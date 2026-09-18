@@ -98,6 +98,9 @@ class AdjustBody(BaseModel):
     reason: str
     adjustment_date: date
     notes: Optional[str] = None
+    unit_usaha_id: Optional[str] = None
+    debit_account_code: Optional[str] = None
+    credit_account_code: Optional[str] = None
 
 
 async def resolve_unit_id(session: AsyncSession, body_unit_id: Optional[str], user: User) -> str:
@@ -287,16 +290,21 @@ async def list_adjustments(
 @router.post("/adjustments")
 async def create_adjustment(
     body: AdjustBody,
-    _: User = Depends(require_inventory_user),
+    user: User = Depends(require_inventory_user),
     session: AsyncSession = Depends(get_db),
 ):
     try:
+        uid = await resolve_unit_id(session, body.unit_usaha_id, user)
         return await InventoryService(session).adjust_stock(
             product_id=body.product_id,
             quantity_delta=body.quantity_delta,
             reason=body.reason,
             adjustment_date=body.adjustment_date,
             notes=body.notes,
+            unit_usaha_id=uid,
+            debit_account_code=body.debit_account_code,
+            credit_account_code=body.credit_account_code,
+            created_by=user.username,
         )
     except ValueError as exc:
         raise HTTPException(status_code=422, detail=str(exc)) from exc
