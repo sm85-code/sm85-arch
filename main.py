@@ -11,7 +11,9 @@ from fastapi.responses import JSONResponse
 from sqlalchemy import text
 
 from adapters.api.v1 import siabumdes_router, uu05_inventory_router
-from shared.config import APP_TITLE, CORS_ORIGINS
+from adapters.api.v1.admin_control_router import router as admin_control_router
+from adapters.api.v1.auth_router import router as auth_router
+from shared.config import APP_TITLE, CORS_ORIGIN_REGEX, CORS_ORIGINS, origin_allowed
 from shared.database import engine
 
 logging.basicConfig(
@@ -20,24 +22,38 @@ logging.basicConfig(
 )
 logger = logging.getLogger("sm85.audit")
 
-app = FastAPI(title=APP_TITLE, version="0.6.0")
+app = FastAPI(title=APP_TITLE, version="0.8.0")
 _login_attempts: dict[str, deque[float]] = defaultdict(deque)
 
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=CORS_ORIGINS or ["*"],
+    allow_origins=CORS_ORIGINS,
+    allow_origin_regex=CORS_ORIGIN_REGEX,
     allow_credentials=True,
     allow_methods=["GET", "POST", "PUT", "PATCH", "DELETE", "OPTIONS"],
-    allow_headers=["Content-Type", "Authorization", "X-CSRF-Token"],
+    allow_headers=["Content-Type", "Authorization", "X-CSRF-Token", "X-Requested-With"],
+    expose_headers=["Content-Disposition"],
 )
 
+app.include_router(auth_router)
+app.include_router(admin_control_router)
 app.include_router(siabumdes_router.router)
 app.include_router(uu05_inventory_router.router)
 
 
+def _apply_cors(response, origin: str | None) -> None:
+    if origin and origin_allowed(origin):
+        response.headers["Access-Control-Allow-Origin"] = origin
+        response.headers["Access-Control-Allow-Credentials"] = "true"
+        response.headers["Vary"] = "Origin"
+
+
 @app.middleware("http")
 async def validate_csrf_origin(request: Request, call_next):
-    """Reject cross-site mutations; rate-limit login."""
+    """Reject unknown-origin mutations; rate-limit login. Never block CORS preflight."""
+    if request.method == "OPTIONS":
+        return await call_next(request)
+
     if request.method in {"POST", "PUT", "PATCH", "DELETE"}:
         if request.url.path.endswith("/auth/login"):
             now = monotonic()
@@ -46,19 +62,22 @@ async def validate_csrf_origin(request: Request, call_next):
             while attempts and now - attempts[0] > 60:
                 attempts.popleft()
             if len(attempts) >= 10:
-                return JSONResponse(
+                response = JSONResponse(
                     status_code=429,
                     content={"detail": "Terlalu banyak percobaan login"},
                 )
+                _apply_cors(response, request.headers.get("origin"))
+                return response
             attempts.append(now)
         origin = request.headers.get("origin")
         referer = request.headers.get("referer")
         source = origin or (referer and "/".join(referer.split("/")[:3]))
-        if source and CORS_ORIGINS and source not in CORS_ORIGINS:
-            return JSONResponse(
+        if source and CORS_ORIGINS and not origin_allowed(source):
+            response = JSONResponse(
                 status_code=403,
                 content={"detail": "Permintaan lintas situs ditolak"},
             )
+            return response
     try:
         response = await call_next(request)
     except Exception as exc:
@@ -72,11 +91,7 @@ async def validate_csrf_origin(request: Request, call_next):
                 "path": request.url.path,
             },
         )
-        origin = request.headers.get("origin")
-        if origin and origin in CORS_ORIGINS:
-            response.headers["Access-Control-Allow-Origin"] = origin
-            response.headers["Access-Control-Allow-Credentials"] = "true"
-            response.headers["Vary"] = "Origin"
+        _apply_cors(response, request.headers.get("origin"))
     if request.method in {"POST", "PUT", "PATCH", "DELETE"}:
         logger.info(
             "mutation method=%s path=%s status=%s",
@@ -107,4 +122,4 @@ async def health():
 
 @app.get("/")
 async def root():
-    return {"app": APP_TITLE, "version": "0.6.0"}
+    return {"app": APP_TITLE, "version": "0.8.0"}

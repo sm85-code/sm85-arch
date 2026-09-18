@@ -1,1 +1,1 @@
-"""HTTP API v1 routers."""
+"""HTTP API adapters consumed by main.py."""
