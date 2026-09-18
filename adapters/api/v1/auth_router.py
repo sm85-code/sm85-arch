@@ -5,6 +5,7 @@ from typing import Optional
 
 from fastapi import APIRouter, Depends, HTTPException, Response, status
 from pydantic import BaseModel, EmailStr, Field
+from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from adapters.api.deps import get_current_user, require_roles
@@ -59,6 +60,12 @@ class ProfileUpdateRequest(BaseModel):
     username: str
 
 
+class AdminUserUpdateRequest(BaseModel):
+    name: Optional[str] = None
+    email: Optional[EmailStr] = None
+    username: Optional[str] = None
+
+
 class BlockedPeriodsRequest(BaseModel):
     blocked_periods: list[str] = Field(default_factory=list)
 
@@ -70,6 +77,20 @@ def _token_for(user: User) -> str:
         user.session_version,
         {"name": user.name, "unit": user.unit_usaha_id},
     )
+
+
+async def _username_taken(session: AsyncSession, username: str, exclude_id: str) -> bool:
+    row = (
+        await session.execute(select(User).where(User.username == username, User.id != exclude_id))
+    ).scalar_one_or_none()
+    return row is not None
+
+
+async def _email_taken(session: AsyncSession, email: str, exclude_id: str) -> bool:
+    row = (
+        await session.execute(select(User).where(User.email == email, User.id != exclude_id))
+    ).scalar_one_or_none()
+    return row is not None
 
 
 @router.post("/auth/login")
@@ -128,12 +149,64 @@ async def update_profile(
     user: User = Depends(get_current_user),
     session: AsyncSession = Depends(get_db),
 ):
-    user.name = payload.name.strip()
-    user.email = str(payload.email)
-    user.username = payload.username.strip()
+    name = payload.name.strip()
+    email = str(payload.email).strip()
+    username = payload.username.strip()
+    if not name:
+        raise HTTPException(status_code=400, detail="Nama wajib diisi")
+    if await _email_taken(session, email, user.id):
+        raise HTTPException(status_code=400, detail="Email sudah dipakai")
+
+    user.name = name
+    user.email = email
+
+    if username and username != user.username:
+        if public_role(user.role) != "admin":
+            raise HTTPException(
+                status_code=403,
+                detail="Hanya admin yang dapat mengubah username",
+            )
+        if len(username) < 3:
+            raise HTTPException(status_code=400, detail="Username minimal 3 karakter")
+        if await _username_taken(session, username, user.id):
+            raise HTTPException(status_code=400, detail="Username sudah dipakai")
+        user.username = username
+
     control = await get_system_control(session)
     await session.flush()
     return user_to_out(user, recording_locked=control.recording_locked)
+
+
+@router.put("/users/{user_id}")
+async def admin_update_user(
+    user_id: str,
+    payload: AdminUserUpdateRequest,
+    _: User = Depends(require_roles("admin")),
+    session: AsyncSession = Depends(get_db),
+):
+    target = await session.get(User, user_id)
+    if not target:
+        raise HTTPException(status_code=404, detail="User tidak ditemukan")
+    if payload.name is not None:
+        name = payload.name.strip()
+        if not name:
+            raise HTTPException(status_code=400, detail="Nama wajib diisi")
+        target.name = name
+    if payload.email is not None:
+        email = str(payload.email).strip()
+        if await _email_taken(session, email, target.id):
+            raise HTTPException(status_code=400, detail="Email sudah dipakai")
+        target.email = email
+    if payload.username is not None:
+        username = payload.username.strip()
+        if len(username) < 3:
+            raise HTTPException(status_code=400, detail="Username minimal 3 karakter")
+        if await _username_taken(session, username, target.id):
+            raise HTTPException(status_code=400, detail="Username sudah dipakai")
+        target.username = username
+    control = await get_system_control(session)
+    await session.flush()
+    return user_to_out(target, recording_locked=control.recording_locked)
 
 
 @router.post("/auth/register")
