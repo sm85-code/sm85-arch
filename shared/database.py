@@ -1,4 +1,4 @@
-"""SQLAlchemy 2.0 async engine + session for PostgreSQL (Neon-ready)."""
+"""SQLAlchemy 2.0 async engine + session for PostgreSQL (Neon / DO Managed)."""
 from __future__ import annotations
 
 import os
@@ -12,6 +12,8 @@ from sqlalchemy.ext.asyncio import (
     create_async_engine,
 )
 from sqlalchemy.orm import DeclarativeBase
+
+from shared.config import POSTGRES_SSL
 
 load_dotenv()
 
@@ -30,22 +32,27 @@ def _database_url() -> str:
     else:
         raise RuntimeError("DATABASE_URL must use PostgreSQL")
 
-    # Strip driver options that asyncpg does not accept
+    # asyncpg rejects libpq-only query args (sslmode, channel_binding).
     query = [
         (k, v)
         for k, v in parse_qsl(parts.query, keep_blank_values=True)
-        if k not in {"channel_binding", "sslmode"}
+        if k.lower() not in {"channel_binding", "sslmode", "ssl"}
     ]
     return urlunsplit((scheme, parts.netloc, parts.path, urlencode(query), parts.fragment))
 
 
 DATABASE_URL = _database_url()
 
+_connect_args: dict = {}
+ if POSTGRES_SSL:
+    _connect_args["ssl"] = True
+
 engine = create_async_engine(
     DATABASE_URL,
     pool_pre_ping=True,
     pool_size=5,
     max_overflow=10,
+    connect_args=_connect_args,
 )
 
 SessionLocal = async_sessionmaker(
