@@ -8,7 +8,7 @@ from __future__ import annotations
 import uuid
 from datetime import date, datetime, timezone
 from decimal import Decimal
-from typing import Optional
+from typing import Any, Optional
 
 from sqlalchemy import (
     Boolean,
@@ -21,6 +21,7 @@ from sqlalchemy import (
     Text,
     UniqueConstraint,
 )
+from sqlalchemy.dialects.postgresql import ARRAY, JSONB
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 
 from shared.database import Base
@@ -59,9 +60,9 @@ class Account(Base):
     id: Mapped[str] = mapped_column(String(36), primary_key=True, default=_uuid)
     code: Mapped[str] = mapped_column(String(32), nullable=False, index=True)
     name: Mapped[str] = mapped_column(String(255), nullable=False)
-    category: Mapped[str] = mapped_column(String(32), nullable=False)  # aset|kewajiban|ekuitas|pendapatan|beban
+    category: Mapped[str] = mapped_column(String(32), nullable=False)
     subcategory: Mapped[str] = mapped_column(String(64), nullable=False, default="")
-    normal_balance: Mapped[str] = mapped_column(String(8), nullable=False)  # debit|kredit
+    normal_balance: Mapped[str] = mapped_column(String(8), nullable=False)
     parent_code: Mapped[Optional[str]] = mapped_column(String(32), nullable=True)
     group_code: Mapped[str] = mapped_column(String(20), nullable=False, default="BUMDES", index=True)
     unit_usaha_id: Mapped[Optional[str]] = mapped_column(
@@ -71,6 +72,32 @@ class Account(Base):
 
     unit_usaha: Mapped[Optional["UnitUsaha"]] = relationship(back_populates="accounts")
     journal_items: Mapped[list["JournalItem"]] = relationship(back_populates="account")
+
+
+class TransactionType(Base):
+    __tablename__ = "transaction_types"
+    __table_args__ = (UniqueConstraint("code", "group_code", name="uq_tx_types_code_group"),)
+
+    id: Mapped[str] = mapped_column(String(36), primary_key=True, default=_uuid)
+    code: Mapped[str] = mapped_column(String(64), nullable=False, index=True)
+    name: Mapped[str] = mapped_column(String(255), nullable=False)
+    debit: Mapped[str] = mapped_column(String(32), nullable=False, default="")
+    credit: Mapped[str] = mapped_column(String(32), nullable=False, default="")
+    group_code: Mapped[str] = mapped_column(String(20), nullable=False, default="BUMDES", index=True)
+    unit_codes: Mapped[list[str]] = mapped_column(ARRAY(String(20)), nullable=False, default=list)
+
+
+class Mitra(Base):
+    __tablename__ = "mitra"
+
+    id: Mapped[str] = mapped_column(String(36), primary_key=True, default=_uuid)
+    name: Mapped[str] = mapped_column(String(255), nullable=False)
+    unit_usaha_id: Mapped[Optional[str]] = mapped_column(
+        String(36), ForeignKey("unit_usaha.id", ondelete="SET NULL"), nullable=True, index=True
+    )
+    phone: Mapped[str] = mapped_column(String(50), nullable=False, default="")
+    note: Mapped[str] = mapped_column(Text, nullable=False, default="")
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=_utcnow)
 
 
 class Transaction(Base):
@@ -96,6 +123,8 @@ class Transaction(Base):
     reference: Mapped[str] = mapped_column(String(128), nullable=False, default="")
     created_by: Mapped[str] = mapped_column(String(36), nullable=False)
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=_utcnow)
+    is_closing: Mapped[bool] = mapped_column(Boolean, nullable=False, default=False)
+    proofs: Mapped[list[dict[str, Any]]] = mapped_column(JSONB, nullable=False, default=list)
 
     unit_usaha: Mapped[Optional["UnitUsaha"]] = relationship(back_populates="transactions")
     journal_entry: Mapped[Optional["JournalEntry"]] = relationship(
@@ -139,7 +168,7 @@ class JournalItem(Base):
     account_id: Mapped[str] = mapped_column(
         String(36), ForeignKey("accounts.id", ondelete="RESTRICT"), nullable=False
     )
-    side: Mapped[str] = mapped_column(String(8), nullable=False)  # debit | credit
+    side: Mapped[str] = mapped_column(String(8), nullable=False)
     amount: Mapped[Decimal] = mapped_column(Numeric(20, 2), nullable=False)
 
     journal_entry: Mapped["JournalEntry"] = relationship(back_populates="items")

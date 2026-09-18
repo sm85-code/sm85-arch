@@ -3,7 +3,6 @@ from __future__ import annotations
 
 from fastapi import APIRouter, Depends, HTTPException, Query
 from pydantic import BaseModel, Field
-from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from adapters.api.deps import get_current_user, require_roles
@@ -15,7 +14,6 @@ from modules.identity.application.services import (
     set_recording_lock,
 )
 from modules.identity.infrastructure.models import User
-from modules.siabumdes.infrastructure.models import UnitUsaha
 from shared.database import get_db
 
 router = APIRouter(prefix="/api", tags=["admin-control"])
@@ -122,21 +120,3 @@ async def delete_close_period(
     except LookupError as exc:
         raise HTTPException(status_code=404, detail=str(exc)) from exc
     return {"deleted_entries": deleted}
-
-
-@router.get("/unit-usaha")
-async def list_unit_usaha(
-    _: User = Depends(get_current_user),
-    session: AsyncSession = Depends(get_db),
-):
-    rows = (await session.execute(select(UnitUsaha).order_by(UnitUsaha.code.asc()))).scalars()
-    return [
-        {
-            "id": row.id,
-            "code": row.code,
-            "name": row.name,
-            "description": row.description,
-            "active": row.active,
-        }
-        for row in rows
-    ]
