@@ -38,7 +38,7 @@ def _utcnow() -> datetime:
 class UnitUsaha(Base):
     __tablename__ = "unit_usaha"
 
-    id: Mapped[str] = mapped_column(String(36), primary_key=True, default=_uuid)
+    id: Mapped[str] = mapped_column(String(64), primary_key=True, default=_uuid)
     code: Mapped[str] = mapped_column(String(20), unique=True, nullable=False, index=True)
     name: Mapped[str] = mapped_column(String(255), nullable=False)
     description: Mapped[str] = mapped_column(Text, nullable=False, default="")
@@ -57,16 +57,16 @@ class Account(Base):
         Index("ix_accounts_category", "category"),
     )
 
-    id: Mapped[str] = mapped_column(String(36), primary_key=True, default=_uuid)
-    code: Mapped[str] = mapped_column(String(32), nullable=False, index=True)
+    id: Mapped[str] = mapped_column(String(64), primary_key=True, default=_uuid)
+    code: Mapped[str] = mapped_column(String(64), nullable=False, index=True)
     name: Mapped[str] = mapped_column(String(255), nullable=False)
-    category: Mapped[str] = mapped_column(String(32), nullable=False)
-    subcategory: Mapped[str] = mapped_column(String(64), nullable=False, default="")
+    category: Mapped[str] = mapped_column(String(64), nullable=False)
+    subcategory: Mapped[str] = mapped_column(String(128), nullable=False, default="")
     normal_balance: Mapped[str] = mapped_column(String(8), nullable=False)
-    parent_code: Mapped[Optional[str]] = mapped_column(String(32), nullable=True)
+    parent_code: Mapped[Optional[str]] = mapped_column(String(64), nullable=True)
     group_code: Mapped[str] = mapped_column(String(20), nullable=False, default="BUMDES", index=True)
     unit_usaha_id: Mapped[Optional[str]] = mapped_column(
-        String(36), ForeignKey("unit_usaha.id", ondelete="SET NULL"), nullable=True
+        String(64), ForeignKey("unit_usaha.id", ondelete="SET NULL"), nullable=True
     )
     active: Mapped[bool] = mapped_column(Boolean, nullable=False, default=True)
 
@@ -78,11 +78,11 @@ class TransactionType(Base):
     __tablename__ = "transaction_types"
     __table_args__ = (UniqueConstraint("code", "group_code", name="uq_tx_types_code_group"),)
 
-    id: Mapped[str] = mapped_column(String(36), primary_key=True, default=_uuid)
+    id: Mapped[str] = mapped_column(String(64), primary_key=True, default=_uuid)
     code: Mapped[str] = mapped_column(String(64), nullable=False, index=True)
     name: Mapped[str] = mapped_column(String(255), nullable=False)
-    debit: Mapped[str] = mapped_column(String(32), nullable=False, default="")
-    credit: Mapped[str] = mapped_column(String(32), nullable=False, default="")
+    debit: Mapped[str] = mapped_column(String(64), nullable=False, default="")
+    credit: Mapped[str] = mapped_column(String(64), nullable=False, default="")
     group_code: Mapped[str] = mapped_column(String(20), nullable=False, default="BUMDES", index=True)
     unit_codes: Mapped[list[str]] = mapped_column(ARRAY(String(20)), nullable=False, default=list)
 
@@ -90,10 +90,10 @@ class TransactionType(Base):
 class Mitra(Base):
     __tablename__ = "mitra"
 
-    id: Mapped[str] = mapped_column(String(36), primary_key=True, default=_uuid)
+    id: Mapped[str] = mapped_column(String(64), primary_key=True, default=_uuid)
     name: Mapped[str] = mapped_column(String(255), nullable=False)
     unit_usaha_id: Mapped[Optional[str]] = mapped_column(
-        String(36), ForeignKey("unit_usaha.id", ondelete="SET NULL"), nullable=True, index=True
+        String(64), ForeignKey("unit_usaha.id", ondelete="SET NULL"), nullable=True, index=True
     )
     phone: Mapped[str] = mapped_column(String(50), nullable=False, default="")
     note: Mapped[str] = mapped_column(Text, nullable=False, default="")
@@ -109,19 +109,19 @@ class Transaction(Base):
         Index("ix_transactions_reference", "reference"),
     )
 
-    id: Mapped[str] = mapped_column(String(36), primary_key=True, default=_uuid)
+    id: Mapped[str] = mapped_column(String(64), primary_key=True, default=_uuid)
     date: Mapped[date] = mapped_column(Date, nullable=False)
     unit_usaha_id: Mapped[Optional[str]] = mapped_column(
-        String(36), ForeignKey("unit_usaha.id", ondelete="SET NULL"), nullable=True, index=True
+        String(64), ForeignKey("unit_usaha.id", ondelete="SET NULL"), nullable=True, index=True
     )
     transaction_type: Mapped[str] = mapped_column(String(64), nullable=False, index=True)
     description: Mapped[str] = mapped_column(Text, nullable=False, default="")
     amount: Mapped[Decimal] = mapped_column(Numeric(20, 2), nullable=False)
-    debit_account_code: Mapped[str] = mapped_column(String(32), nullable=False)
-    credit_account_code: Mapped[str] = mapped_column(String(32), nullable=False)
-    mitra_id: Mapped[Optional[str]] = mapped_column(String(36), nullable=True)
+    debit_account_code: Mapped[str] = mapped_column(String(64), nullable=False)
+    credit_account_code: Mapped[str] = mapped_column(String(64), nullable=False)
+    mitra_id: Mapped[Optional[str]] = mapped_column(String(64), nullable=True)
     reference: Mapped[str] = mapped_column(String(128), nullable=False, default="")
-    created_by: Mapped[str] = mapped_column(String(36), nullable=False)
+    created_by: Mapped[str] = mapped_column(String(64), nullable=False)
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=_utcnow)
     is_closing: Mapped[bool] = mapped_column(Boolean, nullable=False, default=False)
     proofs: Mapped[list[dict[str, Any]]] = mapped_column(JSONB, nullable=False, default=list)
@@ -138,9 +138,9 @@ class JournalEntry(Base):
     __tablename__ = "journal_entries"
     __table_args__ = (Index("ix_journal_entries_date", "entry_date"),)
 
-    id: Mapped[str] = mapped_column(String(36), primary_key=True, default=_uuid)
+    id: Mapped[str] = mapped_column(String(64), primary_key=True, default=_uuid)
     transaction_id: Mapped[str] = mapped_column(
-        String(36),
+        String(64),
         ForeignKey("transactions.id", ondelete="CASCADE"),
         unique=True,
         nullable=False,
@@ -161,12 +161,12 @@ class JournalItem(Base):
     __tablename__ = "journal_items"
     __table_args__ = (Index("ix_journal_items_account", "account_id"),)
 
-    id: Mapped[str] = mapped_column(String(36), primary_key=True, default=_uuid)
+    id: Mapped[str] = mapped_column(String(64), primary_key=True, default=_uuid)
     journal_entry_id: Mapped[str] = mapped_column(
-        String(36), ForeignKey("journal_entries.id", ondelete="CASCADE"), nullable=False, index=True
+        String(64), ForeignKey("journal_entries.id", ondelete="CASCADE"), nullable=False, index=True
     )
     account_id: Mapped[str] = mapped_column(
-        String(36), ForeignKey("accounts.id", ondelete="RESTRICT"), nullable=False
+        String(64), ForeignKey("accounts.id", ondelete="RESTRICT"), nullable=False
     )
     side: Mapped[str] = mapped_column(String(8), nullable=False)
     amount: Mapped[Decimal] = mapped_column(Numeric(20, 2), nullable=False)
