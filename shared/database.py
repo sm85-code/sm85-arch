@@ -44,7 +44,7 @@ def _database_url() -> str:
 DATABASE_URL = _database_url()
 
 _connect_args: dict = {}
- if POSTGRES_SSL:
+if POSTGRES_SSL:
     _connect_args["ssl"] = True
 
 engine = create_async_engine(
