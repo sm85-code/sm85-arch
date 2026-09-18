@@ -3,6 +3,7 @@ from __future__ import annotations
 
 import logging
 from collections import defaultdict, deque
+from contextlib import asynccontextmanager
 from time import monotonic
 
 from fastapi import FastAPI, Request
@@ -13,10 +14,13 @@ from sqlalchemy import text
 from adapters.api.v1 import siabumdes_router, uu05_inventory_router
 from adapters.api.v1.admin_control_router import router as admin_control_router
 from adapters.api.v1.auth_router import router as auth_router
+from adapters.api.v1.io_router import router as io_router
 from adapters.api.v1.master_data_router import router as master_data_router
+from adapters.api.v1.reports_router import router as reports_router
 from adapters.api.v1.transaction_router import router as transaction_router
 from shared.config import APP_TITLE, CORS_ORIGIN_REGEX, CORS_ORIGINS, origin_allowed
 from shared.database import engine
+from shared.seed import seed_if_needed
 
 logging.basicConfig(
     level=logging.INFO,
@@ -24,7 +28,17 @@ logging.basicConfig(
 )
 logger = logging.getLogger("sm85.audit")
 
-app = FastAPI(title=APP_TITLE, version="0.9.0")
+
+@asynccontextmanager
+async def lifespan(_: FastAPI):
+    try:
+        await seed_if_needed()
+    except Exception:
+        logger.exception("startup seed failed — app continues")
+    yield
+
+
+app = FastAPI(title=APP_TITLE, version="1.0.0", lifespan=lifespan)
 _login_attempts: dict[str, deque[float]] = defaultdict(deque)
 
 app.add_middleware(
@@ -41,6 +55,8 @@ app.include_router(auth_router)
 app.include_router(admin_control_router)
 app.include_router(master_data_router)
 app.include_router(transaction_router)
+app.include_router(reports_router)
+app.include_router(io_router)
 app.include_router(siabumdes_router.router)
 app.include_router(uu05_inventory_router.router)
 
@@ -126,4 +142,4 @@ async def health():
 
 @app.get("/")
 async def root():
-    return {"app": APP_TITLE, "version": "0.9.0"}
+    return {"app": APP_TITLE, "version": "1.0.0"}
