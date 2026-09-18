@@ -1,0 +1,26 @@
+# Runtime — FastAPI + PostgreSQL (no MongoDB / pymongo / motor)
+fastapi==0.110.1
+uvicorn[standard]==0.25.0
+sqlalchemy[asyncio]==2.0.43
+asyncpg==0.30.0
+alembic==1.16.5
+pydantic[email]==2.13.4
+python-dotenv==1.2.3
+python-jose[cryptography]==3.5.0
+passlib[bcrypt]==1.7.4
+bcrypt==4.0.1
+python-multipart==0.0.32
+reportlab==4.2.5
+openpyxl==3.1.5
+pandas==3.0.5
+pypdf==6.16.2
+requests==2.34.2
+google-api-python-client==2.198.0
+google-auth==2.56.3
+google-auth-httplib2==0.4.1
+google-auth-oauthlib==1.4.1
+stripe==14.4.1
+
+# Dev / test
+pytest==9.1.1
+pytest-xdist==3.8.0
