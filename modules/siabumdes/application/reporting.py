@@ -16,6 +16,28 @@ def _f(value: Decimal | float | int | None) -> float:
     return float(value or 0)
 
 
+def _r(value: float | Decimal | int | None) -> float:
+    return round(float(value or 0), 2)
+
+
+def _acc_text(acc: Account) -> str:
+    return f"{acc.name} {acc.subcategory or ''} {acc.code}".lower()
+
+
+def _is_laba_account(acc: Account) -> bool:
+    text = _acc_text(acc)
+    return any(token in text for token in ("laba", "rugi", "ditahan"))
+
+
+def _is_desa_modal(acc: Account) -> bool:
+    text = _acc_text(acc)
+    return "desa" in text and "masyarakat" not in text
+
+
+def _is_masyarakat_modal(acc: Account) -> bool:
+    return "masyarakat" in _acc_text(acc)
+
+
 class ReportingService:
     def __init__(self, session: AsyncSession) -> None:
         self.session = session
@@ -71,8 +93,7 @@ class ReportingService:
             {"code": c, "name": accounts[c].name, "amount": _f(v)}
             for c, v in sorted(pendapatan.items())
             if c in accounts
-        ]
-        beban_rows = [
+        ]n        beban_rows = [
             {"code": c, "name": accounts[c].name, "amount": _f(v)}
             for c, v in sorted(beban.items())
             if c in accounts
@@ -158,20 +179,98 @@ class ReportingService:
             "arus_kas_bersih": total_masuk - total_keluar,
         }
 
+    async def _period_penyertaan(
+        self,
+        start: date,
+        end: date,
+        unit_usaha_id: Optional[str],
+    ) -> tuple[float, float]:
+        group = await self._group_for(unit_usaha_id)
+        accounts = {a.code: a for a in await self._accounts(group)}
+        txs = await self._txs(start=start, end=end, unit_usaha_id=unit_usaha_id, pusat_only=unit_usaha_id is None)
+        desa = 0.0
+        masyarakat = 0.0
+        for tx in txs:
+            credit = accounts.get(tx.credit_account_code)
+            debit = accounts.get(tx.debit_account_code)
+            amt = _f(tx.amount)
+            for acc, sign in ((credit, 1.0), (debit, -1.0)):
+                if not acc or acc.category != "ekuitas" or _is_laba_account(acc):
+                    continue
+                if _is_masyarakat_modal(acc):
+                    masyarakat += sign * amt
+                else:
+                    desa += sign * amt
+        return _r(desa), _r(masyarakat)
+
     async def perubahan_ekuitas(self, start: date, end: date, unit_usaha_id: Optional[str] = None) -> dict[str, Any]:
-        before = start - timedelta(days=1)
-        opening = await self.neraca(before, unit_usaha_id)
-        closing = await self.neraca(end, unit_usaha_id)
-        lr = await self.laba_rugi(start, end, unit_usaha_id)
-        modal_awal = opening["total_ekuitas"]
-        laba = lr["laba_bersih"]
-        modal_akhir = closing["total_ekuitas"]
+        prev_year = start.year - 1
+        prev_end = date(prev_year, 12, 31)
+        prev_start = date(prev_year, 1, 1)
+        opening = await self.neraca(prev_end, unit_usaha_id)
+        prev_lr = await self.laba_rugi(prev_start, prev_end, unit_usaha_id)
+        curr_lr = await self.laba_rugi(start, end, unit_usaha_id)
+
+        n2 = _r(opening["total_ekuitas"])
+        n3 = 0.0
+        n4 = n2
+        n6, n7 = await self._period_penyertaan(start, end, unit_usaha_id)
+        n8 = _r(n3 + n4 + n6 + n7)
+
+        laba_asli = _r(curr_lr["laba_bersih"])
+        n11 = 0.0
+        n12 = _r(_r(prev_lr["laba_bersih"]) * 0.18)
+        n13 = _r(laba_asli - laba_asli * (0.35 + 0.07 + 0.05 + 0.05))
+        n15 = _r(laba_asli * 0.20)
+        n16 = 0.0
+        n17 = _r(n11 + n12 + n13 - n15 - n16)
+        n18 = _r(n8 + n17)
+
+        def row(no, label, amount=None, *, kind="data", indent=0, bold=False):
+            return {
+                "no": no,
+                "label": label,
+                "amount": amount,
+                "kind": kind,
+                "indent": indent,
+                "bold": bold,
+            }
+
         rows = [
-            {"no": 1, "label": "Ekuitas awal periode", "amount": modal_awal, "kind": "data", "indent": 0, "bold": False},
-            {"no": 2, "label": "Laba (rugi) periode berjalan", "amount": laba, "kind": "data", "indent": 0, "bold": False},
-            {"no": 3, "label": "Ekuitas akhir periode", "amount": modal_akhir, "kind": "data", "indent": 0, "bold": True},
+            row(1, "PENYERTAAN MODAL", kind="section"),
+            row(2, "Penyertaan modal awal:", n2, indent=1, bold=True),
+            row(3, "Penyertaan Modal Desa", n3, indent=2),
+            row(4, "Penyertaan Modal Masyarakat", n4, indent=2),
+            row(5, "Penambahan Investasi periode berjalan:", kind="section", indent=1),
+            row(6, "Penyertaan Modal Desa", n6, indent=2),
+            row(7, "Penyertaan Modal Masyarakat", n7, indent=2),
+            row(8, "Penyertaan Modal Akhir (3+4+6+7)", n8, indent=1, bold=True),
+            row(9, "SALDO LABA", kind="section"),
+            row(10, "Saldo Laba Awal:", kind="section", indent=1),
+            row(11, "Saldo Laba Tidak Dicadangkan", n11, indent=2),
+            row(12, "Saldo Laba Dicadangkan", n12, indent=2),
+            row(13, "Laba (Rugi) periode berjalan", n13, indent=1),
+            row(14, "Bagi Hasil Penyertaan:", kind="section", indent=1),
+            row(15, "Bagi Hasil Penyertaan Modal Desa", n15, indent=2),
+            row(16, "Bagi Hasil Penyertaan Modal Masyarakat", n16, indent=2),
+            row(17, "Saldo Laba Akhir (11+12+13-15-16)", n17, indent=1, bold=True),
+            row(18, "EKUITAS AKHIR (8+17)", n18, kind="section", bold=True),
         ]
-        return {"rows": rows, "modal_awal": modal_awal, "laba_periode": laba, "modal_akhir": modal_akhir}
+        return {
+            "rows": rows,
+            "modal_awal": n2,
+            "laba_periode": n13,
+            "laba_bersih_asli": laba_asli,
+            "modal_akhir": n18,
+            "alokasi": {
+                "pengurus_35": _r(laba_asli * 0.35),
+                "penasihat_7": _r(laba_asli * 0.07),
+                "pengawas_5": _r(laba_asli * 0.05),
+                "dana_sosial_5": _r(laba_asli * 0.05),
+                "pades_desa_20": n15,
+                "penguatan_modal_18_tahun_lalu": n12,
+            },
+        }
 
     async def calk(self, start: date, end: date, unit_usaha_id: Optional[str] = None) -> dict[str, Any]:
         lr = await self.laba_rugi(start, end, unit_usaha_id)
