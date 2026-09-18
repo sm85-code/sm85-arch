@@ -1,19 +1,22 @@
 """Users, system recording lock, and closed accounting periods.
 
-Revision ID: 20260918_05_identity_and_controls
+Revision ID: 20260918_05_identity
 Revises: 20260915_04_inventory_tables
 """
 from alembic import op
 import sqlalchemy as sa
 from sqlalchemy.dialects import postgresql
 
-revision = "20260918_05_identity_and_controls"
+# Must stay <= 32 chars: alembic_version.version_num is VARCHAR(32) by default.
+revision = "20260918_05_identity"
 down_revision = "20260915_04_inventory_tables"
 branch_labels = None
 depends_on = None
 
 
 def upgrade() -> None:
+    op.execute("ALTER TABLE alembic_version ALTER COLUMN version_num TYPE VARCHAR(255)")
+
     op.create_table(
         "users",
         sa.Column("id", sa.String(length=36), primary_key=True, nullable=False),

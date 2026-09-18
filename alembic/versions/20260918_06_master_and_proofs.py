@@ -1,14 +1,14 @@
 """Transaction types, mitra, proofs JSON, is_closing flag.
 
 Revision ID: 20260918_06_master_and_proofs
-Revises: 20260918_05_identity_and_controls
+Revises: 20260918_05_identity
 """
 from alembic import op
 import sqlalchemy as sa
 from sqlalchemy.dialects import postgresql
 
 revision = "20260918_06_master_and_proofs"
-down_revision = "20260918_05_identity_and_controls"
+down_revision = "20260918_05_identity"
 branch_labels = None
 depends_on = None
 
