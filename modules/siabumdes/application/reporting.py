@@ -207,9 +207,9 @@ class ReportingService:
         prev_lr = await self.laba_rugi(prev_start, prev_end, unit_usaha_id)
         curr_lr = await self.laba_rugi(start, end, unit_usaha_id)
 
-        n2 = _r(opening["total_ekuitas"])
-        n3 = 0.0
-        n4 = n2
+        prev_equity = _r(opening["total_ekuitas"])
+        n3 = prev_equity
+        n4 = 0.0
         n6, n7 = await self._period_penyertaan(start, end, unit_usaha_id)
         n8 = _r(n3 + n4 + n6 + n7)
 
@@ -234,7 +234,7 @@ class ReportingService:
 
         rows = [
             row(1, "PENYERTAAN MODAL", kind="section"),
-            row(2, "Penyertaan modal awal:", n2, indent=1, bold=True),
+            row(2, "Penyertaan modal awal:", kind="section", indent=1),
             row(3, "Penyertaan Modal Desa", n3, indent=2),
             row(4, "Penyertaan Modal Masyarakat", n4, indent=2),
             row(5, "Penambahan Investasi periode berjalan:", kind="section", indent=1),
@@ -250,11 +250,11 @@ class ReportingService:
             row(15, "Bagi Hasil Penyertaan Modal Desa", n15, indent=2),
             row(16, "Bagi Hasil Penyertaan Modal Masyarakat", n16, indent=2),
             row(17, "Saldo Laba Akhir (11+12+13-15-16)", n17, indent=1, bold=True),
-            row(18, "EKUITAS AKHIR (8+17)", n18, kind="section", bold=True),
+            row(18, "EKUITAS AKHIR (8+17)", n18, kind="data", bold=True),
         ]
         return {
             "rows": rows,
-            "modal_awal": n2,
+            "modal_awal": n3,
             "laba_periode": n13,
             "laba_bersih_asli": laba_asli,
             "modal_akhir": n18,
