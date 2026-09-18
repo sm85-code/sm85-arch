@@ -20,12 +20,12 @@ COA_PATH = ROOT_DIR / "data" / "COA.xlsx"
 
 UNIT_CATALOG = {
     "BUMDES": ("BUMDes (Pusat)", "Kantor pusat BUMDes"),
-    "UU01": ("Unit Usaha 01", "Unit usaha UU01"),
-    "UU02": ("Unit Usaha 02", "Unit usaha UU02"),
-    "UU03": ("Unit Usaha 03", "Unit usaha UU03"),
-    "UU04": ("Unit Usaha 04", "Unit usaha UU04"),
-    "UU05": ("Unit Usaha 05", "Unit usaha UU05 — inventori"),
-    "UU06": ("Unit Usaha 06", "Unit usaha UU06"),
+    "UU01": ("Pembibitan Domba Garut", "Unit usaha UU01"),
+    "UU02": ("Peternakan Ikan Air Tawar Sistem Bioflok", "Unit usaha UU02"),
+    "UU03": ("Sewa Kendaraan Angkutan", "Unit usaha UU03"),
+    "UU04": ("Karya Raharja Sinergi Digital (KRSD)", "Unit usaha UU04"),
+    "UU05": ("Toko Offline BUMDES", "Unit usaha UU05 — inventori"),
+    "UU06": ("Toko Online BUMDES", "Unit usaha UU06"),
 }
 
 DEFAULT_USERS = [
@@ -69,7 +69,6 @@ def _iter_coa_rows(path: Path):
 
 
 async def seed_if_needed() -> None:
-    """Safe to run on every boot. Never overwrites existing rows."""
     async with SessionLocal() as session:
         try:
             units = await _seed_units(session)
@@ -92,6 +91,10 @@ async def _seed_units(session) -> dict[str, UnitUsaha]:
         if code == "BUMDES":
             continue
         if code in existing:
+            row = existing[code]
+            if row.name != name or row.description != desc:
+                row.name = name
+                row.description = desc
             continue
         row = UnitUsaha(code=code, name=name, description=desc, active=True)
         session.add(row)
