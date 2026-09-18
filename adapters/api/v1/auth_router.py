@@ -4,7 +4,7 @@ from __future__ import annotations
 from typing import Optional
 
 from fastapi import APIRouter, Depends, HTTPException, Response, status
-from pydantic import BaseModel, EmailStr, Field
+from pydantic import BaseModel, Field
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -38,7 +38,7 @@ class LoginRequest(BaseModel):
 
 class RegisterRequest(BaseModel):
     username: str
-    email: EmailStr
+    email: str
     name: str
     password: str
     role: str
@@ -56,13 +56,13 @@ class PasswordResetRequest(BaseModel):
 
 class ProfileUpdateRequest(BaseModel):
     name: str
-    email: EmailStr
-    username: str
+    email: str = ""
+    username: str = ""
 
 
 class AdminUserUpdateRequest(BaseModel):
     name: Optional[str] = None
-    email: Optional[EmailStr] = None
+    email: Optional[str] = None
     username: Optional[str] = None
 
 
@@ -77,6 +77,10 @@ def _token_for(user: User) -> str:
         user.session_version,
         {"name": user.name, "unit": user.unit_usaha_id},
     )
+
+
+def _looks_like_email(value: str) -> bool:
+    return "@" in value and "." in value.split("@")[-1]
 
 
 async def _username_taken(session: AsyncSession, username: str, exclude_id: str) -> bool:
@@ -150,15 +154,18 @@ async def update_profile(
     session: AsyncSession = Depends(get_db),
 ):
     name = payload.name.strip()
-    email = str(payload.email).strip()
-    username = payload.username.strip()
+    email = (payload.email or user.email or "").strip()
+    username = (payload.username or user.username or "").strip()
     if not name:
         raise HTTPException(status_code=400, detail="Nama wajib diisi")
-    if await _email_taken(session, email, user.id):
+    if email and not _looks_like_email(email):
+        raise HTTPException(status_code=400, detail="Format email tidak valid")
+    if email and await _email_taken(session, email, user.id):
         raise HTTPException(status_code=400, detail="Email sudah dipakai")
 
     user.name = name
-    user.email = email
+    if email:
+        user.email = email
 
     if username and username != user.username:
         if public_role(user.role) != "admin":
@@ -193,8 +200,10 @@ async def admin_update_user(
             raise HTTPException(status_code=400, detail="Nama wajib diisi")
         target.name = name
     if payload.email is not None:
-        email = str(payload.email).strip()
-        if await _email_taken(session, email, target.id):
+        email = payload.email.strip()
+        if email and not _looks_like_email(email):
+            raise HTTPException(status_code=400, detail="Format email tidak valid")
+        if email and await _email_taken(session, email, target.id):
             raise HTTPException(status_code=400, detail="Email sudah dipakai")
         target.email = email
     if payload.username is not None:
