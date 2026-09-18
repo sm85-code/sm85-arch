@@ -20,6 +20,7 @@ from adapters.api.v1.reports_router import router as reports_router
 from adapters.api.v1.transaction_router import router as transaction_router
 from shared.config import APP_TITLE, CORS_ORIGIN_REGEX, CORS_ORIGINS, origin_allowed
 from shared.database import engine
+from shared.schema import ensure_schema
 from shared.seed import seed_if_needed
 
 logging.basicConfig(
@@ -32,9 +33,10 @@ logger = logging.getLogger("sm85.audit")
 @asynccontextmanager
 async def lifespan(_: FastAPI):
     try:
+        await ensure_schema()
         await seed_if_needed()
     except Exception:
-        logger.exception("startup seed failed — app continues")
+        logger.exception("startup schema/seed failed — app continues")
     yield
 
 
