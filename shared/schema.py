@@ -1,7 +1,7 @@
 """Create missing tables and widen short varchar columns on boot.
 
 App Platform has no one-off alembic job. Neon starts empty, so seed
-used to hit `relation \"users\" does not exist`.
+used to hit relation users does not exist.
 """
 from __future__ import annotations
 
@@ -11,7 +11,6 @@ from sqlalchemy import text
 
 from shared.database import Base, engine
 
-# Register metadata.
 from modules.identity.infrastructure import models as _identity_models  # noqa: F401
 from modules.siabumdes.infrastructure import models as _siabumdes_models  # noqa: F401
 from modules.uu05_inventory.infrastructure import models as _inventory_models  # noqa: F401
@@ -36,18 +35,19 @@ async def ensure_schema() -> None:
             await conn.execute(
                 text(
                     f"""
-                    DO $$ BEGIN
+                    DO $widen$
+                    BEGIN
                         IF EXISTS (
                             SELECT 1 FROM information_schema.columns
                             WHERE table_schema = 'public'
-                              AND table_name = :table_name
-                              AND column_name = :column_name
+                              AND table_name = '{table}'
+                              AND column_name = '{column}'
                         ) THEN
                             EXECUTE 'ALTER TABLE {table} ALTER COLUMN {column} TYPE {new_type}';
                         END IF;
-                    END $$;
+                    END
+                    $widen$;
                     """
-                ),
-                {"table_name": table, "column_name": column},
+                )
             )
     logger.info("schema ready")
