@@ -54,6 +54,19 @@ def _xlsx(title: str, headers: list[str], rows: list[list]) -> Response:
     )
 
 
+def _ekuitas_export_rows(data: dict) -> list[list]:
+    rows: list[list] = []
+    for r in data.get("rows") or []:
+        indent = int(r.get("indent") or 0)
+        label = ("    " * indent) + str(r.get("label") or "")
+        if r.get("kind") == "section" and r.get("amount") is None:
+            amount = ""
+        else:
+            amount = r.get("amount")
+        rows.append([r.get("no"), label, amount])
+    return rows
+
+
 @router.get("/reports/dashboard")
 async def dashboard(
     start_date: Optional[str] = None,
@@ -255,8 +268,7 @@ async def _materialize(
     if report_key == "perubahan-ekuitas":
         start, end = _need_dates(start_date, end_date)
         data = await svc.perubahan_ekuitas(start, end, unit_id)
-        rows = [[r["no"], r["label"], r["amount"]] for r in data["rows"]]
-        return data, "Perubahan Ekuitas", ["No", "Uraian", "Nominal"], rows
+        return data, "Laporan Perubahan Ekuitas", ["No.", "Uraian", "Jumlah (Rp)"], _ekuitas_export_rows(data)
     if report_key == "calk":
         start, end = _need_dates(start_date, end_date)
         data = await svc.calk(start, end, unit_id)
