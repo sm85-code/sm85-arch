@@ -9,7 +9,7 @@ from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from modules.siabumdes.application.services import FinanceService
-from modules.siabumdes.infrastructure.models import Account, Transaction
+from modules.siabumdes.infrastructure.models import Account, JournalEntry, Transaction
 
 
 class SiabumdesPublicService:
@@ -93,6 +93,15 @@ class SiabumdesPublicService:
         )
         if not tx:
             return 0
+        # Delete journal entry (+ items via ORM cascade) before the transaction.
+        # ORM delete of Transaction alone would SET NULL journal_entries.transaction_id,
+        # which violates NOT NULL and caused HTTP 500 on cancel-movement.
+        entry = await self.session.scalar(
+            select(JournalEntry).where(JournalEntry.transaction_id == tx.id)
+        )
+        if entry:
+            await self.session.delete(entry)
+            await self.session.flush()
         await self.session.delete(tx)
         await self.session.flush()
         return 1
