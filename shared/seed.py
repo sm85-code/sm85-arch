@@ -1,22 +1,28 @@
-"""Idempotent startup seed: units, COA from data/COA.xlsx, default users."""
+"""Startup seed: taxonomy + COA from data/*.xlsx, default users. Resets finance master data."""
 from __future__ import annotations
 
 import logging
 from pathlib import Path
 
 from openpyxl import load_workbook
-from sqlalchemy import select
+from sqlalchemy import delete, select, text
 from sqlalchemy.dialects.postgresql import insert as pg_insert
 
 from modules.identity.infrastructure.models import SystemControl, User
-from modules.siabumdes.infrastructure.models import Account, UnitUsaha
-from shared.config import ROOT_DIR
+from modules.siabumdes.infrastructure.models import (
+    Account,
+    AccountCategory,
+    AccountSubcategory,
+    JournalEntry,
+    JournalItem,
+    Transaction,
+    UnitUsaha,
+)
+from shared.coa_taxonomy import COA_PATH, TAXONOMY_PATH, load_taxonomy_rows, valid_pair
 from shared.database import SessionLocal
 from shared.security import hash_password
 
 logger = logging.getLogger("sm85.seed")
-
-COA_PATH = ROOT_DIR / "data" / "COA.xlsx"
 
 UNIT_CATALOG = {
     "BUMDES": ("BUMDes (Pusat)", "Kantor pusat BUMDes"),
@@ -45,44 +51,67 @@ DEFAULT_USERS = [
 
 def _iter_coa_rows(path: Path):
     wb = load_workbook(path, data_only=True, read_only=True)
-    ws = wb[wb.sheetnames[0]]
-    for idx, row in enumerate(ws.iter_rows(min_row=2, values_only=True), start=2):
-        code = str(row[0]).strip() if row[0] else ""
-        if not code or code.lower() == "kode akun":
+    for sheet in wb.sheetnames:
+        ws = wb[sheet]
+        rows = list(ws.iter_rows(values_only=True))
+        if not rows:
             continue
-        name = str(row[1] or "").strip()
-        category = str(row[2] or "").strip().lower()
-        subcategory = str(row[3] or "").strip().lower()
-        normal_balance = str(row[4] or "").strip().lower()
-        group = str(row[5] or "BUMDES").strip().upper()
-        if not name or not category or normal_balance not in {"debit", "kredit"}:
+        header = [str(c or "").strip().lower() for c in rows[0]]
+        if header[:5] != ["code", "name", "category", "subcategory", "normal_balance"]:
             continue
-        yield {
-            "code": code,
-            "name": name,
-            "category": category,
-            "subcategory": subcategory,
-            "normal_balance": normal_balance,
-            "group_code": group,
-        }
+        for raw in rows[1:]:
+            if not raw or not raw[0]:
+                continue
+            code = str(raw[0]).strip()
+            name = str(raw[1] or "").strip()
+            category = str(raw[2] or "").strip().lower()
+            subcategory = str(raw[3] or "").strip().lower()
+            normal_balance = str(raw[4] or "").strip().lower()
+            group = str(raw[5] or sheet).strip().upper() if len(raw) > 5 else sheet.upper()
+            if not name or normal_balance not in {"debit", "kredit"}:
+                continue
+            if not valid_pair(category, subcategory):
+                logger.warning("skip COA %s %s: unknown %s/%s", group, code, category, subcategory)
+                continue
+            yield {
+                "code": code,
+                "name": name,
+                "category": category,
+                "subcategory": subcategory,
+                "normal_balance": normal_balance,
+                "group_code": group,
+            }
     wb.close()
 
 
 async def seed_if_needed() -> None:
     async with SessionLocal() as session:
         try:
+            await _reset_finance(session)
             units = await _seed_units(session)
+            await _seed_taxonomy(session)
             await _seed_coa(session, units)
             await _seed_users(session, units)
             existing = await session.get(SystemControl, "default")
             if not existing:
                 session.add(SystemControl(id="default", recording_locked=False))
             await session.commit()
-            logger.info("seed completed")
+            logger.info("seed completed from %s + %s", TAXONOMY_PATH.name, COA_PATH.name)
         except Exception:
             await session.rollback()
             logger.exception("seed failed")
             raise
+
+
+async def _reset_finance(session) -> None:
+    """Empty transactional + COA tables so workbook is the only source."""
+    await session.execute(delete(JournalItem))
+    await session.execute(delete(JournalEntry))
+    await session.execute(delete(Transaction))
+    await session.execute(delete(Account))
+    await session.execute(delete(AccountSubcategory))
+    await session.execute(delete(AccountCategory))
+    logger.info("finance master data reset")
 
 
 async def _seed_units(session) -> dict[str, UnitUsaha]:
@@ -92,15 +121,44 @@ async def _seed_units(session) -> dict[str, UnitUsaha]:
             continue
         if code in existing:
             row = existing[code]
-            if row.name != name or row.description != desc:
-                row.name = name
-                row.description = desc
+            row.name = name
+            row.description = desc
             continue
         row = UnitUsaha(code=code, name=name, description=desc, active=True)
         session.add(row)
         existing[code] = row
     await session.flush()
     return existing
+
+
+async def _seed_taxonomy(session) -> None:
+    rows = load_taxonomy_rows()
+    if not rows:
+        logger.warning("taxonomy workbook missing at %s", TAXONOMY_PATH)
+        return
+    seen_cat: set[str] = set()
+    for item in rows:
+        if item["category"] not in seen_cat:
+            session.add(
+                AccountCategory(
+                    slug=item["category"],
+                    label=item["label_category"],
+                    normal_balance=item["normal_balance"] or "debit",
+                )
+            )
+            seen_cat.add(item["category"])
+    await session.flush()
+    for item in rows:
+        session.add(
+            AccountSubcategory(
+                slug=item["subcategory"],
+                category_slug=item["category"],
+                label=item["label_subcategory"],
+                is_system=item["is_system"],
+            )
+        )
+    await session.flush()
+    logger.info("taxonomy seeded categories=%s rows=%s", len(seen_cat), len(rows))
 
 
 async def _seed_coa(session, units: dict[str, UnitUsaha]) -> None:
@@ -110,9 +168,8 @@ async def _seed_coa(session, units: dict[str, UnitUsaha]) -> None:
     inserted = 0
     for item in _iter_coa_rows(COA_PATH):
         unit = units.get(item["group_code"])
-        stmt = (
-            pg_insert(Account)
-            .values(
+        session.add(
+            Account(
                 code=item["code"],
                 name=item["name"],
                 category=item["category"],
@@ -122,11 +179,10 @@ async def _seed_coa(session, units: dict[str, UnitUsaha]) -> None:
                 unit_usaha_id=unit.id if unit else None,
                 active=True,
             )
-            .on_conflict_do_nothing(constraint="uq_accounts_code_group")
         )
-        result = await session.execute(stmt)
-        inserted += result.rowcount or 0
-    logger.info("coa seed inserted=%s", inserted)
+        inserted += 1
+    await session.flush()
+    logger.info("coa seed inserted=%s from %s", inserted, COA_PATH.name)
 
 
 async def _seed_users(session, units: dict[str, UnitUsaha]) -> None:
