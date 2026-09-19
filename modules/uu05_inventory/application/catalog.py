@@ -201,6 +201,8 @@ class InventoryCatalogMixin:
                 select(StockAdjustment).where(StockAdjustment.product_id == product_id)
             )
         ).all():
+            # Adjustments may have posted finance journals (stock-adj:<id>).
+            await self.finance.cancel_inventory_journal(f"stock-adj:{adj.id}")
             await self.session.delete(adj)
         for card in (
             await self.session.scalars(select(StockCard).where(StockCard.product_id == product_id))
