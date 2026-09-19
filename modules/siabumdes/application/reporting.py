@@ -10,6 +10,7 @@ from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from modules.siabumdes.infrastructure.models import Account, Transaction, UnitUsaha
+from shared.coa_taxonomy import SUB_LABA_DICADANGKAN, SUB_MODAL_DESA
 
 
 def _f(value: Decimal | float | int | None) -> float:
@@ -175,49 +176,43 @@ class ReportingService:
             "arus_kas_bersih": total_masuk - total_keluar,
         }
 
-    async def _period_penyertaan(
+    async def _subcategory_balance(
         self,
-        start: date,
-        end: date,
-        unit_usaha_id: Optional[str],
-    ) -> tuple[float, float]:
+        subcategory: str,
+        *,
+        start: Optional[date] = None,
+        end: Optional[date] = None,
+        unit_usaha_id: Optional[str] = None,
+    ) -> float:
         group = await self._group_for(unit_usaha_id)
         accounts = {a.code: a for a in await self._accounts(group)}
         txs = await self._txs(start=start, end=end, unit_usaha_id=unit_usaha_id, pusat_only=unit_usaha_id is None)
-        desa = 0.0
-        masyarakat = 0.0
+        total = 0.0
         for tx in txs:
             credit = accounts.get(tx.credit_account_code)
             debit = accounts.get(tx.debit_account_code)
             amt = _f(tx.amount)
             for acc, sign in ((credit, 1.0), (debit, -1.0)):
-                if not acc or acc.category != "ekuitas" or _is_laba_account(acc):
-                    continue
-                if _is_masyarakat_modal(acc):
-                    masyarakat += sign * amt
-                else:
-                    desa += sign * amt
-        return _r(desa), _r(masyarakat)
+                if acc and acc.subcategory == subcategory:
+                    total += sign * amt
+        return _r(total)
 
     async def perubahan_ekuitas(self, start: date, end: date, unit_usaha_id: Optional[str] = None) -> dict[str, Any]:
         prev_year = start.year - 1
         prev_end = date(prev_year, 12, 31)
-        prev_start = date(prev_year, 1, 1)
-        opening = await self.neraca(prev_end, unit_usaha_id)
-        prev_lr = await self.laba_rugi(prev_start, prev_end, unit_usaha_id)
         curr_lr = await self.laba_rugi(start, end, unit_usaha_id)
 
-        prev_equity = _r(opening["total_ekuitas"])
-        n3 = prev_equity
+        n3 = await self._subcategory_balance(SUB_MODAL_DESA, end=prev_end, unit_usaha_id=unit_usaha_id)
         n4 = 0.0
-        n6, n7 = await self._period_penyertaan(start, end, unit_usaha_id)
+        n6 = await self._subcategory_balance(SUB_MODAL_DESA, start=start, end=end, unit_usaha_id=unit_usaha_id)
+        n7 = 0.0
         n8 = _r(n3 + n4 + n6 + n7)
 
         laba_asli = _r(curr_lr["laba_bersih"])
         n11 = 0.0
-        n12 = _r(_r(prev_lr["laba_bersih"]) * 0.18)
-        n13 = _r(laba_asli - laba_asli * (0.35 + 0.07 + 0.05 + 0.05))
-        n15 = _r(laba_asli * 0.20)
+        n12 = await self._subcategory_balance(SUB_LABA_DICADANGKAN, end=prev_end, unit_usaha_id=unit_usaha_id)
+        n13 = _r(laba_asli * 0.48)
+        n15 = _r(laba_asli * 0.30)
         n16 = 0.0
         n17 = _r(n11 + n12 + n13 - n15 - n16)
         n18 = _r(n8 + n17)
@@ -263,8 +258,8 @@ class ReportingService:
                 "penasihat_7": _r(laba_asli * 0.07),
                 "pengawas_5": _r(laba_asli * 0.05),
                 "dana_sosial_5": _r(laba_asli * 0.05),
-                "pades_desa_20": n15,
-                "penguatan_modal_18_tahun_lalu": n12,
+                "pades_desa_30": n15,
+                "laba_dicadangkan_tahun_lalu": n12,
             },
         }
 
