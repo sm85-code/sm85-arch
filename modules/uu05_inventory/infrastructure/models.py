@@ -67,8 +67,12 @@ class Product(Base):
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=_utcnow)
 
     category: Mapped["StockCategory"] = relationship(back_populates="products")
-    stock_cards: Mapped[list["StockCard"]] = relationship(back_populates="product")
-    adjustments: Mapped[list["StockAdjustment"]] = relationship(back_populates="product")
+    stock_cards: Mapped[list["StockCard"]] = relationship(
+        back_populates="product", cascade="all, delete-orphan"
+    )
+    adjustments: Mapped[list["StockAdjustment"]] = relationship(
+        back_populates="product", cascade="all, delete-orphan"
+    )
 
 
 class StockCard(Base):
