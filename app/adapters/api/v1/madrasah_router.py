@@ -7,6 +7,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from app.modules.madrasah.application import services
 from app.modules.madrasah.application.schemas import AbsenBulkRequest, LoginRequest, ProgresCreateRequest
 from app.modules.madrasah.infrastructure.database import get_db_madrasah
+from app.modules.madrasah.infrastructure.seeder import seed_madrasah
 
 madrasah_router = APIRouter()
 router = madrasah_router
@@ -14,6 +15,15 @@ router = madrasah_router
 
 def _user_out(user) -> dict:
     return {"id": user.id, "nama": user.nama, "no_hp": user.no_hp, "role": user.role}
+
+
+@madrasah_router.get("/seed-now")
+async def seed_now(session: AsyncSession = Depends(get_db_madrasah)):
+    try:
+        ids = await seed_madrasah(session)
+    except RuntimeError as exc:
+        raise HTTPException(status_code=status.HTTP_503_SERVICE_UNAVAILABLE, detail=str(exc)) from exc
+    return {"status": "Database madrasah berhasil diisi data awal JWT", "ids": ids}
 
 
 @madrasah_router.post("/auth/login")
