@@ -9,8 +9,10 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from app.modules.madrasah.application.schemas import AbsenBulkRequest, LoginRequest, ProgresCreateRequest
 from app.modules.madrasah.infrastructure.models import (
     AbsensiMadrasah,
+    KelasMadrasah,
     PengumumanMadrasah,
     ProgresHafalan,
+    SantriMadrasah,
     TagihanSyahriyah,
     UserMadrasah,
 )
@@ -34,6 +36,19 @@ async def login_by_phone(session: AsyncSession, payload: LoginRequest) -> UserMa
     return user
 
 
+async def list_kelas(session: AsyncSession) -> list[KelasMadrasah]:
+    result = await session.execute(select(KelasMadrasah).order_by(KelasMadrasah.nama_kelas))
+    return list(result.scalars())
+
+
+async def list_santri(session: AsyncSession, kelas_id: str | None = None) -> list[SantriMadrasah]:
+    stmt = select(SantriMadrasah).order_by(SantriMadrasah.nama)
+    if kelas_id:
+        stmt = stmt.where(SantriMadrasah.kelas_id == kelas_id)
+    result = await session.execute(stmt)
+    return list(result.scalars())
+
+
 async def bulk_insert_absensi(session: AsyncSession, payload: AbsenBulkRequest) -> list[AbsensiMadrasah]:
     guru = await session.get(UserMadrasah, payload.guru_id)
     if not guru or guru.role != "guru":
@@ -53,6 +68,9 @@ async def bulk_insert_absensi(session: AsyncSession, payload: AbsenBulkRequest) 
 
 
 async def create_progres(session: AsyncSession, payload: ProgresCreateRequest) -> ProgresHafalan:
+    santri = await session.get(SantriMadrasah, payload.santri_id)
+    if not santri:
+        raise MadrasahNotFoundError("Santri tidak ditemukan")
     row = ProgresHafalan(
         tanggal=payload.tanggal,
         santri_id=payload.santri_id,
