@@ -35,6 +35,29 @@ def _utcnow() -> datetime:
     return datetime.now(timezone.utc)
 
 
+class AccountCategory(Base):
+    __tablename__ = "account_categories"
+
+    slug: Mapped[str] = mapped_column(String(64), primary_key=True)
+    label: Mapped[str] = mapped_column(String(128), nullable=False)
+    normal_balance: Mapped[str] = mapped_column(String(8), nullable=False)
+
+    subcategories: Mapped[list["AccountSubcategory"]] = relationship(back_populates="category")
+
+
+class AccountSubcategory(Base):
+    __tablename__ = "account_subcategories"
+
+    slug: Mapped[str] = mapped_column(String(128), primary_key=True)
+    category_slug: Mapped[str] = mapped_column(
+        String(64), ForeignKey("account_categories.slug", ondelete="CASCADE"), nullable=False, index=True
+    )
+    label: Mapped[str] = mapped_column(String(128), nullable=False)
+    is_system: Mapped[bool] = mapped_column(Boolean, nullable=False, default=False)
+
+    category: Mapped["AccountCategory"] = relationship(back_populates="subcategories")
+
+
 class UnitUsaha(Base):
     __tablename__ = "unit_usaha"
 
