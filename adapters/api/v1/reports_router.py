@@ -36,8 +36,21 @@ def _need_dates(start_date: Optional[str], end_date: Optional[str]) -> tuple[dat
     return start, end
 
 
-def _pdf(title: str, headers: list[str], rows: list[list], subtitle: str = "") -> Response:
-    blob = generate_pdf_report(title=title, subtitle=subtitle, table_headers=headers, table_rows=rows)
+def _pdf(
+    title: str,
+    headers: list[str],
+    rows: list[list],
+    subtitle: str = "",
+    *,
+    landscape: bool = False,
+) -> Response:
+    blob = generate_pdf_report(
+        title=title,
+        subtitle=subtitle,
+        table_headers=headers,
+        table_rows=rows,
+        landscape=landscape,
+    )
     return Response(
         content=blob,
         media_type="application/pdf",
@@ -45,8 +58,21 @@ def _pdf(title: str, headers: list[str], rows: list[list], subtitle: str = "") -
     )
 
 
-def _xlsx(title: str, headers: list[str], rows: list[list]) -> Response:
-    blob = generate_excel_report(headers, rows, title)
+def _xlsx(
+    title: str,
+    headers: list[str],
+    rows: list[list],
+    subtitle: str = "",
+    *,
+    landscape: bool = False,
+) -> Response:
+    blob = generate_excel_report(
+        headers,
+        rows,
+        title,
+        subtitle=subtitle,
+        landscape=landscape,
+    )
     return Response(
         content=blob,
         media_type="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
@@ -212,7 +238,8 @@ async def report_pdf(
         subtitle = f"{start_date} s.d. {end_date}"
     elif as_of_date:
         subtitle = f"Per {as_of_date}"
-    return _pdf(title, headers, rows, subtitle)
+    landscape = report_key in {"ledger", "buku-besar"}
+    return _pdf(title, headers, rows, subtitle, landscape=landscape)
 
 
 @router.get("/reports/{report_key}/excel")
@@ -229,7 +256,13 @@ async def report_excel(
     payload, title, headers, rows = await _materialize(
         session, user, report_key, start_date, end_date, as_of_date, unit_usaha_id, account_code
     )
-    return _xlsx(title, headers, rows)
+    subtitle = ""
+    if start_date and end_date:
+        subtitle = f"{start_date} s.d. {end_date}"
+    elif as_of_date:
+        subtitle = f"Per {as_of_date}"
+    landscape = report_key in {"ledger", "buku-besar"}
+    return _xlsx(title, headers, rows, subtitle, landscape=landscape)
 
 
 async def _materialize(
