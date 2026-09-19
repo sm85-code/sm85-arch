@@ -19,7 +19,6 @@ READONLY_ROLES = ("pengawas", "penasihat")
 API_PREFIX = "/api"
 APP_TITLE = os.getenv("APP_TITLE", "SM85 Arch API")
 
-# Frontend public role names. Internal aliases are mapped on the way out.
 PUBLIC_ROLES = (
     "admin",
     "direktur",
@@ -35,13 +34,17 @@ ROLE_ALIASES_TO_PUBLIC = {
     "pengelola_unit": "pengelola",
 }
 
+EXTRA_CORS_ORIGINS = [
+    "https://banihusen-sgxg4.ondigitalocean.app",
+]
+
 
 def _csv(name: str, default: str = "") -> list[str]:
     raw = os.getenv(name, default)
     return [part.strip().rstrip("/") for part in raw.split(",") if part.strip()]
 
 
-CORS_ORIGINS = _csv("CORS_ORIGINS", "http://localhost:3000")
+CORS_ORIGINS = list(dict.fromkeys(_csv("CORS_ORIGINS", "http://localhost:3000") + EXTRA_CORS_ORIGINS))
 CORS_ORIGIN_REGEX = os.getenv("CORS_ORIGIN_REGEX", "").strip() or None
 
 JWT_SECRET = os.getenv("JWT_SECRET", "")
@@ -49,7 +52,6 @@ JWT_ALGORITHM = os.getenv("JWT_ALGORITHM", "HS256")
 JWT_EXPIRE_HOURS = int(os.getenv("JWT_EXPIRE_HOURS", str(24 * 7)))
 JWT_COOKIE_NAME = os.getenv("JWT_COOKIE_NAME", "bumdes_token")
 
-# Split-host App Platform deploy: third-party cookie requires None + Secure.
 COOKIE_SECURE = os.getenv("COOKIE_SECURE", "true").strip().lower() in {"1", "true", "yes"}
 COOKIE_SAMESITE = os.getenv("COOKIE_SAMESITE", "none").strip().lower() or "none"
 COOKIE_PATH = os.getenv("COOKIE_PATH", "/")
@@ -58,7 +60,6 @@ POSTGRES_SSL = os.getenv("POSTGRES_SSL", "true").strip().lower() in {"1", "true"
 
 
 def public_role(raw: str | None) -> str:
-    """Map stored/internal role names to the frontend contract."""
     value = (raw or "").strip().lower()
     return ROLE_ALIASES_TO_PUBLIC.get(value, value)
 
