@@ -73,6 +73,10 @@ class CancelBody(BaseModel):
     stock_card_id: str
 
 
+class CancelAdjustBody(BaseModel):
+    adjustment_id: str
+
+
 class ProductCreateBody(BaseModel):
     sku: str
     name: str
@@ -276,6 +280,17 @@ async def list_movements(
     return await InventoryService(session).list_movements(
         product_id=product_id, direction=direction, limit=limit
     )
+
+
+
+@router.post("/cancel-adjustment")
+async def cancel_adjustment(
+    body: CancelAdjustBody,
+    _: User = Depends(require_inventory_user),
+    session: AsyncSession = Depends(get_db),
+):
+    await InventoryService(session).cancel_adjustment(body.adjustment_id)
+    return {"cancelled": body.adjustment_id}
 
 
 @router.get("/adjustments")

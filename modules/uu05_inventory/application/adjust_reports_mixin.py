@@ -123,6 +123,21 @@ class InventoryAdjustReportsMixin:
             for a in rows
         ]
 
+    async def cancel_adjustment(self, adjustment_id: str) -> None:
+        """Reverse qty impact, remove finance journal, delete adjustment row."""
+        row = await self.session.get(StockAdjustment, adjustment_id)
+        if not row:
+            # Product delete may have removed the row before journals were cleaned.
+            await self.finance.cancel_inventory_journal(f"stock-adj:{adjustment_id}")
+            return
+        product = await self.session.get(Product, row.product_id)
+        if product:
+            # Reverse the delta that was applied at create time.
+            product.qty_on_hand = max(0, product.qty_on_hand - row.quantity_delta)
+        await self.finance.cancel_inventory_journal(f"stock-adj:{row.id}")
+        await self.session.delete(row)
+        await self.session.flush()
+
 
     async def stock_valuation_report(self) -> dict[str, Any]:
         await self.ensure_categories()
