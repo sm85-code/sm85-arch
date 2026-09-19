@@ -29,7 +29,6 @@ class InventoryCatalogMixin:
             raise ValueError("Unit usaha UU05 belum terdaftar")
         return unit
 
-
     async def ensure_categories(self, unit_usaha_id: Optional[str] = None) -> list[StockCategory]:
         if unit_usaha_id:
             uid = unit_usaha_id
@@ -58,11 +57,9 @@ class InventoryCatalogMixin:
             await self.session.flush()
         return [by_code[code] for code, _ in DEFAULT_CATEGORIES if code in by_code]
 
-
     async def list_categories(self) -> list[dict[str, Any]]:
         rows = await self.ensure_categories()
         return [{"id": r.id, "code": r.code, "name": r.name, "unit_usaha_id": r.unit_usaha_id} for r in rows]
-
 
     def _product_query(
         self,
@@ -80,7 +77,6 @@ class InventoryCatalogMixin:
             like = f"%{q.strip()}%"
             stmt = stmt.where(or_(Product.sku.ilike(like), Product.name.ilike(like)))
         return stmt
-
 
     @staticmethod
     def _product_dict(p: Product) -> dict[str, Any]:
@@ -100,7 +96,6 @@ class InventoryCatalogMixin:
             "created_at": p.created_at.isoformat() if p.created_at else None,
         }
 
-
     async def list_products(
         self,
         *,
@@ -115,7 +110,6 @@ class InventoryCatalogMixin:
             )
         ).all()
         return [self._product_dict(p) for p in rows]
-
 
     async def create_product(
         self,
@@ -160,7 +154,6 @@ class InventoryCatalogMixin:
         await self.session.refresh(product, attribute_names=["category"])
         return self._product_dict(product)
 
-
     async def update_product(
         self,
         product_id: str,
@@ -193,12 +186,14 @@ class InventoryCatalogMixin:
         await self.session.refresh(product, attribute_names=["category"])
         return self._product_dict(product)
 
-
     async def delete_product(self, product_id: str) -> None:
         product = await self.session.get(Product, product_id)
         if not product:
             raise ValueError("produk tidak ditemukan")
         if product.qty_on_hand != 0:
-            raise ValueError("stok harus 0 sebelum produk dihapus")
+            raise ValueError(
+                "stok harus 0 sebelum produk dihapus — batalkan stock-in/out tersisa dulu"
+            )
+        # Stock cards / adjustments cascade via FK ondelete=CASCADE.
         await self.session.delete(product)
         await self.session.flush()

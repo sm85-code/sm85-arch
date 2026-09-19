@@ -62,7 +62,6 @@ class InventoryStockMixin:
         await self.session.flush()
         return card
 
-
     async def stock_out(
         self,
         *,
@@ -113,10 +112,19 @@ class InventoryStockMixin:
         await self.session.flush()
         return card
 
-
     async def cancel_movement(self, stock_card_id: str) -> None:
+        """Reverse qty, remove finance journal, and delete the stock card.
+
+        Soft-cancel left cancelled rows (and confusing \"jurnal dibatalkan\") in the UI;
+        callers expect cancel to leave the ledger clean.
+        """
         card = await self.session.get(StockCard, stock_card_id)
-        if not card or card.finance_status == "cancelled":
+        if not card:
+            return
+        if card.finance_status == "cancelled":
+            # Leftover soft-cancelled row from older builds — just purge.
+            await self.session.delete(card)
+            await self.session.flush()
             return
         product = await self.session.get(Product, card.product_id)
         if product:
@@ -126,9 +134,8 @@ class InventoryStockMixin:
                 product.qty_on_hand += card.quantity
         if card.reference:
             await self.finance.cancel_inventory_journal(card.reference)
-        card.finance_status = "cancelled"
+        await self.session.delete(card)
         await self.session.flush()
-
 
     async def list_movements(
         self,
@@ -147,6 +154,8 @@ class InventoryStockMixin:
             stmt = stmt.where(StockCard.product_id == product_id)
         if direction in {"in", "out"}:
             stmt = stmt.where(StockCard.direction == direction)
+        # Cancelled rows are purged on cancel; hide any legacy soft-cancels.
+        stmt = stmt.where(StockCard.finance_status != "cancelled")
         rows = (await self.session.scalars(stmt)).all()
         return [
             {
