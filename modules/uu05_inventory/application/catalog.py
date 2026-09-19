@@ -8,7 +8,7 @@ from sqlalchemy import Select, or_, select
 from sqlalchemy.orm import selectinload
 
 from modules.siabumdes.infrastructure.models import UnitUsaha
-from modules.uu05_inventory.infrastructure.models import Product, StockCategory
+from modules.uu05_inventory.infrastructure.models import Product, StockAdjustment, StockCard, StockCategory
 
 UU05_CODE = "UU05"
 
@@ -194,6 +194,20 @@ class InventoryCatalogMixin:
             raise ValueError(
                 "stok harus 0 sebelum produk dihapus — batalkan stock-in/out tersisa dulu"
             )
-        # Stock cards / adjustments cascade via FK ondelete=CASCADE.
+        # Delete children first. ORM delete of Product alone tries to SET NULL
+        # product_id on stock_adjustments/stock_cards (NOT NULL) despite DB CASCADE.
+        for adj in (
+            await self.session.scalars(
+                select(StockAdjustment).where(StockAdjustment.product_id == product_id)
+            )
+        ).all():
+            await self.session.delete(adj)
+        for card in (
+            await self.session.scalars(select(StockCard).where(StockCard.product_id == product_id))
+        ).all():
+            if card.finance_status == "posted" and card.reference:
+                await self.finance.cancel_inventory_journal(card.reference)
+            await self.session.delete(card)
+        await self.session.flush()
         await self.session.delete(product)
         await self.session.flush()
