@@ -72,40 +72,115 @@ class ReportingService:
         unit = await self.session.get(UnitUsaha, unit_usaha_id)
         return unit.code if unit else "BUMDES"
 
-    async def laba_rugi(self, start: date, end: date, unit_usaha_id: Optional[str] = None) -> dict[str, Any]:
-        group = await self._group_for(unit_usaha_id)
-        accounts = {a.code: a for a in await self._accounts(group)}
-        txs = await self._txs(start=start, end=end, unit_usaha_id=unit_usaha_id, pusat_only=unit_usaha_id is None)
-        pendapatan: dict[str, Decimal] = defaultdict(lambda: Decimal("0"))
-        beban: dict[str, Decimal] = defaultdict(lambda: Decimal("0"))
+    _HPP_ENTITIES = {"UU05", "UU06"}
+
+    @staticmethod
+    def _entity_prefix(entity: str) -> str:
+        return f"{(entity or 'BUMDES').strip().upper()}-"
+
+    def _account_index(self, accounts: list[Account], entity: str) -> dict[str, Account]:
+        prefix = self._entity_prefix(entity)
+        idx: dict[str, Account] = {}
+        for acc in accounts:
+            idx[acc.code] = acc
+            if not acc.code.upper().startswith(prefix):
+                idx[f"{entity}-{acc.code}"] = acc
+        return idx
+
+    def _code_in_entity(self, code: str, entity: str) -> bool:
+        if not code:
+            return False
+        prefix = self._entity_prefix(entity)
+        return code.strip().upper().startswith(prefix)
+
+    async def _resolve_entity(
+        self,
+        unit_usaha_id: Optional[str] = None,
+        entity: Optional[str] = None,
+    ) -> str:
+        if entity:
+            return entity.strip().upper()
+        return await self._group_for(unit_usaha_id)
+
+    async def laba_rugi(
+        self,
+        start: date,
+        end: date,
+        unit_usaha_id: Optional[str] = None,
+        entity: Optional[str] = None,
+    ) -> dict[str, Any]:
+        group = await self._resolve_entity(unit_usaha_id, entity)
+        prefix = self._entity_prefix(group)
+        has_hpp = group in self._HPP_ENTITIES
+        accounts = self._account_index(await self._accounts(group), group)
+        txs = await self._txs(
+            start=start,
+            end=end,
+            unit_usaha_id=unit_usaha_id,
+            pusat_only=unit_usaha_id is None and group == "BUMDES",
+        )
+        debit: dict[str, Decimal] = defaultdict(lambda: Decimal("0"))
+        credit: dict[str, Decimal] = defaultdict(lambda: Decimal("0"))
         for tx in txs:
-            credit = accounts.get(tx.credit_account_code)
-            debit = accounts.get(tx.debit_account_code)
-            if credit and credit.category == "pendapatan":
-                pendapatan[credit.code] += tx.amount
-            if debit and debit.category in {"beban", "hpp"}:
-                beban[debit.code] += tx.amount
-        pend_rows = [
-            {"code": c, "name": accounts[c].name, "amount": _f(v)}
-            for c, v in sorted(pendapatan.items())
-            if c in accounts
-        ]
-        beban_rows = [
-            {"code": c, "name": accounts[c].name, "amount": _f(v)}
-            for c, v in sorted(beban.items())
-            if c in accounts
-        ]
-        total_p = sum(r["amount"] for r in pend_rows)
-        total_b = sum(r["amount"] for r in beban_rows)
+            d_code = (tx.debit_account_code or "").strip()
+            c_code = (tx.credit_account_code or "").strip()
+            if not (
+                self._code_in_entity(d_code, group)
+                or self._code_in_entity(c_code, group)
+                or d_code in accounts
+                or c_code in accounts
+            ):
+                continue
+            if d_code:
+                debit[d_code] += tx.amount
+            if c_code:
+                credit[c_code] += tx.amount
+
+        def _net_rows(category: str, formula: str) -> list[dict[str, Any]]:
+            rows = []
+            seen: set[str] = set()
+            for code in sorted(set(debit) | set(credit) | set(accounts)):
+                acc = accounts.get(code)
+                if not acc or acc.category != category or acc.code in seen:
+                    continue
+                seen.add(acc.code)
+                keys = {acc.code, f"{group}-{acc.code}"}
+                d = sum((debit.get(k, Decimal("0")) for k in keys), Decimal("0"))
+                c = sum((credit.get(k, Decimal("0")) for k in keys), Decimal("0"))
+                amt = (c - d) if formula == "kredit" else (d - c)
+                if amt == 0:
+                    continue
+                rows.append({
+                    "code": acc.code if acc.code.upper().startswith(prefix) else f"{group}-{acc.code}",
+                    "name": acc.name,
+                    "amount": _f(amt),
+                })
+            return rows
+
+        pend_rows = _net_rows("pendapatan", "kredit")
+        hpp_rows = _net_rows("hpp", "debit") if has_hpp else []
+        beban_rows = _net_rows("beban", "debit")
+        total_p = _r(sum(r["amount"] for r in pend_rows))
+        total_hpp = _r(sum(r["amount"] for r in hpp_rows)) if has_hpp else 0.0
+        total_b = _r(sum(r["amount"] for r in beban_rows))
+        laba_kotor = _r(total_p - total_hpp) if has_hpp else total_p
+        laba_bersih = _r(laba_kotor - total_b)
         return {
             "pendapatan": pend_rows,
             "beban": beban_rows,
+            "hpp": hpp_rows,
             "total_pendapatan": total_p,
+            "total_hpp": total_hpp,
+            "laba_kotor": laba_kotor if has_hpp else None,
             "total_beban": total_b,
-            "laba_bersih": total_p - total_b,
+            "laba_bersih": laba_bersih,
+            "has_hpp": has_hpp,
+            "format": "laba-kotor" if has_hpp else "ringkas",
             "start_date": start.isoformat(),
             "end_date": end.isoformat(),
             "group": group,
+            "entity": group,
+            "account_prefix": prefix.rstrip("-"),
         }
 
     async def neraca(self, as_of: date, unit_usaha_id: Optional[str] = None) -> dict[str, Any]:
@@ -201,13 +276,11 @@ class ReportingService:
         prev_year = start.year - 1
         prev_end = date(prev_year, 12, 31)
         curr_lr = await self.laba_rugi(start, end, unit_usaha_id)
-
         n3 = await self._subcategory_balance(SUB_MODAL_DESA, end=prev_end, unit_usaha_id=unit_usaha_id)
         n4 = 0.0
         n6 = await self._subcategory_balance(SUB_MODAL_DESA, start=start, end=end, unit_usaha_id=unit_usaha_id)
         n7 = 0.0
         n8 = _r(n3 + n4 + n6 + n7)
-
         laba_asli = _r(curr_lr["laba_bersih"])
         n11 = 0.0
         n12 = await self._subcategory_balance(SUB_LABA_DICADANGKAN, end=prev_end, unit_usaha_id=unit_usaha_id)
@@ -218,14 +291,7 @@ class ReportingService:
         n18 = _r(n8 + n17)
 
         def row(no, label, amount=None, *, kind="data", indent=0, bold=False):
-            return {
-                "no": no,
-                "label": label,
-                "amount": amount,
-                "kind": kind,
-                "indent": indent,
-                "bold": bold,
-            }
+            return {"no": no, "label": label, "amount": amount, "kind": kind, "indent": indent, "bold": bold}
 
         rows = [
             row(1, "PENYERTAAN MODAL", kind="section"),
@@ -268,11 +334,7 @@ class ReportingService:
         nr = await self.neraca(end, unit_usaha_id)
         ak = await self.arus_kas(start, end, unit_usaha_id)
         return {
-            "informasi_umum": {
-                "nama": "BUMDes",
-                "periode_awal": start.isoformat(),
-                "periode_akhir": end.isoformat(),
-            },
+            "informasi_umum": {"nama": "BUMDes", "periode_awal": start.isoformat(), "periode_akhir": end.isoformat()},
             "ringkasan_kinerja": {
                 "total_pendapatan": lr["total_pendapatan"],
                 "total_beban": lr["total_beban"],
@@ -330,26 +392,19 @@ class ReportingService:
             total_c += credit
             other = tx.credit_account_code if tx.debit_account_code == account_code else tx.debit_account_code
             other_acc = accounts.get(other)
-            entries.append(
-                {
-                    "id": tx.id,
-                    "date": tx.date.isoformat(),
-                    "description": tx.description,
-                    "other_account_code": other,
-                    "other_account_name": other_acc.name if other_acc else other,
-                    "reference": tx.reference,
-                    "debit": _f(debit),
-                    "credit": _f(credit),
-                    "balance": _f(saldo),
-                }
-            )
+            entries.append({
+                "id": tx.id,
+                "date": tx.date.isoformat(),
+                "description": tx.description,
+                "other_account_code": other,
+                "other_account_name": other_acc.name if other_acc else other,
+                "reference": tx.reference,
+                "debit": _f(debit),
+                "credit": _f(credit),
+                "balance": _f(saldo),
+            })
         return {
-            "account": {
-                "code": acc.code,
-                "name": acc.name,
-                "category": acc.category,
-                "normal_balance": acc.normal_balance,
-            },
+            "account": {"code": acc.code, "name": acc.name, "category": acc.category, "normal_balance": acc.normal_balance},
             "saldo_awal": _f(saldo_awal),
             "saldo_akhir": _f(saldo),
             "total_debit": _f(total_d),
@@ -370,18 +425,16 @@ class ReportingService:
         units = []
         for unit in await self._units():
             lr = await self.laba_rugi(start, end, unit.id)
-            units.append(
-                {
-                    "id": unit.id,
-                    "code": unit.code,
-                    "name": unit.name,
-                    "pendapatan": lr["total_pendapatan"],
-                    "beban": lr["total_beban"],
-                    "laba_bersih": lr["laba_bersih"],
-                    "share_pengelola_30": round(lr["laba_bersih"] * 0.30),
-                    "share_bumdes_70": round(lr["laba_bersih"] * 0.70),
-                }
-            )
+            units.append({
+                "id": unit.id,
+                "code": unit.code,
+                "name": unit.name,
+                "pendapatan": lr["total_pendapatan"],
+                "beban": lr["total_beban"],
+                "laba_bersih": lr["laba_bersih"],
+                "share_pengelola_30": round(lr["laba_bersih"] * 0.30),
+                "share_bumdes_70": round(lr["laba_bersih"] * 0.70),
+            })
         return {"bumdes": bumdes, "units": units}
 
     async def dashboard(
@@ -401,7 +454,6 @@ class ReportingService:
         else:
             lr = await self.laba_rugi(start or date(2000, 1, 1), end or date.today(), None)
             txs = await self._txs(start=start, end=end)
-
         bucket_len = 10 if granularity == "day" else 7
         monthly: dict[str, dict[str, float]] = {}
         group = await self._group_for(unit_usaha_id)
@@ -420,22 +472,19 @@ class ReportingService:
         series = [monthly[k] for k in sorted(monthly)]
         if not start and not end:
             series = series[-6:]
-
         unit_summaries = []
         for unit in await self._units():
             if unit_usaha_id and unit.id != unit_usaha_id:
                 continue
             u_lr = await self.laba_rugi(start or date(2000, 1, 1), end or date.today(), unit.id)
-            unit_summaries.append(
-                {
-                    "id": unit.id,
-                    "code": unit.code,
-                    "name": unit.name,
-                    "pendapatan": u_lr["total_pendapatan"],
-                    "beban": u_lr["total_beban"],
-                    "laba": u_lr["laba_bersih"],
-                }
-            )
+            unit_summaries.append({
+                "id": unit.id,
+                "code": unit.code,
+                "name": unit.name,
+                "pendapatan": u_lr["total_pendapatan"],
+                "beban": u_lr["total_beban"],
+                "laba": u_lr["laba_bersih"],
+            })
         return {
             "total_pendapatan": lr["total_pendapatan"],
             "total_beban": lr["total_beban"],
