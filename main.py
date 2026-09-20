@@ -16,11 +16,11 @@ from adapters.api.v1.admin_control_router import router as admin_control_router
 from adapters.api.v1.auth_router import router as auth_router
 from adapters.api.v1.io_router import router as io_router
 from adapters.api.v1.master_data_router import router as master_data_router
+from adapters.api.v1.period_close_router import router as period_close_router
 from adapters.api.v1.public_router import router as public_router
 from adapters.api.v1.reports_router import router as reports_router
 from adapters.api.v1.transaction_router import router as transaction_router
 from app.adapters.api.v1.madrasah_router import madrasah_router
-from routers.reports.periods import router as period_close_router
 from shared.config import APP_TITLE, CORS_ORIGIN_REGEX, CORS_ORIGINS, origin_allowed
 from shared.database import engine
 from shared.schema import ensure_schema
