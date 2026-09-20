@@ -1,4 +1,4 @@
-"""Isolated ORM models for the madrasah Neon database."""
+"""Isolated ORM models for the madrasah Neon database (multi-role schema)."""
 from __future__ import annotations
 
 import uuid
@@ -6,7 +6,7 @@ from datetime import date, datetime, timezone
 from decimal import Decimal
 from typing import Optional
 
-from sqlalchemy import Boolean, Date, DateTime, ForeignKey, Numeric, String, Text
+from sqlalchemy import Boolean, Date, DateTime, ForeignKey, Integer, Numeric, String, Text
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 
 from app.modules.madrasah.infrastructure.database import MadrasahBase
@@ -27,15 +27,46 @@ class UserMadrasah(MadrasahBase):
     nama: Mapped[str] = mapped_column(String(255), nullable=False)
     no_hp: Mapped[str] = mapped_column(String(32), unique=True, nullable=False, index=True)
     password_hash: Mapped[str] = mapped_column(String(255), nullable=False)
-    role: Mapped[str] = mapped_column(String(32), nullable=False, index=True)  # guru | wali_santri
+    role: Mapped[str] = mapped_column(String(32), nullable=False, index=True)
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=_utcnow)
 
     santri_asuh: Mapped[list["SantriMadrasah"]] = relationship(back_populates="orang_tua")
     absensi_dicatat: Mapped[list["AbsensiMadrasah"]] = relationship(back_populates="guru")
     pengumuman: Mapped[list["PengumumanMadrasah"]] = relationship(back_populates="pembuat")
+    rombel_asuh: Mapped[list["RombelMadrasah"]] = relationship(back_populates="wali_kelas")
+
+
+class TingkatMadrasah(MadrasahBase):
+    __tablename__ = "madrasah_tingkat"
+
+    id: Mapped[str] = mapped_column(String(64), primary_key=True, default=_uuid)
+    nama: Mapped[str] = mapped_column(String(128), nullable=False, unique=True)
+    urutan: Mapped[int] = mapped_column(Integer, nullable=False, default=1)
+
+    rombel: Mapped[list["RombelMadrasah"]] = relationship(back_populates="tingkat")
+
+
+class RombelMadrasah(MadrasahBase):
+    __tablename__ = "madrasah_rombel"
+
+    id: Mapped[str] = mapped_column(String(64), primary_key=True, default=_uuid)
+    nama: Mapped[str] = mapped_column(String(128), nullable=False, unique=True)
+    tingkat_id: Mapped[Optional[str]] = mapped_column(
+        String(64), ForeignKey("madrasah_tingkat.id", ondelete="SET NULL"), nullable=True, index=True
+    )
+    wali_kelas_id: Mapped[Optional[str]] = mapped_column(
+        String(64), ForeignKey("madrasah_users.id", ondelete="SET NULL"), nullable=True, index=True
+    )
+
+    tingkat: Mapped[Optional["TingkatMadrasah"]] = relationship(back_populates="rombel")
+    wali_kelas: Mapped[Optional["UserMadrasah"]] = relationship(back_populates="rombel_asuh")
+    santri: Mapped[list["SantriMadrasah"]] = relationship(back_populates="rombel")
+    jadwal: Mapped[list["JadwalMadrasah"]] = relationship(back_populates="rombel")
 
 
 class KelasMadrasah(MadrasahBase):
+    """Legacy alias table kept so older Neon rows / frontend /kelas keep working."""
+
     __tablename__ = "madrasah_kelas"
 
     id: Mapped[str] = mapped_column(String(64), primary_key=True, default=_uuid)
@@ -52,15 +83,62 @@ class SantriMadrasah(MadrasahBase):
     kelas_id: Mapped[Optional[str]] = mapped_column(
         String(64), ForeignKey("madrasah_kelas.id", ondelete="SET NULL"), nullable=True, index=True
     )
+    rombel_id: Mapped[Optional[str]] = mapped_column(
+        String(64), ForeignKey("madrasah_rombel.id", ondelete="SET NULL"), nullable=True, index=True
+    )
     orang_tua_id: Mapped[Optional[str]] = mapped_column(
         String(64), ForeignKey("madrasah_users.id", ondelete="SET NULL"), nullable=True, index=True
     )
 
     kelas: Mapped[Optional["KelasMadrasah"]] = relationship(back_populates="santri")
+    rombel: Mapped[Optional["RombelMadrasah"]] = relationship(back_populates="santri")
     orang_tua: Mapped[Optional["UserMadrasah"]] = relationship(back_populates="santri_asuh")
     absensi: Mapped[list["AbsensiMadrasah"]] = relationship(back_populates="santri")
     hafalan: Mapped[list["ProgresHafalan"]] = relationship(back_populates="santri")
     tagihan: Mapped[list["TagihanSyahriyah"]] = relationship(back_populates="santri")
+
+
+class MapelMadrasah(MadrasahBase):
+    __tablename__ = "madrasah_mapel"
+
+    id: Mapped[str] = mapped_column(String(64), primary_key=True, default=_uuid)
+    kode: Mapped[str] = mapped_column(String(32), nullable=False, unique=True)
+    nama: Mapped[str] = mapped_column(String(128), nullable=False)
+
+    materi: Mapped[list["MateriTarget"]] = relationship(back_populates="mapel")
+    jadwal: Mapped[list["JadwalMadrasah"]] = relationship(back_populates="mapel")
+
+
+class MateriTarget(MadrasahBase):
+    __tablename__ = "madrasah_materi_target"
+
+    id: Mapped[str] = mapped_column(String(64), primary_key=True, default=_uuid)
+    mapel_id: Mapped[str] = mapped_column(
+        String(64), ForeignKey("madrasah_mapel.id", ondelete="CASCADE"), nullable=False, index=True
+    )
+    judul: Mapped[str] = mapped_column(String(255), nullable=False)
+    urutan: Mapped[int] = mapped_column(Integer, nullable=False, default=1)
+    aktif: Mapped[bool] = mapped_column(Boolean, nullable=False, default=True)
+
+    mapel: Mapped["MapelMadrasah"] = relationship(back_populates="materi")
+
+
+class JadwalMadrasah(MadrasahBase):
+    __tablename__ = "madrasah_jadwal"
+
+    id: Mapped[str] = mapped_column(String(64), primary_key=True, default=_uuid)
+    rombel_id: Mapped[str] = mapped_column(
+        String(64), ForeignKey("madrasah_rombel.id", ondelete="CASCADE"), nullable=False, index=True
+    )
+    mapel_id: Mapped[str] = mapped_column(
+        String(64), ForeignKey("madrasah_mapel.id", ondelete="CASCADE"), nullable=False, index=True
+    )
+    hari: Mapped[str] = mapped_column(String(16), nullable=False)
+    jam_mulai: Mapped[str] = mapped_column(String(8), nullable=False, default="07:00")
+    jam_selesai: Mapped[str] = mapped_column(String(8), nullable=False, default="08:00")
+
+    rombel: Mapped["RombelMadrasah"] = relationship(back_populates="jadwal")
+    mapel: Mapped["MapelMadrasah"] = relationship(back_populates="jadwal")
 
 
 class AbsensiMadrasah(MadrasahBase):
@@ -68,7 +146,7 @@ class AbsensiMadrasah(MadrasahBase):
 
     id: Mapped[str] = mapped_column(String(64), primary_key=True, default=_uuid)
     tanggal: Mapped[date] = mapped_column(Date, nullable=False, index=True)
-    status: Mapped[str] = mapped_column(String(16), nullable=False)  # hadir | sakit | izin | alpa
+    status: Mapped[str] = mapped_column(String(16), nullable=False)
     santri_id: Mapped[str] = mapped_column(
         String(64), ForeignKey("madrasah_santri.id", ondelete="CASCADE"), nullable=False, index=True
     )
@@ -91,6 +169,8 @@ class ProgresHafalan(MadrasahBase):
     tipe: Mapped[str] = mapped_column(String(64), nullable=False, default="")
     capaian: Mapped[str] = mapped_column(String(255), nullable=False, default="")
     catatan_guru: Mapped[str] = mapped_column(Text, nullable=False, default="")
+    mapel_id: Mapped[Optional[str]] = mapped_column(String(64), ForeignKey("madrasah_mapel.id", ondelete="SET NULL"), nullable=True)
+    materi_id: Mapped[Optional[str]] = mapped_column(String(64), ForeignKey("madrasah_materi_target.id", ondelete="SET NULL"), nullable=True)
 
     santri: Mapped["SantriMadrasah"] = relationship(back_populates="hafalan")
 
@@ -99,7 +179,7 @@ class TagihanSyahriyah(MadrasahBase):
     __tablename__ = "madrasah_tagihan_syahriyah"
 
     id: Mapped[str] = mapped_column(String(64), primary_key=True, default=_uuid)
-    bulan_tahun: Mapped[str] = mapped_column(String(7), nullable=False, index=True)  # YYYY-MM
+    bulan_tahun: Mapped[str] = mapped_column(String(7), nullable=False, index=True)
     nominal: Mapped[Decimal] = mapped_column(Numeric(20, 2), nullable=False, default=Decimal("0"))
     status_bayar: Mapped[bool] = mapped_column(Boolean, nullable=False, default=False)
     dibayar_pada: Mapped[Optional[datetime]] = mapped_column(DateTime(timezone=True), nullable=True)
