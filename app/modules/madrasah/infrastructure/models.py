@@ -102,6 +102,7 @@ class TagihanSyahriyah(MadrasahBase):
     bulan_tahun: Mapped[str] = mapped_column(String(7), nullable=False, index=True)  # YYYY-MM
     nominal: Mapped[Decimal] = mapped_column(Numeric(20, 2), nullable=False, default=Decimal("0"))
     status_bayar: Mapped[bool] = mapped_column(Boolean, nullable=False, default=False)
+    dibayar_pada: Mapped[Optional[datetime]] = mapped_column(DateTime(timezone=True), nullable=True)
     santri_id: Mapped[str] = mapped_column(
         String(64), ForeignKey("madrasah_santri.id", ondelete="CASCADE"), nullable=False, index=True
     )
