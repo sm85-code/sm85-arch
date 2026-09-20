@@ -278,19 +278,21 @@ class ReportingService:
         return _r(total)
 
     async def perubahan_ekuitas(self, start: date, end: date, unit_usaha_id: Optional[str] = None) -> dict[str, Any]:
+        unit_usaha_id = None
         prev_year = start.year - 1
         prev_end = date(prev_year, 12, 31)
-        curr_lr = await self.laba_rugi(start, end, unit_usaha_id)
-        n3 = await self._subcategory_balance(SUB_MODAL_DESA, end=prev_end, unit_usaha_id=unit_usaha_id)
+        curr_lr = await self.laba_rugi(start, end, None, entity="BUMDES")
+        n3 = await self._subcategory_balance(SUB_MODAL_DESA, end=prev_end, unit_usaha_id=None)
         n4 = 0.0
-        n6 = await self._subcategory_balance(SUB_MODAL_DESA, start=start, end=end, unit_usaha_id=unit_usaha_id)
+        n6 = await self._subcategory_balance(SUB_MODAL_DESA, start=start, end=end, unit_usaha_id=None)
         n7 = 0.0
         n8 = _r(n3 + n4 + n6 + n7)
         laba_asli = _r(curr_lr["laba_bersih"])
         n11 = 0.0
-        n12 = await self._subcategory_balance(SUB_LABA_DICADANGKAN, end=prev_end, unit_usaha_id=unit_usaha_id)
-        n13 = laba_asli
-        n15 = await self._subcategory_balance(SUB_BAGI_HASIL_DESA, start=start, end=end, unit_usaha_id=unit_usaha_id)
+        n12 = await self._subcategory_balance(SUB_LABA_DICADANGKAN, end=prev_end, unit_usaha_id=None)
+        n15 = await self._subcategory_balance(SUB_BAGI_HASIL_DESA, start=start, end=end, unit_usaha_id=None)
+        n13_cadangan = await self._subcategory_balance(SUB_LABA_DICADANGKAN, start=start, end=end, unit_usaha_id=None)
+        n13 = _r(n15 + n13_cadangan)
         n16 = 0.0
         n17 = _r(n11 + n12 + n13 - n15 - n16)
         n18 = _r(n8 + n17)
@@ -320,10 +322,13 @@ class ReportingService:
         ]
         return {
             "rows": rows,
+            "group": "BUMDES",
+            "entity": "BUMDES",
             "modal_awal": n3,
             "laba_periode": n13,
             "laba_bersih_asli": laba_asli,
             "modal_akhir": n18,
+            "laba_dicadangkan_periode": n13_cadangan,
             "alokasi": {
                 "pengurus_35": _r(laba_asli * 0.35),
                 "penasihat_7": _r(laba_asli * 0.07),
