@@ -1,7 +1,7 @@
 """Idempotent starter rows for the isolated madrasah Neon database."""
 from __future__ import annotations
 
-from sqlalchemy import select
+from sqlalchemy import select, text
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.modules.madrasah.infrastructure.database import MadrasahBase, engine
@@ -19,6 +19,14 @@ async def seed_madrasah(session: AsyncSession) -> dict[str, str]:
         raise RuntimeError("DATABASE_URL_MADRASAH is not configured")
     async with engine.begin() as conn:
         await conn.run_sync(MadrasahBase.metadata.create_all)
+        await conn.execute(
+            text(
+                """
+                ALTER TABLE IF EXISTS madrasah_tagihan_syahriyah
+                ADD COLUMN IF NOT EXISTS dibayar_pada TIMESTAMPTZ NULL
+                """
+            )
+        )
 
     guru = (
         await session.execute(select(UserMadrasah).where(UserMadrasah.no_hp == GURU_HP))
