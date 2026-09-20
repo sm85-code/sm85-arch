@@ -1,18 +1,12 @@
-"""Admin system lock + accounting period close/unclose (frontend contract)."""
+"""Admin system lock. Period close lives in routers/reports/periods.py."""
 from __future__ import annotations
 
-from fastapi import APIRouter, Depends, HTTPException, Query
-from pydantic import BaseModel, Field
+from fastapi import APIRouter, Depends
+from pydantic import BaseModel
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from adapters.api.deps import get_current_user, require_roles
-from modules.identity.application.services import (
-    close_period,
-    get_system_control,
-    list_closed_periods,
-    reopen_period,
-    set_recording_lock,
-)
+from adapters.api.deps import require_roles
+from modules.identity.application.services import get_system_control, set_recording_lock
 from modules.identity.infrastructure.models import User
 from shared.database import get_db
 
@@ -22,11 +16,6 @@ router = APIRouter(prefix="/api", tags=["admin-control"])
 class SystemLockRequest(BaseModel):
     locked: bool
     note: str = ""
-
-
-class ClosePeriodRequest(BaseModel):
-    period: str = Field(..., examples=["2026-09"])
-    group: str = Field(default="BUMDES")
 
 
 @router.get("/admin/system-lock")
@@ -61,62 +50,3 @@ async def put_lock(
         "locked_by": control.locked_by,
         "note": control.note,
     }
-
-
-@router.get("/reports/closed-periods")
-async def closed_periods(
-    _: User = Depends(get_current_user),
-    session: AsyncSession = Depends(get_db),
-):
-    rows = await list_closed_periods(session)
-    return [
-        {
-            "period": row.period,
-            "group": row.group_code,
-            "laba_bersih": float(row.laba_bersih),
-            "entries": row.entries,
-            "closed_at": row.closed_at.isoformat(),
-            "closed_by": row.closed_by,
-        }
-        for row in rows
-    ]
-
-
-@router.post("/reports/close-period")
-async def post_close_period(
-    payload: ClosePeriodRequest,
-    admin: User = Depends(require_roles("admin")),
-    session: AsyncSession = Depends(get_db),
-):
-    try:
-        row = await close_period(
-            session,
-            period=payload.period,
-            group=payload.group,
-            actor_id=admin.id,
-        )
-    except ValueError as exc:
-        raise HTTPException(status_code=400, detail=str(exc)) from exc
-    return {
-        "closed": True,
-        "period": row.period,
-        "group": row.group_code,
-        "entries": row.entries,
-        "laba_bersih": float(row.laba_bersih),
-    }
-
-
-@router.delete("/reports/close-period")
-async def delete_close_period(
-    period: str = Query(...),
-    group: str = Query("BUMDES"),
-    _: User = Depends(require_roles("admin")),
-    session: AsyncSession = Depends(get_db),
-):
-    try:
-        deleted = await reopen_period(session, period, group)
-    except ValueError as exc:
-        raise HTTPException(status_code=400, detail=str(exc)) from exc
-    except LookupError as exc:
-        raise HTTPException(status_code=404, detail=str(exc)) from exc
-    return {"deleted_entries": deleted}
