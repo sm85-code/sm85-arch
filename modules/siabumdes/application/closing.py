@@ -1,0 +1,324 @@
+"""Automated monthly closing journals (per-entity, slug-mapped)."""
+from __future__ import annotations
+
+import re
+from calendar import monthrange
+from datetime import date, datetime, timezone
+from decimal import Decimal, ROUND_HALF_UP
+from typing import Any, Optional
+
+from sqlalchemy import delete, select
+from sqlalchemy.ext.asyncio import AsyncSession
+
+from modules.identity.infrastructure.models import ClosedPeriod
+from modules.siabumdes.application.reporting import ReportingService
+from modules.siabumdes.application.services import FinanceService
+from modules.siabumdes.infrastructure.models import (
+    Account,
+    JournalEntry,
+    JournalItem,
+    Transaction,
+    UnitUsaha,
+)
+from shared.coa_taxonomy import (
+    SUB_BAGI_HASIL_DESA,
+    SUB_IKHTISAR_LR,
+    SUB_LABA_DICADANGKAN,
+    SUB_SALDO_LABA,
+)
+
+_PERIOD_RE = re.compile(r"^\d{4}-\d{2}$")
+CENT = Decimal("0.01")
+
+SUB_UTANG_BH_BUMDES = "utang_bagi_hasil_bumdes"
+SUB_UTANG_BH_UNIT = "utang_bagi_hasil_unit"
+
+BUMDES_ALLOC = (
+    (SUB_UTANG_BH_BUMDES, Decimal("0.52")),
+    (SUB_BAGI_HASIL_DESA, Decimal("0.30")),
+    (SUB_LABA_DICADANGKAN, Decimal("0.18")),
+)
+
+
+def _money(value: float | Decimal | int) -> Decimal:
+    return Decimal(str(value or 0)).quantize(CENT, rounding=ROUND_HALF_UP)
+
+
+def _period_range(period: str) -> tuple[date, date]:
+    year, month = int(period[:4]), int(period[5:7])
+    return date(year, month, 1), date(year, month, monthrange(year, month)[1])
+
+
+def _close_ref(period: str, group: str) -> str:
+    return f"CLOSE-{period}-{group}"
+
+
+async def _account_by_slug(session: AsyncSession, group: str, slug: str) -> Account:
+    row = (
+        await session.execute(
+            select(Account).where(
+                Account.group_code == group,
+                Account.subcategory == slug,
+                Account.active.is_(True),
+            )
+        )
+    ).scalars().first()
+    if not row:
+        raise ValueError(
+            f"Akun slug '{slug}' tidak ditemukan di grup {group}. Periksa COA."
+        )
+    return row
+
+
+async def _resolve_unit(session: AsyncSession, group: str) -> Optional[UnitUsaha]:
+    if group == "BUMDES":
+        return None
+    unit = (
+        await session.execute(select(UnitUsaha).where(UnitUsaha.code == group))
+    ).scalar_one_or_none()
+    if not unit:
+        raise ValueError(f"Grup {group} tidak ditemukan")
+    return unit
+
+
+async def _post_pair(
+    session: AsyncSession,
+    *,
+    end: date,
+    unit_id: Optional[str],
+    debit: Account,
+    credit: Account,
+    amount: Decimal,
+    desc: str,
+    reference: str,
+    actor_id: str,
+) -> Transaction:
+    if amount <= 0:
+        raise ValueError("amount jurnal penutup harus > 0")
+    tx = Transaction(
+        date=end,
+        unit_usaha_id=unit_id,
+        transaction_type="jurnal_penutup",
+        description=desc,
+        amount=amount,
+        debit_account_code=debit.code,
+        credit_account_code=credit.code,
+        reference=reference,
+        created_by=actor_id,
+        created_at=datetime.now(timezone.utc),
+        is_closing=True,
+        proofs=[],
+    )
+    session.add(tx)
+    await session.flush()
+    finance = FinanceService(session)
+    await finance.create_journal_entry(
+        transaction_id=tx.id,
+        entry_date=end,
+        memo=desc,
+        debit_account_id=debit.id,
+        credit_account_id=credit.id,
+        amount=amount,
+    )
+    return tx
+
+
+async def run_monthly_close(
+    session: AsyncSession,
+    *,
+    period: str,
+    group: str,
+    actor_id: str,
+) -> dict[str, Any]:
+    if not _PERIOD_RE.match(period or ""):
+        raise ValueError("Format period harus YYYY-MM")
+    group_code = (group or "BUMDES").strip().upper()
+    if group_code not in {"BUMDES", "UU01", "UU02", "UU03", "UU04", "UU05", "UU06"}:
+        raise ValueError(f"Grup {group_code} tidak valid")
+
+    existing = (
+        await session.execute(
+            select(ClosedPeriod).where(
+                ClosedPeriod.period == period,
+                ClosedPeriod.group_code == group_code,
+            )
+        )
+    ).scalar_one_or_none()
+    if existing:
+        raise ValueError(f"Periode {period} ({group_code}) sudah ditutup")
+
+    start, end = _period_range(period)
+    unit = await _resolve_unit(session, group_code)
+    unit_id = unit.id if unit else None
+    reference = _close_ref(period, group_code)
+
+    ikhtisar = await _account_by_slug(session, group_code, SUB_IKHTISAR_LR)
+    reports = ReportingService(session)
+    lr = await reports.laba_rugi(start, end, unit_id, entity=group_code)
+    laba = _money(lr.get("laba_bersih") or 0)
+    accounts = {
+        acc.code: acc
+        for acc in (
+            await session.execute(select(Account).where(Account.group_code == group_code))
+        ).scalars()
+    }
+
+    created = 0
+    by_plain = {code.split("-", 1)[-1]: acc for code, acc in accounts.items()}
+
+    async def _close_row(code: str, amount: float, *, income: bool) -> None:
+        nonlocal created
+        amt = _money(amount)
+        raw = (code or "").strip()
+        acc = accounts.get(raw) or by_plain.get(raw) or by_plain.get(raw.split("-", 1)[-1])
+        if not acc or amt <= 0:
+            return
+        if income:
+            await _post_pair(
+                session,
+                end=end,
+                unit_id=unit_id,
+                debit=acc,
+                credit=ikhtisar,
+                amount=amt,
+                desc=f"Tutup pendapatan {acc.code} {period}",
+                reference=reference,
+                actor_id=actor_id,
+            )
+        else:
+            await _post_pair(
+                session,
+                end=end,
+                unit_id=unit_id,
+                debit=ikhtisar,
+                credit=acc,
+                amount=amt,
+                desc=f"Tutup beban/HPP {acc.code} {period}",
+                reference=reference,
+                actor_id=actor_id,
+            )
+        created += 1
+
+    for row in lr.get("pendapatan") or []:
+        await _close_row(row["code"], row["amount"], income=True)
+    for row in (lr.get("hpp") or []) + (lr.get("beban") or []):
+        await _close_row(row["code"], row["amount"], income=False)
+
+    if laba > 0:
+        if group_code == "BUMDES":
+            remaining = laba
+            last_idx = len(BUMDES_ALLOC) - 1
+            for i, (slug, ratio) in enumerate(BUMDES_ALLOC):
+                dest = await _account_by_slug(session, group_code, slug)
+                portion = remaining if i == last_idx else _money(laba * ratio)
+                remaining -= portion
+                if portion <= 0:
+                    continue
+                await _post_pair(
+                    session,
+                    end=end,
+                    unit_id=unit_id,
+                    debit=ikhtisar,
+                    credit=dest,
+                    amount=portion,
+                    desc=f"Alokasi laba {period} ke {slug}",
+                    reference=reference,
+                    actor_id=actor_id,
+                )
+                created += 1
+        else:
+            dest = await _account_by_slug(session, group_code, SUB_UTANG_BH_UNIT)
+            await _post_pair(
+                session,
+                end=end,
+                unit_id=unit_id,
+                debit=ikhtisar,
+                credit=dest,
+                amount=laba,
+                desc=f"Alokasi laba unit {period} ke utang bagi hasil",
+                reference=reference,
+                actor_id=actor_id,
+            )
+            created += 1
+        outcome = "laba"
+    elif laba < 0:
+        saldo = await _account_by_slug(session, group_code, SUB_SALDO_LABA)
+        await _post_pair(
+            session,
+            end=end,
+            unit_id=unit_id,
+            debit=saldo,
+            credit=ikhtisar,
+            amount=abs(laba),
+            desc=f"Transfer rugi {period} ke saldo laba/rugi",
+            reference=reference,
+            actor_id=actor_id,
+        )
+        created += 1
+        outcome = "rugi"
+    else:
+        outcome = "impas"
+
+    row = ClosedPeriod(
+        period=period,
+        group_code=group_code,
+        laba_bersih=laba,
+        entries=created,
+        closed_by=actor_id,
+    )
+    session.add(row)
+    await session.flush()
+    return {
+        "closed": True,
+        "period": period,
+        "group": group_code,
+        "entries": created,
+        "laba_bersih": float(laba),
+        "outcome": outcome,
+    }
+
+
+async def undo_monthly_close(session: AsyncSession, period: str, group: str) -> int:
+    if not _PERIOD_RE.match(period or ""):
+        raise ValueError("Format period harus YYYY-MM")
+    group_code = (group or "BUMDES").strip().upper()
+    row = (
+        await session.execute(
+            select(ClosedPeriod).where(
+                ClosedPeriod.period == period,
+                ClosedPeriod.group_code == group_code,
+            )
+        )
+    ).scalar_one_or_none()
+    if not row:
+        raise LookupError("Periode tertutup tidak ditemukan")
+
+    reference = _close_ref(period, group_code)
+    txs = list(
+        (
+            await session.execute(
+                select(Transaction).where(
+                    Transaction.reference == reference,
+                    Transaction.is_closing.is_(True),
+                )
+            )
+        ).scalars()
+    )
+    tx_ids = [tx.id for tx in txs]
+    if tx_ids:
+        entry_ids = list(
+            (
+                await session.execute(
+                    select(JournalEntry.id).where(JournalEntry.transaction_id.in_(tx_ids))
+                )
+            ).scalars()
+        )
+        if entry_ids:
+            await session.execute(delete(JournalItem).where(JournalItem.journal_entry_id.in_(entry_ids)))
+            await session.execute(delete(JournalEntry).where(JournalEntry.id.in_(entry_ids)))
+        await session.execute(delete(Transaction).where(Transaction.id.in_(tx_ids)))
+
+    deleted = len(tx_ids)
+    await session.delete(row)
+    await session.flush()
+    return deleted
