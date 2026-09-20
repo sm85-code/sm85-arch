@@ -6,7 +6,7 @@ from datetime import date, timedelta
 from decimal import Decimal
 from typing import Any, Optional
 
-from sqlalchemy import select
+from sqlalchemy import not_, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from modules.siabumdes.infrastructure.models import Account, Transaction, UnitUsaha
@@ -25,7 +25,7 @@ def _acc_text(acc: Account) -> str:
     return f"{acc.name} {acc.subcategory or ''} {acc.code}".lower()
 
 
-def _is_laba_account(acc: Account) -> str:
+def _is_laba_account(acc: Account) -> bool:
     text = _acc_text(acc)
     return any(token in text for token in ("laba", "rugi", "ditahan"))
 
@@ -54,6 +54,7 @@ class ReportingService:
         end: Optional[date] = None,
         unit_usaha_id: Optional[str] = None,
         pusat_only: bool = False,
+        exclude_closing: bool = False,
     ) -> list[Transaction]:
         stmt = select(Transaction).order_by(Transaction.date.asc(), Transaction.created_at.asc())
         if start:
@@ -64,6 +65,9 @@ class ReportingService:
             stmt = stmt.where(Transaction.unit_usaha_id.is_(None))
         elif unit_usaha_id:
             stmt = stmt.where(Transaction.unit_usaha_id == unit_usaha_id)
+        if exclude_closing:
+            stmt = stmt.where(Transaction.is_closing.is_(False))
+            stmt = stmt.where(not_(Transaction.reference.startswith("CLOSE-")))
         return list((await self.session.execute(stmt)).scalars())
 
     async def _group_for(self, unit_usaha_id: Optional[str]) -> str:
@@ -118,6 +122,7 @@ class ReportingService:
             end=end,
             unit_usaha_id=unit_usaha_id,
             pusat_only=unit_usaha_id is None and group == "BUMDES",
+            exclude_closing=True,
         )
         debit: dict[str, Decimal] = defaultdict(lambda: Decimal("0"))
         credit: dict[str, Decimal] = defaultdict(lambda: Decimal("0"))
@@ -273,19 +278,21 @@ class ReportingService:
         return _r(total)
 
     async def perubahan_ekuitas(self, start: date, end: date, unit_usaha_id: Optional[str] = None) -> dict[str, Any]:
+        unit_usaha_id = None
         prev_year = start.year - 1
         prev_end = date(prev_year, 12, 31)
-        curr_lr = await self.laba_rugi(start, end, unit_usaha_id)
-        n3 = await self._subcategory_balance(SUB_MODAL_DESA, end=prev_end, unit_usaha_id=unit_usaha_id)
+        curr_lr = await self.laba_rugi(start, end, None, entity="BUMDES")
+        n3 = await self._subcategory_balance(SUB_MODAL_DESA, end=prev_end, unit_usaha_id=None)
         n4 = 0.0
-        n6 = await self._subcategory_balance(SUB_MODAL_DESA, start=start, end=end, unit_usaha_id=unit_usaha_id)
+        n6 = await self._subcategory_balance(SUB_MODAL_DESA, start=start, end=end, unit_usaha_id=None)
         n7 = 0.0
         n8 = _r(n3 + n4 + n6 + n7)
         laba_asli = _r(curr_lr["laba_bersih"])
         n11 = 0.0
-        n12 = await self._subcategory_balance(SUB_LABA_DICADANGKAN, end=prev_end, unit_usaha_id=unit_usaha_id)
-        n13 = laba_asli
-        n15 = await self._subcategory_balance(SUB_BAGI_HASIL_DESA, start=start, end=end, unit_usaha_id=unit_usaha_id)
+        n12 = await self._subcategory_balance(SUB_LABA_DICADANGKAN, end=prev_end, unit_usaha_id=None)
+        n15 = await self._subcategory_balance(SUB_BAGI_HASIL_DESA, start=start, end=end, unit_usaha_id=None)
+        n13_cadangan = await self._subcategory_balance(SUB_LABA_DICADANGKAN, start=start, end=end, unit_usaha_id=None)
+        n13 = _r(n15 + n13_cadangan)
         n16 = 0.0
         n17 = _r(n11 + n12 + n13 - n15 - n16)
         n18 = _r(n8 + n17)
@@ -315,10 +322,13 @@ class ReportingService:
         ]
         return {
             "rows": rows,
+            "group": "BUMDES",
+            "entity": "BUMDES",
             "modal_awal": n3,
             "laba_periode": n13,
             "laba_bersih_asli": laba_asli,
             "modal_akhir": n18,
+            "laba_dicadangkan_periode": n13_cadangan,
             "alokasi": {
                 "pengurus_35": _r(laba_asli * 0.35),
                 "penasihat_7": _r(laba_asli * 0.07),
@@ -347,8 +357,29 @@ class ReportingService:
             "kebijakan_akuntansi": [
                 "Laporan disusun sesuai Kepmendesa PDTT No. 136 Tahun 2022.",
                 "Pengakuan pendapatan menggunakan basis akrual.",
-                "Bagi hasil pengelola sebesar 30% dari laba bersih unit usaha.",
-                "Bagi hasil BUMDES sebesar 70% dari laba bersih unit usaha.",
+                (
+                    "Berdasarkan kepatuhan terhadap Kepmendesa No. 136 Tahun 2022, "
+                    "Laporan Perubahan Ekuitas (LPE) hanya menyajikan mutasi modal murni Kantor Pusat BUMDES. "
+                    "Rincian bagi hasil untuk pihak eksternal non-Penyertaan Modal Desa dilarang disajikan di dalam LPE. "
+                    "Guna menyelaraskan regulasi tersebut dengan AD/ART BUM Desa mengenai kewajiban alokasi Bagi Hasil Usaha (BHU), "
+                    "manajemen menerapkan kebijakan penutupan pembukuan bulanan (Accrual Monthly Closing Entries) sebagai berikut:"
+                ),
+                (
+                    "a. Kantor Pusat BUM Desa (BUMDES): Setiap akhir bulan berjalan, Laba Bersih Operasional dialokasikan "
+                    "dengan memindahkan porsi 52% ke pos Kewajiban Lancar pada akun 'utang_bagi_hasil_bumdes' "
+                    "(untuk Pengurus 35%, Penasihat 7%, Pengawas 5%, dan Dana Sosial 5%). "
+                    "Proporsi pembagian bagi hasil BUMDES pusat serta jangka waktu pencairannya secara berkala (per 3 bulan) "
+                    "telah diatur secara mengikat dan sah di dalam AD/ART BUM Desa kami. "
+                    "Sisa porsi laba sebesar 48% diakui secara instan sebagai penambah komponen Ekuitas pada akun "
+                    "'bagi_hasil_desa' (PADes 30%) dan 'laba_dicadangkan' (Penguatan Modal 18%). "
+                    "Kebijakan ini memastikan Baris 13 pada LPE Pusat menyajikan porsi modal 48% yang stabil dan terintegrasi secara balance."
+                ),
+                (
+                    "b. Unit Usaha BUM Desa (UU01 s.d UU06): Setiap akhir bulan berjalan, 100% Laba Bersih Operasional "
+                    "Unit Usaha langsung dipindahkan seluruhnya ke pos Kewajiban Lancar pada akun 'utang_bagi_hasil_unit' "
+                    "untuk dicairkan secara tunai pada awal bulan berikutnya. Kebijakan ini diterapkan untuk menjaga "
+                    "independensi pembukuan terpisah serta mengamankan hak penarikan PADes unit ke kas pusat secara akuntabel."
+                ),
             ],
         }
 
