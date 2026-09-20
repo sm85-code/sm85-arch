@@ -1,4 +1,4 @@
-"""Admin system lock. Period close lives in routers/reports/periods.py."""
+"""Admin system lock. Period close lives in adapters/api/v1/period_close_router.py."""
 from __future__ import annotations
 
 from fastapi import APIRouter, Depends

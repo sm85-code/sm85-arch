@@ -1,11 +1,11 @@
-"""Startup seed: taxonomy + COA from data/*.xlsx, default users. Resets finance master data."""
+"""Startup seed: taxonomy + COA + default users. Idempotent, no overwrite of live data."""
 from __future__ import annotations
 
 import logging
 from pathlib import Path
 
 from openpyxl import load_workbook
-from sqlalchemy import delete, select, text
+from sqlalchemy import select
 from sqlalchemy.dialects.postgresql import insert as pg_insert
 
 from modules.identity.infrastructure.models import SystemControl, User
@@ -13,9 +13,6 @@ from modules.siabumdes.infrastructure.models import (
     Account,
     AccountCategory,
     AccountSubcategory,
-    JournalEntry,
-    JournalItem,
-    Transaction,
     UnitUsaha,
 )
 from shared.coa_taxonomy import COA_PATH, TAXONOMY_PATH, load_taxonomy_rows, valid_pair
@@ -87,7 +84,6 @@ def _iter_coa_rows(path: Path):
 async def seed_if_needed() -> None:
     async with SessionLocal() as session:
         try:
-            await _reset_finance(session)
             units = await _seed_units(session)
             await _seed_taxonomy(session)
             await _seed_coa(session, units)
@@ -96,38 +92,27 @@ async def seed_if_needed() -> None:
             if not existing:
                 session.add(SystemControl(id="default", recording_locked=False))
             await session.commit()
-            logger.info("seed completed from %s + %s", TAXONOMY_PATH.name, COA_PATH.name)
+            logger.info("seed completed (idempotent) from %s + %s", TAXONOMY_PATH.name, COA_PATH.name)
         except Exception:
             await session.rollback()
             logger.exception("seed failed")
             raise
 
 
-async def _reset_finance(session) -> None:
-    """Empty transactional + COA tables so workbook is the only source."""
-    await session.execute(delete(JournalItem))
-    await session.execute(delete(JournalEntry))
-    await session.execute(delete(Transaction))
-    await session.execute(delete(Account))
-    await session.execute(delete(AccountSubcategory))
-    await session.execute(delete(AccountCategory))
-    logger.info("finance master data reset")
-
-
 async def _seed_units(session) -> dict[str, UnitUsaha]:
     existing = {u.code: u for u in (await session.execute(select(UnitUsaha))).scalars()}
+    created = 0
     for code, (name, desc) in UNIT_CATALOG.items():
         if code == "BUMDES":
             continue
         if code in existing:
-            row = existing[code]
-            row.name = name
-            row.description = desc
             continue
         row = UnitUsaha(code=code, name=name, description=desc, active=True)
         session.add(row)
         existing[code] = row
+        created += 1
     await session.flush()
+    logger.info("unit seed created=%s existing=%s", created, len(existing))
     return existing
 
 
@@ -136,53 +121,76 @@ async def _seed_taxonomy(session) -> None:
     if not rows:
         logger.warning("taxonomy workbook missing at %s", TAXONOMY_PATH)
         return
-    seen_cat: set[str] = set()
+    cats = [
+        {"slug": item["category"], "label": item["label_category"], "normal_balance": item["normal_balance"] or "debit"}
+        for item in rows
+    ]
+    seen: set[str] = set()
+    cat_payload = []
+    for row in cats:
+        if row["slug"] in seen:
+            continue
+        seen.add(row["slug"])
+        cat_payload.append(row)
+    if cat_payload:
+        await session.execute(
+            pg_insert(AccountCategory).values(cat_payload).on_conflict_do_nothing(index_elements=["slug"])
+        )
+    sub_payload = []
+    seen_sub: set[str] = set()
     for item in rows:
-        if item["category"] not in seen_cat:
-            session.add(
-                AccountCategory(
-                    slug=item["category"],
-                    label=item["label_category"],
-                    normal_balance=item["normal_balance"] or "debit",
-                )
-            )
-            seen_cat.add(item["category"])
-    await session.flush()
-    for item in rows:
-        session.add(
-            AccountSubcategory(
-                slug=item["subcategory"],
-                category_slug=item["category"],
-                label=item["label_subcategory"],
-                is_system=item["is_system"],
-            )
+        slug = item["subcategory"]
+        if slug in seen_sub:
+            continue
+        seen_sub.add(slug)
+        sub_payload.append(
+            {
+                "slug": slug,
+                "category_slug": item["category"],
+                "label": item["label_subcategory"],
+                "is_system": item["is_system"],
+            }
+        )
+    if sub_payload:
+        await session.execute(
+            pg_insert(AccountSubcategory).values(sub_payload).on_conflict_do_nothing(index_elements=["slug"])
         )
     await session.flush()
-    logger.info("taxonomy seeded categories=%s rows=%s", len(seen_cat), len(rows))
+    logger.info("taxonomy upsert categories=%s subcategories=%s", len(cat_payload), len(sub_payload))
 
 
 async def _seed_coa(session, units: dict[str, UnitUsaha]) -> None:
     if not COA_PATH.is_file():
         logger.warning("COA workbook missing at %s", COA_PATH)
         return
-    inserted = 0
+    payload = []
+    seen: set[tuple[str, str]] = set()
     for item in _iter_coa_rows(COA_PATH):
+        key = (item["code"], item["group_code"])
+        if key in seen:
+            continue
+        seen.add(key)
         unit = units.get(item["group_code"])
-        session.add(
-            Account(
-                code=item["code"],
-                name=item["name"],
-                category=item["category"],
-                subcategory=item["subcategory"],
-                normal_balance=item["normal_balance"],
-                group_code=item["group_code"],
-                unit_usaha_id=unit.id if unit else None,
-                active=True,
-            )
+        payload.append(
+            {
+                "code": item["code"],
+                "name": item["name"],
+                "category": item["category"],
+                "subcategory": item["subcategory"],
+                "normal_balance": item["normal_balance"],
+                "group_code": item["group_code"],
+                "unit_usaha_id": unit.id if unit else None,
+                "active": True,
+            }
         )
-        inserted += 1
+    inserted = 0
+    if payload:
+        result = await session.execute(
+            pg_insert(Account).values(payload).on_conflict_do_nothing(constraint="uq_accounts_code_group")
+        )
+        inserted = result.rowcount or 0
     await session.flush()
-    logger.info("coa seed inserted=%s from %s", inserted, COA_PATH.name)
+    logger.info("coa seed inserted=%s skipped_existing=%s from %s", inserted, max(len(payload) - inserted, 0), COA_PATH.name)
 
 
 async def _seed_users(session, units: dict[str, UnitUsaha]) -> None:
@@ -205,4 +213,4 @@ async def _seed_users(session, units: dict[str, UnitUsaha]) -> None:
             )
         )
         created += 1
-    logger.info("user seed created=%s", created)
+    logger.info("user seed created=%s skipped=%s", created, len(DEFAULT_USERS) - created)
