@@ -87,6 +87,21 @@ async def get_tagihan(santri_id: str, session: AsyncSession = Depends(get_db_mad
     ]
 
 
+@madrasah_router.post("/spp/generate", status_code=status.HTTP_201_CREATED)
+async def spp_generate(session: AsyncSession = Depends(get_db_madrasah)):
+    rows = await services.generate_spp_massal(session)
+    return [services.tagihan_out(row) for row in rows]
+
+
+@madrasah_router.post("/spp/pay/{id}")
+async def spp_pay(id: str, session: AsyncSession = Depends(get_db_madrasah)):
+    try:
+        row = await services.pay_spp_manual(session, id)
+    except services.MadrasahNotFoundError as exc:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=str(exc)) from exc
+    return services.tagihan_out(row)
+
+
 @madrasah_router.get("/pengumuman")
 async def get_pengumuman(session: AsyncSession = Depends(get_db_madrasah)):
     rows = await services.list_pengumuman(session)
