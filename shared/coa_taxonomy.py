@@ -19,6 +19,8 @@ SUB_MODAL_MASYARAKAT = "modal_masyarakat"
 SUB_BAGI_HASIL_DESA = "bagi_hasil_desa"
 SUB_BAGI_HASIL_MASYARAKAT = "bagi_hasil_masyarakat"
 SUB_LABA_DICADANGKAN = "laba_dicadangkan"
+SUB_UTANG_BAGI_HASIL_BUMDES = "utang_bagi_hasil_bumdes"
+SUB_UTANG_BAGI_HASIL_UNIT = "utang_bagi_hasil_unit"
 
 
 @lru_cache(maxsize=1)

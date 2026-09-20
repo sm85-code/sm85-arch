@@ -20,6 +20,7 @@ from adapters.api.v1.public_router import router as public_router
 from adapters.api.v1.reports_router import router as reports_router
 from adapters.api.v1.transaction_router import router as transaction_router
 from app.adapters.api.v1.madrasah_router import madrasah_router
+from routers.reports.periods import router as period_close_router
 from shared.config import APP_TITLE, CORS_ORIGIN_REGEX, CORS_ORIGINS, origin_allowed
 from shared.database import engine
 from shared.schema import ensure_schema
@@ -57,6 +58,7 @@ app.add_middleware(
 
 app.include_router(public_router)
 app.include_router(auth_router)
+app.include_router(period_close_router)
 app.include_router(admin_control_router)
 app.include_router(master_data_router)
 app.include_router(transaction_router)
