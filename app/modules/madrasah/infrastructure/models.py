@@ -153,6 +153,11 @@ class AbsensiMadrasah(MadrasahBase):
     guru_id: Mapped[Optional[str]] = mapped_column(
         String(64), ForeignKey("madrasah_users.id", ondelete="SET NULL"), nullable=True, index=True
     )
+    # Nullable: absensi lama (wali kelas, 1x/hari per rombel) tidak punya mapel_id.
+    # Absensi baru dari guru mapel (per sesi mapel) mengisi field ini.
+    mapel_id: Mapped[Optional[str]] = mapped_column(
+        String(64), ForeignKey("madrasah_mapel.id", ondelete="SET NULL"), nullable=True, index=True
+    )
 
     santri: Mapped["SantriMadrasah"] = relationship(back_populates="absensi")
     guru: Mapped[Optional["UserMadrasah"]] = relationship(back_populates="absensi_dicatat")
@@ -202,3 +207,29 @@ class PengumumanMadrasah(MadrasahBase):
     )
 
     pembuat: Mapped[Optional["UserMadrasah"]] = relationship(back_populates="pengumuman")
+
+
+class GuruMapelRombel(MadrasahBase):
+    """Penugasan: guru X mengajar mapel Y di rombel Z. Many-to-many, baru,
+    tidak menyentuh/mengubah tabel manapun yang sudah ada. Dipakai untuk
+    men-scope portal Guru Mapel supaya guru hanya melihat rombel & santri
+    yang benar-benar dia ajar, bukan wali_kelas_id (itu tetap urusan
+    RombelMadrasah.wali_kelas_id, tidak berubah)."""
+
+    __tablename__ = "madrasah_guru_mapel_rombel"
+
+    id: Mapped[str] = mapped_column(String(64), primary_key=True, default=_uuid)
+    guru_id: Mapped[str] = mapped_column(
+        String(64), ForeignKey("madrasah_users.id", ondelete="CASCADE"), nullable=False, index=True
+    )
+    mapel_id: Mapped[str] = mapped_column(
+        String(64), ForeignKey("madrasah_mapel.id", ondelete="CASCADE"), nullable=False, index=True
+    )
+    rombel_id: Mapped[str] = mapped_column(
+        String(64), ForeignKey("madrasah_rombel.id", ondelete="CASCADE"), nullable=False, index=True
+    )
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=_utcnow)
+
+    guru: Mapped["UserMadrasah"] = relationship()
+    mapel: Mapped["MapelMadrasah"] = relationship()
+    rombel: Mapped["RombelMadrasah"] = relationship()
