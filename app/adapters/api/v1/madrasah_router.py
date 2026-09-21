@@ -20,6 +20,7 @@ from app.modules.madrasah.application.schemas import (
     PenugasanIn,
     PlacementIn,
     ProgresCreateRequest,
+    ProgresPatch,
     RombelIn,
     SantriIn,
     TingkatIn,
@@ -100,9 +101,12 @@ async def get_kelas(
 async def get_santri(
     kelas_id: str | None = Query(default=None),
     session: AsyncSession = Depends(get_db_madrasah),
-    _: UserMadrasah = Depends(require_roles_madrasah(*ANY_AUTHENTICATED)),
+    user: UserMadrasah = Depends(require_roles_madrasah(*ANY_AUTHENTICATED)),
 ):
-    rows = await services.list_santri(session, kelas_id)
+    # Untuk role wali_kelas, kelas_id yang dikirim client DIABAIKAN --
+    # list_santri_for_caller memaksa hasil ke rombel milik wali kelas itu
+    # sendiri, menutup celah client mengganti kelas_id untuk lihat kelas lain.
+    rows = await services.list_santri_for_caller(session, user, kelas_id)
     return [{"id": row.id, "nama": row.nama, "kelas_id": row.kelas_id, "rombel_id": getattr(row, "rombel_id", None), "orang_tua_id": row.orang_tua_id} for row in rows]
 
 
@@ -188,20 +192,15 @@ async def admin_tingkat_create(
 @admin_r.get("/rombel")
 async def admin_rombel(
     session: AsyncSession = Depends(get_db_madrasah),
-    _: UserMadrasah = Depends(require_roles_madrasah(*ANY_AUTHENTICATED)),
+    user: UserMadrasah = Depends(require_roles_madrasah(*ANY_AUTHENTICATED)),
 ):
-    # NOTE: kept accessible to any authenticated role (not just ADMIN_ROLES)
-    # because WaliKelasPortal.jsx and KurikulumPortal.jsx on the frontend also
-    # call this same endpoint (services/waliKelas.js listRombel, and
-    # KurikulumPortal's listRombel import from services/admin.js) to populate
-    # rombel dropdowns. It now at least requires login, closing the
-    # completely-open access found in the audit, but it still returns ALL
-    # rombel across the whole madrasah to every logged-in role, not just the
-    # caller's own class. Properly scoping "wali_kelas only sees own rombel"
-    # requires a separate, more invasive change to list_rombel() in
-    # services.py (filtering by wali_kelas_id server-side) -- flagged here as
-    # a follow-up, not done in this change to keep the diff minimal and safe.
-    return [{"id": r.id, "nama": r.nama, "tingkat_id": r.tingkat_id, "wali_kelas_id": r.wali_kelas_id, "wali_kelas": r.wali_kelas.nama if r.wali_kelas else None} for r in await services.list_rombel(session)]
+    # Kept accessible to any authenticated role (not just ADMIN_ROLES) because
+    # WaliKelasPortal.jsx and KurikulumPortal.jsx also call this endpoint to
+    # populate rombel dropdowns. list_rombel_for_caller now scopes the result
+    # to the caller's own rombel when role == "wali_kelas"; other roles
+    # (admin, kepala_sekolah, kurikulum, guru) still see the full list, which
+    # they legitimately need for their own screens.
+    return [{"id": r.id, "nama": r.nama, "tingkat_id": r.tingkat_id, "wali_kelas_id": r.wali_kelas_id, "wali_kelas": r.wali_kelas.nama if r.wali_kelas else None} for r in await services.list_rombel_for_caller(session, user)]
 
 
 @admin_r.post("/rombel", status_code=status.HTTP_201_CREATED)
@@ -357,9 +356,12 @@ async def wk_kurikulum(
 async def wk_absen(
     payload: AbsenBulkRequest,
     session: AsyncSession = Depends(get_db_madrasah),
-    _: UserMadrasah = Depends(require_roles_madrasah(*WALI_KELAS_ROLES)),
+    user: UserMadrasah = Depends(require_roles_madrasah(*WALI_KELAS_ROLES)),
 ):
-    rows = await services.bulk_insert_absensi(session, payload)
+    try:
+        rows = await services.bulk_insert_absensi(session, payload, guru=user)
+    except services.MadrasahForbiddenError as exc:
+        raise HTTPException(status_code=403, detail=str(exc)) from exc
     return {"inserted": len(rows)}
 
 
@@ -367,13 +369,31 @@ async def wk_absen(
 async def wk_progres(
     payload: ProgresCreateRequest,
     session: AsyncSession = Depends(get_db_madrasah),
-    _: UserMadrasah = Depends(require_roles_madrasah(*WALI_KELAS_ROLES)),
+    user: UserMadrasah = Depends(require_roles_madrasah(*WALI_KELAS_ROLES)),
 ):
     try:
-        row = await services.create_progres(session, payload)
+        row = await services.create_progres(session, payload, guru=user)
     except services.MadrasahNotFoundError as exc:
         raise HTTPException(status_code=404, detail=str(exc)) from exc
+    except services.MadrasahForbiddenError as exc:
+        raise HTTPException(status_code=403, detail=str(exc)) from exc
     return {"id": row.id, "santri_id": row.santri_id, "capaian": row.capaian, "materi_id": row.materi_id}
+
+
+@wali_kelas_r.patch("/progres/{progres_id}")
+async def wk_progres_patch(
+    progres_id: str,
+    payload: ProgresPatch,
+    session: AsyncSession = Depends(get_db_madrasah),
+    user: UserMadrasah = Depends(require_roles_madrasah(*WALI_KELAS_ROLES)),
+):
+    try:
+        row = await services.patch_progres(session, user, progres_id, payload)
+    except services.MadrasahNotFoundError as exc:
+        raise HTTPException(status_code=404, detail=str(exc)) from exc
+    except services.MadrasahForbiddenError as exc:
+        raise HTTPException(status_code=403, detail=str(exc)) from exc
+    return {"id": row.id, "santri_id": row.santri_id, "capaian": row.capaian, "catatan_guru": row.catatan_guru}
 
 
 @wali_santri_r.get("/progres/{santri_id}")

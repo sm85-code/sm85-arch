@@ -98,6 +98,11 @@ class PenugasanIn(BaseModel):
     rombel_id: str
 
 
+class ProgresPatch(BaseModel):
+    capaian: str | None = None
+    catatan_guru: str | None = None
+
+
 class AbsenMapelItem(BaseModel):
     santri_id: str
     status: Literal["hadir", "sakit", "izin", "alpa"]

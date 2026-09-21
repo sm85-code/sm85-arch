@@ -21,6 +21,7 @@ from app.modules.madrasah.application.schemas import (
     PenugasanIn,
     PlacementIn,
     ProgresCreateRequest,
+    ProgresPatch,
     RombelIn,
     SantriIn,
     TingkatIn,
@@ -112,7 +113,9 @@ async def list_santri(session: AsyncSession, kelas_id: str | None = None) -> lis
     return list((await session.execute(stmt)).scalars())
 
 
-async def bulk_insert_absensi(session: AsyncSession, payload: AbsenBulkRequest) -> list[AbsensiMadrasah]:
+async def bulk_insert_absensi(session: AsyncSession, payload: AbsenBulkRequest, guru: UserMadrasah | None = None) -> list[AbsensiMadrasah]:
+    if guru:
+        await assert_own_rombel_santri(session, guru, [item.santri_id for item in payload.items])
     rows: list[AbsensiMadrasah] = []
     for item in payload.items:
         row = AbsensiMadrasah(tanggal=payload.tanggal, status=item.status, santri_id=item.santri_id, guru_id=payload.guru_id)
@@ -122,9 +125,66 @@ async def bulk_insert_absensi(session: AsyncSession, payload: AbsenBulkRequest) 
     return rows
 
 
-async def create_progres(session: AsyncSession, payload: ProgresCreateRequest) -> ProgresHafalan:
+async def assert_own_rombel_santri(session: AsyncSession, guru: UserMadrasah, santri_ids: list[str]) -> None:
+    """Wali kelas cuma boleh input/edit absensi & progres untuk santri di
+    rombel yang dia asuh sendiri (RombelMadrasah.wali_kelas_id == guru.id).
+    Admin/kepala sekolah bypass (perlu akses lintas kelas). Role lain (guru
+    mapel biasa) tidak dibatasi lewat fungsi ini -- dia punya jalurnya sendiri
+    (GuruMapelRombel, lihat bulk_insert_absensi_mapel)."""
+    if guru.role in ("admin", "kepala_sekolah"):
+        return
+    if guru.role != "wali_kelas":
+        return
+    if not santri_ids:
+        return
+    rows = list(
+        (
+            await session.execute(
+                select(SantriMadrasah.id, SantriMadrasah.rombel_id).where(SantriMadrasah.id.in_(santri_ids))
+            )
+        ).all()
+    )
+    rombel_ids = {r.rombel_id for r in rows if r.rombel_id}
+    if not rombel_ids:
+        raise MadrasahForbiddenError("Santri tidak ditemukan di rombel Anda")
+    owned = list(
+        (
+            await session.execute(
+                select(RombelMadrasah.id).where(RombelMadrasah.id.in_(rombel_ids), RombelMadrasah.wali_kelas_id == guru.id)
+            )
+        ).scalars()
+    )
+    if set(owned) != rombel_ids:
+        raise MadrasahForbiddenError("Anda hanya dapat mengelola santri di rombel Anda sendiri")
+
+
+async def list_rombel_for_caller(session: AsyncSession, caller: UserMadrasah) -> list[RombelMadrasah]:
+    rows = await list_rombel(session)
+    if caller.role != "wali_kelas":
+        return rows
+    return [r for r in rows if r.wali_kelas_id == caller.id]
+
+
+async def list_santri_for_caller(session: AsyncSession, caller: UserMadrasah, kelas_id: str | None) -> list[SantriMadrasah]:
+    """Untuk wali kelas: abaikan/timpa kelas_id yang dikirim client, paksa
+    hanya rombel miliknya sendiri -- menutup celah client mengganti kelas_id
+    di request untuk melihat santri kelas lain."""
+    if caller.role != "wali_kelas":
+        return await list_santri(session, kelas_id)
+    own_rombel = list(
+        (await session.execute(select(RombelMadrasah.id).where(RombelMadrasah.wali_kelas_id == caller.id))).scalars()
+    )
+    if not own_rombel:
+        return []
+    stmt = select(SantriMadrasah).where(SantriMadrasah.rombel_id.in_(own_rombel)).order_by(SantriMadrasah.nama)
+    return list((await session.execute(stmt)).scalars())
+
+
+async def create_progres(session: AsyncSession, payload: ProgresCreateRequest, guru: UserMadrasah | None = None) -> ProgresHafalan:
     if not await session.get(SantriMadrasah, payload.santri_id):
         raise MadrasahNotFoundError("Santri tidak ditemukan")
+    if guru:
+        await assert_own_rombel_santri(session, guru, [payload.santri_id])
     row = ProgresHafalan(
         tanggal=payload.tanggal,
         santri_id=payload.santri_id,
@@ -135,6 +195,21 @@ async def create_progres(session: AsyncSession, payload: ProgresCreateRequest) -
         materi_id=payload.materi_id,
     )
     session.add(row)
+    await session.flush()
+    return row
+
+
+async def patch_progres(session: AsyncSession, guru: UserMadrasah, progres_id: str, payload: ProgresPatch) -> ProgresHafalan:
+    row = await session.get(ProgresHafalan, progres_id)
+    if not row:
+        raise MadrasahNotFoundError("Entri progres tidak ditemukan")
+    santri = await session.get(SantriMadrasah, row.santri_id)
+    if not santri or not await _can_view_santri(session, guru, santri):
+        raise MadrasahForbiddenError("Anda tidak berwenang mengubah entri ini")
+    if payload.capaian is not None:
+        row.capaian = payload.capaian
+    if payload.catatan_guru is not None:
+        row.catatan_guru = payload.catatan_guru
     await session.flush()
     return row
 
@@ -278,7 +353,7 @@ async def create_jadwal(session: AsyncSession, payload: JadwalIn) -> JadwalMadra
 
 async def progres_series(session: AsyncSession, santri_id: str) -> list[dict]:
     rows = list((await session.execute(select(ProgresHafalan).where(ProgresHafalan.santri_id == santri_id).order_by(ProgresHafalan.tanggal.asc()))).scalars())
-    return [{"tanggal": r.tanggal.isoformat(), "tipe": r.tipe, "capaian": r.capaian, "catatan_guru": r.catatan_guru, "mapel_id": r.mapel_id, "materi_id": r.materi_id} for r in rows]
+    return [{"id": r.id, "tanggal": r.tanggal.isoformat(), "tipe": r.tipe, "capaian": r.capaian, "catatan_guru": r.catatan_guru, "mapel_id": r.mapel_id, "materi_id": r.materi_id} for r in rows]
 
 
 # --- Guru Mapel: penugasan guru<->mapel<->rombel (fondasi baru, additive) ---
