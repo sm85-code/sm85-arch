@@ -5,7 +5,7 @@ import os
 from datetime import date, datetime, timezone
 from decimal import Decimal
 
-from sqlalchemy import select, text
+from sqlalchemy import func, select, text
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import selectinload
 
@@ -24,6 +24,8 @@ from app.modules.madrasah.application.schemas import (
     ProgresPatch,
     RombelIn,
     SantriIn,
+    SantriPatch,
+    PengumumanIn,
     TingkatIn,
 )
 from app.modules.madrasah.infrastructure.models import (
@@ -158,6 +160,30 @@ async def assert_own_rombel_santri(session: AsyncSession, guru: UserMadrasah, sa
         raise MadrasahForbiddenError("Anda hanya dapat mengelola santri di rombel Anda sendiri")
 
 
+async def assert_guru_mengajar_santri(session: AsyncSession, guru: UserMadrasah, mapel_id: str, santri_id: str) -> None:
+    """Untuk POST /guru-mapel/progres: pastikan guru benar-benar ditugaskan
+    (GuruMapelRombel) mengajar mapel_id ini di rombel tempat santri_id berada
+    -- sebelumnya cuma bulk_insert_absensi_mapel yang divalidasi begini,
+    endpoint progres guru mapel masih bisa dipakai untuk santri di rombel
+    manapun."""
+    if guru.role in ("admin", "kepala_sekolah"):
+        return
+    santri = await session.get(SantriMadrasah, santri_id)
+    if not santri or not santri.rombel_id:
+        raise MadrasahForbiddenError("Santri tidak ditemukan di rombel manapun")
+    penugasan = (
+        await session.execute(
+            select(GuruMapelRombel).where(
+                GuruMapelRombel.guru_id == guru.id,
+                GuruMapelRombel.mapel_id == mapel_id,
+                GuruMapelRombel.rombel_id == santri.rombel_id,
+            )
+        )
+    ).scalar_one_or_none()
+    if not penugasan:
+        raise MadrasahForbiddenError("Anda tidak ditugaskan mengajar mapel ini di rombel santri tersebut")
+
+
 async def list_rombel_for_caller(session: AsyncSession, caller: UserMadrasah) -> list[RombelMadrasah]:
     rows = await list_rombel(session)
     if caller.role != "wali_kelas":
@@ -167,8 +193,12 @@ async def list_rombel_for_caller(session: AsyncSession, caller: UserMadrasah) ->
 
 async def list_santri_for_caller(session: AsyncSession, caller: UserMadrasah, kelas_id: str | None) -> list[SantriMadrasah]:
     """Untuk wali kelas: abaikan/timpa kelas_id yang dikirim client, paksa
-    hanya rombel miliknya sendiri -- menutup celah client mengganti kelas_id
-    di request untuk melihat santri kelas lain."""
+    hanya rombel miliknya sendiri. Untuk wali santri: abaikan kelas_id sama
+    sekali, paksa hanya anak yang orang_tua_id-nya cocok dengan akun ini --
+    menutup celah wali santri melihat/memilih santri siapa pun di dropdown."""
+    if caller.role == "wali_santri":
+        stmt = select(SantriMadrasah).where(SantriMadrasah.orang_tua_id == caller.id).order_by(SantriMadrasah.nama)
+        return list((await session.execute(stmt)).scalars())
     if caller.role != "wali_kelas":
         return await list_santri(session, kelas_id)
     own_rombel = list(
@@ -178,6 +208,16 @@ async def list_santri_for_caller(session: AsyncSession, caller: UserMadrasah, ke
         return []
     stmt = select(SantriMadrasah).where(SantriMadrasah.rombel_id.in_(own_rombel)).order_by(SantriMadrasah.nama)
     return list((await session.execute(stmt)).scalars())
+
+
+async def assert_own_child(session: AsyncSession, caller: UserMadrasah, santri_id: str) -> None:
+    if caller.role in ("admin", "kepala_sekolah"):
+        return
+    if caller.role != "wali_santri":
+        return
+    santri = await session.get(SantriMadrasah, santri_id)
+    if not santri or santri.orang_tua_id != caller.id:
+        raise MadrasahForbiddenError("Anda hanya dapat melihat data anak Anda sendiri")
 
 
 async def create_progres(session: AsyncSession, payload: ProgresCreateRequest, guru: UserMadrasah | None = None) -> ProgresHafalan:
@@ -278,6 +318,10 @@ async def list_guru(session: AsyncSession) -> list[UserMadrasah]:
     return list((await session.execute(select(UserMadrasah).where(UserMadrasah.role.in_(["wali_kelas", "guru", "kepala_sekolah", "kurikulum", "bendahara"])).order_by(UserMadrasah.nama))).scalars())
 
 
+async def list_wali_santri(session: AsyncSession) -> list[UserMadrasah]:
+    return list((await session.execute(select(UserMadrasah).where(UserMadrasah.role == "wali_santri").order_by(UserMadrasah.nama))).scalars())
+
+
 async def create_guru(session: AsyncSession, payload: GuruIn) -> UserMadrasah:
     row = UserMadrasah(nama=payload.nama, no_hp=payload.no_hp.strip(), password_hash=hash_password(payload.password), role=payload.role or "wali_kelas")
     session.add(row)
@@ -301,6 +345,55 @@ async def create_santri(session: AsyncSession, payload: SantriIn) -> SantriMadra
     session.add(row)
     await session.flush()
     return row
+
+
+async def patch_santri(session: AsyncSession, santri_id: str, payload: SantriPatch) -> SantriMadrasah:
+    row = await session.get(SantriMadrasah, santri_id)
+    if not row:
+        raise MadrasahNotFoundError("Santri tidak ditemukan")
+    if payload.nama is not None:
+        row.nama = payload.nama
+    if payload.rombel_id is not None:
+        row.rombel_id = payload.rombel_id
+        row.kelas_id = payload.rombel_id
+    if payload.orang_tua_id is not None:
+        row.orang_tua_id = payload.orang_tua_id
+    await session.flush()
+    return row
+
+
+async def create_pengumuman(session: AsyncSession, payload: PengumumanIn, dibuat_by: str) -> PengumumanMadrasah:
+    row = PengumumanMadrasah(judul=payload.judul, isi=payload.isi, tanggal=date.today(), dibuat_by=dibuat_by)
+    session.add(row)
+    await session.flush()
+    return row
+
+
+async def rekap_umum(session: AsyncSession) -> dict:
+    total_santri = (await session.execute(select(func.count()).select_from(SantriMadrasah))).scalar_one()
+    total_guru = (await session.execute(select(func.count()).select_from(UserMadrasah).where(UserMadrasah.role.in_(("guru", "wali_kelas"))))).scalar_one()
+    total_rombel = (await session.execute(select(func.count()).select_from(RombelMadrasah))).scalar_one()
+    tagihan_lunas = (await session.execute(select(func.count()).select_from(TagihanSyahriyah).where(TagihanSyahriyah.status_bayar.is_(True)))).scalar_one()
+    tagihan_belum = (await session.execute(select(func.count()).select_from(TagihanSyahriyah).where(TagihanSyahriyah.status_bayar.is_(False)))).scalar_one()
+    per_rombel_rows = list(
+        (
+            await session.execute(
+                select(RombelMadrasah.nama, func.count(SantriMadrasah.id))
+                .select_from(RombelMadrasah)
+                .outerjoin(SantriMadrasah, SantriMadrasah.rombel_id == RombelMadrasah.id)
+                .group_by(RombelMadrasah.id, RombelMadrasah.nama)
+                .order_by(RombelMadrasah.nama)
+            )
+        ).all()
+    )
+    return {
+        "total_santri": total_santri,
+        "total_guru": total_guru,
+        "total_rombel": total_rombel,
+        "tagihan_lunas": tagihan_lunas,
+        "tagihan_belum": tagihan_belum,
+        "per_rombel": [{"rombel": nama, "jumlah_santri": jumlah} for nama, jumlah in per_rombel_rows],
+    }
 
 
 async def list_mapel(session: AsyncSession) -> list[MapelMadrasah]:
