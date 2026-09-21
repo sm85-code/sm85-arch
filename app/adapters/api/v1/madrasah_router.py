@@ -18,11 +18,13 @@ from app.modules.madrasah.application.schemas import (
     MateriIn,
     MateriPatch,
     PenugasanIn,
+    PengumumanIn,
     PlacementIn,
     ProgresCreateRequest,
     ProgresPatch,
     RombelIn,
     SantriIn,
+    SantriPatch,
     TingkatIn,
 )
 from app.modules.madrasah.infrastructure.auth import (
@@ -224,6 +226,14 @@ async def admin_guru(
     return [services.user_out(r) for r in await services.list_guru(session)]
 
 
+@admin_r.get("/wali-santri")
+async def admin_wali_santri(
+    session: AsyncSession = Depends(get_db_madrasah),
+    _: UserMadrasah = Depends(require_roles_madrasah(*ADMIN_ROLES)),
+):
+    return [services.user_out(r) for r in await services.list_wali_santri(session)]
+
+
 @admin_r.post("/guru", status_code=status.HTTP_201_CREATED)
 async def admin_guru_create(
     payload: GuruIn,
@@ -241,6 +251,49 @@ async def admin_santri_create(
 ):
     row = await services.create_santri(session, payload)
     return {"id": row.id, "nama": row.nama, "rombel_id": row.rombel_id}
+
+
+@admin_r.get("/santri")
+async def admin_santri_list(
+    session: AsyncSession = Depends(get_db_madrasah),
+    _: UserMadrasah = Depends(require_roles_madrasah(*ADMIN_ROLES)),
+):
+    # Beda dari GET /santri (root, di-scope per-role): ini khusus admin untuk
+    # keperluan kelola data lengkap -- selalu daftar semua santri apa adanya.
+    rows = await services.list_santri(session, None)
+    return [{"id": r.id, "nama": r.nama, "rombel_id": r.rombel_id, "orang_tua_id": r.orang_tua_id} for r in rows]
+
+
+@admin_r.patch("/santri/{santri_id}")
+async def admin_santri_patch(
+    santri_id: str,
+    payload: SantriPatch,
+    session: AsyncSession = Depends(get_db_madrasah),
+    _: UserMadrasah = Depends(require_roles_madrasah(*ADMIN_ROLES)),
+):
+    try:
+        row = await services.patch_santri(session, santri_id, payload)
+    except services.MadrasahNotFoundError as exc:
+        raise HTTPException(status_code=404, detail=str(exc)) from exc
+    return {"id": row.id, "nama": row.nama, "rombel_id": row.rombel_id, "orang_tua_id": row.orang_tua_id}
+
+
+@admin_r.post("/pengumuman", status_code=status.HTTP_201_CREATED)
+async def admin_pengumuman_create(
+    payload: PengumumanIn,
+    session: AsyncSession = Depends(get_db_madrasah),
+    user: UserMadrasah = Depends(require_roles_madrasah(*ADMIN_ROLES)),
+):
+    row = await services.create_pengumuman(session, payload, user.id)
+    return {"id": row.id, "judul": row.judul, "isi": row.isi, "tanggal": row.tanggal.isoformat()}
+
+
+@admin_r.get("/rekap")
+async def admin_rekap(
+    session: AsyncSession = Depends(get_db_madrasah),
+    _: UserMadrasah = Depends(require_roles_madrasah(*ADMIN_ROLES)),
+):
+    return await services.rekap_umum(session)
 
 
 @admin_r.post("/penempatan")
@@ -400,8 +453,12 @@ async def wk_progres_patch(
 async def ws_progres(
     santri_id: str,
     session: AsyncSession = Depends(get_db_madrasah),
-    _: UserMadrasah = Depends(require_roles_madrasah(*WALI_SANTRI_ROLES)),
+    user: UserMadrasah = Depends(require_roles_madrasah(*WALI_SANTRI_ROLES)),
 ):
+    try:
+        await services.assert_own_child(session, user, santri_id)
+    except services.MadrasahForbiddenError as exc:
+        raise HTTPException(status_code=403, detail=str(exc)) from exc
     return await services.progres_series(session, santri_id)
 
 
@@ -409,8 +466,12 @@ async def ws_progres(
 async def ws_tagihan(
     santri_id: str,
     session: AsyncSession = Depends(get_db_madrasah),
-    _: UserMadrasah = Depends(require_roles_madrasah(*WALI_SANTRI_ROLES)),
+    user: UserMadrasah = Depends(require_roles_madrasah(*WALI_SANTRI_ROLES)),
 ):
+    try:
+        await services.assert_own_child(session, user, santri_id)
+    except services.MadrasahForbiddenError as exc:
+        raise HTTPException(status_code=403, detail=str(exc)) from exc
     return [services.tagihan_out(r) for r in await services.list_tagihan(session, santri_id)]
 
 
@@ -510,12 +571,16 @@ async def gm_rekap_absensi(
 async def gm_progres(
     payload: ProgresCreateRequest,
     session: AsyncSession = Depends(get_db_madrasah),
-    _: UserMadrasah = Depends(require_roles_madrasah(*GURU_MAPEL_ROLES)),
+    user: UserMadrasah = Depends(require_roles_madrasah(*GURU_MAPEL_ROLES)),
 ):
     try:
+        if payload.mapel_id:
+            await services.assert_guru_mengajar_santri(session, user, payload.mapel_id, payload.santri_id)
         row = await services.create_progres(session, payload)
     except services.MadrasahNotFoundError as exc:
         raise HTTPException(status_code=404, detail=str(exc)) from exc
+    except services.MadrasahForbiddenError as exc:
+        raise HTTPException(status_code=403, detail=str(exc)) from exc
     return {"id": row.id, "santri_id": row.santri_id, "capaian": row.capaian, "mapel_id": row.mapel_id, "materi_id": row.materi_id}
 
 
