@@ -88,6 +88,17 @@ class SantriPatch(BaseModel):
     orang_tua_id: Optional[str] = None
 
 
+class RombelPatch(BaseModel):
+    nama: Optional[str] = None
+    tingkat_id: Optional[str] = None
+    wali_kelas_id: Optional[str] = None
+
+
+class PesanIn(BaseModel):
+    santri_id: str
+    isi: str = Field(..., min_length=1)
+
+
 class PengumumanIn(BaseModel):
     judul: str
     isi: str = ""
