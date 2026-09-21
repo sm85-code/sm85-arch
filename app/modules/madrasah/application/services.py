@@ -55,6 +55,10 @@ class MadrasahNotFoundError(Exception):
     pass
 
 
+class MadrasahForbiddenError(Exception):
+    pass
+
+
 def _utcnow() -> datetime:
     return datetime.now(timezone.utc)
 
@@ -353,3 +357,33 @@ async def rekap_absensi_mapel(session: AsyncSession, rombel_id: str, mapel_id: s
     )
     rows = list((await session.execute(stmt)).scalars())
     return [{"id": r.id, "tanggal": r.tanggal.isoformat(), "santri_id": r.santri_id, "status": r.status} for r in rows]
+
+
+# --- Rapor: baca riwayat progres gabungan seorang santri, dengan cek ---
+# kepemilikan supaya guru/wali kelas cuma bisa lihat santri yang benar-benar
+# ada hubungannya (rombel yang dia ajar/asuh), bukan santri siapa pun.
+
+async def _can_view_santri(session: AsyncSession, guru: UserMadrasah, santri: SantriMadrasah) -> bool:
+    if guru.role in ("admin", "kepala_sekolah"):
+        return True
+    if not santri.rombel_id:
+        return False
+    if guru.role == "wali_kelas":
+        rombel = await session.get(RombelMadrasah, santri.rombel_id)
+        if rombel and rombel.wali_kelas_id == guru.id:
+            return True
+    penugasan = (
+        await session.execute(
+            select(GuruMapelRombel).where(GuruMapelRombel.guru_id == guru.id, GuruMapelRombel.rombel_id == santri.rombel_id)
+        )
+    ).scalar_one_or_none()
+    return bool(penugasan)
+
+
+async def rapor_santri(session: AsyncSession, guru: UserMadrasah, santri_id: str) -> dict:
+    santri = await session.get(SantriMadrasah, santri_id)
+    if not santri:
+        raise MadrasahNotFoundError("Santri tidak ditemukan")
+    if not await _can_view_santri(session, guru, santri):
+        raise MadrasahForbiddenError("Anda tidak berwenang melihat rapor santri ini")
+    return {"santri_id": santri.id, "santri_nama": santri.nama, "progres": await progres_series(session, santri_id)}

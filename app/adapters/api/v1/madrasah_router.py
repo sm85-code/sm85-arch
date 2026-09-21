@@ -499,6 +499,20 @@ async def gm_progres(
     return {"id": row.id, "santri_id": row.santri_id, "capaian": row.capaian, "mapel_id": row.mapel_id, "materi_id": row.materi_id}
 
 
+@guru_mapel_r.get("/rapor/{santri_id}")
+async def gm_rapor(
+    santri_id: str,
+    session: AsyncSession = Depends(get_db_madrasah),
+    user: UserMadrasah = Depends(require_roles_madrasah(*GURU_MAPEL_ROLES)),
+):
+    try:
+        return await services.rapor_santri(session, user, santri_id)
+    except services.MadrasahNotFoundError as exc:
+        raise HTTPException(status_code=404, detail=str(exc)) from exc
+    except services.MadrasahForbiddenError as exc:
+        raise HTTPException(status_code=403, detail=str(exc)) from exc
+
+
 madrasah_router.include_router(admin_r)
 madrasah_router.include_router(kurikulum_r)
 madrasah_router.include_router(bendahara_r)
