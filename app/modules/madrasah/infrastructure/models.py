@@ -188,6 +188,13 @@ class TagihanSyahriyah(MadrasahBase):
     nominal: Mapped[Decimal] = mapped_column(Numeric(20, 2), nullable=False, default=Decimal("0"))
     status_bayar: Mapped[bool] = mapped_column(Boolean, nullable=False, default=False)
     dibayar_pada: Mapped[Optional[datetime]] = mapped_column(DateTime(timezone=True), nullable=True)
+    # Approval bertingkat: wali kelas "mengajukan" (mencatat sudah terima
+    # uang tunai) lewat diajukan_oleh/diajukan_pada; status_bayar baru jadi
+    # True setelah bendahara approve lewat alur pay yang sudah ada.
+    diajukan_oleh: Mapped[Optional[str]] = mapped_column(
+        String(64), ForeignKey("madrasah_users.id", ondelete="SET NULL"), nullable=True, index=True
+    )
+    diajukan_pada: Mapped[Optional[datetime]] = mapped_column(DateTime(timezone=True), nullable=True)
     santri_id: Mapped[str] = mapped_column(
         String(64), ForeignKey("madrasah_santri.id", ondelete="CASCADE"), nullable=False, index=True
     )
@@ -233,3 +240,23 @@ class GuruMapelRombel(MadrasahBase):
     guru: Mapped["UserMadrasah"] = relationship()
     mapel: Mapped["MapelMadrasah"] = relationship()
     rombel: Mapped["RombelMadrasah"] = relationship()
+
+
+class PesanMadrasah(MadrasahBase):
+    """Komunikasi antara wali kelas dan wali santri, per santri (bukan
+    percakapan bebas antar-user). Baru, tidak menyentuh tabel manapun."""
+
+    __tablename__ = "madrasah_pesan"
+
+    id: Mapped[str] = mapped_column(String(64), primary_key=True, default=_uuid)
+    santri_id: Mapped[str] = mapped_column(
+        String(64), ForeignKey("madrasah_santri.id", ondelete="CASCADE"), nullable=False, index=True
+    )
+    dari_user_id: Mapped[str] = mapped_column(
+        String(64), ForeignKey("madrasah_users.id", ondelete="CASCADE"), nullable=False, index=True
+    )
+    isi: Mapped[str] = mapped_column(Text, nullable=False)
+    dibuat_pada: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=_utcnow, index=True)
+
+    santri: Mapped["SantriMadrasah"] = relationship()
+    dari_user: Mapped["UserMadrasah"] = relationship()

@@ -23,9 +23,11 @@ from app.modules.madrasah.application.schemas import (
     ProgresCreateRequest,
     ProgresPatch,
     RombelIn,
+    RombelPatch,
     SantriIn,
     SantriPatch,
     PengumumanIn,
+    PesanIn,
     TingkatIn,
 )
 from app.modules.madrasah.infrastructure.models import (
@@ -36,6 +38,7 @@ from app.modules.madrasah.infrastructure.models import (
     MapelMadrasah,
     MateriTarget,
     PengumumanMadrasah,
+    PesanMadrasah,
     ProgresHafalan,
     RombelMadrasah,
     SantriMadrasah,
@@ -46,6 +49,7 @@ from app.modules.madrasah.infrastructure.models import (
 from shared.security import hash_password, verify_password
 
 STATUS_BELUM = "Belum Bayar"
+STATUS_MENUNGGU = "Menunggu Verifikasi"
 STATUS_LUNAS = "Lunas"
 DEFAULT_SPP_NOMINAL = Decimal(os.getenv("SPP_NOMINAL", "50000"))
 
@@ -75,11 +79,16 @@ def user_out(user: UserMadrasah) -> dict:
 
 
 def tagihan_status_label(row: TagihanSyahriyah) -> str:
-    return STATUS_LUNAS if row.status_bayar else STATUS_BELUM
+    if row.status_bayar:
+        return STATUS_LUNAS
+    if row.diajukan_oleh:
+        return STATUS_MENUNGGU
+    return STATUS_BELUM
 
 
 def tagihan_out(row: TagihanSyahriyah, nama: str | None = None) -> dict:
     paid_at = row.dibayar_pada.isoformat() if row.dibayar_pada else None
+    diajukan_at = row.diajukan_pada.isoformat() if row.diajukan_pada else None
     return {
         "id": row.id,
         "santri_id": row.santri_id,
@@ -90,6 +99,8 @@ def tagihan_out(row: TagihanSyahriyah, nama: str | None = None) -> dict:
         "status": tagihan_status_label(row),
         "status_bayar": row.status_bayar,
         "lunas": row.status_bayar,
+        "diajukan_oleh": row.diajukan_oleh,
+        "diajukan_pada": diajukan_at,
         "dibayar_pada": paid_at,
     }
 
@@ -158,6 +169,18 @@ async def assert_own_rombel_santri(session: AsyncSession, guru: UserMadrasah, sa
     )
     if set(owned) != rombel_ids:
         raise MadrasahForbiddenError("Anda hanya dapat mengelola santri di rombel Anda sendiri")
+
+
+async def assert_own_rombel(session: AsyncSession, guru: UserMadrasah, rombel_id: str) -> None:
+    """Untuk endpoint yang menerima rombel_id langsung (bukan santri_id):
+    pastikan rombel_id itu memang milik wali kelas yang bersangkutan."""
+    if guru.role in ("admin", "kepala_sekolah"):
+        return
+    if guru.role != "wali_kelas":
+        return
+    rombel = await session.get(RombelMadrasah, rombel_id)
+    if not rombel or rombel.wali_kelas_id != guru.id:
+        raise MadrasahForbiddenError("Rombel ini bukan rombel Anda")
 
 
 async def assert_guru_mengajar_santri(session: AsyncSession, guru: UserMadrasah, mapel_id: str, santri_id: str) -> None:
@@ -258,6 +281,41 @@ async def list_tagihan(session: AsyncSession, santri_id: str) -> list[TagihanSya
     return list((await session.execute(select(TagihanSyahriyah).where(TagihanSyahriyah.santri_id == santri_id).order_by(TagihanSyahriyah.bulan_tahun.desc()))).scalars())
 
 
+async def list_tagihan_rombel(session: AsyncSession, rombel_id: str) -> list[TagihanSyahriyah]:
+    stmt = (
+        select(TagihanSyahriyah)
+        .options(selectinload(TagihanSyahriyah.santri))
+        .join(SantriMadrasah, TagihanSyahriyah.santri_id == SantriMadrasah.id)
+        .where(SantriMadrasah.rombel_id == rombel_id)
+        .order_by(TagihanSyahriyah.bulan_tahun.desc())
+    )
+    return list((await session.execute(stmt)).scalars())
+
+
+async def list_tagihan_menunggu(session: AsyncSession) -> list[TagihanSyahriyah]:
+    stmt = (
+        select(TagihanSyahriyah)
+        .options(selectinload(TagihanSyahriyah.santri))
+        .where(TagihanSyahriyah.diajukan_oleh.is_not(None), TagihanSyahriyah.status_bayar.is_(False))
+        .order_by(TagihanSyahriyah.diajukan_pada.asc())
+    )
+    return list((await session.execute(stmt)).scalars())
+
+
+async def ajukan_pembayaran(session: AsyncSession, guru: UserMadrasah, tagihan_id: str) -> TagihanSyahriyah:
+    row = await session.get(TagihanSyahriyah, tagihan_id)
+    if not row:
+        raise MadrasahNotFoundError("Tagihan tidak ditemukan")
+    await assert_own_rombel_santri(session, guru, [row.santri_id])
+    if row.status_bayar:
+        raise MadrasahForbiddenError("Tagihan ini sudah lunas")
+    row.diajukan_oleh = guru.id
+    row.diajukan_pada = _utcnow()
+    await session.flush()
+    await session.refresh(row, attribute_names=["santri"])
+    return row
+
+
 async def list_pengumuman(session: AsyncSession, limit: int = 50) -> list[PengumumanMadrasah]:
     return list((await session.execute(select(PengumumanMadrasah).order_by(PengumumanMadrasah.tanggal.desc()).limit(limit))).scalars())
 
@@ -314,6 +372,20 @@ async def create_rombel(session: AsyncSession, payload: RombelIn) -> RombelMadra
     return row
 
 
+async def patch_rombel(session: AsyncSession, rombel_id: str, payload: RombelPatch) -> RombelMadrasah:
+    row = await session.get(RombelMadrasah, rombel_id)
+    if not row:
+        raise MadrasahNotFoundError("Rombel tidak ditemukan")
+    if payload.nama is not None:
+        row.nama = payload.nama
+    if payload.tingkat_id is not None:
+        row.tingkat_id = payload.tingkat_id
+    if payload.wali_kelas_id is not None:
+        row.wali_kelas_id = payload.wali_kelas_id
+    await session.flush()
+    return row
+
+
 async def list_guru(session: AsyncSession) -> list[UserMadrasah]:
     return list((await session.execute(select(UserMadrasah).where(UserMadrasah.role.in_(["wali_kelas", "guru", "kepala_sekolah", "kurikulum", "bendahara"])).order_by(UserMadrasah.nama))).scalars())
 
@@ -360,6 +432,58 @@ async def patch_santri(session: AsyncSession, santri_id: str, payload: SantriPat
         row.orang_tua_id = payload.orang_tua_id
     await session.flush()
     return row
+
+
+async def patch_santri_wali_kelas(session: AsyncSession, guru: UserMadrasah, santri_id: str, payload: SantriPatch) -> SantriMadrasah:
+    """Versi terbatas patch_santri untuk wali kelas: hanya boleh untuk santri
+    di rombelnya sendiri, dan tidak boleh memindahkan santri ke rombel lain
+    lewat sini (itu tetap wewenang admin/kurikulum lewat penempatan)."""
+    await assert_own_rombel_santri(session, guru, [santri_id])
+    row = await session.get(SantriMadrasah, santri_id)
+    if not row:
+        raise MadrasahNotFoundError("Santri tidak ditemukan")
+    if payload.nama is not None:
+        row.nama = payload.nama
+    if payload.orang_tua_id is not None:
+        row.orang_tua_id = payload.orang_tua_id
+    await session.flush()
+    return row
+
+
+async def kirim_pesan(session: AsyncSession, pengirim: UserMadrasah, payload: PesanIn) -> PesanMadrasah:
+    santri = await session.get(SantriMadrasah, payload.santri_id)
+    if not santri:
+        raise MadrasahNotFoundError("Santri tidak ditemukan")
+    if pengirim.role == "wali_kelas":
+        await assert_own_rombel_santri(session, pengirim, [payload.santri_id])
+    elif pengirim.role == "wali_santri":
+        await assert_own_child(session, pengirim, payload.santri_id)
+    elif pengirim.role not in ("admin", "kepala_sekolah"):
+        raise MadrasahForbiddenError("Anda tidak berwenang mengirim pesan untuk santri ini")
+    row = PesanMadrasah(santri_id=payload.santri_id, dari_user_id=pengirim.id, isi=payload.isi)
+    session.add(row)
+    await session.flush()
+    return row
+
+
+async def list_pesan(session: AsyncSession, santri_id: str) -> list[dict]:
+    stmt = (
+        select(PesanMadrasah)
+        .options(selectinload(PesanMadrasah.dari_user))
+        .where(PesanMadrasah.santri_id == santri_id)
+        .order_by(PesanMadrasah.dibuat_pada.asc())
+    )
+    rows = list((await session.execute(stmt)).scalars())
+    return [
+        {
+            "id": r.id,
+            "isi": r.isi,
+            "dari_nama": r.dari_user.nama if r.dari_user else "-",
+            "dari_role": r.dari_user.role if r.dari_user else None,
+            "dibuat_pada": r.dibuat_pada.isoformat(),
+        }
+        for r in rows
+    ]
 
 
 async def create_pengumuman(session: AsyncSession, payload: PengumumanIn, dibuat_by: str) -> PengumumanMadrasah:

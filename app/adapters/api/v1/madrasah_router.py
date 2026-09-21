@@ -19,10 +19,12 @@ from app.modules.madrasah.application.schemas import (
     MateriPatch,
     PenugasanIn,
     PengumumanIn,
+    PesanIn,
     PlacementIn,
     ProgresCreateRequest,
     ProgresPatch,
     RombelIn,
+    RombelPatch,
     SantriIn,
     SantriPatch,
     TingkatIn,
@@ -377,12 +379,34 @@ async def kur_jadwal_create(
     return {"id": row.id, "rombel_id": row.rombel_id, "mapel_id": row.mapel_id, "hari": row.hari}
 
 
+@kurikulum_r.patch("/rombel/{rombel_id}")
+async def kur_rombel_patch(
+    rombel_id: str,
+    payload: RombelPatch,
+    session: AsyncSession = Depends(get_db_madrasah),
+    _: UserMadrasah = Depends(require_roles_madrasah(*KURIKULUM_ROLES)),
+):
+    try:
+        row = await services.patch_rombel(session, rombel_id, payload)
+    except services.MadrasahNotFoundError as exc:
+        raise HTTPException(status_code=404, detail=str(exc)) from exc
+    return {"id": row.id, "nama": row.nama, "tingkat_id": row.tingkat_id, "wali_kelas_id": row.wali_kelas_id}
+
+
 @bendahara_r.post("/spp/generate", status_code=status.HTTP_201_CREATED)
 async def ben_generate(
     session: AsyncSession = Depends(get_db_madrasah),
     _: UserMadrasah = Depends(require_roles_madrasah(*BENDAHARA_ROLES)),
 ):
     return [services.tagihan_out(r) for r in await services.generate_spp_massal(session)]
+
+
+@bendahara_r.get("/spp/menunggu")
+async def ben_menunggu(
+    session: AsyncSession = Depends(get_db_madrasah),
+    _: UserMadrasah = Depends(require_roles_madrasah(*BENDAHARA_ROLES)),
+):
+    return [services.tagihan_out(r) for r in await services.list_tagihan_menunggu(session)]
 
 
 @bendahara_r.post("/spp/pay/{id}")
@@ -447,6 +471,116 @@ async def wk_progres_patch(
     except services.MadrasahForbiddenError as exc:
         raise HTTPException(status_code=403, detail=str(exc)) from exc
     return {"id": row.id, "santri_id": row.santri_id, "capaian": row.capaian, "catatan_guru": row.catatan_guru}
+
+
+@wali_kelas_r.get("/tagihan")
+async def wk_tagihan(
+    rombel_id: str = Query(...),
+    session: AsyncSession = Depends(get_db_madrasah),
+    user: UserMadrasah = Depends(require_roles_madrasah(*WALI_KELAS_ROLES)),
+):
+    try:
+        await services.assert_own_rombel(session, user, rombel_id)
+    except services.MadrasahForbiddenError as exc:
+        raise HTTPException(status_code=403, detail=str(exc)) from exc
+    return [services.tagihan_out(r) for r in await services.list_tagihan_rombel(session, rombel_id)]
+
+
+@wali_kelas_r.post("/tagihan/ajukan/{tagihan_id}")
+async def wk_tagihan_ajukan(
+    tagihan_id: str,
+    session: AsyncSession = Depends(get_db_madrasah),
+    user: UserMadrasah = Depends(require_roles_madrasah(*WALI_KELAS_ROLES)),
+):
+    try:
+        row = await services.ajukan_pembayaran(session, user, tagihan_id)
+    except services.MadrasahNotFoundError as exc:
+        raise HTTPException(status_code=404, detail=str(exc)) from exc
+    except services.MadrasahForbiddenError as exc:
+        raise HTTPException(status_code=403, detail=str(exc)) from exc
+    return services.tagihan_out(row)
+
+
+@wali_kelas_r.patch("/santri/{santri_id}")
+async def wk_santri_patch(
+    santri_id: str,
+    payload: SantriPatch,
+    session: AsyncSession = Depends(get_db_madrasah),
+    user: UserMadrasah = Depends(require_roles_madrasah(*WALI_KELAS_ROLES)),
+):
+    try:
+        row = await services.patch_santri_wali_kelas(session, user, santri_id, payload)
+    except services.MadrasahNotFoundError as exc:
+        raise HTTPException(status_code=404, detail=str(exc)) from exc
+    except services.MadrasahForbiddenError as exc:
+        raise HTTPException(status_code=403, detail=str(exc)) from exc
+    return {"id": row.id, "nama": row.nama, "orang_tua_id": row.orang_tua_id}
+
+
+@wali_kelas_r.post("/pengumuman", status_code=status.HTTP_201_CREATED)
+async def wk_pengumuman_create(
+    payload: PengumumanIn,
+    session: AsyncSession = Depends(get_db_madrasah),
+    user: UserMadrasah = Depends(require_roles_madrasah(*WALI_KELAS_ROLES)),
+):
+    row = await services.create_pengumuman(session, payload, user.id)
+    return {"id": row.id, "judul": row.judul, "isi": row.isi, "tanggal": row.tanggal.isoformat()}
+
+
+@wali_kelas_r.get("/pesan/{santri_id}")
+async def wk_pesan_list(
+    santri_id: str,
+    session: AsyncSession = Depends(get_db_madrasah),
+    user: UserMadrasah = Depends(require_roles_madrasah(*WALI_KELAS_ROLES)),
+):
+    try:
+        await services.assert_own_rombel_santri(session, user, [santri_id])
+    except services.MadrasahForbiddenError as exc:
+        raise HTTPException(status_code=403, detail=str(exc)) from exc
+    return await services.list_pesan(session, santri_id)
+
+
+@wali_kelas_r.post("/pesan", status_code=status.HTTP_201_CREATED)
+async def wk_pesan_create(
+    payload: PesanIn,
+    session: AsyncSession = Depends(get_db_madrasah),
+    user: UserMadrasah = Depends(require_roles_madrasah(*WALI_KELAS_ROLES)),
+):
+    try:
+        row = await services.kirim_pesan(session, user, payload)
+    except services.MadrasahNotFoundError as exc:
+        raise HTTPException(status_code=404, detail=str(exc)) from exc
+    except services.MadrasahForbiddenError as exc:
+        raise HTTPException(status_code=403, detail=str(exc)) from exc
+    return {"id": row.id, "isi": row.isi}
+
+
+@wali_santri_r.get("/pesan/{santri_id}")
+async def ws_pesan_list(
+    santri_id: str,
+    session: AsyncSession = Depends(get_db_madrasah),
+    user: UserMadrasah = Depends(require_roles_madrasah(*WALI_SANTRI_ROLES)),
+):
+    try:
+        await services.assert_own_child(session, user, santri_id)
+    except services.MadrasahForbiddenError as exc:
+        raise HTTPException(status_code=403, detail=str(exc)) from exc
+    return await services.list_pesan(session, santri_id)
+
+
+@wali_santri_r.post("/pesan", status_code=status.HTTP_201_CREATED)
+async def ws_pesan_create(
+    payload: PesanIn,
+    session: AsyncSession = Depends(get_db_madrasah),
+    user: UserMadrasah = Depends(require_roles_madrasah(*WALI_SANTRI_ROLES)),
+):
+    try:
+        row = await services.kirim_pesan(session, user, payload)
+    except services.MadrasahNotFoundError as exc:
+        raise HTTPException(status_code=404, detail=str(exc)) from exc
+    except services.MadrasahForbiddenError as exc:
+        raise HTTPException(status_code=403, detail=str(exc)) from exc
+    return {"id": row.id, "isi": row.isi}
 
 
 @wali_santri_r.get("/progres/{santri_id}")
