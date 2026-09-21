@@ -39,6 +39,8 @@ async def _ensure_columns(conn) -> None:
     await conn.execute(text("ALTER TABLE IF EXISTS madrasah_progres_hafalan ADD COLUMN IF NOT EXISTS mapel_id VARCHAR(64) NULL"))
     await conn.execute(text("ALTER TABLE IF EXISTS madrasah_progres_hafalan ADD COLUMN IF NOT EXISTS materi_id VARCHAR(64) NULL"))
     await conn.execute(text("ALTER TABLE IF EXISTS madrasah_absensi ADD COLUMN IF NOT EXISTS mapel_id VARCHAR(64) NULL"))
+    await conn.execute(text("ALTER TABLE IF EXISTS madrasah_tagihan_syahriyah ADD COLUMN IF NOT EXISTS diajukan_oleh VARCHAR(64) NULL"))
+    await conn.execute(text("ALTER TABLE IF EXISTS madrasah_tagihan_syahriyah ADD COLUMN IF NOT EXISTS diajukan_pada TIMESTAMPTZ NULL"))
 
 
 async def _ensure_user(session: AsyncSession, *, no_hp: str, nama: str, role: str) -> UserMadrasah:
