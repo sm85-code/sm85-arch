@@ -6,6 +6,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.modules.madrasah.infrastructure.database import MadrasahBase, engine
 from app.modules.madrasah.infrastructure.models import (
+    GuruMapelRombel,
     KelasMadrasah,
     MapelMadrasah,
     MateriTarget,
@@ -22,12 +23,35 @@ DEFAULT_PASSWORD = "password123"
 ROMBEL_NAMA = "Jilid 1 B"
 TINGKAT_NAMA = "Jilid 1"
 
+# Akun default tambahan supaya semua role bisa langsung dites tanpa perlu
+# dibuat manual lewat AdminPortal (yang notabene butuh akun admin untuk
+# mengaksesnya — ayam-telur kalau tidak di-seed dari sini).
+ADMIN_HP = "081200000001"
+KEPALA_SEKOLAH_HP = "081200000002"
+KURIKULUM_HP = "081200000003"
+BENDAHARA_HP = "081200000004"
+GURU_MAPEL_HP = "081200000005"
+
 
 async def _ensure_columns(conn) -> None:
     await conn.execute(text("ALTER TABLE IF EXISTS madrasah_santri ADD COLUMN IF NOT EXISTS rombel_id VARCHAR(64) NULL"))
     await conn.execute(text("ALTER TABLE IF EXISTS madrasah_tagihan_syahriyah ADD COLUMN IF NOT EXISTS dibayar_pada TIMESTAMPTZ NULL"))
     await conn.execute(text("ALTER TABLE IF EXISTS madrasah_progres_hafalan ADD COLUMN IF NOT EXISTS mapel_id VARCHAR(64) NULL"))
     await conn.execute(text("ALTER TABLE IF EXISTS madrasah_progres_hafalan ADD COLUMN IF NOT EXISTS materi_id VARCHAR(64) NULL"))
+    await conn.execute(text("ALTER TABLE IF EXISTS madrasah_absensi ADD COLUMN IF NOT EXISTS mapel_id VARCHAR(64) NULL"))
+
+
+async def _ensure_user(session: AsyncSession, *, no_hp: str, nama: str, role: str) -> UserMadrasah:
+    """Idempotent: buat akun kalau belum ada (cek by no_hp), kalau sudah ada
+    dan role-nya beda, biarkan (jangan timpa role manual yang mungkin sudah
+    diubah admin) -- konsisten dengan pola akun guru/wali yang sudah ada di
+    fungsi ini."""
+    user = (await session.execute(select(UserMadrasah).where(UserMadrasah.no_hp == no_hp))).scalar_one_or_none()
+    if not user:
+        user = UserMadrasah(nama=nama, no_hp=no_hp, password_hash=hash_password(DEFAULT_PASSWORD), role=role)
+        session.add(user)
+        await session.flush()
+    return user
 
 
 async def seed_madrasah(session: AsyncSession) -> dict[str, str]:
@@ -106,6 +130,27 @@ async def seed_madrasah(session: AsyncSession) -> dict[str, str]:
         await session.flush()
         session.add(MateriTarget(mapel_id=mapel.id, judul="Iqra halaman 1-5", urutan=1, aktif=True))
 
+    admin = await _ensure_user(session, no_hp=ADMIN_HP, nama="Admin Madrasah", role="admin")
+    kepsek = await _ensure_user(session, no_hp=KEPALA_SEKOLAH_HP, nama="Kepala Sekolah", role="kepala_sekolah")
+    kurikulum_user = await _ensure_user(session, no_hp=KURIKULUM_HP, nama="Staf Kurikulum", role="kurikulum")
+    bendahara_user = await _ensure_user(session, no_hp=BENDAHARA_HP, nama="Bendahara Madrasah", role="bendahara")
+    guru_mapel_user = await _ensure_user(session, no_hp=GURU_MAPEL_HP, nama="Guru Mapel Contoh", role="guru")
+
+    # Supaya akun guru mapel contoh langsung bisa dites tanpa harus login
+    # sebagai kurikulum dulu untuk membuat penugasan secara manual.
+    penugasan = (
+        await session.execute(
+            select(GuruMapelRombel).where(
+                GuruMapelRombel.guru_id == guru_mapel_user.id,
+                GuruMapelRombel.mapel_id == mapel.id,
+                GuruMapelRombel.rombel_id == rombel.id,
+            )
+        )
+    ).scalar_one_or_none()
+    if not penugasan:
+        session.add(GuruMapelRombel(guru_id=guru_mapel_user.id, mapel_id=mapel.id, rombel_id=rombel.id))
+        await session.flush()
+
     return {
         "guru_id": guru.id,
         "wali_id": wali.id,
@@ -114,4 +159,9 @@ async def seed_madrasah(session: AsyncSession) -> dict[str, str]:
         "tingkat_id": tingkat.id,
         "santri_id": santri.id,
         "mapel_id": mapel.id,
+        "admin_id": admin.id,
+        "kepala_sekolah_id": kepsek.id,
+        "kurikulum_id": kurikulum_user.id,
+        "bendahara_id": bendahara_user.id,
+        "guru_mapel_id": guru_mapel_user.id,
     }

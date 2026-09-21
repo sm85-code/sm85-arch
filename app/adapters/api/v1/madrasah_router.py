@@ -10,12 +10,14 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from app.modules.madrasah.application import services
 from app.modules.madrasah.application.schemas import (
     AbsenBulkRequest,
+    AbsenMapelBulkRequest,
     GuruIn,
     JadwalIn,
     LoginRequest,
     MapelIn,
     MateriIn,
     MateriPatch,
+    PenugasanIn,
     PlacementIn,
     ProgresCreateRequest,
     RombelIn,
@@ -39,6 +41,7 @@ kurikulum_r = APIRouter(prefix="/kurikulum", tags=["Madrasah Kurikulum"])
 bendahara_r = APIRouter(prefix="/bendahara", tags=["Madrasah Bendahara"])
 wali_kelas_r = APIRouter(prefix="/wali-kelas", tags=["Madrasah Wali Kelas"])
 wali_santri_r = APIRouter(prefix="/wali-santri", tags=["Madrasah Wali Santri"])
+guru_mapel_r = APIRouter(prefix="/guru-mapel", tags=["Madrasah Guru Mapel"])
 
 # Role groups mirror src/App.jsx <Guard roles={[...]}> exactly, so a request that
 # would be blocked from reaching a page in the frontend is also rejected by the
@@ -48,6 +51,9 @@ KURIKULUM_ROLES = ("kurikulum", "kepala_sekolah", "admin")
 BENDAHARA_ROLES = ("bendahara", "kepala_sekolah", "admin")
 WALI_KELAS_ROLES = ("wali_kelas", "guru", "kepala_sekolah", "admin")
 WALI_SANTRI_ROLES = ("wali_santri", "kepala_sekolah", "admin")
+# Wali kelas "mewarisi" semua tugas guru mapel (lihat pembagian peran), jadi
+# role wali_kelas ikut disertakan di sini, bukan cuma "guru".
+GURU_MAPEL_ROLES = ("guru", "wali_kelas", "kepala_sekolah", "admin")
 ANY_AUTHENTICATED = ADMIN_ROLES + KURIKULUM_ROLES + BENDAHARA_ROLES + WALI_KELAS_ROLES + WALI_SANTRI_ROLES
 
 
@@ -211,8 +217,11 @@ async def admin_rombel_create(
 @admin_r.get("/guru")
 async def admin_guru(
     session: AsyncSession = Depends(get_db_madrasah),
-    _: UserMadrasah = Depends(require_roles_madrasah(*ADMIN_ROLES)),
+    _: UserMadrasah = Depends(require_roles_madrasah(*ADMIN_ROLES, *KURIKULUM_ROLES)),
 ):
+    # GET dilonggarkan untuk KURIKULUM_ROLES juga: KurikulumPortal.jsx perlu
+    # daftar guru untuk UI penugasan guru<->mapel<->rombel. POST di bawah
+    # (buat akun guru baru) tetap eksklusif ADMIN_ROLES.
     return [services.user_out(r) for r in await services.list_guru(session)]
 
 
@@ -385,8 +394,114 @@ async def ws_tagihan(
     return [services.tagihan_out(r) for r in await services.list_tagihan(session, santri_id)]
 
 
+# --- Kurikulum: kelola penugasan guru mapel (fondasi baru) ---
+
+@kurikulum_r.get("/guru-mapel")
+async def kur_guru_mapel_list(
+    guru_id: str | None = Query(default=None),
+    session: AsyncSession = Depends(get_db_madrasah),
+    _: UserMadrasah = Depends(require_roles_madrasah(*KURIKULUM_ROLES)),
+):
+    rows = await services.list_penugasan(session, guru_id)
+    return [
+        {
+            "id": r.id,
+            "guru_id": r.guru_id,
+            "guru": r.guru.nama if r.guru else None,
+            "mapel_id": r.mapel_id,
+            "mapel": r.mapel.nama if r.mapel else None,
+            "rombel_id": r.rombel_id,
+            "rombel": r.rombel.nama if r.rombel else None,
+        }
+        for r in rows
+    ]
+
+
+@kurikulum_r.post("/guru-mapel", status_code=status.HTTP_201_CREATED)
+async def kur_guru_mapel_create(
+    payload: PenugasanIn,
+    session: AsyncSession = Depends(get_db_madrasah),
+    _: UserMadrasah = Depends(require_roles_madrasah(*KURIKULUM_ROLES)),
+):
+    row = await services.assign_guru_mapel(session, payload)
+    return {"id": row.id, "guru_id": row.guru_id, "mapel_id": row.mapel_id, "rombel_id": row.rombel_id}
+
+
+@kurikulum_r.delete("/guru-mapel/{penugasan_id}", status_code=status.HTTP_204_NO_CONTENT)
+async def kur_guru_mapel_delete(
+    penugasan_id: str,
+    session: AsyncSession = Depends(get_db_madrasah),
+    _: UserMadrasah = Depends(require_roles_madrasah(*KURIKULUM_ROLES)),
+):
+    try:
+        await services.remove_penugasan(session, penugasan_id)
+    except services.MadrasahNotFoundError as exc:
+        raise HTTPException(status_code=404, detail=str(exc)) from exc
+
+
+# --- Guru Mapel: portal operasional (fondasi baru) ---
+
+@guru_mapel_r.get("/penugasan-saya")
+async def gm_penugasan_saya(
+    session: AsyncSession = Depends(get_db_madrasah),
+    user: UserMadrasah = Depends(require_roles_madrasah(*GURU_MAPEL_ROLES)),
+):
+    rows = await services.list_penugasan(session, user.id)
+    return [
+        {"id": r.id, "mapel_id": r.mapel_id, "mapel": r.mapel.nama if r.mapel else None, "rombel_id": r.rombel_id, "rombel": r.rombel.nama if r.rombel else None}
+        for r in rows
+    ]
+
+
+@guru_mapel_r.get("/santri")
+async def gm_santri(
+    rombel_id: str = Query(...),
+    session: AsyncSession = Depends(get_db_madrasah),
+    _: UserMadrasah = Depends(require_roles_madrasah(*GURU_MAPEL_ROLES)),
+):
+    rows = await services.list_santri(session, rombel_id)
+    return [{"id": r.id, "nama": r.nama} for r in rows]
+
+
+@guru_mapel_r.post("/absensi", status_code=status.HTTP_201_CREATED)
+async def gm_absensi(
+    payload: AbsenMapelBulkRequest,
+    session: AsyncSession = Depends(get_db_madrasah),
+    user: UserMadrasah = Depends(require_roles_madrasah(*GURU_MAPEL_ROLES)),
+):
+    try:
+        rows = await services.bulk_insert_absensi_mapel(session, user.id, payload)
+    except services.MadrasahNotFoundError as exc:
+        raise HTTPException(status_code=403, detail=str(exc)) from exc
+    return {"inserted": len(rows)}
+
+
+@guru_mapel_r.get("/rekap-absensi")
+async def gm_rekap_absensi(
+    rombel_id: str = Query(...),
+    mapel_id: str = Query(...),
+    session: AsyncSession = Depends(get_db_madrasah),
+    _: UserMadrasah = Depends(require_roles_madrasah(*GURU_MAPEL_ROLES)),
+):
+    return await services.rekap_absensi_mapel(session, rombel_id, mapel_id)
+
+
+@guru_mapel_r.post("/progres", status_code=status.HTTP_201_CREATED)
+async def gm_progres(
+    payload: ProgresCreateRequest,
+    session: AsyncSession = Depends(get_db_madrasah),
+    _: UserMadrasah = Depends(require_roles_madrasah(*GURU_MAPEL_ROLES)),
+):
+    try:
+        row = await services.create_progres(session, payload)
+    except services.MadrasahNotFoundError as exc:
+        raise HTTPException(status_code=404, detail=str(exc)) from exc
+    return {"id": row.id, "santri_id": row.santri_id, "capaian": row.capaian, "mapel_id": row.mapel_id, "materi_id": row.materi_id}
+
+
 madrasah_router.include_router(admin_r)
 madrasah_router.include_router(kurikulum_r)
 madrasah_router.include_router(bendahara_r)
 madrasah_router.include_router(wali_kelas_r)
 madrasah_router.include_router(wali_santri_r)
+madrasah_router.include_router(guru_mapel_r)

@@ -11,12 +11,14 @@ from sqlalchemy.orm import selectinload
 
 from app.modules.madrasah.application.schemas import (
     AbsenBulkRequest,
+    AbsenMapelBulkRequest,
     GuruIn,
     JadwalIn,
     LoginRequest,
     MapelIn,
     MateriIn,
     MateriPatch,
+    PenugasanIn,
     PlacementIn,
     ProgresCreateRequest,
     RombelIn,
@@ -25,6 +27,7 @@ from app.modules.madrasah.application.schemas import (
 )
 from app.modules.madrasah.infrastructure.models import (
     AbsensiMadrasah,
+    GuruMapelRombel,
     JadwalMadrasah,
     KelasMadrasah,
     MapelMadrasah,
@@ -272,3 +275,81 @@ async def create_jadwal(session: AsyncSession, payload: JadwalIn) -> JadwalMadra
 async def progres_series(session: AsyncSession, santri_id: str) -> list[dict]:
     rows = list((await session.execute(select(ProgresHafalan).where(ProgresHafalan.santri_id == santri_id).order_by(ProgresHafalan.tanggal.asc()))).scalars())
     return [{"tanggal": r.tanggal.isoformat(), "tipe": r.tipe, "capaian": r.capaian, "catatan_guru": r.catatan_guru, "mapel_id": r.mapel_id, "materi_id": r.materi_id} for r in rows]
+
+
+# --- Guru Mapel: penugasan guru<->mapel<->rombel (fondasi baru, additive) ---
+
+async def assign_guru_mapel(session: AsyncSession, payload: PenugasanIn) -> GuruMapelRombel:
+    existing = (
+        await session.execute(
+            select(GuruMapelRombel).where(
+                GuruMapelRombel.guru_id == payload.guru_id,
+                GuruMapelRombel.mapel_id == payload.mapel_id,
+                GuruMapelRombel.rombel_id == payload.rombel_id,
+            )
+        )
+    ).scalar_one_or_none()
+    if existing:
+        return existing
+    row = GuruMapelRombel(guru_id=payload.guru_id, mapel_id=payload.mapel_id, rombel_id=payload.rombel_id)
+    session.add(row)
+    await session.flush()
+    return row
+
+
+async def remove_penugasan(session: AsyncSession, penugasan_id: str) -> None:
+    row = await session.get(GuruMapelRombel, penugasan_id)
+    if not row:
+        raise MadrasahNotFoundError("Penugasan tidak ditemukan")
+    await session.delete(row)
+
+
+async def list_penugasan(session: AsyncSession, guru_id: str | None = None) -> list[GuruMapelRombel]:
+    stmt = select(GuruMapelRombel).options(
+        selectinload(GuruMapelRombel.guru), selectinload(GuruMapelRombel.mapel), selectinload(GuruMapelRombel.rombel)
+    )
+    if guru_id:
+        stmt = stmt.where(GuruMapelRombel.guru_id == guru_id)
+    return list((await session.execute(stmt)).scalars())
+
+
+async def bulk_insert_absensi_mapel(session: AsyncSession, guru_id: str, payload: AbsenMapelBulkRequest) -> list[AbsensiMadrasah]:
+    # Defense in depth: pastikan guru ini memang ditugaskan untuk kombinasi
+    # mapel+rombel ini, jangan percaya begitu saja rombel_id/mapel_id dari
+    # body request (mengulang temuan IDOR yang sama seperti sebelumnya).
+    penugasan = (
+        await session.execute(
+            select(GuruMapelRombel).where(
+                GuruMapelRombel.guru_id == guru_id,
+                GuruMapelRombel.mapel_id == payload.mapel_id,
+                GuruMapelRombel.rombel_id == payload.rombel_id,
+            )
+        )
+    ).scalar_one_or_none()
+    if not penugasan:
+        raise MadrasahNotFoundError("Anda tidak ditugaskan untuk mapel/rombel ini")
+
+    rows: list[AbsensiMadrasah] = []
+    for item in payload.items:
+        row = AbsensiMadrasah(
+            tanggal=payload.tanggal,
+            status=item.status,
+            santri_id=item.santri_id,
+            guru_id=guru_id,
+            mapel_id=payload.mapel_id,
+        )
+        session.add(row)
+        rows.append(row)
+    await session.flush()
+    return rows
+
+
+async def rekap_absensi_mapel(session: AsyncSession, rombel_id: str, mapel_id: str) -> list[dict]:
+    stmt = (
+        select(AbsensiMadrasah)
+        .join(SantriMadrasah, AbsensiMadrasah.santri_id == SantriMadrasah.id)
+        .where(SantriMadrasah.rombel_id == rombel_id, AbsensiMadrasah.mapel_id == mapel_id)
+        .order_by(AbsensiMadrasah.tanggal.desc())
+    )
+    rows = list((await session.execute(stmt)).scalars())
+    return [{"id": r.id, "tanggal": r.tanggal.isoformat(), "santri_id": r.santri_id, "status": r.status} for r in rows]

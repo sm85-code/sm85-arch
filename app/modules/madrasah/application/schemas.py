@@ -88,3 +88,27 @@ class JadwalIn(BaseModel):
     hari: str
     jam_mulai: str = "07:00"
     jam_selesai: str = "08:00"
+
+
+class PenugasanIn(BaseModel):
+    """Menugaskan seorang guru mengajar satu mapel di satu rombel."""
+
+    guru_id: str
+    mapel_id: str
+    rombel_id: str
+
+
+class AbsenMapelItem(BaseModel):
+    santri_id: str
+    status: Literal["hadir", "sakit", "izin", "alpa"]
+
+
+class AbsenMapelBulkRequest(BaseModel):
+    """Sama seperti AbsenBulkRequest, tapi wajib menyertakan mapel_id +
+    rombel_id karena ini absensi per sesi mapel (guru mapel), bukan absensi
+    harian per rombel (wali kelas)."""
+
+    tanggal: date
+    rombel_id: str
+    mapel_id: str
+    items: list[AbsenMapelItem] = Field(..., min_length=1)
