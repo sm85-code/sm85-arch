@@ -82,6 +82,17 @@ class MateriPatch(BaseModel):
     aktif: Optional[bool] = None
 
 
+class SantriPatch(BaseModel):
+    nama: Optional[str] = None
+    rombel_id: Optional[str] = None
+    orang_tua_id: Optional[str] = None
+
+
+class PengumumanIn(BaseModel):
+    judul: str
+    isi: str = ""
+
+
 class JadwalIn(BaseModel):
     rombel_id: str
     mapel_id: str
