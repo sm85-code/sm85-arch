@@ -6,6 +6,7 @@ import logging
 from datetime import datetime
 from typing import Any, Optional, Sequence
 
+from adapters.external.report_formatting import format_money, is_money_header
 from shared.report_branding import ReportBranding, get_report_branding
 
 logger = logging.getLogger(__name__)
@@ -66,15 +67,7 @@ def _esc(v: Any) -> str:
     return html.escape(str(v))
 
 
-def _is_money_header(h: str) -> bool:
-    h = (h or "").lower()
-    return any(
-        k in h
-        for k in (
-            "nominal", "jumlah", "debit", "kredit", "saldo", "rp",
-            "amount", "nilai", "laba", "beban", "pendapatan",
-        )
-    )
+_is_money_header = is_money_header
 
 
 def _row_class(row: Sequence[Any]) -> str:
@@ -122,7 +115,8 @@ def build_report_html(
     for row in rows:
         cls = _row_class(row)
         tds = "".join(
-            f'<td class="{"num" if i in money_cols else ""}">{_esc(cell)}</td>'
+            f'<td class="{"num" if i in money_cols else ""}">'
+            f'{_esc(format_money(cell) if i in money_cols else cell)}</td>'
             for i, cell in enumerate(row)
         )
         body_rows.append(f'<tr class="{cls}">{tds}</tr>')
