@@ -19,6 +19,7 @@ from tenants.madrasah.modules.madrasah.application.schemas import (
     MateriIn,
     MateriPatch,
     PenugasanIn,
+    PengaturanPatch,
     PlacementIn,
     ProgresCreateRequest,
     ProgresPatch,
@@ -37,6 +38,7 @@ from tenants.madrasah.modules.madrasah.infrastructure.models import (
     KelasMadrasah,
     MapelMadrasah,
     MateriTarget,
+    PengaturanSekolah,
     PengumumanMadrasah,
     PesanMadrasah,
     ProgresHafalan,
@@ -314,6 +316,35 @@ async def ajukan_pembayaran(session: AsyncSession, guru: UserMadrasah, tagihan_i
     await session.flush()
     await session.refresh(row, attribute_names=["santri"])
     return row
+
+
+async def get_pengaturan(session: AsyncSession) -> PengaturanSekolah:
+    """Baris singleton -- dibuat otomatis kalau belum ada, supaya modul ini
+    bisa dipasang di database yang sudah berjalan tanpa migrasi data manual."""
+    row = (await session.execute(select(PengaturanSekolah).limit(1))).scalar_one_or_none()
+    if not row:
+        row = PengaturanSekolah()
+        session.add(row)
+        await session.flush()
+    return row
+
+
+async def update_pengaturan(session: AsyncSession, payload: PengaturanPatch) -> PengaturanSekolah:
+    row = await get_pengaturan(session)
+    data = payload.model_dump(exclude_unset=True)
+    for field, value in data.items():
+        setattr(row, field, value)
+    await session.flush()
+    return row
+
+
+def pengaturan_out(row: PengaturanSekolah) -> dict:
+    return {
+        "nama_sekolah": row.nama_sekolah,
+        "tagline": row.tagline,
+        "logo_url": row.logo_url,
+        "alamat": row.alamat,
+    }
 
 
 async def list_pengumuman(session: AsyncSession, limit: int = 50) -> list[PengumumanMadrasah]:

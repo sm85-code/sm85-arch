@@ -130,6 +130,13 @@ class AbsenMapelItem(BaseModel):
     status: Literal["hadir", "sakit", "izin", "alpa"]
 
 
+class PengaturanPatch(BaseModel):
+    nama_sekolah: Optional[str] = Field(None, min_length=1, max_length=255)
+    tagline: Optional[str] = Field(None, max_length=255)
+    logo_url: Optional[str] = Field(None, max_length=500)
+    alamat: Optional[str] = Field(None, max_length=500)
+
+
 class AbsenMapelBulkRequest(BaseModel):
     """Sama seperti AbsenBulkRequest, tapi wajib menyertakan mapel_id +
     rombel_id karena ini absensi per sesi mapel (guru mapel), bukan absensi
