@@ -59,6 +59,7 @@ class CekOngkirIn(BaseModel):
 class PengirimanIn(BaseModel):
     kurir: str
     layanan: str
+    ongkir: Decimal = Decimal("0")
     nama_penerima: str
     telepon_penerima: str
     alamat_tujuan: str
