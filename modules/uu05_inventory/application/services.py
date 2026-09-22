@@ -13,6 +13,7 @@ from modules.uu05_inventory.application.catalog import (
 )
 from modules.uu05_inventory.application.stock_mixin import InventoryStockMixin
 from modules.uu05_inventory.application.adjust_reports_mixin import InventoryAdjustReportsMixin
+from modules.uu05_inventory.application.trade_mixin import InventoryTradeMixin
 
 __all__ = ["InventoryService", "UU05_CODE", "DEFAULT_CATEGORIES"]
 
@@ -21,6 +22,7 @@ class InventoryService(
     InventoryCatalogMixin,
     InventoryStockMixin,
     InventoryAdjustReportsMixin,
+    InventoryTradeMixin,
 ):
     def __init__(
         self,

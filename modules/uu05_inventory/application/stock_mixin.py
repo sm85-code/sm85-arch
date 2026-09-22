@@ -9,7 +9,17 @@ from sqlalchemy import select
 from sqlalchemy.orm import selectinload
 
 from modules.uu05_inventory.application.coa import validate_coa_codes
-from modules.uu05_inventory.infrastructure.models import Product, StockCard
+from modules.uu05_inventory.infrastructure.models import (
+    Product,
+    Purchase,
+    Sale,
+    StockCard,
+    Vendor,
+    Customer,
+)
+
+_PURCHASE_METHODS = {"cash", "credit"}
+_SALE_METHODS = {"cash", "piutang"}
 
 
 class InventoryStockMixin:
@@ -23,13 +33,24 @@ class InventoryStockMixin:
         unit_usaha_id: str,
         debit_account_code: str,
         credit_account_code: str,
+        vendor_id: str,
+        invoice_number: str = "",
+        payment_method: str = "cash",
+        due_date: Optional[date] = None,
         created_by: str = "system-inventory",
     ) -> StockCard:
         if quantity <= 0:
             raise ValueError("quantity must be > 0")
+        if payment_method not in _PURCHASE_METHODS:
+            raise ValueError("metode pembayaran pembelian tidak valid")
+        if payment_method == "credit" and not due_date:
+            raise ValueError("tanggal jatuh tempo wajib diisi untuk pembelian kredit")
         product = await self.session.get(Product, product_id)
         if not product:
             raise ValueError("product not found")
+        vendor = await self.session.get(Vendor, vendor_id)
+        if not vendor:
+            raise ValueError("vendor tidak ditemukan")
         total = (unit_cost * quantity).quantize(Decimal("0.01"))
         card = StockCard(
             product_id=product_id,
@@ -59,6 +80,16 @@ class InventoryStockMixin:
             transaction_type="inventory_purchase",
         )
         card.finance_status = "posted"
+        purchase = Purchase(
+            stock_card_id=card.id,
+            vendor_id=vendor_id,
+            invoice_number=invoice_number or "",
+            payment_method=payment_method,
+            total_amount=total,
+            due_date=due_date if payment_method == "credit" else None,
+            status="paid" if payment_method == "cash" else "unpaid",
+        )
+        self.session.add(purchase)
         await self.session.flush()
         return card
 
@@ -71,15 +102,31 @@ class InventoryStockMixin:
         unit_usaha_id: str,
         debit_account_code: str,
         credit_account_code: str,
+        customer_id: str,
+        sell_price: Decimal,
+        revenue_debit_account_code: str,
+        revenue_credit_account_code: str,
+        invoice_number: str = "",
+        payment_method: str = "cash",
+        due_date: Optional[date] = None,
         created_by: str = "system-inventory",
     ) -> StockCard:
         if quantity <= 0:
             raise ValueError("quantity must be > 0")
+        if sell_price < 0:
+            raise ValueError("harga jual tidak boleh negatif")
+        if payment_method not in _SALE_METHODS:
+            raise ValueError("metode pembayaran penjualan tidak valid")
+        if payment_method == "piutang" and not due_date:
+            raise ValueError("tanggal jatuh tempo wajib diisi untuk penjualan piutang")
         product = await self.session.get(Product, product_id)
         if not product:
             raise ValueError("product not found")
         if product.qty_on_hand < quantity:
             raise ValueError("insufficient stock")
+        customer = await self.session.get(Customer, customer_id)
+        if not customer:
+            raise ValueError("customer tidak ditemukan")
         unit_cost = product.cost_price
         total = (unit_cost * quantity).quantize(Decimal("0.01"))
         card = StockCard(
@@ -108,12 +155,40 @@ class InventoryStockMixin:
             created_by=created_by,
             transaction_type="inventory_cogs",
         )
+
+        revenue_total = (sell_price * quantity).quantize(Decimal("0.01"))
+        await validate_coa_codes(self.session, revenue_debit_account_code, revenue_credit_account_code)
+        revenue_reference = f"stock-out-rev:{card.id}"
+        if revenue_total > 0:
+            await self.finance.record_inventory_journal(
+                movement_date=movement_date,
+                unit_usaha_id=unit_usaha_id,
+                amount=revenue_total,
+                debit_account_code=revenue_debit_account_code,
+                credit_account_code=revenue_credit_account_code,
+                description=f"Penjualan {product.sku} x{quantity}",
+                reference=revenue_reference,
+                created_by=created_by,
+                transaction_type="inventory_sale_revenue",
+            )
+
         card.finance_status = "posted"
+        sale = Sale(
+            stock_card_id=card.id,
+            customer_id=customer_id,
+            invoice_number=invoice_number or "",
+            sell_price=sell_price,
+            payment_method=payment_method,
+            total_amount=revenue_total,
+            due_date=due_date if payment_method == "piutang" else None,
+            status="paid" if payment_method == "cash" else "unpaid",
+        )
+        self.session.add(sale)
         await self.session.flush()
         return card
 
     async def cancel_movement(self, stock_card_id: str) -> None:
-        """Reverse qty, remove finance journal, and delete the stock card.
+        """Reverse qty, remove finance journal(s), purchase/sale records, and the stock card.
 
         Soft-cancel left cancelled rows (and confusing \"jurnal dibatalkan\") in the UI;
         callers expect cancel to leave the ledger clean.
@@ -132,8 +207,35 @@ class InventoryStockMixin:
                 product.qty_on_hand = max(0, product.qty_on_hand - card.quantity)
             else:
                 product.qty_on_hand += card.quantity
+
+        purchase = await self.session.scalar(
+            select(Purchase)
+            .options(selectinload(Purchase.payments))
+            .where(Purchase.stock_card_id == card.id)
+        )
+        if purchase:
+            for payment in list(purchase.payments):
+                if payment.reference:
+                    await self.finance.cancel_inventory_journal(payment.reference)
+                await self.session.delete(payment)
+            await self.session.delete(purchase)
+
+        sale = await self.session.scalar(
+            select(Sale)
+            .options(selectinload(Sale.payments))
+            .where(Sale.stock_card_id == card.id)
+        )
+        if sale:
+            for payment in list(sale.payments):
+                if payment.reference:
+                    await self.finance.cancel_inventory_journal(payment.reference)
+                await self.session.delete(payment)
+            await self.finance.cancel_inventory_journal(f"stock-out-rev:{card.id}")
+            await self.session.delete(sale)
+
         if card.reference:
             await self.finance.cancel_inventory_journal(card.reference)
+        await self.session.flush()
         await self.session.delete(card)
         await self.session.flush()
 
