@@ -242,6 +242,28 @@ class GuruMapelRombel(MadrasahBase):
     rombel: Mapped["RombelMadrasah"] = relationship()
 
 
+class BukuKasMadrasah(MadrasahBase):
+    """Kas satu pintu (single entry, bukan pembukuan double-entry): baris
+    "masuk" dibuat otomatis saat SPP dibayar lunas (lihat pay_spp_manual di
+    services.py), baris "keluar" dicatat manual oleh Kepala Sekolah/Admin
+    untuk ATK dan honor guru ngaji."""
+
+    __tablename__ = "madrasah_buku_kas"
+
+    id: Mapped[str] = mapped_column(String(64), primary_key=True, default=_uuid)
+    tanggal: Mapped[date] = mapped_column(Date, nullable=False, index=True)
+    tipe: Mapped[str] = mapped_column(String(16), nullable=False)
+    kategori: Mapped[str] = mapped_column(String(64), nullable=False)
+    jumlah: Mapped[Decimal] = mapped_column(Numeric(20, 2), nullable=False, default=Decimal("0"))
+    keterangan: Mapped[str] = mapped_column(Text, nullable=False, default="")
+    dicatat_oleh: Mapped[Optional[str]] = mapped_column(
+        String(64), ForeignKey("madrasah_users.id", ondelete="SET NULL"), nullable=True, index=True
+    )
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=_utcnow)
+
+    pencatat: Mapped[Optional["UserMadrasah"]] = relationship()
+
+
 class PengaturanSekolah(MadrasahBase):
     """Baris tunggal (singleton) berisi identitas madrasah yang dipakai
     frontend (nama, logo, alamat) -- supaya produk ini bisa dijual ke
