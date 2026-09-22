@@ -10,10 +10,10 @@ from reportlab.lib.enums import TA_CENTER, TA_LEFT, TA_RIGHT
 from reportlab.lib.pagesizes import A4, landscape as landscape_page
 from reportlab.lib.styles import ParagraphStyle, getSampleStyleSheet
 from reportlab.lib.units import cm, mm
-from reportlab.platypus import Paragraph, SimpleDocTemplate, Spacer, Table, TableStyle
+from reportlab.platypus import Image, Paragraph, SimpleDocTemplate, Spacer, Table, TableStyle
 
 from adapters.external.report_formatting import format_money, is_money_header, row_is_total
-from shared.report_branding import get_report_branding
+from shared.report_branding import ReportBranding, fetch_logo_bytes, get_report_branding
 
 _is_money_header = is_money_header
 _row_is_total = row_is_total
@@ -24,13 +24,16 @@ def _styles(primary_hex: str) -> dict[str, ParagraphStyle]:
     primary = colors.HexColor(f"#{primary_hex}")
     return {
         "org": ParagraphStyle(
-            "OrgName", parent=base["Heading1"], fontSize=13, textColor=primary, spaceAfter=2, leading=16
+            "OrgName", parent=base["Heading1"], alignment=TA_CENTER, fontSize=13,
+            textColor=primary, spaceAfter=2, leading=16,
         ),
         "legal": ParagraphStyle(
-            "OrgLegal", parent=base["Normal"], fontSize=8, textColor=colors.HexColor("#444444"), spaceAfter=1
+            "OrgLegal", parent=base["Normal"], alignment=TA_CENTER, fontSize=8,
+            textColor=colors.HexColor("#444444"), spaceAfter=1,
         ),
         "addr": ParagraphStyle(
-            "OrgAddr", parent=base["Normal"], fontSize=7.5, textColor=colors.HexColor("#555555"), leading=10
+            "OrgAddr", parent=base["Normal"], alignment=TA_CENTER, fontSize=7.5,
+            textColor=colors.HexColor("#555555"), leading=10,
         ),
         "title": ParagraphStyle(
             "DocTitle", parent=base["Heading1"], alignment=TA_CENTER, fontSize=12, spaceBefore=8, spaceAfter=4
@@ -68,10 +71,11 @@ def generate_pdf_report_platypus(
     table_rows: Optional[list[list[Any]]] = None,
     footer: str = "",
     landscape: bool = False,
+    branding: Optional[ReportBranding] = None,
     generated_by: str = "",
 ) -> bytes:
     """Letterhead + signatures ReportLab renderer (WeasyPrint fallback / simple docs)."""
-    branding = get_report_branding()
+    branding = branding or get_report_branding()
     primary = branding.primary_color
     page = landscape_page(A4) if landscape else A4
     buf = io.BytesIO()
@@ -85,6 +89,18 @@ def generate_pdf_report_platypus(
     )
     s = _styles(primary)
     story: list[Any] = []
+
+    logo_bytes = fetch_logo_bytes(branding.logo_url) if branding.logo_url else None
+    if logo_bytes:
+        try:
+            logo_img = Image(io.BytesIO(logo_bytes))
+            logo_img.drawHeight = 1.5 * cm
+            logo_img.drawWidth = logo_img.drawHeight * (logo_img.imageWidth / logo_img.imageHeight)
+            logo_img.hAlign = "CENTER"
+            story.append(logo_img)
+            story.append(Spacer(1, 1.5 * mm))
+        except Exception:  # noqa: BLE001 -- a broken/unsupported logo must never break the report
+            pass
 
     story.append(Paragraph(branding.org_name, s["org"]))
     story.append(Paragraph(branding.org_legal_name, s["legal"]))
@@ -187,6 +203,7 @@ def generate_pdf_report(
     table_rows: Optional[list[list[Any]]] = None,
     footer: str = "",
     landscape: bool = False,
+    branding: Optional[ReportBranding] = None,
     generated_by: str = "",
 ) -> bytes:
     """Audit-ready PDF: WeasyPrint HTML when available, else Platypus letterhead."""
@@ -199,6 +216,7 @@ def generate_pdf_report(
             table_rows=table_rows,
             footer=footer,
             landscape=landscape,
+            branding=branding,
             generated_by=generated_by,
         )
     from adapters.external.html_pdf import generate_audit_pdf
@@ -210,6 +228,7 @@ def generate_pdf_report(
         table_rows=table_rows,
         footer=footer,
         landscape=landscape,
+        branding=branding,
         generated_by=generated_by,
     )
 

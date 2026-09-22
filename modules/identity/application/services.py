@@ -10,9 +10,10 @@ from typing import Any, Optional
 from sqlalchemy import Select, func, or_, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from modules.identity.infrastructure.models import ClosedPeriod, SystemControl, User
+from modules.identity.infrastructure.models import ClosedPeriod, OrgProfile, SystemControl, User
 from modules.siabumdes.infrastructure.models import Transaction, UnitUsaha
 from shared.config import PUBLIC_ROLES, public_role
+from shared.report_branding import get_report_branding
 from shared.security import hash_password, verify_password
 
 _PERIOD_RE = re.compile(r"^\d{4}-\d{2}$")
@@ -39,6 +40,48 @@ async def get_system_control(session: AsyncSession) -> SystemControl:
         return row
     row = SystemControl(id="default", recording_locked=False)
     session.add(row)
+    await session.flush()
+    return row
+
+
+async def get_org_profile(session: AsyncSession) -> OrgProfile:
+    """Kop surat/letterhead settings, editable via the Profil BUMDES menu.
+    Seeded from the legacy env-var branding on first read so an existing
+    deployment doesn't suddenly show a blank letterhead."""
+    row = await session.get(OrgProfile, "default")
+    if row:
+        return row
+    seed = get_report_branding()
+    row = OrgProfile(
+        id="default",
+        org_name=seed.org_name,
+        org_legal_name=seed.org_legal_name,
+        address=seed.address,
+        village=seed.village,
+        district=seed.district,
+        regency=seed.regency,
+        province=seed.province,
+        phone=seed.phone,
+        email=seed.email,
+        tagline=seed.tagline,
+        signatory_left_title=seed.signatory_left_title,
+        signatory_left_name=seed.signatory_left_name,
+        signatory_mid_title=seed.signatory_mid_title,
+        signatory_mid_name=seed.signatory_mid_name,
+        signatory_right_title=seed.signatory_right_title,
+        signatory_right_name=seed.signatory_right_name,
+        primary_color=seed.primary_color,
+    )
+    session.add(row)
+    await session.flush()
+    return row
+
+
+async def update_org_profile(session: AsyncSession, **fields: Any) -> OrgProfile:
+    row = await get_org_profile(session)
+    for key, value in fields.items():
+        if value is not None:
+            setattr(row, key, value)
     await session.flush()
     return row
 

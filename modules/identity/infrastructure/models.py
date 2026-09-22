@@ -53,6 +53,34 @@ class SystemControl(Base):
     updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=_utcnow)
 
 
+class OrgProfile(Base):
+    """Singleton row (id=default): kop surat/letterhead untuk export PDF/Excel/Word,
+    diedit lewat menu Profil BUMDES (bukan lagi env var statis)."""
+
+    __tablename__ = "org_profiles"
+
+    id: Mapped[str] = mapped_column(String(64), primary_key=True, default="default")
+    org_name: Mapped[str] = mapped_column(String(255), nullable=False, default="BUMDes")
+    org_legal_name: Mapped[str] = mapped_column(String(255), nullable=False, default="Badan Usaha Milik Desa")
+    address: Mapped[str] = mapped_column(String(500), nullable=False, default="")
+    village: Mapped[str] = mapped_column(String(120), nullable=False, default="")
+    district: Mapped[str] = mapped_column(String(120), nullable=False, default="")
+    regency: Mapped[str] = mapped_column(String(120), nullable=False, default="")
+    province: Mapped[str] = mapped_column(String(120), nullable=False, default="")
+    phone: Mapped[str] = mapped_column(String(60), nullable=False, default="")
+    email: Mapped[str] = mapped_column(String(255), nullable=False, default="")
+    tagline: Mapped[str] = mapped_column(String(255), nullable=False, default="Laporan Keuangan")
+    logo_url: Mapped[str] = mapped_column(String(500), nullable=False, default="")
+    signatory_left_title: Mapped[str] = mapped_column(String(120), nullable=False, default="Direktur / Ketua")
+    signatory_left_name: Mapped[str] = mapped_column(String(255), nullable=False, default="")
+    signatory_mid_title: Mapped[str] = mapped_column(String(120), nullable=False, default="Bendahara")
+    signatory_mid_name: Mapped[str] = mapped_column(String(255), nullable=False, default="")
+    signatory_right_title: Mapped[str] = mapped_column(String(120), nullable=False, default="Mengetahui")
+    signatory_right_name: Mapped[str] = mapped_column(String(255), nullable=False, default="")
+    primary_color: Mapped[str] = mapped_column(String(6), nullable=False, default="1F4E79")
+    updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=_utcnow, onupdate=_utcnow)
+
+
 class ClosedPeriod(Base):
     __tablename__ = "closed_periods"
     __table_args__ = (UniqueConstraint("period", "group_code", name="uq_closed_periods_period_group"),)

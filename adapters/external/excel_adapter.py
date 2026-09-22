@@ -7,10 +7,11 @@ from decimal import Decimal
 from typing import Any, Optional
 
 from openpyxl import Workbook, load_workbook
+from openpyxl.drawing.image import Image as XlImage
 from openpyxl.styles import Alignment, Border, Font, PatternFill, Side
 from openpyxl.utils import get_column_letter
 
-from shared.report_branding import get_report_branding
+from shared.report_branding import ReportBranding, fetch_logo_bytes, get_report_branding
 
 
 def parse_excel_rows(
@@ -67,10 +68,11 @@ def generate_excel_report(
     *,
     subtitle: str = "",
     landscape: bool = False,
+    branding: Optional[ReportBranding] = None,
     generated_by: str = "",
 ) -> bytes:
     """Build audit-ready .xlsx with letterhead, freeze panes, currency, signatures."""
-    branding = get_report_branding()
+    branding = branding or get_report_branding()
     primary = branding.primary_color
     wb = Workbook()
     ws = wb.active
@@ -84,21 +86,39 @@ def generate_excel_report(
     currency_format = '"Rp"#,##0.00'
     money_cols = {i + 1 for i, h in enumerate(headers) if _is_money_header(h)}
     span = max(len(headers), 3)
+    center = Alignment(horizontal="center")
+
+    logo_bytes = fetch_logo_bytes(branding.logo_url) if branding.logo_url else None
+    if logo_bytes:
+        try:
+            xl_logo = XlImage(io.BytesIO(logo_bytes))
+            xl_logo.height = 46
+            xl_logo.width = 46
+            ws.add_image(xl_logo, "A1")
+            ws.row_dimensions[1].height = 36
+        except Exception:  # noqa: BLE001 -- a broken/unsupported logo must never break the report
+            pass
 
     ws.merge_cells(start_row=1, start_column=1, end_row=1, end_column=span)
-    ws.cell(row=1, column=1, value=branding.org_name).font = Font(bold=True, size=14, color=primary)
+    org_cell = ws.cell(row=1, column=1, value=branding.org_name)
+    org_cell.font = Font(bold=True, size=14, color=primary)
+    org_cell.alignment = center
 
     ws.merge_cells(start_row=2, start_column=1, end_row=2, end_column=span)
-    ws.cell(row=2, column=1, value=branding.org_legal_name).font = Font(size=9, color="444444")
+    legal_cell = ws.cell(row=2, column=1, value=branding.org_legal_name)
+    legal_cell.font = Font(size=9, color="444444")
+    legal_cell.alignment = center
 
     addr = branding.address_block.replace("\n", " | ") if branding.address_block else ""
     ws.merge_cells(start_row=3, start_column=1, end_row=3, end_column=span)
-    ws.cell(row=3, column=1, value=addr).font = Font(size=8, color="555555")
+    addr_cell = ws.cell(row=3, column=1, value=addr)
+    addr_cell.font = Font(size=8, color="555555")
+    addr_cell.alignment = center
 
     ws.merge_cells(start_row=5, start_column=1, end_row=5, end_column=span)
     title_cell = ws.cell(row=5, column=1, value=sheet_title)
     title_cell.font = Font(bold=True, size=12)
-    title_cell.alignment = Alignment(horizontal="center")
+    title_cell.alignment = center
 
     row_cursor = 6
     if subtitle:

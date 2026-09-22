@@ -16,7 +16,7 @@ from docx.oxml.ns import qn
 from docx.shared import Pt, RGBColor, Cm
 
 from adapters.external.report_formatting import format_money, is_money_header, row_is_total
-from shared.report_branding import get_report_branding
+from shared.report_branding import ReportBranding, fetch_logo_bytes, get_report_branding
 
 _is_money_header = is_money_header
 _row_is_total = row_is_total
@@ -52,10 +52,11 @@ def generate_word_report(
     table_rows: Optional[list[list[Any]]] = None,
     footer: str = "",
     landscape: bool = False,
+    branding: Optional[ReportBranding] = None,
     generated_by: str = "",
 ) -> bytes:
     """Build an audit-ready .docx: letterhead, title, data table, signatures."""
-    branding = get_report_branding()
+    branding = branding or get_report_branding()
     primary_hex = branding.primary_color or "1C8A8A"
     primary_rgb = _rgb(primary_hex)
 
@@ -72,7 +73,18 @@ def generate_word_report(
     style.font.name = "Calibri"
     style.font.size = Pt(10)
 
+    logo_bytes = fetch_logo_bytes(branding.logo_url) if branding.logo_url else None
+    if logo_bytes:
+        try:
+            logo_p = doc.add_paragraph()
+            logo_p.alignment = WD_ALIGN_PARAGRAPH.CENTER
+            logo_p.paragraph_format.space_after = Pt(2)
+            logo_p.add_run().add_picture(io.BytesIO(logo_bytes), height=Cm(1.6))
+        except Exception:  # noqa: BLE001 -- a broken/unsupported logo must never break the report
+            pass
+
     org_p = doc.add_paragraph()
+    org_p.alignment = WD_ALIGN_PARAGRAPH.CENTER
     org_run = org_p.add_run(branding.org_name)
     org_run.bold = True
     org_run.font.size = Pt(15)
@@ -80,6 +92,7 @@ def generate_word_report(
     org_p.paragraph_format.space_after = Pt(1)
 
     legal_p = doc.add_paragraph()
+    legal_p.alignment = WD_ALIGN_PARAGRAPH.CENTER
     legal_run = legal_p.add_run(branding.org_legal_name)
     legal_run.font.size = Pt(9)
     legal_run.font.color.rgb = RGBColor(0x44, 0x44, 0x44)
@@ -87,6 +100,7 @@ def generate_word_report(
 
     if branding.address_block:
         addr_p = doc.add_paragraph()
+        addr_p.alignment = WD_ALIGN_PARAGRAPH.CENTER
         addr_run = addr_p.add_run(branding.address_block.replace("\n", " · "))
         addr_run.font.size = Pt(8)
         addr_run.font.color.rgb = RGBColor(0x55, 0x55, 0x55)

@@ -16,6 +16,7 @@ from adapters.api.v1.admin_control_router import router as admin_control_router
 from adapters.api.v1.auth_router import router as auth_router
 from adapters.api.v1.io_router import router as io_router
 from adapters.api.v1.master_data_router import router as master_data_router
+from adapters.api.v1.org_profile_router import router as org_profile_router
 from adapters.api.v1.period_close_router import router as period_close_router
 from adapters.api.v1.public_router import router as public_router
 from adapters.api.v1.reports_router import router as reports_router
@@ -62,6 +63,7 @@ app.include_router(auth_router)
 app.include_router(period_close_router)
 app.include_router(admin_control_router)
 app.include_router(master_data_router)
+app.include_router(org_profile_router)
 app.include_router(transaction_router)
 app.include_router(reports_router)
 app.include_router(io_router)
