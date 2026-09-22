@@ -16,6 +16,7 @@ from tenants.madrasah.modules.madrasah.application.schemas import (
     JadwalIn,
     LoginRequest,
     MapelIn,
+    MapelPatch,
     MateriIn,
     MateriPatch,
     PenugasanIn,
@@ -30,6 +31,8 @@ from tenants.madrasah.modules.madrasah.application.schemas import (
     SantriIn,
     SantriPatch,
     TingkatIn,
+    TingkatPatch,
+    UserPatch,
 )
 from tenants.madrasah.modules.madrasah.infrastructure.auth import (
     clear_madrasah_cookie,
@@ -227,6 +230,32 @@ async def admin_tingkat_create(
     return {"id": row.id, "nama": row.nama, "urutan": row.urutan}
 
 
+@admin_r.patch("/tingkat/{tingkat_id}")
+async def admin_tingkat_patch(
+    tingkat_id: str,
+    payload: TingkatPatch,
+    session: AsyncSession = Depends(get_db_madrasah),
+    _: UserMadrasah = Depends(require_roles_madrasah(*ADMIN_ROLES)),
+):
+    try:
+        row = await services.patch_tingkat(session, tingkat_id, payload)
+    except services.MadrasahNotFoundError as exc:
+        raise HTTPException(status_code=404, detail=str(exc)) from exc
+    return {"id": row.id, "nama": row.nama, "urutan": row.urutan}
+
+
+@admin_r.delete("/tingkat/{tingkat_id}", status_code=status.HTTP_204_NO_CONTENT)
+async def admin_tingkat_delete(
+    tingkat_id: str,
+    session: AsyncSession = Depends(get_db_madrasah),
+    _: UserMadrasah = Depends(require_roles_madrasah(*ADMIN_ROLES)),
+):
+    try:
+        await services.delete_tingkat(session, tingkat_id)
+    except services.MadrasahNotFoundError as exc:
+        raise HTTPException(status_code=404, detail=str(exc)) from exc
+
+
 @admin_r.get("/rombel")
 async def admin_rombel(
     session: AsyncSession = Depends(get_db_madrasah),
@@ -249,6 +278,18 @@ async def admin_rombel_create(
 ):
     row = await services.create_rombel(session, payload)
     return {"id": row.id, "nama": row.nama, "tingkat_id": row.tingkat_id, "wali_kelas_id": row.wali_kelas_id}
+
+
+@admin_r.delete("/rombel/{rombel_id}", status_code=status.HTTP_204_NO_CONTENT)
+async def admin_rombel_delete(
+    rombel_id: str,
+    session: AsyncSession = Depends(get_db_madrasah),
+    _: UserMadrasah = Depends(require_roles_madrasah(*ADMIN_ROLES)),
+):
+    try:
+        await services.delete_rombel(session, rombel_id)
+    except services.MadrasahNotFoundError as exc:
+        raise HTTPException(status_code=404, detail=str(exc)) from exc
 
 
 @admin_r.get("/guru")
@@ -277,6 +318,67 @@ async def admin_guru_create(
     _: UserMadrasah = Depends(require_roles_madrasah(*ADMIN_ROLES)),
 ):
     return services.user_out(await services.create_guru(session, payload))
+
+
+@admin_r.patch("/guru/{user_id}")
+async def admin_guru_patch(
+    user_id: str,
+    payload: UserPatch,
+    session: AsyncSession = Depends(get_db_madrasah),
+    _: UserMadrasah = Depends(require_roles_madrasah(*ADMIN_ROLES)),
+):
+    try:
+        row = await services.patch_guru(session, user_id, payload)
+    except services.MadrasahNotFoundError as exc:
+        raise HTTPException(status_code=404, detail=str(exc)) from exc
+    return services.user_out(row)
+
+
+@admin_r.delete("/guru/{user_id}", status_code=status.HTTP_204_NO_CONTENT)
+async def admin_guru_delete(
+    user_id: str,
+    session: AsyncSession = Depends(get_db_madrasah),
+    _: UserMadrasah = Depends(require_roles_madrasah(*ADMIN_ROLES)),
+):
+    try:
+        await services.delete_guru(session, user_id)
+    except services.MadrasahNotFoundError as exc:
+        raise HTTPException(status_code=404, detail=str(exc)) from exc
+
+
+@admin_r.post("/wali-santri", status_code=status.HTTP_201_CREATED)
+async def admin_wali_santri_create(
+    payload: GuruIn,
+    session: AsyncSession = Depends(get_db_madrasah),
+    _: UserMadrasah = Depends(require_roles_madrasah(*ADMIN_ROLES)),
+):
+    return services.user_out(await services.create_wali_santri(session, payload))
+
+
+@admin_r.patch("/wali-santri/{user_id}")
+async def admin_wali_santri_patch(
+    user_id: str,
+    payload: UserPatch,
+    session: AsyncSession = Depends(get_db_madrasah),
+    _: UserMadrasah = Depends(require_roles_madrasah(*ADMIN_ROLES)),
+):
+    try:
+        row = await services.patch_guru(session, user_id, payload)
+    except services.MadrasahNotFoundError as exc:
+        raise HTTPException(status_code=404, detail=str(exc)) from exc
+    return services.user_out(row)
+
+
+@admin_r.delete("/wali-santri/{user_id}", status_code=status.HTTP_204_NO_CONTENT)
+async def admin_wali_santri_delete(
+    user_id: str,
+    session: AsyncSession = Depends(get_db_madrasah),
+    _: UserMadrasah = Depends(require_roles_madrasah(*ADMIN_ROLES)),
+):
+    try:
+        await services.delete_guru(session, user_id)
+    except services.MadrasahNotFoundError as exc:
+        raise HTTPException(status_code=404, detail=str(exc)) from exc
 
 
 @admin_r.post("/santri", status_code=status.HTTP_201_CREATED)
@@ -312,6 +414,18 @@ async def admin_santri_patch(
     except services.MadrasahNotFoundError as exc:
         raise HTTPException(status_code=404, detail=str(exc)) from exc
     return {"id": row.id, "nama": row.nama, "rombel_id": row.rombel_id, "orang_tua_id": row.orang_tua_id}
+
+
+@admin_r.delete("/santri/{santri_id}", status_code=status.HTTP_204_NO_CONTENT)
+async def admin_santri_delete(
+    santri_id: str,
+    session: AsyncSession = Depends(get_db_madrasah),
+    _: UserMadrasah = Depends(require_roles_madrasah(*ADMIN_ROLES)),
+):
+    try:
+        await services.delete_santri(session, santri_id)
+    except services.MadrasahNotFoundError as exc:
+        raise HTTPException(status_code=404, detail=str(exc)) from exc
 
 
 @admin_r.post("/pengumuman", status_code=status.HTTP_201_CREATED)
@@ -367,6 +481,32 @@ async def kur_mapel_create(
     return {"id": row.id, "kode": row.kode, "nama": row.nama}
 
 
+@kurikulum_r.patch("/mapel/{mapel_id}")
+async def kur_mapel_patch(
+    mapel_id: str,
+    payload: MapelPatch,
+    session: AsyncSession = Depends(get_db_madrasah),
+    _: UserMadrasah = Depends(require_roles_madrasah(*KURIKULUM_ROLES)),
+):
+    try:
+        row = await services.patch_mapel(session, mapel_id, payload)
+    except services.MadrasahNotFoundError as exc:
+        raise HTTPException(status_code=404, detail=str(exc)) from exc
+    return {"id": row.id, "kode": row.kode, "nama": row.nama}
+
+
+@kurikulum_r.delete("/mapel/{mapel_id}", status_code=status.HTTP_204_NO_CONTENT)
+async def kur_mapel_delete(
+    mapel_id: str,
+    session: AsyncSession = Depends(get_db_madrasah),
+    _: UserMadrasah = Depends(require_roles_madrasah(*KURIKULUM_ROLES)),
+):
+    try:
+        await services.delete_mapel(session, mapel_id)
+    except services.MadrasahNotFoundError as exc:
+        raise HTTPException(status_code=404, detail=str(exc)) from exc
+
+
 @kurikulum_r.post("/materi", status_code=status.HTTP_201_CREATED)
 async def kur_materi_create(
     payload: MateriIn,
@@ -394,6 +534,18 @@ async def kur_materi_patch(
     return {"id": row.id, "judul": row.judul, "urutan": row.urutan, "aktif": row.aktif}
 
 
+@kurikulum_r.delete("/materi/{materi_id}", status_code=status.HTTP_204_NO_CONTENT)
+async def kur_materi_delete(
+    materi_id: str,
+    session: AsyncSession = Depends(get_db_madrasah),
+    _: UserMadrasah = Depends(require_roles_madrasah(*KURIKULUM_ROLES)),
+):
+    try:
+        await services.delete_materi(session, materi_id)
+    except services.MadrasahNotFoundError as exc:
+        raise HTTPException(status_code=404, detail=str(exc)) from exc
+
+
 @kurikulum_r.get("/jadwal")
 async def kur_jadwal(
     rombel_id: str | None = Query(default=None),
@@ -411,6 +563,18 @@ async def kur_jadwal_create(
 ):
     row = await services.create_jadwal(session, payload)
     return {"id": row.id, "rombel_id": row.rombel_id, "mapel_id": row.mapel_id, "hari": row.hari}
+
+
+@kurikulum_r.delete("/jadwal/{jadwal_id}", status_code=status.HTTP_204_NO_CONTENT)
+async def kur_jadwal_delete(
+    jadwal_id: str,
+    session: AsyncSession = Depends(get_db_madrasah),
+    _: UserMadrasah = Depends(require_roles_madrasah(*KURIKULUM_ROLES)),
+):
+    try:
+        await services.delete_jadwal(session, jadwal_id)
+    except services.MadrasahNotFoundError as exc:
+        raise HTTPException(status_code=404, detail=str(exc)) from exc
 
 
 @kurikulum_r.patch("/rombel/{rombel_id}")

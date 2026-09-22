@@ -95,6 +95,26 @@ class RombelPatch(BaseModel):
     wali_kelas_id: Optional[str] = None
 
 
+class MapelPatch(BaseModel):
+    kode: Optional[str] = None
+    nama: Optional[str] = None
+
+
+class UserPatch(BaseModel):
+    """Edit akun guru/wali_santri oleh admin. Semua field opsional (PATCH
+    parsial); password kalau diisi akan di-hash ulang."""
+
+    nama: Optional[str] = None
+    no_hp: Optional[str] = None
+    role: Optional[str] = None
+    password: Optional[str] = None
+
+
+class TingkatPatch(BaseModel):
+    nama: Optional[str] = None
+    urutan: Optional[int] = None
+
+
 class PesanIn(BaseModel):
     santri_id: str
     isi: str = Field(..., min_length=1)
