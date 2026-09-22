@@ -1,7 +1,6 @@
 """Unauthenticated endpoints consumed by frontend-siabumdes Landing.jsx."""
 from __future__ import annotations
 
-from collections import defaultdict
 from datetime import date
 
 from fastapi import APIRouter, Depends

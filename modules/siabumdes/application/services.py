@@ -13,7 +13,6 @@ from modules.siabumdes.infrastructure.models import (
     Account,
     JournalEntry,
     JournalItem,
-    Transaction,
 )
 
 

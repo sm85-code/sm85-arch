@@ -1,7 +1,5 @@
 """Create the application entity store and migration ledger."""
 from alembic import op
-import sqlalchemy as sa
-from sqlalchemy.dialects import postgresql
 
 revision = "20260913_01"
 down_revision = None

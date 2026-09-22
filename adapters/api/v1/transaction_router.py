@@ -5,7 +5,7 @@ from datetime import date, datetime, timezone
 from decimal import Decimal
 from typing import Optional
 
-from fastapi import APIRouter, Depends, File, HTTPException, Query, Request, UploadFile
+from fastapi import APIRouter, Depends, File, HTTPException, Request, UploadFile
 from pydantic import BaseModel, Field
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -31,8 +31,7 @@ from adapters.external.gdrive_adapter import (
 )
 from modules.identity.infrastructure.models import User
 from modules.siabumdes.application.services import FinanceService
-from modules.siabumdes.infrastructure.models import Account, JournalEntry, Transaction, UnitUsaha
-from shared.config import public_role
+from modules.siabumdes.infrastructure.models import Account, JournalEntry, Transaction
 from shared.database import get_db
 
 router = APIRouter(prefix="/api", tags=["transactions"])
