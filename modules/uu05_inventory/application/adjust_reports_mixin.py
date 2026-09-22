@@ -15,6 +15,10 @@ from modules.uu05_inventory.infrastructure.models import (
     StockCard,
 )
 
+PERSEDIAAN_ACCOUNT_CODE = "1.1.05.15"
+PENYESUAIAN_NILAI_PERSEDIAAN_ACCOUNT_CODE = "1.1.05.51"
+BEBAN_KERUGIAN_BARANG_ACCOUNT_CODE = "6.2.99.52"
+
 
 class InventoryAdjustReportsMixin:
     async def adjust_stock(
@@ -45,14 +49,22 @@ class InventoryAdjustReportsMixin:
         amount = (product.cost_price * Decimal(abs(quantity_delta))).quantize(Decimal("0.01"))
         journal_reference = None
         finance_status = "skipped"
+        is_loss = quantity_delta < 0
 
-        if amount > 0:
+        if amount > 0 and not is_loss:
             if not (debit_account_code or "").strip() or not (credit_account_code or "").strip():
                 raise ValueError(
                     "debit_account_code dan credit_account_code wajib diisi "
                     "ketika penyesuaian berdampak nilai (HPP x |delta| > 0)"
                 )
             await validate_coa_codes(self.session, debit_account_code, credit_account_code)
+        elif amount > 0 and is_loss:
+            await validate_coa_codes(
+                self.session,
+                PENYESUAIAN_NILAI_PERSEDIAAN_ACCOUNT_CODE,
+                PERSEDIAAN_ACCOUNT_CODE,
+                BEBAN_KERUGIAN_BARANG_ACCOUNT_CODE,
+            )
 
         product.qty_on_hand = new_qty
         adj = StockAdjustment(
@@ -65,14 +77,41 @@ class InventoryAdjustReportsMixin:
         self.session.add(adj)
         await self.session.flush()
 
-        if amount > 0:
+        if amount > 0 and is_loss:
             uid = unit_usaha_id or product.unit_usaha_id
             journal_reference = f"stock-adj:{adj.id}"
-            side = "loss" if quantity_delta < 0 else "gain"
-            desc = (
-                f"Penyesuaian stok {side} {product.sku} "
-                f"delta={quantity_delta} ({reason_clean})"
+            reduction_reference = f"stock-adj:{adj.id}:reduce"
+            loss_reference = f"stock-adj:{adj.id}:loss"
+            desc_base = f"Penyesuaian stok {product.sku} delta={quantity_delta} ({reason_clean})"
+            # 1) Pengurangan fisik nilai persediaan: Dr Penyesuaian Nilai Persediaan / Cr Persediaan
+            await self.finance.record_inventory_journal(
+                movement_date=adjustment_date,
+                unit_usaha_id=uid,
+                amount=amount,
+                debit_account_code=PENYESUAIAN_NILAI_PERSEDIAAN_ACCOUNT_CODE,
+                credit_account_code=PERSEDIAAN_ACCOUNT_CODE,
+                description=f"{desc_base} - pengurangan fisik",
+                reference=reduction_reference,
+                created_by=created_by,
+                transaction_type="inventory_adjustment_reduction",
             )
+            # 2) Pengakuan beban kerugian: Dr Beban Kerugian Barang / Cr Penyesuaian Nilai Persediaan
+            await self.finance.record_inventory_journal(
+                movement_date=adjustment_date,
+                unit_usaha_id=uid,
+                amount=amount,
+                debit_account_code=BEBAN_KERUGIAN_BARANG_ACCOUNT_CODE,
+                credit_account_code=PENYESUAIAN_NILAI_PERSEDIAAN_ACCOUNT_CODE,
+                description=f"{desc_base} - pengakuan beban kerugian",
+                reference=loss_reference,
+                created_by=created_by,
+                transaction_type="inventory_adjustment_loss",
+            )
+            finance_status = "posted"
+        elif amount > 0:
+            uid = unit_usaha_id or product.unit_usaha_id
+            journal_reference = f"stock-adj:{adj.id}"
+            desc = f"Penyesuaian stok gain {product.sku} delta={quantity_delta} ({reason_clean})"
             await self.finance.record_inventory_journal(
                 movement_date=adjustment_date,
                 unit_usaha_id=uid,
@@ -124,17 +163,23 @@ class InventoryAdjustReportsMixin:
         ]
 
     async def cancel_adjustment(self, adjustment_id: str) -> None:
-        """Reverse qty impact, remove finance journal, delete adjustment row."""
+        """Reverse qty impact, remove finance journal(s), delete adjustment row."""
         row = await self.session.get(StockAdjustment, adjustment_id)
         if not row:
             # Product delete may have removed the row before journals were cleaned.
             await self.finance.cancel_inventory_journal(f"stock-adj:{adjustment_id}")
+            await self.finance.cancel_inventory_journal(f"stock-adj:{adjustment_id}:reduce")
+            await self.finance.cancel_inventory_journal(f"stock-adj:{adjustment_id}:loss")
             return
         product = await self.session.get(Product, row.product_id)
         if product:
             # Reverse the delta that was applied at create time.
             product.qty_on_hand = max(0, product.qty_on_hand - row.quantity_delta)
+        # Gain adjustments post a single "stock-adj:<id>" journal; loss adjustments post
+        # a "reduce" + "loss" pair instead — cancel whichever reference(s) exist.
         await self.finance.cancel_inventory_journal(f"stock-adj:{row.id}")
+        await self.finance.cancel_inventory_journal(f"stock-adj:{row.id}:reduce")
+        await self.finance.cancel_inventory_journal(f"stock-adj:{row.id}:loss")
         await self.session.delete(row)
         await self.session.flush()
 
