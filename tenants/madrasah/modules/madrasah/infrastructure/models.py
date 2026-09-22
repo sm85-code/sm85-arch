@@ -242,6 +242,24 @@ class GuruMapelRombel(MadrasahBase):
     rombel: Mapped["RombelMadrasah"] = relationship()
 
 
+class PengaturanSekolah(MadrasahBase):
+    """Baris tunggal (singleton) berisi identitas madrasah yang dipakai
+    frontend (nama, logo, alamat) -- supaya produk ini bisa dijual ke
+    madrasah lain tanpa mengubah kode/hardcode nama sekolah tertentu.
+    Diambil/di-buat otomatis lewat get_pengaturan() kalau baris belum ada,
+    jadi tidak perlu migrasi data manual saat modul ini pertama kali
+    dipasang di database yang sudah berjalan."""
+
+    __tablename__ = "madrasah_pengaturan"
+
+    id: Mapped[str] = mapped_column(String(64), primary_key=True, default=_uuid)
+    nama_sekolah: Mapped[str] = mapped_column(String(255), nullable=False, default="Madrasah Diniyah")
+    tagline: Mapped[str] = mapped_column(String(255), nullable=False, default="Sistem Informasi Madrasah")
+    logo_url: Mapped[Optional[str]] = mapped_column(String(500), nullable=True)
+    alamat: Mapped[str] = mapped_column(String(500), nullable=False, default="")
+    updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=_utcnow, onupdate=_utcnow)
+
+
 class PesanMadrasah(MadrasahBase):
     """Komunikasi antara wali kelas dan wali santri, per santri (bukan
     percakapan bebas antar-user). Baru, tidak menyentuh tabel manapun."""

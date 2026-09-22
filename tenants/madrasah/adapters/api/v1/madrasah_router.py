@@ -18,6 +18,7 @@ from tenants.madrasah.modules.madrasah.application.schemas import (
     MateriIn,
     MateriPatch,
     PenugasanIn,
+    PengaturanPatch,
     PengumumanIn,
     PesanIn,
     PlacementIn,
@@ -164,6 +165,25 @@ async def spp_pay(
         return services.tagihan_out(await services.pay_spp_manual(session, id))
     except services.MadrasahNotFoundError as exc:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=str(exc)) from exc
+
+
+@madrasah_router.get("/pengaturan")
+async def get_pengaturan(session: AsyncSession = Depends(get_db_madrasah)):
+    # Intentionally left WITHOUT an auth dependency: Landing.jsx dan Login.jsx
+    # (halaman publik, sebelum login) menampilkan nama & logo madrasah dari
+    # sini. Sama seperti /pengumuman di bawah.
+    row = await services.get_pengaturan(session)
+    return services.pengaturan_out(row)
+
+
+@admin_r.patch("/pengaturan")
+async def admin_pengaturan_patch(
+    payload: PengaturanPatch,
+    session: AsyncSession = Depends(get_db_madrasah),
+    _: UserMadrasah = Depends(require_roles_madrasah(*ADMIN_ROLES)),
+):
+    row = await services.update_pengaturan(session, payload)
+    return services.pengaturan_out(row)
 
 
 @madrasah_router.get("/pengumuman")
