@@ -50,12 +50,14 @@ async def test_pengiriman_status_transitions_and_auto_completes_pesanan(session)
         PengirimanIn(
             kurir="jne",
             layanan="reg",
+            ongkir=Decimal("15000.00"),
             nama_penerima="Budi",
             telepon_penerima="0812xxxx",
             alamat_tujuan="Jl. Contoh No. 1",
         ),
     )
     assert pengiriman.status == "menunggu_pickup"
+    assert pengiriman.ongkir == Decimal("15000.00")
 
     await services.ubah_status_pengiriman(session, pesanan_id, "dikirim")
     pengiriman = await services.ubah_status_pengiriman(session, pesanan_id, "diterima", tracking_id="JNE123")
@@ -144,3 +146,13 @@ async def test_biteship_adapter_fails_loud_when_not_configured(monkeypatch):
 
     with pytest.raises(biteship.BiteshipNotConfigured):
         await biteship.cek_ongkir(kode_pos_asal="12345", kode_pos_tujuan="54321", berat_gram=1000, nilai_barang="0")
+
+
+@pytest.mark.asyncio
+async def test_image_upload_fails_loud_when_not_configured(monkeypatch):
+    import tenants.toko.modules.toko.infrastructure.image_upload as image_upload
+
+    monkeypatch.setattr(image_upload, "GDRIVE_FOLDER_ID_TOKO", None)
+
+    with pytest.raises(image_upload.UploadNotConfigured):
+        await image_upload.upload_produk_photo(b"fake-bytes", "foto.jpg", "image/jpeg")

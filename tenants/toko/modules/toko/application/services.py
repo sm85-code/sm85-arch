@@ -323,11 +323,10 @@ def pengiriman_out(pengiriman: PengirimanToko) -> dict:
     }
 
 
-async def buat_pengiriman_lokal(
-    session: AsyncSession, pesanan_id: str, payload: PengirimanIn, *, ongkir: Decimal = Decimal("0")
-) -> PengirimanToko:
-    """Catat data pengiriman di database kita. Pemanggilan API Biteship yang
-    sesungguhnya (assign kurir, dapat tracking_id) ada di infrastructure/
+async def buat_pengiriman_lokal(session: AsyncSession, pesanan_id: str, payload: PengirimanIn) -> PengirimanToko:
+    """Catat data pengiriman (termasuk ongkir yang dipilih pembeli dari hasil
+    cek-ongkir) di database kita. Pemanggilan API Biteship yang sesungguhnya
+    (assign kurir, dapat tracking_id) ada di infrastructure/
     shipping_biteship.py -- belum terhubung, lihat docstring di sana."""
     await get_pesanan(session, pesanan_id)
     existing = (
@@ -336,7 +335,7 @@ async def buat_pengiriman_lokal(
     if existing:
         raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail="Pesanan ini sudah punya data pengiriman")
 
-    pengiriman = PengirimanToko(pesanan_id=pesanan_id, ongkir=ongkir, **payload.model_dump())
+    pengiriman = PengirimanToko(pesanan_id=pesanan_id, **payload.model_dump())
     session.add(pengiriman)
     await session.flush()
     return pengiriman

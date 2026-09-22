@@ -8,7 +8,7 @@ from __future__ import annotations
 
 from datetime import date
 
-from fastapi import APIRouter, Depends, HTTPException, Response, status as http_status
+from fastapi import APIRouter, Depends, File, HTTPException, Response, UploadFile, status as http_status
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from tenants.toko.modules.toko.application import services
@@ -32,6 +32,7 @@ from tenants.toko.modules.toko.infrastructure.auth import (
     set_toko_cookie,
 )
 from tenants.toko.modules.toko.infrastructure.database import get_db_toko
+from tenants.toko.modules.toko.infrastructure.image_upload import upload_produk_photo
 from tenants.toko.modules.toko.infrastructure.models import UserToko
 from tenants.toko.modules.toko.infrastructure.payment_ipaymu import create_payment as ipaymu_create_payment
 from tenants.toko.modules.toko.infrastructure.payment_ipaymu import parse_webhook as ipaymu_parse_webhook
@@ -126,6 +127,22 @@ async def remove_produk(
 ):
     await services.delete_produk(session, produk_id)
     return {"ok": True}
+
+
+@toko_router.post("/admin/produk/{produk_id}/foto")
+async def upload_foto_produk(
+    produk_id: str,
+    file: UploadFile = File(...),
+    session: AsyncSession = Depends(get_db_toko),
+    _user: UserToko = Depends(require_roles_toko(*ADMIN_ROLES)),
+):
+    """Upload foto ke Google Drive (lihat infrastructure/image_upload.py --
+    butuh GDRIVE_FOLDER_ID_TOKO + kredensial service account terisi) lalu
+    simpan URL-nya ke produk.foto_url."""
+    file_bytes = await file.read()
+    foto_url = await upload_produk_photo(file_bytes, file.filename or produk_id, file.content_type or "")
+    produk = await services.update_produk(session, produk_id, ProdukPatch(foto_url=foto_url))
+    return services.produk_out(produk)
 
 
 @toko_router.get("/keranjang")
@@ -287,6 +304,23 @@ async def admin_buat_pengiriman(
     session: AsyncSession = Depends(get_db_toko),
     _user: UserToko = Depends(require_roles_toko(*ADMIN_ROLES)),
 ):
+    pengiriman = await services.buat_pengiriman_lokal(session, pesanan_id, payload)
+    return services.pengiriman_out(pengiriman)
+
+
+@toko_router.post("/pesanan/{pesanan_id}/pengiriman")
+async def isi_alamat_pengiriman(
+    pesanan_id: str,
+    payload: PengirimanIn,
+    session: AsyncSession = Depends(get_db_toko),
+    user: UserToko = Depends(get_current_user_toko),
+):
+    """Pembeli mengisi alamat tujuan untuk pesanannya sendiri (beda dari
+    /admin/pesanan/{id}/pengiriman yang dipakai admin, misalnya untuk
+    pesanan yang masuk lewat telepon/WhatsApp)."""
+    pesanan = await services.get_pesanan(session, pesanan_id)
+    if pesanan.user_id != user.id:
+        raise HTTPException(status_code=http_status.HTTP_404_NOT_FOUND, detail="Pesanan tidak ditemukan")
     pengiriman = await services.buat_pengiriman_lokal(session, pesanan_id, payload)
     return services.pengiriman_out(pengiriman)
 

@@ -91,6 +91,13 @@ def _exists_sync(file_id: str) -> bool:
         return False
 
 
+def _set_public_sync(file_id: str) -> None:
+    service = _drive_service()
+    service.permissions().create(
+        fileId=file_id, body={"type": "anyone", "role": "reader"}, supportsAllDrives=True
+    ).execute()
+
+
 async def upload_file_to_gdrive(
     file_bytes: bytes,
     file_name: str,
@@ -107,3 +114,10 @@ async def delete_file_from_gdrive(file_id: str) -> None:
 
 async def gdrive_file_exists(file_id: str) -> bool:
     return await asyncio.to_thread(_exists_sync, file_id)
+
+
+async def set_gdrive_file_public(file_id: str) -> None:
+    """Grants anyone-with-the-link read access. Needed for files that must
+    be embeddable (e.g. <img src>), since the default sharing for a service
+    account upload is private."""
+    await asyncio.to_thread(_set_public_sync, file_id)
