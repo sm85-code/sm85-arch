@@ -4,8 +4,8 @@ from __future__ import annotations
 from sqlalchemy import select, text
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from app.modules.madrasah.infrastructure.database import MadrasahBase, engine
-from app.modules.madrasah.infrastructure.models import (
+from tenants.madrasah.modules.madrasah.infrastructure.database import MadrasahBase, engine
+from tenants.madrasah.modules.madrasah.infrastructure.models import (
     GuruMapelRombel,
     KelasMadrasah,
     MapelMadrasah,

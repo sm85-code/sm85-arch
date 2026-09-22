@@ -17,8 +17,8 @@ from typing import Callable
 from fastapi import Depends, HTTPException, Request, Response, status
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from app.modules.madrasah.infrastructure.database import get_db_madrasah
-from app.modules.madrasah.infrastructure.models import UserMadrasah
+from tenants.madrasah.modules.madrasah.infrastructure.database import get_db_madrasah
+from tenants.madrasah.modules.madrasah.infrastructure.models import UserMadrasah
 from shared.config import COOKIE_PATH, COOKIE_SAMESITE, COOKIE_SECURE, JWT_EXPIRE_HOURS
 from shared.security import create_access_token, decode_access_token
 
