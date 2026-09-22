@@ -34,3 +34,16 @@ class ProdukPatch(BaseModel):
     stok: Optional[int] = None
     foto_url: Optional[str] = None
     aktif: Optional[bool] = None
+
+
+class KeranjangItemIn(BaseModel):
+    produk_id: str
+    qty: int = 1
+
+
+class KeranjangItemPatch(BaseModel):
+    qty: int
+
+
+class StatusPesananIn(BaseModel):
+    status: str
