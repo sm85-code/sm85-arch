@@ -6,6 +6,7 @@ from datetime import date, datetime, timezone
 from decimal import Decimal
 
 from sqlalchemy import func, select, text
+from sqlalchemy.exc import OperationalError, ProgrammingError
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import selectinload
 
@@ -320,8 +321,21 @@ async def ajukan_pembayaran(session: AsyncSession, guru: UserMadrasah, tagihan_i
 
 async def get_pengaturan(session: AsyncSession) -> PengaturanSekolah:
     """Baris singleton -- dibuat otomatis kalau belum ada, supaya modul ini
-    bisa dipasang di database yang sudah berjalan tanpa migrasi data manual."""
-    row = (await session.execute(select(PengaturanSekolah).limit(1))).scalar_one_or_none()
+    bisa dipasang di database yang sudah berjalan tanpa migrasi data manual.
+
+    GET /pengaturan itu publik (dipanggil dari Login.jsx/Landing.jsx sebelum
+    siapa pun login), jadi kalau tabelnya belum sempat dibuat lewat
+    /seed-now setelah deploy, endpoint ini akan 500 buat SEMUA pengunjung,
+    bukan cuma admin. Self-heal di sini (buat tabelnya sendiri kalau belum
+    ada) supaya kelas bug ini tidak bisa terulang untuk tabel baru lain.
+    """
+    try:
+        row = (await session.execute(select(PengaturanSekolah).limit(1))).scalar_one_or_none()
+    except (ProgrammingError, OperationalError):
+        await session.rollback()
+        conn = await session.connection()
+        await conn.run_sync(lambda sync_conn: PengaturanSekolah.__table__.create(sync_conn, checkfirst=True))
+        row = None
     if not row:
         row = PengaturanSekolah()
         session.add(row)
