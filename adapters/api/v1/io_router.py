@@ -184,7 +184,7 @@ async def export_transactions(
     session: AsyncSession = Depends(get_db),
 ):
     units = {u.id: u for u in (await session.execute(select(UnitUsaha))).scalars()}
-    accounts = {a.code: a for a in (await session.execute(select(Account))).scalars()}
+    accounts = {(a.code, a.group_code): a for a in (await session.execute(select(Account))).scalars()}
     stmt = select(Transaction).order_by(Transaction.date.asc())
     if is_pengelola(user):
         stmt = stmt.where(Transaction.unit_usaha_id == user.unit_usaha_id)
@@ -206,15 +206,17 @@ async def export_transactions(
 
     def row_of(tx: Transaction) -> list:
         grp = units[tx.unit_usaha_id].code if tx.unit_usaha_id and tx.unit_usaha_id in units else "BUMDES"
+        debit = accounts.get((tx.debit_account_code, grp))
+        credit = accounts.get((tx.credit_account_code, grp))
         return [
             tx.date.isoformat(),
             grp,
             tx.transaction_type,
             tx.description,
             tx.debit_account_code,
-            (accounts.get(tx.debit_account_code) or Account(code="", name="")).name if False else (accounts.get(tx.debit_account_code).name if accounts.get(tx.debit_account_code) else ""),
+            debit.name if debit else "",
             tx.credit_account_code,
-            accounts.get(tx.credit_account_code).name if accounts.get(tx.credit_account_code) else "",
+            credit.name if credit else "",
             float(tx.amount),
             tx.reference or "",
         ]

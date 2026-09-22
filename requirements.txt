@@ -12,6 +12,11 @@ bcrypt==4.0.1
 python-multipart==0.0.32
 reportlab==4.2.5
 weasyprint==62.3
+# weasyprint 62.3 declares "pydyf>=0.10.0" but its Stream subclass calls
+# super().transform(...), an API pydyf removed in 0.12 -- pip resolves an
+# unpinned pydyf to the latest 0.12.x and every PDF export silently falls
+# back to the ReportLab renderer. Pin to the last compatible release.
+pydyf==0.11.0
 openpyxl==3.1.5
 pandas==3.0.5
 pypdf==6.16.2
