@@ -13,11 +13,16 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from tenants.toko.modules.toko.application import services
 from tenants.toko.modules.toko.application.schemas import (
+    AlamatIn,
+    AlamatPatch,
     CekOngkirIn,
+    GoogleLoginRequest,
+    KategoriIn,
     KeranjangItemIn,
     KeranjangItemPatch,
     LoginRequest,
     PengirimanIn,
+    PesanChatIn,
     ProdukIn,
     ProdukPatch,
     RegisterRequest,
@@ -32,6 +37,7 @@ from tenants.toko.modules.toko.infrastructure.auth import (
     set_toko_cookie,
 )
 from tenants.toko.modules.toko.infrastructure.database import get_db_toko
+from tenants.toko.modules.toko.infrastructure.google_auth import verify_google_id_token
 from tenants.toko.modules.toko.infrastructure.image_upload import upload_produk_photo
 from tenants.toko.modules.toko.infrastructure.models import UserToko
 from tenants.toko.modules.toko.infrastructure.payment_ipaymu import create_payment as ipaymu_create_payment
@@ -61,6 +67,15 @@ async def do_register(payload: RegisterRequest, response: Response, session: Asy
 @toko_router.post("/auth/login")
 async def do_login(payload: LoginRequest, response: Response, session: AsyncSession = Depends(get_db_toko)):
     user = await services.authenticate(session, payload.email, payload.password)
+    token = issue_toko_token(user)
+    set_toko_cookie(response, token)
+    return services.user_out(user)
+
+
+@toko_router.post("/auth/google")
+async def do_login_google(payload: GoogleLoginRequest, response: Response, session: AsyncSession = Depends(get_db_toko)):
+    claims = verify_google_id_token(payload.id_token)
+    user = await services.login_or_register_google(session, google_sub=claims["sub"], email=claims["email"], nama=claims["name"])
     token = issue_toko_token(user)
     set_toko_cookie(response, token)
     return services.user_out(user)
@@ -143,6 +158,78 @@ async def upload_foto_produk(
     foto_url = await upload_produk_photo(file_bytes, file.filename or produk_id, file.content_type or "")
     produk = await services.update_produk(session, produk_id, ProdukPatch(foto_url=foto_url))
     return services.produk_out(produk)
+
+
+# --- Kategori --------------------------------------------------------------
+
+
+@toko_router.get("/kategori")
+async def get_kategori_list(session: AsyncSession = Depends(get_db_toko)):
+    kategori = await services.list_kategori(session)
+    return [services.kategori_out(k) for k in kategori]
+
+
+@toko_router.post("/admin/kategori")
+async def admin_create_kategori(
+    payload: KategoriIn,
+    session: AsyncSession = Depends(get_db_toko),
+    _user: UserToko = Depends(require_roles_toko(*ADMIN_ROLES)),
+):
+    kategori = await services.create_kategori(session, payload)
+    return services.kategori_out(kategori)
+
+
+@toko_router.delete("/admin/kategori/{kategori_id}")
+async def admin_delete_kategori(
+    kategori_id: str,
+    session: AsyncSession = Depends(get_db_toko),
+    _user: UserToko = Depends(require_roles_toko(*ADMIN_ROLES)),
+):
+    await services.delete_kategori(session, kategori_id)
+    return {"ok": True}
+
+
+# --- Alamat (buku alamat pembeli) ------------------------------------------
+
+
+@toko_router.get("/alamat")
+async def get_alamat_list(
+    session: AsyncSession = Depends(get_db_toko),
+    user: UserToko = Depends(get_current_user_toko),
+):
+    alamat = await services.list_alamat(session, user.id)
+    return [services.alamat_out(a) for a in alamat]
+
+
+@toko_router.post("/alamat")
+async def create_alamat(
+    payload: AlamatIn,
+    session: AsyncSession = Depends(get_db_toko),
+    user: UserToko = Depends(get_current_user_toko),
+):
+    alamat = await services.create_alamat(session, user.id, payload)
+    return services.alamat_out(alamat)
+
+
+@toko_router.patch("/alamat/{alamat_id}")
+async def patch_alamat(
+    alamat_id: str,
+    payload: AlamatPatch,
+    session: AsyncSession = Depends(get_db_toko),
+    user: UserToko = Depends(get_current_user_toko),
+):
+    alamat = await services.update_alamat(session, user.id, alamat_id, payload)
+    return services.alamat_out(alamat)
+
+
+@toko_router.delete("/alamat/{alamat_id}")
+async def remove_alamat(
+    alamat_id: str,
+    session: AsyncSession = Depends(get_db_toko),
+    user: UserToko = Depends(get_current_user_toko),
+):
+    await services.delete_alamat(session, user.id, alamat_id)
+    return {"ok": True}
 
 
 @toko_router.get("/keranjang")
@@ -389,3 +476,61 @@ async def admin_laporan_ringkasan_status(
     _user: UserToko = Depends(require_roles_toko(*ADMIN_ROLES)),
 ):
     return await services.laporan_ringkasan_status(session)
+
+
+# --- Chat toko web (terpisah dari chat Shopee, yang belum dibangun) --------
+
+
+@toko_router.get("/chat")
+async def get_percakapan_saya(
+    session: AsyncSession = Depends(get_db_toko),
+    user: UserToko = Depends(get_current_user_toko),
+):
+    percakapan = await services.get_or_create_percakapan(session, user.id)
+    percakapan = await services.get_percakapan(session, percakapan.id)
+    await services.tandai_dibaca(session, percakapan.id, sebagai_admin=False)
+    return services.percakapan_out(percakapan, dengan_pesan=True)
+
+
+@toko_router.post("/chat")
+async def kirim_pesan_saya(
+    payload: PesanChatIn,
+    session: AsyncSession = Depends(get_db_toko),
+    user: UserToko = Depends(get_current_user_toko),
+):
+    percakapan = await services.get_or_create_percakapan(session, user.id)
+    await services.kirim_pesan(session, percakapan.id, user, payload.isi)
+    percakapan = await services.get_percakapan(session, percakapan.id)
+    return services.percakapan_out(percakapan, dengan_pesan=True)
+
+
+@toko_router.get("/admin/chat")
+async def admin_list_percakapan(
+    session: AsyncSession = Depends(get_db_toko),
+    _user: UserToko = Depends(require_roles_toko(*ADMIN_ROLES)),
+):
+    percakapan = await services.list_percakapan_admin(session)
+    return [services.percakapan_out(p) for p in percakapan]
+
+
+@toko_router.get("/admin/chat/{percakapan_id}")
+async def admin_get_percakapan(
+    percakapan_id: str,
+    session: AsyncSession = Depends(get_db_toko),
+    _user: UserToko = Depends(require_roles_toko(*ADMIN_ROLES)),
+):
+    percakapan = await services.get_percakapan(session, percakapan_id)
+    await services.tandai_dibaca(session, percakapan_id, sebagai_admin=True)
+    return services.percakapan_out(percakapan, dengan_pesan=True)
+
+
+@toko_router.post("/admin/chat/{percakapan_id}")
+async def admin_kirim_pesan(
+    percakapan_id: str,
+    payload: PesanChatIn,
+    session: AsyncSession = Depends(get_db_toko),
+    user: UserToko = Depends(require_roles_toko(*ADMIN_ROLES)),
+):
+    await services.kirim_pesan(session, percakapan_id, user, payload.isi)
+    percakapan = await services.get_percakapan(session, percakapan_id)
+    return services.percakapan_out(percakapan, dengan_pesan=True)

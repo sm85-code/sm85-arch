@@ -1,7 +1,9 @@
 """Idempotent starter rows for the isolated toko database."""
 from __future__ import annotations
 
-from sqlalchemy import select
+import uuid
+
+from sqlalchemy import select, text
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from shared.security import hash_password
@@ -11,6 +13,58 @@ from tenants.toko.modules.toko.infrastructure.models import UserToko
 OWNER_EMAIL = "owner@toko.test"
 ADMIN_EMAIL = "admin@toko.test"
 DEFAULT_PASSWORD = "password123"
+
+
+async def _ensure_columns(conn) -> None:
+    # Columns added after the tables were first created -- ALTER TABLE IF
+    # EXISTS/ADD COLUMN IF NOT EXISTS makes this a no-op on a fresh install
+    # (create_all already includes them) and safe to re-run on a deploy that
+    # already has the old schema.
+    await conn.execute(text("ALTER TABLE IF EXISTS toko_users ADD COLUMN IF NOT EXISTS google_sub VARCHAR(255) NULL"))
+    await conn.execute(text("ALTER TABLE IF EXISTS toko_users ALTER COLUMN password_hash DROP NOT NULL"))
+    await conn.execute(text("ALTER TABLE IF EXISTS toko_produk ADD COLUMN IF NOT EXISTS kategori_id VARCHAR(64) NULL"))
+
+
+async def _migrate_free_text_kategori(session: AsyncSession) -> None:
+    """One-time backfill: the old `toko_produk.kategori` free-text column
+    (if it still exists from before KategoriToko existed) gets turned into
+    real KategoriToko rows, and matching products get their new
+    kategori_id set. Safe to re-run -- skips products that already have a
+    kategori_id, and does nothing once the old column is gone or empty."""
+    has_old_column = (
+        await session.execute(
+            text(
+                "SELECT 1 FROM information_schema.columns "
+                "WHERE table_name = 'toko_produk' AND column_name = 'kategori'"
+            )
+        )
+    ).scalar_one_or_none()
+    if not has_old_column:
+        return
+
+    rows = (
+        await session.execute(
+            text(
+                "SELECT DISTINCT kategori FROM toko_produk "
+                "WHERE kategori_id IS NULL AND kategori IS NOT NULL AND kategori != ''"
+            )
+        )
+    ).all()
+    for (nama,) in rows:
+        kategori_id = (
+            await session.execute(text("SELECT id FROM toko_kategori WHERE nama = :nama"), {"nama": nama})
+        ).scalar_one_or_none()
+        if not kategori_id:
+            kategori_id = str(uuid.uuid4())
+            await session.execute(
+                text("INSERT INTO toko_kategori (id, nama) VALUES (:id, :nama)"),
+                {"id": kategori_id, "nama": nama},
+            )
+        await session.execute(
+            text("UPDATE toko_produk SET kategori_id = :kid WHERE kategori = :nama AND kategori_id IS NULL"),
+            {"kid": kategori_id, "nama": nama},
+        )
+    await session.flush()
 
 
 async def _ensure_user(session: AsyncSession, *, email: str, nama: str, role: str) -> UserToko:
@@ -27,6 +81,9 @@ async def seed_toko(session: AsyncSession) -> dict[str, str]:
         raise RuntimeError("DATABASE_URL_TOKO is not configured")
     async with engine.begin() as conn:
         await conn.run_sync(TokoBase.metadata.create_all)
+        await _ensure_columns(conn)
+
+    await _migrate_free_text_kategori(session)
 
     owner = await _ensure_user(session, email=OWNER_EMAIL, nama="Pemilik Toko", role="owner")
     admin = await _ensure_user(session, email=ADMIN_EMAIL, nama="Admin Toko", role="admin_toko")
