@@ -52,7 +52,7 @@ async def test_pengiriman_status_transitions_and_auto_completes_pesanan(session)
             layanan="reg",
             ongkir=Decimal("15000.00"),
             nama_penerima="Budi",
-            telepon_penerima="0812xxxx",
+            telepon_penerima="081234567890",
             alamat_tujuan="Jl. Contoh No. 1",
         ),
     )
@@ -74,7 +74,7 @@ async def test_pengiriman_rejects_invalid_transition(session):
     await services.buat_pengiriman_lokal(
         session,
         pesanan_id,
-        PengirimanIn(kurir="jne", layanan="reg", nama_penerima="Budi", telepon_penerima="0812", alamat_tujuan="Jl. X"),
+        PengirimanIn(kurir="jne", layanan="reg", nama_penerima="Budi", telepon_penerima="081234567890", alamat_tujuan="Jl. X"),
     )
 
     with pytest.raises(Exception) as exc_info:
@@ -85,7 +85,7 @@ async def test_pengiriman_rejects_invalid_transition(session):
 @pytest.mark.asyncio
 async def test_pengiriman_rejects_duplicate_for_same_pesanan(session):
     pesanan_id = await _pesanan_baru(session)
-    payload = PengirimanIn(kurir="jne", layanan="reg", nama_penerima="Budi", telepon_penerima="0812", alamat_tujuan="Jl. X")
+    payload = PengirimanIn(kurir="jne", layanan="reg", nama_penerima="Budi", telepon_penerima="081234567890", alamat_tujuan="Jl. X")
     await services.buat_pengiriman_lokal(session, pesanan_id, payload)
 
     with pytest.raises(Exception) as exc_info:

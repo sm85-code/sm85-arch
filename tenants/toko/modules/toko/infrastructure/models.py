@@ -31,12 +31,26 @@ class UserToko(TokoBase):
     id: Mapped[str] = mapped_column(String(64), primary_key=True, default=_uuid)
     nama: Mapped[str] = mapped_column(String(255), nullable=False)
     email: Mapped[str] = mapped_column(String(255), unique=True, nullable=False, index=True)
-    password_hash: Mapped[str] = mapped_column(String(255), nullable=False)
+    # Nullable: akun yang dibuat lewat "Masuk dengan Google" tidak punya
+    # password kita sendiri -- login mereka selalu lewat verifikasi token
+    # Google, bukan password_hash ini.
+    password_hash: Mapped[Optional[str]] = mapped_column(String(255), nullable=True)
+    # Subject ID dari Google (klaim "sub" di ID token) -- dipakai untuk
+    # menautkan akun Google ke UserToko secara stabil, bukan cuma
+    # mengandalkan kecocokan email (email teknisnya bisa berubah pemilik).
+    google_sub: Mapped[Optional[str]] = mapped_column(String(255), unique=True, nullable=True, index=True)
     # admin_toko: kelola produk & pesanan. owner: full akses + laporan.
     # pembeli: akun customer (opsional -- checkout sebagai guest juga didukung
     # nanti di modul pesanan).
     role: Mapped[str] = mapped_column(String(32), nullable=False, index=True, default="pembeli")
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=_utcnow)
+
+
+class KategoriToko(TokoBase):
+    __tablename__ = "toko_kategori"
+
+    id: Mapped[str] = mapped_column(String(64), primary_key=True, default=_uuid)
+    nama: Mapped[str] = mapped_column(String(128), nullable=False, unique=True)
 
 
 class ProdukToko(TokoBase):
@@ -45,13 +59,41 @@ class ProdukToko(TokoBase):
     id: Mapped[str] = mapped_column(String(64), primary_key=True, default=_uuid)
     nama: Mapped[str] = mapped_column(String(255), nullable=False)
     deskripsi: Mapped[str] = mapped_column(Text, nullable=False, default="")
-    kategori: Mapped[str] = mapped_column(String(128), nullable=False, default="", index=True)
+    kategori_id: Mapped[Optional[str]] = mapped_column(
+        String(64), ForeignKey("toko_kategori.id", ondelete="SET NULL"), nullable=True, index=True
+    )
     harga: Mapped[Decimal] = mapped_column(Numeric(20, 2), nullable=False, default=Decimal("0"))
     stok: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
     foto_url: Mapped[Optional[str]] = mapped_column(String(1024), nullable=True)
     aktif: Mapped[bool] = mapped_column(Boolean, nullable=False, default=True)
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=_utcnow)
     updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=_utcnow, onupdate=_utcnow)
+
+    kategori: Mapped[Optional["KategoriToko"]] = relationship()
+
+
+class AlamatToko(TokoBase):
+    """Buku alamat pembeli -- boleh lebih dari satu per user, salah satu
+    ditandai utama. Dipilih saat checkout alih-alih ketik ulang tiap kali;
+    PengirimanToko tetap menyimpan salinannya sendiri sesuai alamat yang
+    dipilih saat itu (lihat docstring PengirimanToko), jadi baris ini boleh
+    diubah/dihapus tanpa memengaruhi riwayat pesanan lama."""
+
+    __tablename__ = "toko_alamat"
+
+    id: Mapped[str] = mapped_column(String(64), primary_key=True, default=_uuid)
+    user_id: Mapped[str] = mapped_column(
+        String(64), ForeignKey("toko_users.id", ondelete="CASCADE"), nullable=False, index=True
+    )
+    label: Mapped[str] = mapped_column(String(64), nullable=False, default="Rumah")
+    nama_penerima: Mapped[str] = mapped_column(String(255), nullable=False)
+    telepon_penerima: Mapped[str] = mapped_column(String(32), nullable=False)
+    alamat_lengkap: Mapped[str] = mapped_column(Text, nullable=False)
+    kota: Mapped[str] = mapped_column(String(128), nullable=False, default="")
+    provinsi: Mapped[str] = mapped_column(String(128), nullable=False, default="")
+    kode_pos: Mapped[str] = mapped_column(String(16), nullable=False, default="")
+    utama: Mapped[bool] = mapped_column(Boolean, nullable=False, default=False)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=_utcnow)
 
 
 class ItemKeranjang(TokoBase):
@@ -160,3 +202,44 @@ class PengirimanToko(TokoBase):
     updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=_utcnow, onupdate=_utcnow)
 
     pesanan: Mapped["PesananToko"] = relationship()
+
+
+class PercakapanToko(TokoBase):
+    """Satu thread chat per pembeli dengan admin toko -- pola support-chat
+    sederhana (bukan multi-thread per topik). unread_admin/unread_pembeli
+    dipakai buat badge notifikasi tanpa perlu hitung ulang semua pesan tiap
+    kali."""
+
+    __tablename__ = "toko_percakapan"
+
+    id: Mapped[str] = mapped_column(String(64), primary_key=True, default=_uuid)
+    user_id: Mapped[str] = mapped_column(
+        String(64), ForeignKey("toko_users.id", ondelete="CASCADE"), nullable=False, unique=True, index=True
+    )
+    unread_admin: Mapped[bool] = mapped_column(Boolean, nullable=False, default=False)
+    unread_pembeli: Mapped[bool] = mapped_column(Boolean, nullable=False, default=False)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=_utcnow)
+    updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=_utcnow, onupdate=_utcnow)
+
+    pembeli: Mapped["UserToko"] = relationship()
+    pesan: Mapped[list["PesanChatToko"]] = relationship(back_populates="percakapan", order_by="PesanChatToko.created_at")
+
+
+class PesanChatToko(TokoBase):
+    __tablename__ = "toko_pesan_chat"
+
+    id: Mapped[str] = mapped_column(String(64), primary_key=True, default=_uuid)
+    percakapan_id: Mapped[str] = mapped_column(
+        String(64), ForeignKey("toko_percakapan.id", ondelete="CASCADE"), nullable=False, index=True
+    )
+    pengirim_id: Mapped[str] = mapped_column(
+        String(64), ForeignKey("toko_users.id", ondelete="CASCADE"), nullable=False, index=True
+    )
+    # Disnapshot langsung, bukan selalu join ke UserToko.role -- role pengirim
+    # saat pesan dikirim harus tetap sama di riwayat chat walau role user
+    # itu berubah belakangan (mis. admin_toko diturunkan jadi pembeli).
+    pengirim_admin: Mapped[bool] = mapped_column(Boolean, nullable=False, default=False)
+    isi: Mapped[str] = mapped_column(Text, nullable=False)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=_utcnow)
+
+    percakapan: Mapped["PercakapanToko"] = relationship(back_populates="pesan")

@@ -31,11 +31,15 @@ def test_produk_out_serializes_decimal_as_string():
 
     from tenants.toko.modules.toko.application.services import produk_out
 
+    class FakeKategori:
+        nama = "Sembako"
+
     class FakeProduk:
         id = "produk-1"
         nama = "Beras 5kg"
         deskripsi = ""
-        kategori = "sembako"
+        kategori_id = "kategori-1"
+        kategori = FakeKategori()
         harga = Decimal("65000.00")
         stok = 10
         foto_url = None

@@ -9,13 +9,25 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import selectinload
 
 from shared.security import hash_password, verify_password
-from tenants.toko.modules.toko.application.schemas import PengirimanIn, ProdukIn, ProdukPatch, RegisterRequest
+from tenants.toko.modules.toko.application.schemas import (
+    AlamatIn,
+    AlamatPatch,
+    KategoriIn,
+    PengirimanIn,
+    ProdukIn,
+    ProdukPatch,
+    RegisterRequest,
+)
 from tenants.toko.modules.toko.infrastructure.models import (
     STATUS_PENGIRIMAN,
     STATUS_PESANAN,
+    AlamatToko,
     ItemKeranjang,
     ItemPesanan,
+    KategoriToko,
+    PercakapanToko,
     PengirimanToko,
+    PesanChatToko,
     PesananToko,
     ProdukToko,
     UserToko,
@@ -55,7 +67,8 @@ def produk_out(produk: ProdukToko) -> dict:
         "id": produk.id,
         "nama": produk.nama,
         "deskripsi": produk.deskripsi,
-        "kategori": produk.kategori,
+        "kategori_id": produk.kategori_id,
+        "kategori_nama": produk.kategori.nama if produk.kategori else None,
         "harga": str(produk.harga),
         "stok": produk.stok,
         "foto_url": produk.foto_url,
@@ -86,14 +99,15 @@ async def register(session: AsyncSession, payload: RegisterRequest) -> UserToko:
 
 
 async def list_produk(session: AsyncSession, *, hanya_aktif: bool = False) -> list[ProdukToko]:
-    stmt = select(ProdukToko).order_by(ProdukToko.created_at.desc())
+    stmt = select(ProdukToko).options(selectinload(ProdukToko.kategori)).order_by(ProdukToko.created_at.desc())
     if hanya_aktif:
         stmt = stmt.where(ProdukToko.aktif.is_(True))
     return list((await session.execute(stmt)).scalars().all())
 
 
 async def get_produk(session: AsyncSession, produk_id: str) -> ProdukToko:
-    produk = await session.get(ProdukToko, produk_id)
+    stmt = select(ProdukToko).where(ProdukToko.id == produk_id).options(selectinload(ProdukToko.kategori))
+    produk = (await session.execute(stmt)).scalar_one_or_none()
     if not produk:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Produk tidak ditemukan")
     return produk
@@ -108,9 +122,14 @@ async def create_produk(session: AsyncSession, payload: ProdukIn) -> ProdukToko:
 
 async def update_produk(session: AsyncSession, produk_id: str, payload: ProdukPatch) -> ProdukToko:
     produk = await get_produk(session, produk_id)
-    for field, value in payload.model_dump(exclude_unset=True).items():
+    fields = payload.model_dump(exclude_unset=True)
+    for field, value in fields.items():
         setattr(produk, field, value)
     await session.flush()
+    if "kategori_id" in fields:
+        # Relationship was eager-loaded before the FK changed -- refresh so
+        # produk_out() reflects the new kategori, not the stale cached one.
+        await session.refresh(produk, attribute_names=["kategori"])
     return produk
 
 
@@ -445,3 +464,214 @@ async def laporan_ringkasan_status(session: AsyncSession) -> dict:
     stmt = select(PesananToko.status, func.count(PesananToko.id)).group_by(PesananToko.status)
     rows = (await session.execute(stmt)).all()
     return {status_: jumlah for status_, jumlah in rows}
+
+
+# --- Kategori ---------------------------------------------------------
+
+
+def kategori_out(kategori: KategoriToko) -> dict:
+    return {"id": kategori.id, "nama": kategori.nama}
+
+
+async def list_kategori(session: AsyncSession) -> list[KategoriToko]:
+    stmt = select(KategoriToko).order_by(KategoriToko.nama)
+    return list((await session.execute(stmt)).scalars().all())
+
+
+async def create_kategori(session: AsyncSession, payload: KategoriIn) -> KategoriToko:
+    existing = (
+        await session.execute(select(KategoriToko).where(KategoriToko.nama == payload.nama))
+    ).scalar_one_or_none()
+    if existing:
+        raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail="Kategori sudah ada")
+    kategori = KategoriToko(nama=payload.nama)
+    session.add(kategori)
+    await session.flush()
+    return kategori
+
+
+async def delete_kategori(session: AsyncSession, kategori_id: str) -> None:
+    kategori = await session.get(KategoriToko, kategori_id)
+    if not kategori:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Kategori tidak ditemukan")
+    # Produk yang masih pakai kategori ini otomatis jadi kategori_id=NULL
+    # (ON DELETE SET NULL di model) -- tidak ikut terhapus.
+    await session.delete(kategori)
+
+
+# --- Alamat (buku alamat pembeli) --------------------------------------
+
+
+def alamat_out(alamat: AlamatToko) -> dict:
+    return {
+        "id": alamat.id,
+        "label": alamat.label,
+        "nama_penerima": alamat.nama_penerima,
+        "telepon_penerima": alamat.telepon_penerima,
+        "alamat_lengkap": alamat.alamat_lengkap,
+        "kota": alamat.kota,
+        "provinsi": alamat.provinsi,
+        "kode_pos": alamat.kode_pos,
+        "utama": alamat.utama,
+    }
+
+
+async def list_alamat(session: AsyncSession, user_id: str) -> list[AlamatToko]:
+    stmt = select(AlamatToko).where(AlamatToko.user_id == user_id).order_by(AlamatToko.utama.desc(), AlamatToko.created_at.desc())
+    return list((await session.execute(stmt)).scalars().all())
+
+
+async def _unset_other_utama(session: AsyncSession, user_id: str, kecuali_id: str | None = None) -> None:
+    stmt = select(AlamatToko).where(AlamatToko.user_id == user_id, AlamatToko.utama.is_(True))
+    if kecuali_id:
+        stmt = stmt.where(AlamatToko.id != kecuali_id)
+    for row in (await session.execute(stmt)).scalars().all():
+        row.utama = False
+
+
+async def create_alamat(session: AsyncSession, user_id: str, payload: AlamatIn) -> AlamatToko:
+    is_first = len((await session.execute(select(AlamatToko).where(AlamatToko.user_id == user_id)))
+                    .scalars().all()) == 0
+    alamat = AlamatToko(user_id=user_id, **payload.model_dump())
+    if is_first:
+        alamat.utama = True  # alamat pertama otomatis jadi utama
+    session.add(alamat)
+    await session.flush()
+    if alamat.utama:
+        await _unset_other_utama(session, user_id, kecuali_id=alamat.id)
+        await session.flush()
+    return alamat
+
+
+async def _get_alamat_milik(session: AsyncSession, user_id: str, alamat_id: str) -> AlamatToko:
+    alamat = await session.get(AlamatToko, alamat_id)
+    if not alamat or alamat.user_id != user_id:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Alamat tidak ditemukan")
+    return alamat
+
+
+async def update_alamat(session: AsyncSession, user_id: str, alamat_id: str, payload: AlamatPatch) -> AlamatToko:
+    alamat = await _get_alamat_milik(session, user_id, alamat_id)
+    for field, value in payload.model_dump(exclude_unset=True).items():
+        setattr(alamat, field, value)
+    await session.flush()
+    if alamat.utama:
+        await _unset_other_utama(session, user_id, kecuali_id=alamat.id)
+        await session.flush()
+    return alamat
+
+
+async def delete_alamat(session: AsyncSession, user_id: str, alamat_id: str) -> None:
+    alamat = await _get_alamat_milik(session, user_id, alamat_id)
+    await session.delete(alamat)
+
+
+# --- Login Google --------------------------------------------------------
+
+
+async def login_or_register_google(session: AsyncSession, *, google_sub: str, email: str, nama: str) -> UserToko:
+    """Cari user berdasarkan google_sub dulu (identitas stabil), baru fallback
+    ke email untuk menautkan akun password biasa yang emailnya sama dengan
+    akun Google-nya. Kalau tidak ada keduanya, daftarkan akun baru."""
+    user = (
+        await session.execute(select(UserToko).where(UserToko.google_sub == google_sub))
+    ).scalar_one_or_none()
+    if user:
+        return user
+
+    user = (await session.execute(select(UserToko).where(UserToko.email == email))).scalar_one_or_none()
+    if user:
+        user.google_sub = google_sub
+        await session.flush()
+        return user
+
+    user = UserToko(nama=nama, email=email, google_sub=google_sub, role="pembeli")
+    session.add(user)
+    await session.flush()
+    return user
+
+
+# --- Chat (toko web, terpisah dari chat Shopee) --------------------------
+
+
+async def get_or_create_percakapan(session: AsyncSession, user_id: str) -> PercakapanToko:
+    stmt = select(PercakapanToko).where(PercakapanToko.user_id == user_id)
+    percakapan = (await session.execute(stmt)).scalar_one_or_none()
+    if not percakapan:
+        percakapan = PercakapanToko(user_id=user_id)
+        session.add(percakapan)
+        await session.flush()
+    return percakapan
+
+
+async def get_percakapan(session: AsyncSession, percakapan_id: str) -> PercakapanToko:
+    stmt = (
+        select(PercakapanToko)
+        .where(PercakapanToko.id == percakapan_id)
+        .options(selectinload(PercakapanToko.pesan), selectinload(PercakapanToko.pembeli))
+    )
+    percakapan = (await session.execute(stmt)).scalar_one_or_none()
+    if not percakapan:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Percakapan tidak ditemukan")
+    return percakapan
+
+
+async def list_percakapan_admin(session: AsyncSession) -> list[PercakapanToko]:
+    stmt = (
+        select(PercakapanToko)
+        .options(selectinload(PercakapanToko.pembeli))
+        .order_by(PercakapanToko.updated_at.desc())
+    )
+    return list((await session.execute(stmt)).scalars().all())
+
+
+async def kirim_pesan(session: AsyncSession, percakapan_id: str, pengirim: UserToko, isi: str) -> PesanChatToko:
+    percakapan = await session.get(PercakapanToko, percakapan_id)
+    if not percakapan:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Percakapan tidak ditemukan")
+    is_admin = (pengirim.role or "").lower() in ("admin_toko", "owner")
+    pesan = PesanChatToko(percakapan_id=percakapan_id, pengirim_id=pengirim.id, pengirim_admin=is_admin, isi=isi)
+    session.add(pesan)
+    percakapan.unread_admin = not is_admin
+    percakapan.unread_pembeli = is_admin
+    await session.flush()
+    # percakapan.pesan bisa saja sudah ter-selectinload sebelumnya di
+    # identity map sesi ini (mis. dari get_percakapan) -- expire supaya
+    # pembacaan berikutnya benar-benar mengambil ulang termasuk pesan baru
+    # ini, bukan koleksi lama yang ter-cache.
+    session.expire(percakapan, ["pesan"])
+    return pesan
+
+
+async def tandai_dibaca(session: AsyncSession, percakapan_id: str, sebagai_admin: bool) -> None:
+    percakapan = await session.get(PercakapanToko, percakapan_id)
+    if not percakapan:
+        return
+    if sebagai_admin:
+        percakapan.unread_admin = False
+    else:
+        percakapan.unread_pembeli = False
+    await session.flush()
+
+
+def pesan_out(pesan: PesanChatToko) -> dict:
+    return {
+        "id": pesan.id,
+        "pengirim_admin": pesan.pengirim_admin,
+        "isi": pesan.isi,
+        "created_at": pesan.created_at.isoformat(),
+    }
+
+
+def percakapan_out(percakapan: PercakapanToko, *, dengan_pesan: bool = False) -> dict:
+    out = {
+        "id": percakapan.id,
+        "user_id": percakapan.user_id,
+        "nama_pembeli": percakapan.pembeli.nama if percakapan.pembeli else None,
+        "unread_admin": percakapan.unread_admin,
+        "unread_pembeli": percakapan.unread_pembeli,
+        "updated_at": percakapan.updated_at.isoformat(),
+    }
+    if dengan_pesan:
+        out["pesan"] = [pesan_out(p) for p in percakapan.pesan]
+    return out
