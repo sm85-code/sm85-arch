@@ -11,6 +11,7 @@ from tenants.madrasah.modules.madrasah.application import services
 from tenants.madrasah.modules.madrasah.application.schemas import (
     AbsenBulkRequest,
     AbsenMapelBulkRequest,
+    BukuKasIn,
     GuruIn,
     JadwalIn,
     LoginRequest,
@@ -38,7 +39,7 @@ from tenants.madrasah.modules.madrasah.infrastructure.auth import (
 )
 from tenants.madrasah.modules.madrasah.infrastructure.database import get_db_madrasah
 from tenants.madrasah.modules.madrasah.infrastructure.models import UserMadrasah
-from tenants.madrasah.modules.madrasah.infrastructure.seeder import seed_madrasah
+from tenants.madrasah.modules.madrasah.infrastructure.seeder import reset_madrasah, seed_madrasah
 
 madrasah_router = APIRouter()
 router = madrasah_router
@@ -48,6 +49,7 @@ bendahara_r = APIRouter(prefix="/bendahara", tags=["Madrasah Bendahara"])
 wali_kelas_r = APIRouter(prefix="/wali-kelas", tags=["Madrasah Wali Kelas"])
 wali_santri_r = APIRouter(prefix="/wali-santri", tags=["Madrasah Wali Santri"])
 guru_mapel_r = APIRouter(prefix="/guru-mapel", tags=["Madrasah Guru Mapel"])
+keuangan_r = APIRouter(prefix="/keuangan", tags=["Madrasah Keuangan"])
 
 # Role groups mirror src/App.jsx <Guard roles={[...]}> exactly, so a request that
 # would be blocked from reaching a page in the frontend is also rejected by the
@@ -74,6 +76,18 @@ async def seed_now(session: AsyncSession = Depends(get_db_madrasah)):
     except RuntimeError as exc:
         raise HTTPException(status_code=status.HTTP_503_SERVICE_UNAVAILABLE, detail=str(exc)) from exc
     return {"status": "Database madrasah berhasil diisi data awal JWT", "ids": ids}
+
+
+@madrasah_router.post("/reset-now")
+async def reset_now(session: AsyncSession = Depends(get_db_madrasah)):
+    # DESTRUCTIVE -- lihat docstring reset_madrasah(). Dibuat sebagai
+    # endpoint terpisah dari /seed-now yang idempotent, supaya redeploy
+    # rutin tidak bisa tidak sengaja menghapus data pelanggan.
+    try:
+        ids = await reset_madrasah(session)
+    except RuntimeError as exc:
+        raise HTTPException(status_code=status.HTTP_503_SERVICE_UNAVAILABLE, detail=str(exc)) from exc
+    return {"status": "Database madrasah di-reset total ke 2 akun default (admin, guru)", "ids": ids}
 
 
 @madrasah_router.post("/auth/login")
@@ -752,9 +766,39 @@ async def gm_rapor(
         raise HTTPException(status_code=403, detail=str(exc)) from exc
 
 
+@keuangan_r.get("/buku-kas")
+async def keuangan_buku_kas_list(
+    bulan: str | None = Query(None, description="Filter YYYY-MM"),
+    session: AsyncSession = Depends(get_db_madrasah),
+    _: UserMadrasah = Depends(require_roles_madrasah(*ADMIN_ROLES)),
+):
+    rows = await services.list_buku_kas(session, bulan)
+    return [services.buku_kas_out(r) for r in rows]
+
+
+@keuangan_r.post("/buku-kas", status_code=status.HTTP_201_CREATED)
+async def keuangan_buku_kas_create(
+    payload: BukuKasIn,
+    session: AsyncSession = Depends(get_db_madrasah),
+    user: UserMadrasah = Depends(require_roles_madrasah(*ADMIN_ROLES)),
+):
+    row = await services.create_buku_kas_entry(session, payload, dicatat_oleh=user.id)
+    return services.buku_kas_out(row)
+
+
+@keuangan_r.get("/laporan")
+async def keuangan_laporan(
+    bulan: str | None = Query(None, description="Filter YYYY-MM"),
+    session: AsyncSession = Depends(get_db_madrasah),
+    _: UserMadrasah = Depends(require_roles_madrasah(*ADMIN_ROLES)),
+):
+    return await services.laporan_keuangan(session, bulan)
+
+
 madrasah_router.include_router(admin_r)
 madrasah_router.include_router(kurikulum_r)
 madrasah_router.include_router(bendahara_r)
 madrasah_router.include_router(wali_kelas_r)
 madrasah_router.include_router(wali_santri_r)
 madrasah_router.include_router(guru_mapel_r)
+madrasah_router.include_router(keuangan_r)

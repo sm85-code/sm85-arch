@@ -13,6 +13,7 @@ from sqlalchemy.orm import selectinload
 from tenants.madrasah.modules.madrasah.application.schemas import (
     AbsenBulkRequest,
     AbsenMapelBulkRequest,
+    BukuKasIn,
     GuruIn,
     JadwalIn,
     LoginRequest,
@@ -34,6 +35,7 @@ from tenants.madrasah.modules.madrasah.application.schemas import (
 )
 from tenants.madrasah.modules.madrasah.infrastructure.models import (
     AbsensiMadrasah,
+    BukuKasMadrasah,
     GuruMapelRombel,
     JadwalMadrasah,
     KelasMadrasah,
@@ -389,7 +391,63 @@ async def pay_spp_manual(session: AsyncSession, target_id: str) -> TagihanSyahri
     row.dibayar_pada = _utcnow()
     await session.flush()
     await session.refresh(row, attribute_names=["santri"])
+    session.add(BukuKasMadrasah(
+        tanggal=_utcnow().date(),
+        tipe="masuk",
+        kategori="SPP",
+        jumlah=row.nominal,
+        keterangan=f"SPP {row.santri.nama} -- {row.bulan_tahun}",
+    ))
+    await session.flush()
     return row
+
+
+async def list_buku_kas(session: AsyncSession, bulan: str | None = None) -> list[BukuKasMadrasah]:
+    # Filter bulan (format "YYYY-MM") di Python, bukan lewat fungsi tanggal
+    # SQL yang beda nama antar dialek (strftime di SQLite vs to_char di
+    # Postgres) -- volume baris buku kas per sekolah kecil, jadi ini murah.
+    stmt = select(BukuKasMadrasah).order_by(BukuKasMadrasah.tanggal.desc(), BukuKasMadrasah.created_at.desc())
+    rows = list((await session.execute(stmt)).scalars())
+    if bulan:
+        rows = [r for r in rows if r.tanggal.strftime("%Y-%m") == bulan]
+    return rows
+
+
+async def create_buku_kas_entry(session: AsyncSession, payload: BukuKasIn, dicatat_oleh: str) -> BukuKasMadrasah:
+    row = BukuKasMadrasah(
+        tanggal=payload.tanggal,
+        tipe=payload.tipe,
+        kategori=payload.kategori,
+        jumlah=payload.jumlah,
+        keterangan=payload.keterangan,
+        dicatat_oleh=dicatat_oleh,
+    )
+    session.add(row)
+    await session.flush()
+    return row
+
+
+def buku_kas_out(row: BukuKasMadrasah) -> dict:
+    return {
+        "id": row.id,
+        "tanggal": row.tanggal.isoformat(),
+        "tipe": row.tipe,
+        "kategori": row.kategori,
+        "jumlah": str(row.jumlah),
+        "keterangan": row.keterangan,
+    }
+
+
+async def laporan_keuangan(session: AsyncSession, bulan: str | None = None) -> dict:
+    rows = await list_buku_kas(session, bulan)
+    total_masuk = sum((r.jumlah for r in rows if r.tipe == "masuk"), Decimal("0"))
+    total_keluar = sum((r.jumlah for r in rows if r.tipe == "keluar"), Decimal("0"))
+    return {
+        "total_masuk": str(total_masuk),
+        "total_keluar": str(total_keluar),
+        "saldo": str(total_masuk - total_keluar),
+        "entries": [buku_kas_out(r) for r in rows],
+    }
 
 
 async def list_tingkat(session: AsyncSession) -> list[TingkatMadrasah]:

@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 from datetime import date
+from decimal import Decimal
 from typing import Literal, Optional
 
 from pydantic import BaseModel, Field
@@ -128,6 +129,14 @@ class ProgresPatch(BaseModel):
 class AbsenMapelItem(BaseModel):
     santri_id: str
     status: Literal["hadir", "sakit", "izin", "alpa"]
+
+
+class BukuKasIn(BaseModel):
+    tanggal: date
+    tipe: Literal["masuk", "keluar"]
+    kategori: str = Field(..., min_length=1, max_length=64)
+    jumlah: Decimal = Field(..., gt=0)
+    keterangan: str = ""
 
 
 class PengaturanPatch(BaseModel):
