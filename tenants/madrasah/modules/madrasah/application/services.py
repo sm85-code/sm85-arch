@@ -9,7 +9,7 @@ from sqlalchemy import func, select, text
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import selectinload
 
-from app.modules.madrasah.application.schemas import (
+from tenants.madrasah.modules.madrasah.application.schemas import (
     AbsenBulkRequest,
     AbsenMapelBulkRequest,
     GuruIn,
@@ -30,7 +30,7 @@ from app.modules.madrasah.application.schemas import (
     PesanIn,
     TingkatIn,
 )
-from app.modules.madrasah.infrastructure.models import (
+from tenants.madrasah.modules.madrasah.infrastructure.models import (
     AbsensiMadrasah,
     GuruMapelRombel,
     JadwalMadrasah,

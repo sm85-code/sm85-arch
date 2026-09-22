@@ -7,8 +7,8 @@ from __future__ import annotations
 from fastapi import APIRouter, Depends, HTTPException, Query, Response, status
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from app.modules.madrasah.application import services
-from app.modules.madrasah.application.schemas import (
+from tenants.madrasah.modules.madrasah.application import services
+from tenants.madrasah.modules.madrasah.application.schemas import (
     AbsenBulkRequest,
     AbsenMapelBulkRequest,
     GuruIn,
@@ -29,15 +29,15 @@ from app.modules.madrasah.application.schemas import (
     SantriPatch,
     TingkatIn,
 )
-from app.modules.madrasah.infrastructure.auth import (
+from tenants.madrasah.modules.madrasah.infrastructure.auth import (
     clear_madrasah_cookie,
     issue_madrasah_token,
     require_roles_madrasah,
     set_madrasah_cookie,
 )
-from app.modules.madrasah.infrastructure.database import get_db_madrasah
-from app.modules.madrasah.infrastructure.models import UserMadrasah
-from app.modules.madrasah.infrastructure.seeder import seed_madrasah
+from tenants.madrasah.modules.madrasah.infrastructure.database import get_db_madrasah
+from tenants.madrasah.modules.madrasah.infrastructure.models import UserMadrasah
+from tenants.madrasah.modules.madrasah.infrastructure.seeder import seed_madrasah
 
 madrasah_router = APIRouter()
 router = madrasah_router
