@@ -58,12 +58,69 @@ class StockInBody(BaseModel):
     unit_usaha_id: Optional[str] = None
     debit_account_code: str
     credit_account_code: str
+    vendor_id: str
+    invoice_number: str = ""
+    payment_method: str = "cash"
+    due_date: Optional[date] = None
 
 
 class StockOutBody(BaseModel):
     product_id: str
     quantity: int = Field(gt=0)
     movement_date: date
+    unit_usaha_id: Optional[str] = None
+    debit_account_code: str
+    credit_account_code: str
+    customer_id: str
+    sell_price: Decimal = Field(ge=0)
+    revenue_debit_account_code: str
+    revenue_credit_account_code: str
+    invoice_number: str = ""
+    payment_method: str = "cash"
+    due_date: Optional[date] = None
+
+
+class VendorCreateBody(BaseModel):
+    name: str
+    unit_usaha_id: Optional[str] = None
+    contact: Optional[str] = None
+    address: Optional[str] = None
+
+
+class VendorUpdateBody(BaseModel):
+    name: Optional[str] = None
+    contact: Optional[str] = None
+    address: Optional[str] = None
+    is_active: Optional[bool] = None
+
+
+class CustomerCreateBody(BaseModel):
+    name: str
+    unit_usaha_id: Optional[str] = None
+    contact: Optional[str] = None
+    address: Optional[str] = None
+
+
+class CustomerUpdateBody(BaseModel):
+    name: Optional[str] = None
+    contact: Optional[str] = None
+    address: Optional[str] = None
+    is_active: Optional[bool] = None
+
+
+class PayPurchaseBody(BaseModel):
+    purchase_id: str
+    amount: Decimal = Field(gt=0)
+    paid_date: date
+    unit_usaha_id: Optional[str] = None
+    debit_account_code: str
+    credit_account_code: str
+
+
+class PaySaleBody(BaseModel):
+    sale_id: str
+    amount: Decimal = Field(gt=0)
+    paid_date: date
     unit_usaha_id: Optional[str] = None
     debit_account_code: str
     credit_account_code: str
@@ -229,6 +286,10 @@ async def stock_in(
             unit_usaha_id=uid,
             debit_account_code=body.debit_account_code,
             credit_account_code=body.credit_account_code,
+            vendor_id=body.vendor_id,
+            invoice_number=body.invoice_number,
+            payment_method=body.payment_method,
+            due_date=body.due_date,
             created_by=user.username,
         )
     except ValueError as exc:
@@ -252,6 +313,13 @@ async def stock_out(
             unit_usaha_id=uid,
             debit_account_code=body.debit_account_code,
             credit_account_code=body.credit_account_code,
+            customer_id=body.customer_id,
+            sell_price=body.sell_price,
+            revenue_debit_account_code=body.revenue_debit_account_code,
+            revenue_credit_account_code=body.revenue_credit_account_code,
+            invoice_number=body.invoice_number,
+            payment_method=body.payment_method,
+            due_date=body.due_date,
             created_by=user.username,
         )
     except ValueError as exc:
@@ -343,3 +411,143 @@ async def report_movements(
     return await InventoryService(session).movement_summary_report(
         date_from=date_from, date_to=date_to
     )
+
+
+@router.get("/vendors")
+async def list_vendors(
+    user: User = Depends(require_inventory_user),
+    session: AsyncSession = Depends(get_db),
+):
+    uid = user.unit_usaha_id if public_role(user.role) == "pengelola" else None
+    return await InventoryService(session).list_vendors(unit_usaha_id=uid)
+
+
+@router.post("/vendors")
+async def create_vendor(
+    body: VendorCreateBody,
+    user: User = Depends(require_inventory_user),
+    session: AsyncSession = Depends(get_db),
+):
+    try:
+        uid = await resolve_unit_id(session, body.unit_usaha_id, user)
+        return await InventoryService(session).create_vendor(
+            unit_usaha_id=uid, name=body.name, contact=body.contact, address=body.address
+        )
+    except ValueError as exc:
+        raise HTTPException(status_code=422, detail=str(exc)) from exc
+
+
+@router.put("/vendors/{vendor_id}")
+async def update_vendor(
+    vendor_id: str,
+    body: VendorUpdateBody,
+    _: User = Depends(require_inventory_user),
+    session: AsyncSession = Depends(get_db),
+):
+    try:
+        return await InventoryService(session).update_vendor(
+            vendor_id, name=body.name, contact=body.contact, address=body.address, is_active=body.is_active
+        )
+    except ValueError as exc:
+        raise HTTPException(status_code=422, detail=str(exc)) from exc
+
+
+@router.get("/customers")
+async def list_customers(
+    user: User = Depends(require_inventory_user),
+    session: AsyncSession = Depends(get_db),
+):
+    uid = user.unit_usaha_id if public_role(user.role) == "pengelola" else None
+    return await InventoryService(session).list_customers(unit_usaha_id=uid)
+
+
+@router.post("/customers")
+async def create_customer(
+    body: CustomerCreateBody,
+    user: User = Depends(require_inventory_user),
+    session: AsyncSession = Depends(get_db),
+):
+    try:
+        uid = await resolve_unit_id(session, body.unit_usaha_id, user)
+        return await InventoryService(session).create_customer(
+            unit_usaha_id=uid, name=body.name, contact=body.contact, address=body.address
+        )
+    except ValueError as exc:
+        raise HTTPException(status_code=422, detail=str(exc)) from exc
+
+
+@router.put("/customers/{customer_id}")
+async def update_customer(
+    customer_id: str,
+    body: CustomerUpdateBody,
+    _: User = Depends(require_inventory_user),
+    session: AsyncSession = Depends(get_db),
+):
+    try:
+        return await InventoryService(session).update_customer(
+            customer_id, name=body.name, contact=body.contact, address=body.address, is_active=body.is_active
+        )
+    except ValueError as exc:
+        raise HTTPException(status_code=422, detail=str(exc)) from exc
+
+
+@router.get("/purchases")
+async def list_purchases(
+    status: Optional[str] = None,
+    limit: int = Query(100, ge=1, le=500),
+    _: User = Depends(require_inventory_user),
+    session: AsyncSession = Depends(get_db),
+):
+    return await InventoryService(session).list_purchases(status=status, limit=limit)
+
+
+@router.post("/purchases/pay")
+async def pay_purchase(
+    body: PayPurchaseBody,
+    user: User = Depends(require_inventory_user),
+    session: AsyncSession = Depends(get_db),
+):
+    try:
+        uid = await resolve_unit_id(session, body.unit_usaha_id, user)
+        return await InventoryService(session).pay_purchase(
+            purchase_id=body.purchase_id,
+            amount=body.amount,
+            paid_date=body.paid_date,
+            debit_account_code=body.debit_account_code,
+            credit_account_code=body.credit_account_code,
+            unit_usaha_id=uid,
+            created_by=user.username,
+        )
+    except ValueError as exc:
+        raise HTTPException(status_code=422, detail=str(exc)) from exc
+
+
+@router.get("/sales")
+async def list_sales(
+    status: Optional[str] = None,
+    limit: int = Query(100, ge=1, le=500),
+    _: User = Depends(require_inventory_user),
+    session: AsyncSession = Depends(get_db),
+):
+    return await InventoryService(session).list_sales(status=status, limit=limit)
+
+
+@router.post("/sales/pay")
+async def pay_sale(
+    body: PaySaleBody,
+    user: User = Depends(require_inventory_user),
+    session: AsyncSession = Depends(get_db),
+):
+    try:
+        uid = await resolve_unit_id(session, body.unit_usaha_id, user)
+        return await InventoryService(session).pay_sale(
+            sale_id=body.sale_id,
+            amount=body.amount,
+            paid_date=body.paid_date,
+            debit_account_code=body.debit_account_code,
+            credit_account_code=body.credit_account_code,
+            unit_usaha_id=uid,
+            created_by=user.username,
+        )
+    except ValueError as exc:
+        raise HTTPException(status_code=422, detail=str(exc)) from exc
