@@ -5,7 +5,7 @@ import os
 from datetime import date, datetime, timezone
 from decimal import Decimal
 
-from sqlalchemy import func, select, text
+from sqlalchemy import delete, func, select, text, update
 from sqlalchemy.exc import OperationalError, ProgrammingError
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import selectinload
@@ -550,9 +550,31 @@ async def patch_guru(session: AsyncSession, user_id: str, payload: UserPatch) ->
 
 
 async def delete_guru(session: AsyncSession, user_id: str) -> None:
+    """Hapus akun guru/wali_kelas/wali_santri/dst.
+
+    Dilakukan lewat UPDATE/DELETE eksplisit (bukan cuma mengandalkan
+    ON DELETE SET NULL/CASCADE di DB) karena tabel-tabel lama di database
+    produksi bisa saja sudah dibuat sebelum aturan ondelete itu ada di
+    models.py -- constraint FK aslinya di Postgres masih RESTRICT, jadi
+    session.delete(row) langsung akan gagal dengan IntegrityError kalau
+    akun ini masih dirujuk di mana pun (rombel yang diasuh, absensi yang
+    dicatat, dsb). Meng-update dulu FK-nya ke NULL/hapus barisnya di sini
+    membuat penghapusan akun aman apa pun kondisi constraint di DB.
+    """
     row = await session.get(UserMadrasah, user_id)
     if not row:
         raise MadrasahNotFoundError("Akun tidak ditemukan")
+
+    await session.execute(update(RombelMadrasah).where(RombelMadrasah.wali_kelas_id == user_id).values(wali_kelas_id=None))
+    await session.execute(update(SantriMadrasah).where(SantriMadrasah.orang_tua_id == user_id).values(orang_tua_id=None))
+    await session.execute(update(AbsensiMadrasah).where(AbsensiMadrasah.guru_id == user_id).values(guru_id=None))
+    await session.execute(update(PengumumanMadrasah).where(PengumumanMadrasah.dibuat_by == user_id).values(dibuat_by=None))
+    await session.execute(update(BukuKasMadrasah).where(BukuKasMadrasah.dicatat_oleh == user_id).values(dicatat_oleh=None))
+    await session.execute(update(TagihanSyahriyah).where(TagihanSyahriyah.diajukan_oleh == user_id).values(diajukan_oleh=None))
+    await session.execute(delete(GuruMapelRombel).where(GuruMapelRombel.guru_id == user_id))
+    await session.execute(delete(PesanMadrasah).where(PesanMadrasah.dari_user_id == user_id))
+    await session.flush()
+
     await session.delete(row)
 
 
