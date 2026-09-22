@@ -13,11 +13,12 @@ from adapters.api.scope import is_pengelola, parse_date, scoped_unit_id
 from adapters.external.excel_adapter import generate_excel_report
 from adapters.external.pdf_generator import generate_pdf_report
 from adapters.external.word_generator import generate_word_report
-from modules.identity.application.services import list_closed_periods
+from modules.identity.application.services import get_org_profile, list_closed_periods
 from modules.identity.infrastructure.models import User
 from modules.siabumdes.application.reporting import ReportingService
 from shared.config import REPORT_READ_LEVEL
 from shared.database import get_db
+from shared.report_branding import ReportBranding, branding_from_org_profile
 
 router = APIRouter(prefix="/api", tags=["reports"])
 READ = require_roles(*REPORT_READ_LEVEL)
@@ -44,6 +45,7 @@ def _pdf(
     subtitle: str = "",
     *,
     landscape: bool = False,
+    branding: Optional[ReportBranding] = None,
 ) -> Response:
     blob = generate_pdf_report(
         title=title,
@@ -51,6 +53,7 @@ def _pdf(
         table_headers=headers,
         table_rows=rows,
         landscape=landscape,
+        branding=branding,
     )
     return Response(
         content=blob,
@@ -66,6 +69,7 @@ def _xlsx(
     subtitle: str = "",
     *,
     landscape: bool = False,
+    branding: Optional[ReportBranding] = None,
 ) -> Response:
     blob = generate_excel_report(
         headers,
@@ -73,6 +77,7 @@ def _xlsx(
         title,
         subtitle=subtitle,
         landscape=landscape,
+        branding=branding,
     )
     return Response(
         content=blob,
@@ -88,6 +93,7 @@ def _docx(
     subtitle: str = "",
     *,
     landscape: bool = False,
+    branding: Optional[ReportBranding] = None,
 ) -> Response:
     blob = generate_word_report(
         title=title,
@@ -95,6 +101,7 @@ def _docx(
         table_headers=headers,
         table_rows=rows,
         landscape=landscape,
+        branding=branding,
     )
     return Response(
         content=blob,
@@ -262,7 +269,8 @@ async def report_pdf(
     elif as_of_date:
         subtitle = f"Per {as_of_date}"
     landscape = report_key in {"ledger", "buku-besar"}
-    return _pdf(title, headers, rows, subtitle, landscape=landscape)
+    branding = branding_from_org_profile(await get_org_profile(session))
+    return _pdf(title, headers, rows, subtitle, landscape=landscape, branding=branding)
 
 
 @router.get("/reports/{report_key}/excel")
@@ -285,7 +293,8 @@ async def report_excel(
     elif as_of_date:
         subtitle = f"Per {as_of_date}"
     landscape = report_key in {"ledger", "buku-besar"}
-    return _xlsx(title, headers, rows, subtitle, landscape=landscape)
+    branding = branding_from_org_profile(await get_org_profile(session))
+    return _xlsx(title, headers, rows, subtitle, landscape=landscape, branding=branding)
 
 
 @router.get("/reports/{report_key}/word")
@@ -308,7 +317,8 @@ async def report_word(
     elif as_of_date:
         subtitle = f"Per {as_of_date}"
     landscape = report_key in {"ledger", "buku-besar"}
-    return _docx(title, headers, rows, subtitle, landscape=landscape)
+    branding = branding_from_org_profile(await get_org_profile(session))
+    return _docx(title, headers, rows, subtitle, landscape=landscape, branding=branding)
 
 
 async def _materialize(

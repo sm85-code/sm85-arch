@@ -1,9 +1,21 @@
-"""Organization letterhead for financial PDF/Excel exports (env-driven)."""
+"""Organization letterhead for financial PDF/Excel/Word exports.
+
+Historically env-var driven (get_report_branding); now editable at runtime
+via the Profil BUMDES menu (OrgProfile row, see modules.identity) and
+converted here with branding_from_org_profile(). The env-var path stays as
+a seed/fallback for deployments that haven't opened that menu yet, and for
+call sites (kwitansi/invoice) that don't have a DB row to read.
+"""
 from __future__ import annotations
 
+import logging
 import os
-from dataclasses import dataclass
+import urllib.request
+from dataclasses import dataclass, field
 from functools import lru_cache
+from typing import Optional
+
+logger = logging.getLogger(__name__)
 
 
 @dataclass(frozen=True)
@@ -25,6 +37,7 @@ class ReportBranding:
     signatory_right_title: str
     signatory_right_name: str
     primary_color: str  # hex without #
+    logo_url: str = field(default="")
 
     @property
     def location_line(self) -> str:
@@ -63,4 +76,44 @@ def get_report_branding() -> ReportBranding:
         signatory_right_title=os.getenv("REPORT_SIGN_RIGHT_TITLE", "Mengetahui"),
         signatory_right_name=os.getenv("REPORT_SIGN_RIGHT_NAME", ""),
         primary_color=os.getenv("REPORT_PRIMARY_COLOR", "1F4E79").lstrip("#"),
+        logo_url=os.getenv("REPORT_ORG_LOGO_URL", ""),
     )
+
+
+def branding_from_org_profile(profile) -> ReportBranding:
+    """Convert an OrgProfile DB row (modules.identity.infrastructure.models)
+    into the ReportBranding shape the PDF/Excel/Word generators expect."""
+    return ReportBranding(
+        org_name=profile.org_name,
+        org_legal_name=profile.org_legal_name,
+        address=profile.address,
+        village=profile.village,
+        district=profile.district,
+        regency=profile.regency,
+        province=profile.province,
+        phone=profile.phone,
+        email=profile.email,
+        tagline=profile.tagline,
+        signatory_left_title=profile.signatory_left_title,
+        signatory_left_name=profile.signatory_left_name,
+        signatory_mid_title=profile.signatory_mid_title,
+        signatory_mid_name=profile.signatory_mid_name,
+        signatory_right_title=profile.signatory_right_title,
+        signatory_right_name=profile.signatory_right_name,
+        primary_color=(profile.primary_color or "1F4E79").lstrip("#"),
+        logo_url=profile.logo_url or "",
+    )
+
+
+def fetch_logo_bytes(url: str, *, timeout: float = 5.0) -> Optional[bytes]:
+    """Best-effort fetch of the letterhead logo for formats that need raw
+    image bytes (Excel, Word -- WeasyPrint fetches the URL itself). Returns
+    None (never raises) so a slow/broken logo URL never breaks a report."""
+    if not url:
+        return None
+    try:
+        with urllib.request.urlopen(url, timeout=timeout) as resp:  # noqa: S310
+            return resp.read()
+    except Exception as exc:  # noqa: BLE001
+        logger.warning("Gagal mengambil logo BUMDes dari %s: %s", url, exc)
+        return None

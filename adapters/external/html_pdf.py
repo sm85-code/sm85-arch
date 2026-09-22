@@ -27,7 +27,8 @@ body {
   color: #1a1a1a;
   line-height: 1.35;
 }
-.letterhead { border-bottom: 2.5px solid #%(primary)s; padding-bottom: 8px; margin-bottom: 14px; }
+.letterhead { border-bottom: 2.5px solid #%(primary)s; padding-bottom: 8px; margin-bottom: 14px; text-align: center; }
+.letterhead .logo { max-height: 52px; max-width: 160px; margin-bottom: 4px; }
 .letterhead .org { font-size: 14pt; font-weight: 700; color: #%(primary)s; letter-spacing: 0.2px; }
 .letterhead .legal { font-size: 8.5pt; color: #444; }
 .letterhead .addr { font-size: 8pt; color: #555; white-space: pre-line; margin-top: 2px; }
@@ -148,6 +149,7 @@ def build_report_html(
 <html lang="id"><head><meta charset="utf-8"/><style>{css}</style></head>
 <body>
   <div class="letterhead">
+    {f'<img class="logo" src="{_esc(b.logo_url)}"/>' if b.logo_url else ""}
     <div class="org">{_esc(b.org_name)}</div>
     <div class="legal">{_esc(b.org_legal_name)}</div>
     <div class="addr">{_esc(b.address_block)}</div>
@@ -188,6 +190,7 @@ def generate_audit_pdf(
     callouts: Optional[list[tuple[str, str]]] = None,
     footer: str = "",
     landscape: bool = False,
+    branding: Optional[ReportBranding] = None,
     generated_by: str = "",
 ) -> bytes:
     """Prefer WeasyPrint HTML; fall back to Platypus letterhead PDF."""
@@ -199,6 +202,7 @@ def generate_audit_pdf(
         callouts=callouts,
         footer=footer,
         landscape=landscape,
+        branding=branding,
         generated_by=generated_by,
     )
     blob = render_pdf_from_html(doc)
@@ -213,5 +217,6 @@ def generate_audit_pdf(
         table_rows=table_rows,
         footer=footer,
         landscape=landscape,
+        branding=branding,
         generated_by=generated_by,
     )
