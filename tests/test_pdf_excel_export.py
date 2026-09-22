@@ -11,11 +11,10 @@ jalan (bukan diam-diam fallback) di lingkungan test/CI.
 """
 from __future__ import annotations
 
-import pytest
-
 from adapters.external.excel_adapter import generate_excel_report
 from adapters.external.html_pdf import render_pdf_from_html, build_report_html
 from adapters.external.pdf_generator import generate_pdf_report_platypus
+from adapters.external.word_generator import generate_word_report
 
 SAMPLE_HEADERS = ["Kode", "Nama", "Nominal"]
 SAMPLE_ROWS = [
@@ -51,3 +50,19 @@ def test_generate_excel_report_has_letterhead_headers_and_currency_format():
     nominal_cell = ws.cell(row=9, column=3)
     assert nominal_cell.value == 15000000
     assert "Rp" in nominal_cell.number_format
+
+
+def test_generate_word_report_is_a_valid_docx_with_letterhead_and_table():
+    blob = generate_word_report(title="Laba Rugi", subtitle="Jan 2024", table_headers=SAMPLE_HEADERS, table_rows=SAMPLE_ROWS)
+    assert blob.startswith(b"PK")  # docx is a zip archive
+
+    from docx import Document
+    import io
+
+    doc = Document(io.BytesIO(blob))
+    body_text = "\n".join(p.text for p in doc.paragraphs)
+    assert "LABA RUGI" in body_text
+    assert "Jan 2024" in body_text
+    assert len(doc.tables) == 2  # data table + signature table
+    header_cells = [c.text for c in doc.tables[0].rows[0].cells]
+    assert header_cells == SAMPLE_HEADERS

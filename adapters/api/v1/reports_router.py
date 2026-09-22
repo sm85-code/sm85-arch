@@ -12,6 +12,7 @@ from adapters.api.deps import get_current_user, require_roles
 from adapters.api.scope import is_pengelola, parse_date, scoped_unit_id
 from adapters.external.excel_adapter import generate_excel_report
 from adapters.external.pdf_generator import generate_pdf_report
+from adapters.external.word_generator import generate_word_report
 from modules.identity.application.services import list_closed_periods
 from modules.identity.infrastructure.models import User
 from modules.siabumdes.application.reporting import ReportingService
@@ -77,6 +78,28 @@ def _xlsx(
         content=blob,
         media_type="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
         headers={"Content-Disposition": f'attachment; filename="{title.replace(" ", "-")}.xlsx"'},
+    )
+
+
+def _docx(
+    title: str,
+    headers: list[str],
+    rows: list[list],
+    subtitle: str = "",
+    *,
+    landscape: bool = False,
+) -> Response:
+    blob = generate_word_report(
+        title=title,
+        subtitle=subtitle,
+        table_headers=headers,
+        table_rows=rows,
+        landscape=landscape,
+    )
+    return Response(
+        content=blob,
+        media_type="application/vnd.openxmlformats-officedocument.wordprocessingml.document",
+        headers={"Content-Disposition": f'attachment; filename="{title.replace(" ", "-")}.docx"'},
     )
 
 
@@ -265,6 +288,29 @@ async def report_excel(
     return _xlsx(title, headers, rows, subtitle, landscape=landscape)
 
 
+@router.get("/reports/{report_key}/word")
+async def report_word(
+    report_key: str,
+    start_date: Optional[str] = None,
+    end_date: Optional[str] = None,
+    as_of_date: Optional[str] = None,
+    unit_usaha_id: Optional[str] = None,
+    account_code: Optional[str] = None,
+    user: User = Depends(READ),
+    session: AsyncSession = Depends(get_db),
+):
+    payload, title, headers, rows = await _materialize(
+        session, user, report_key, start_date, end_date, as_of_date, unit_usaha_id, account_code
+    )
+    subtitle = ""
+    if start_date and end_date:
+        subtitle = f"{start_date} s.d. {end_date}"
+    elif as_of_date:
+        subtitle = f"Per {as_of_date}"
+    landscape = report_key in {"ledger", "buku-besar"}
+    return _docx(title, headers, rows, subtitle, landscape=landscape)
+
+
 async def _materialize(
     session,
     user: User,
@@ -305,7 +351,18 @@ async def _materialize(
     if report_key == "calk":
         start, end = _need_dates(start_date, end_date)
         data = await svc.calk(start, end, unit_id)
-        rows = [[k, v] for k, v in data["ringkasan_kinerja"].items()]
+        rows: list[list] = [["1. INFORMASI UMUM", ""]]
+        info_labels = {"nama": "Nama Entitas", "periode_awal": "Periode Awal", "periode_akhir": "Periode Akhir"}
+        rows += [[info_labels.get(k, k.replace("_", " ").title()), v] for k, v in data["informasi_umum"].items()]
+        rows.append(["2. RINGKASAN KINERJA", ""])
+        kinerja_labels = {
+            "total_pendapatan": "Total Pendapatan", "total_beban": "Total Beban", "laba_bersih": "Laba Bersih",
+            "total_aset": "Total Aset", "total_kewajiban": "Total Kewajiban", "total_ekuitas": "Total Ekuitas",
+            "arus_kas_bersih": "Arus Kas Bersih",
+        }
+        rows += [[kinerja_labels.get(k, k.replace("_", " ").title()), v] for k, v in data["ringkasan_kinerja"].items()]
+        rows.append(["3. KEBIJAKAN AKUNTANSI", ""])
+        rows += [["", note] for note in data["kebijakan_akuntansi"]]
         return data, "CaLK", ["Uraian", "Nilai"], rows
     if report_key in {"ledger", "buku-besar"}:
         if not account_code:
