@@ -26,4 +26,7 @@ jobs:
         # DATABASE_URL is intentionally unset: tests that need a real Postgres
         # instance skip themselves (see tests/test_postgresql_integration.py)
         # instead of failing, so this job stays fast and needs no DB service.
-        run: pytest tests/ -n 0
+        # `python -m pytest` (not the bare `pytest` script) so the repo root
+        # is added to sys.path -- otherwise `from tenants...` imports fail
+        # with ModuleNotFoundError since tests/ has no package __init__.py.
+        run: python -m pytest tests/ -n 0
