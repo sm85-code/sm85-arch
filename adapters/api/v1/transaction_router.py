@@ -109,6 +109,7 @@ async def list_transactions(
     start_date: Optional[str] = None,
     end_date: Optional[str] = None,
     unit_usaha_id: Optional[str] = None,
+    reference: Optional[str] = None,
     limit: int = 500,
     user: User = Depends(get_current_user),
     session: AsyncSession = Depends(get_db),
@@ -124,6 +125,13 @@ async def list_transactions(
         stmt = stmt.where(Transaction.unit_usaha_id == user.unit_usaha_id)
     elif unit_usaha_id:
         stmt = stmt.where(Transaction.unit_usaha_id == unit_usaha_id)
+    if reference:
+        # Substring match, not exact: a single inventory movement can post more
+        # than one transaction (e.g. stock-out posts both "stock-out:<id>" for
+        # COGS and "stock-out-rev:<id>" for revenue). Filtering by the shared
+        # <id> fragment surfaces every transaction tied to that movement/
+        # adjustment in one request, from Inventory's "Lihat transaksi" link.
+        stmt = stmt.where(Transaction.reference.contains(reference))
     rows = (await session.execute(stmt)).scalars().all()
     return [_tx_out(row) for row in rows]
 
