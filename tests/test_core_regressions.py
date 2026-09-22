@@ -1,36 +1,28 @@
-from services.jwt_service import create_access_token, decode_token
-from decimal import Decimal
+"""Regression tests for auth/session primitives.
 
-from database import _matches, _query_condition
-from models.transactions import TransactionCreate
-
-
-def test_query_match_supports_common_filters():
-    document = {"id": "tx-1", "date": "2026-01-15", "unit_usaha_id": "unit-1"}
-    assert _matches(document, {"date": {"gte": "2026-01-01", "lte": "2026-01-31"}})
-    assert _matches(document, {"id": {"in": ["tx-1", "tx-2"]}})
-    assert not _matches(document, {"unit_usaha_id": "unit-2"})
+Note: this file previously imported `services.jwt_service`, `database._matches`,
+`database._query_condition`, and `models.transactions.TransactionCreate` — none
+of which exist in the current codebase (leftovers from an earlier, pre-Postgres
+iteration of the app). Those tests always failed at collection and were never
+actually run. They have been replaced with tests against the real, current
+modules (`shared.security`).
+"""
 
 
-def test_query_condition_compiles_for_nested_document_filters():
-    expression = _query_condition({"date": {"gte": "2026-01-01"}, "unit_usaha_id": "unit-1"})
-    assert expression is not None
+def test_jwt_round_trip(monkeypatch):
+    monkeypatch.setenv("JWT_SECRET", "test-secret-key-for-unit-tests")
+    import importlib
 
+    from shared import config as config_module
 
-def test_transaction_amount_uses_decimal():
-    transaction = TransactionCreate(
-        date="2026-01-15",
-        transaction_type="penerimaan",
-        description="Setoran",
-        amount="1250.10",
-        debit_account_code="1.1",
-        credit_account_code="4.1",
-    )
-    assert transaction.amount == Decimal("1250.10")
+    importlib.reload(config_module)
+    import shared.security as security_module
 
+    importlib.reload(security_module)
 
-def test_jwt_round_trip():
-    token = create_access_token("user-1", "admin")
-    payload = decode_token(token)
+    token = security_module.create_access_token("user-1", "admin", session_version=1)
+    payload = security_module.decode_access_token(token)
+
     assert payload["sub"] == "user-1"
     assert payload["role"] == "admin"
+    assert payload["sv"] == 1

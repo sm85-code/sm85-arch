@@ -1,7 +1,7 @@
 """Unit-usaha isolation and recording-lock guards."""
 from __future__ import annotations
 
-from datetime import date, datetime
+from datetime import date
 from typing import Optional
 
 from fastapi import HTTPException, status
