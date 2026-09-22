@@ -12,7 +12,11 @@ from reportlab.lib.styles import ParagraphStyle, getSampleStyleSheet
 from reportlab.lib.units import cm, mm
 from reportlab.platypus import Paragraph, SimpleDocTemplate, Spacer, Table, TableStyle
 
+from adapters.external.report_formatting import format_money, is_money_header, row_is_total
 from shared.report_branding import get_report_branding
+
+_is_money_header = is_money_header
+_row_is_total = row_is_total
 
 
 def _styles(primary_hex: str) -> dict[str, ParagraphStyle]:
@@ -53,22 +57,6 @@ def _styles(primary_hex: str) -> dict[str, ParagraphStyle]:
             textColor=colors.HexColor("#777777"),
         ),
     }
-
-
-def _is_money_header(h: str) -> bool:
-    h = (h or "").lower()
-    return any(
-        k in h
-        for k in (
-            "nominal", "jumlah", "debit", "kredit", "saldo", "rp",
-            "amount", "nilai", "laba", "beban", "pendapatan",
-        )
-    )
-
-
-def _row_is_total(row: list[Any]) -> bool:
-    joined = " ".join(str(c or "").lower() for c in row)
-    return any(k in joined for k in ("total", "jumlah", "laba bersih", "saldo akhir", "saldo awal"))
 
 
 def generate_pdf_report_platypus(
@@ -122,8 +110,15 @@ def generate_pdf_report_platypus(
         story.append(Spacer(1, 2 * mm))
 
     if table_headers and table_rows is not None:
-        data = [table_headers] + [[str(c) if c is not None else "" for c in r] for r in table_rows]
         money_cols = [i for i, h in enumerate(table_headers) if _is_money_header(h)]
+        money_col_set = set(money_cols)
+        data = [table_headers] + [
+            [
+                format_money(c) if i in money_col_set else (str(c) if c is not None else "")
+                for i, c in enumerate(r)
+            ]
+            for r in table_rows
+        ]
         tbl = Table(data, repeatRows=1)
         style_cmds: list[tuple] = [
             ("BACKGROUND", (0, 0), (-1, 0), colors.HexColor(f"#{primary}")),

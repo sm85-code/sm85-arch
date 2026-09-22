@@ -15,23 +15,11 @@ from docx.enum.text import WD_ALIGN_PARAGRAPH
 from docx.oxml.ns import qn
 from docx.shared import Pt, RGBColor, Cm
 
+from adapters.external.report_formatting import format_money, is_money_header, row_is_total
 from shared.report_branding import get_report_branding
 
-
-def _is_money_header(h: str) -> bool:
-    h = (h or "").lower()
-    return any(
-        k in h
-        for k in (
-            "nominal", "jumlah", "debit", "kredit", "saldo", "rp",
-            "amount", "nilai", "laba", "beban", "pendapatan",
-        )
-    )
-
-
-def _row_is_total(row: list[Any]) -> bool:
-    joined = " ".join(str(c or "").lower() for c in row)
-    return any(k in joined for k in ("total", "jumlah", "laba bersih", "saldo akhir", "saldo awal"))
+_is_money_header = is_money_header
+_row_is_total = row_is_total
 
 
 def _rgb(hex6: str) -> RGBColor:
@@ -157,7 +145,10 @@ def generate_word_report(
             is_total = _row_is_total(row)
             cells = table.add_row().cells
             for i, value in enumerate(row):
-                text = "" if value is None else str(value)
+                if i in money_cols:
+                    text = format_money(value)
+                else:
+                    text = "" if value is None else str(value)
                 align = WD_ALIGN_PARAGRAPH.RIGHT if i in money_cols else WD_ALIGN_PARAGRAPH.LEFT
                 _set_cell_text(cells[i], text, bold=is_total, size=9, align=align)
                 if is_total:
