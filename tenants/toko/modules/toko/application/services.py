@@ -1,22 +1,37 @@
 from __future__ import annotations
 
+from datetime import date
 from decimal import Decimal
 
 from fastapi import HTTPException, status
-from sqlalchemy import select
+from sqlalchemy import func, select
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import selectinload
 
 from shared.security import hash_password, verify_password
-from tenants.toko.modules.toko.application.schemas import ProdukIn, ProdukPatch, RegisterRequest
+from tenants.toko.modules.toko.application.schemas import PengirimanIn, ProdukIn, ProdukPatch, RegisterRequest
 from tenants.toko.modules.toko.infrastructure.models import (
+    STATUS_PENGIRIMAN,
     STATUS_PESANAN,
     ItemKeranjang,
     ItemPesanan,
+    PengirimanToko,
     PesananToko,
     ProdukToko,
     UserToko,
 )
+
+# Transisi status pengiriman yang diizinkan.
+_TRANSISI_STATUS_PENGIRIMAN = {
+    "menunggu_pickup": {"dikirim", "bermasalah"},
+    "dikirim": {"diterima", "bermasalah"},
+    "diterima": set(),
+    "bermasalah": {"dikirim"},
+}
+
+# Status pesanan yang dihitung sebagai penjualan sah untuk laporan --
+# menunggu_pembayaran & dibatalkan tidak dihitung (belum tentu jadi uang).
+_STATUS_TERHITUNG_PENJUALAN = ("dibayar", "diproses", "dikirim", "selesai")
 
 # Transisi status yang diizinkan. dibatalkan bisa dari status manapun
 # sebelum selesai/dikirim (pembatalan setelah dikirim harus lewat proses
@@ -266,3 +281,168 @@ async def ubah_status_pesanan(session: AsyncSession, pesanan_id: str, status_bar
     pesanan.status = status_baru
     await session.flush()
     return pesanan
+
+
+async def catat_metode_pembayaran(session: AsyncSession, pesanan_id: str, *, metode: str, gateway_ref: str | None) -> PesananToko:
+    """Dipanggil setelah adapter payment gateway (mis. iPaymu) berhasil
+    membuat sesi pembayaran, sebelum pengguna diarahkan ke checkout_url."""
+    pesanan = await get_pesanan(session, pesanan_id)
+    pesanan.metode_pembayaran = metode
+    pesanan.gateway_ref = gateway_ref
+    await session.flush()
+    return pesanan
+
+
+async def tandai_dibayar_dari_webhook(session: AsyncSession, gateway_ref: str) -> PesananToko | None:
+    """Dipanggil dari endpoint webhook payment gateway. Mencari pesanan
+    berdasarkan gateway_ref (bukan pesanan_id, karena provider tidak selalu
+    tahu ID internal kita) lalu jalankan transisi status yang sama seperti
+    ubah_status_pesanan -- supaya aturan transisi tetap satu tempat."""
+    stmt = select(PesananToko).where(PesananToko.gateway_ref == gateway_ref)
+    pesanan = (await session.execute(stmt)).scalar_one_or_none()
+    if not pesanan:
+        return None
+    if "dibayar" in _TRANSISI_STATUS.get(pesanan.status, set()):
+        pesanan.status = "dibayar"
+        await session.flush()
+    return pesanan
+
+
+def pengiriman_out(pengiriman: PengirimanToko) -> dict:
+    return {
+        "id": pengiriman.id,
+        "pesanan_id": pengiriman.pesanan_id,
+        "kurir": pengiriman.kurir,
+        "layanan": pengiriman.layanan,
+        "ongkir": str(pengiriman.ongkir),
+        "nama_penerima": pengiriman.nama_penerima,
+        "telepon_penerima": pengiriman.telepon_penerima,
+        "alamat_tujuan": pengiriman.alamat_tujuan,
+        "tracking_id": pengiriman.tracking_id,
+        "status": pengiriman.status,
+    }
+
+
+async def buat_pengiriman_lokal(
+    session: AsyncSession, pesanan_id: str, payload: PengirimanIn, *, ongkir: Decimal = Decimal("0")
+) -> PengirimanToko:
+    """Catat data pengiriman di database kita. Pemanggilan API Biteship yang
+    sesungguhnya (assign kurir, dapat tracking_id) ada di infrastructure/
+    shipping_biteship.py -- belum terhubung, lihat docstring di sana."""
+    await get_pesanan(session, pesanan_id)
+    existing = (
+        await session.execute(select(PengirimanToko).where(PengirimanToko.pesanan_id == pesanan_id))
+    ).scalar_one_or_none()
+    if existing:
+        raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail="Pesanan ini sudah punya data pengiriman")
+
+    pengiriman = PengirimanToko(pesanan_id=pesanan_id, ongkir=ongkir, **payload.model_dump())
+    session.add(pengiriman)
+    await session.flush()
+    return pengiriman
+
+
+async def get_pengiriman(session: AsyncSession, pesanan_id: str) -> PengirimanToko:
+    stmt = select(PengirimanToko).where(PengirimanToko.pesanan_id == pesanan_id)
+    pengiriman = (await session.execute(stmt)).scalar_one_or_none()
+    if not pengiriman:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Data pengiriman tidak ditemukan")
+    return pengiriman
+
+
+async def ubah_status_pengiriman(
+    session: AsyncSession, pesanan_id: str, status_baru: str, tracking_id: str | None = None
+) -> PengirimanToko:
+    if status_baru not in STATUS_PENGIRIMAN:
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Status pengiriman tidak dikenal")
+    pengiriman = await get_pengiriman(session, pesanan_id)
+    if status_baru not in _TRANSISI_STATUS_PENGIRIMAN.get(pengiriman.status, set()):
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail=f"Tidak bisa ubah status pengiriman dari '{pengiriman.status}' ke '{status_baru}'",
+        )
+    pengiriman.status = status_baru
+    if tracking_id:
+        pengiriman.tracking_id = tracking_id
+    await session.flush()
+
+    # Status pengiriman & status pesanan disinkronkan otomatis, supaya admin
+    # tidak perlu update keduanya terpisah secara manual: pengiriman
+    # "dikirim" mendorong pesanan ke "dikirim", dan "diterima" mendorong
+    # pesanan ke "selesai" -- masing-masing hanya kalau pesanan sedang di
+    # status yang mengizinkan transisi itu (lihat _TRANSISI_STATUS).
+    status_pesanan_target = {"dikirim": "dikirim", "diterima": "selesai"}.get(status_baru)
+    if status_pesanan_target:
+        pesanan = await get_pesanan(session, pesanan_id)
+        if status_pesanan_target in _TRANSISI_STATUS.get(pesanan.status, set()):
+            pesanan.status = status_pesanan_target
+            await session.flush()
+
+    return pengiriman
+
+
+async def laporan_penjualan(session: AsyncSession, dari: date, sampai: date) -> dict:
+    """Total penjualan per hari, dalam rentang [dari, sampai] inklusif.
+    Hanya menghitung pesanan berstatus dibayar/diproses/dikirim/selesai --
+    lihat _STATUS_TERHITUNG_PENJUALAN."""
+    stmt = (
+        select(
+            func.date(PesananToko.created_at).label("tanggal"),
+            func.count(PesananToko.id).label("jumlah_pesanan"),
+            func.sum(PesananToko.total).label("total_penjualan"),
+        )
+        .where(
+            PesananToko.status.in_(_STATUS_TERHITUNG_PENJUALAN),
+            func.date(PesananToko.created_at) >= dari,
+            func.date(PesananToko.created_at) <= sampai,
+        )
+        .group_by(func.date(PesananToko.created_at))
+        .order_by(func.date(PesananToko.created_at))
+    )
+    rows = (await session.execute(stmt)).all()
+    harian = [
+        {
+            "tanggal": r.tanggal if isinstance(r.tanggal, str) else r.tanggal.isoformat(),
+            "jumlah_pesanan": r.jumlah_pesanan,
+            "total_penjualan": str(r.total_penjualan or Decimal("0")),
+        }
+        for r in rows
+    ]
+    grand_total = sum((Decimal(h["total_penjualan"]) for h in harian), Decimal("0"))
+    return {"dari": dari.isoformat(), "sampai": sampai.isoformat(), "harian": harian, "grand_total": str(grand_total)}
+
+
+async def laporan_produk_terlaris(session: AsyncSession, dari: date, sampai: date, limit: int = 10) -> list[dict]:
+    stmt = (
+        select(
+            ItemPesanan.produk_id,
+            ItemPesanan.nama_produk,
+            func.sum(ItemPesanan.qty).label("total_qty"),
+            func.sum(ItemPesanan.subtotal).label("total_omzet"),
+        )
+        .join(PesananToko, PesananToko.id == ItemPesanan.pesanan_id)
+        .where(
+            PesananToko.status.in_(_STATUS_TERHITUNG_PENJUALAN),
+            func.date(PesananToko.created_at) >= dari,
+            func.date(PesananToko.created_at) <= sampai,
+        )
+        .group_by(ItemPesanan.produk_id, ItemPesanan.nama_produk)
+        .order_by(func.sum(ItemPesanan.qty).desc())
+        .limit(limit)
+    )
+    rows = (await session.execute(stmt)).all()
+    return [
+        {
+            "produk_id": r.produk_id,
+            "nama_produk": r.nama_produk,
+            "total_qty": r.total_qty,
+            "total_omzet": str(r.total_omzet or Decimal("0")),
+        }
+        for r in rows
+    ]
+
+
+async def laporan_ringkasan_status(session: AsyncSession) -> dict:
+    stmt = select(PesananToko.status, func.count(PesananToko.id)).group_by(PesananToko.status)
+    rows = (await session.execute(stmt)).all()
+    return {status_: jumlah for status_, jumlah in rows}

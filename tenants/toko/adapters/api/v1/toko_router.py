@@ -6,17 +6,22 @@ orders, payment, shipping, and reporting land in follow-up work.
 """
 from __future__ import annotations
 
+from datetime import date
+
 from fastapi import APIRouter, Depends, HTTPException, Response, status as http_status
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from tenants.toko.modules.toko.application import services
 from tenants.toko.modules.toko.application.schemas import (
+    CekOngkirIn,
     KeranjangItemIn,
     KeranjangItemPatch,
     LoginRequest,
+    PengirimanIn,
     ProdukIn,
     ProdukPatch,
     RegisterRequest,
+    StatusPengirimanIn,
     StatusPesananIn,
 )
 from tenants.toko.modules.toko.infrastructure.auth import (
@@ -28,7 +33,11 @@ from tenants.toko.modules.toko.infrastructure.auth import (
 )
 from tenants.toko.modules.toko.infrastructure.database import get_db_toko
 from tenants.toko.modules.toko.infrastructure.models import UserToko
+from tenants.toko.modules.toko.infrastructure.payment_ipaymu import create_payment as ipaymu_create_payment
+from tenants.toko.modules.toko.infrastructure.payment_ipaymu import parse_webhook as ipaymu_parse_webhook
 from tenants.toko.modules.toko.infrastructure.seeder import seed_toko
+from tenants.toko.modules.toko.infrastructure.shipping_biteship import cek_ongkir as biteship_cek_ongkir
+from tenants.toko.modules.toko.infrastructure.shipping_biteship import parse_webhook as biteship_parse_webhook
 
 toko_router = APIRouter()
 
@@ -207,3 +216,142 @@ async def admin_ubah_status_pesanan(
 ):
     pesanan = await services.ubah_status_pesanan(session, pesanan_id, payload.status)
     return services.pesanan_out(pesanan)
+
+
+# --- Pembayaran (iPaymu) -----------------------------------------------
+# Lihat infrastructure/payment_ipaymu.py -- BELUM terhubung ke API asli,
+# menunggu verifikasi merchant selesai. Endpoint di bawah ini sudah
+# terstruktur lengkap (validasi pesanan, catat metode di DB) supaya begitu
+# adapter-nya diisi, cuma bagian pemanggilan API yang perlu ditambah.
+
+
+@toko_router.post("/pesanan/{pesanan_id}/bayar")
+async def mulai_pembayaran(
+    pesanan_id: str,
+    session: AsyncSession = Depends(get_db_toko),
+    user: UserToko = Depends(get_current_user_toko),
+):
+    pesanan = await services.get_pesanan(session, pesanan_id)
+    if pesanan.user_id != user.id:
+        raise HTTPException(status_code=http_status.HTTP_404_NOT_FOUND, detail="Pesanan tidak ditemukan")
+    if pesanan.status != "menunggu_pembayaran":
+        raise HTTPException(
+            status_code=http_status.HTTP_409_CONFLICT,
+            detail=f"Pesanan berstatus '{pesanan.status}', tidak bisa dibayar ulang",
+        )
+
+    result = await ipaymu_create_payment(
+        pesanan_id=pesanan.id,
+        total=str(pesanan.total),
+        nama_pembeli=user.nama,
+        email_pembeli=user.email,
+        notify_url="/api/toko/payment/callback",
+        return_url=f"/pesanan/{pesanan.id}",
+    )
+    await services.catat_metode_pembayaran(session, pesanan.id, metode="gateway", gateway_ref=result.gateway_ref)
+    return {"checkout_url": result.checkout_url}
+
+
+@toko_router.post("/payment/callback")
+async def payment_callback(request: dict, session: AsyncSession = Depends(get_db_toko)):
+    """Webhook dari iPaymu. Bentuk payload BELUM diverifikasi -- lihat
+    infrastructure/payment_ipaymu.py::parse_webhook."""
+    parsed = ipaymu_parse_webhook(request)
+    if not parsed.get("gateway_ref"):
+        raise HTTPException(status_code=http_status.HTTP_400_BAD_REQUEST, detail="Payload webhook tidak dikenal")
+    pesanan = await services.tandai_dibayar_dari_webhook(session, parsed["gateway_ref"])
+    if not pesanan:
+        raise HTTPException(status_code=http_status.HTTP_404_NOT_FOUND, detail="Pesanan untuk gateway_ref ini tidak ditemukan")
+    return {"ok": True}
+
+
+# --- Pengiriman (Biteship) ----------------------------------------------
+# Lihat infrastructure/shipping_biteship.py -- BELUM terhubung ke API asli.
+
+
+@toko_router.post("/pengiriman/cek-ongkir")
+async def cek_ongkir(payload: CekOngkirIn):
+    options = await biteship_cek_ongkir(
+        kode_pos_asal=payload.kode_pos_asal,
+        kode_pos_tujuan=payload.kode_pos_tujuan,
+        berat_gram=payload.berat_gram,
+        nilai_barang=str(payload.nilai_barang),
+    )
+    return options
+
+
+@toko_router.post("/admin/pesanan/{pesanan_id}/pengiriman")
+async def admin_buat_pengiriman(
+    pesanan_id: str,
+    payload: PengirimanIn,
+    session: AsyncSession = Depends(get_db_toko),
+    _user: UserToko = Depends(require_roles_toko(*ADMIN_ROLES)),
+):
+    pengiriman = await services.buat_pengiriman_lokal(session, pesanan_id, payload)
+    return services.pengiriman_out(pengiriman)
+
+
+@toko_router.get("/pesanan/{pesanan_id}/pengiriman")
+async def get_pengiriman(
+    pesanan_id: str,
+    session: AsyncSession = Depends(get_db_toko),
+    user: UserToko = Depends(get_current_user_toko),
+):
+    pesanan = await services.get_pesanan(session, pesanan_id)
+    if pesanan.user_id != user.id and (user.role or "").lower() not in ADMIN_ROLES:
+        raise HTTPException(status_code=http_status.HTTP_404_NOT_FOUND, detail="Pesanan tidak ditemukan")
+    pengiriman = await services.get_pengiriman(session, pesanan_id)
+    return services.pengiriman_out(pengiriman)
+
+
+@toko_router.patch("/admin/pesanan/{pesanan_id}/pengiriman/status")
+async def admin_ubah_status_pengiriman(
+    pesanan_id: str,
+    payload: StatusPengirimanIn,
+    session: AsyncSession = Depends(get_db_toko),
+    _user: UserToko = Depends(require_roles_toko(*ADMIN_ROLES)),
+):
+    pengiriman = await services.ubah_status_pengiriman(session, pesanan_id, payload.status, payload.tracking_id)
+    return services.pengiriman_out(pengiriman)
+
+
+@toko_router.post("/pengiriman/callback")
+async def pengiriman_callback(payload: dict, session: AsyncSession = Depends(get_db_toko)):
+    """Webhook dari Biteship. Bentuk payload BELUM diverifikasi -- lihat
+    infrastructure/shipping_biteship.py::parse_webhook."""
+    parsed = biteship_parse_webhook(payload)
+    if not parsed.get("order_id"):
+        raise HTTPException(status_code=http_status.HTTP_400_BAD_REQUEST, detail="Payload webhook tidak dikenal")
+    return {"ok": True, "note": "Pemetaan order_id Biteship -> pesanan_id belum diimplementasi"}
+
+
+# --- Laporan Penjualan ---------------------------------------------------
+
+
+@toko_router.get("/admin/laporan/penjualan")
+async def admin_laporan_penjualan(
+    dari: date,
+    sampai: date,
+    session: AsyncSession = Depends(get_db_toko),
+    _user: UserToko = Depends(require_roles_toko(*ADMIN_ROLES)),
+):
+    return await services.laporan_penjualan(session, dari, sampai)
+
+
+@toko_router.get("/admin/laporan/produk-terlaris")
+async def admin_laporan_produk_terlaris(
+    dari: date,
+    sampai: date,
+    limit: int = 10,
+    session: AsyncSession = Depends(get_db_toko),
+    _user: UserToko = Depends(require_roles_toko(*ADMIN_ROLES)),
+):
+    return await services.laporan_produk_terlaris(session, dari, sampai, limit)
+
+
+@toko_router.get("/admin/laporan/ringkasan-status")
+async def admin_laporan_ringkasan_status(
+    session: AsyncSession = Depends(get_db_toko),
+    _user: UserToko = Depends(require_roles_toko(*ADMIN_ROLES)),
+):
+    return await services.laporan_ringkasan_status(session)
