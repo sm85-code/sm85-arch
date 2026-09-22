@@ -18,6 +18,7 @@ from tenants.madrasah.modules.madrasah.application.schemas import (
     JadwalIn,
     LoginRequest,
     MapelIn,
+    MapelPatch,
     MateriIn,
     MateriPatch,
     PenugasanIn,
@@ -32,6 +33,8 @@ from tenants.madrasah.modules.madrasah.application.schemas import (
     PengumumanIn,
     PesanIn,
     TingkatIn,
+    TingkatPatch,
+    UserPatch,
 )
 from tenants.madrasah.modules.madrasah.infrastructure.models import (
     AbsensiMadrasah,
@@ -489,6 +492,32 @@ async def patch_rombel(session: AsyncSession, rombel_id: str, payload: RombelPat
     return row
 
 
+async def patch_tingkat(session: AsyncSession, tingkat_id: str, payload: TingkatPatch) -> TingkatMadrasah:
+    row = await session.get(TingkatMadrasah, tingkat_id)
+    if not row:
+        raise MadrasahNotFoundError("Tingkat tidak ditemukan")
+    if payload.nama is not None:
+        row.nama = payload.nama
+    if payload.urutan is not None:
+        row.urutan = payload.urutan
+    await session.flush()
+    return row
+
+
+async def delete_tingkat(session: AsyncSession, tingkat_id: str) -> None:
+    row = await session.get(TingkatMadrasah, tingkat_id)
+    if not row:
+        raise MadrasahNotFoundError("Tingkat tidak ditemukan")
+    await session.delete(row)
+
+
+async def delete_rombel(session: AsyncSession, rombel_id: str) -> None:
+    row = await session.get(RombelMadrasah, rombel_id)
+    if not row:
+        raise MadrasahNotFoundError("Rombel tidak ditemukan")
+    await session.delete(row)
+
+
 async def list_guru(session: AsyncSession) -> list[UserMadrasah]:
     return list((await session.execute(select(UserMadrasah).where(UserMadrasah.role.in_(["wali_kelas", "guru", "kepala_sekolah", "kurikulum", "bendahara"])).order_by(UserMadrasah.nama))).scalars())
 
@@ -499,6 +528,36 @@ async def list_wali_santri(session: AsyncSession) -> list[UserMadrasah]:
 
 async def create_guru(session: AsyncSession, payload: GuruIn) -> UserMadrasah:
     row = UserMadrasah(nama=payload.nama, no_hp=payload.no_hp.strip(), password_hash=hash_password(payload.password), role=payload.role or "wali_kelas")
+    session.add(row)
+    await session.flush()
+    return row
+
+
+async def patch_guru(session: AsyncSession, user_id: str, payload: UserPatch) -> UserMadrasah:
+    row = await session.get(UserMadrasah, user_id)
+    if not row:
+        raise MadrasahNotFoundError("Akun tidak ditemukan")
+    if payload.nama is not None:
+        row.nama = payload.nama
+    if payload.no_hp is not None:
+        row.no_hp = payload.no_hp.strip()
+    if payload.role is not None:
+        row.role = payload.role
+    if payload.password:
+        row.password_hash = hash_password(payload.password)
+    await session.flush()
+    return row
+
+
+async def delete_guru(session: AsyncSession, user_id: str) -> None:
+    row = await session.get(UserMadrasah, user_id)
+    if not row:
+        raise MadrasahNotFoundError("Akun tidak ditemukan")
+    await session.delete(row)
+
+
+async def create_wali_santri(session: AsyncSession, payload: GuruIn) -> UserMadrasah:
+    row = UserMadrasah(nama=payload.nama, no_hp=payload.no_hp.strip(), password_hash=hash_password(payload.password), role="wali_santri")
     session.add(row)
     await session.flush()
     return row
@@ -535,6 +594,13 @@ async def patch_santri(session: AsyncSession, santri_id: str, payload: SantriPat
         row.orang_tua_id = payload.orang_tua_id
     await session.flush()
     return row
+
+
+async def delete_santri(session: AsyncSession, santri_id: str) -> None:
+    row = await session.get(SantriMadrasah, santri_id)
+    if not row:
+        raise MadrasahNotFoundError("Santri tidak ditemukan")
+    await session.delete(row)
 
 
 async def patch_santri_wali_kelas(session: AsyncSession, guru: UserMadrasah, santri_id: str, payload: SantriPatch) -> SantriMadrasah:
@@ -632,6 +698,39 @@ async def create_mapel(session: AsyncSession, payload: MapelIn) -> MapelMadrasah
     session.add(row)
     await session.flush()
     return row
+
+
+async def patch_mapel(session: AsyncSession, mapel_id: str, payload: MapelPatch) -> MapelMadrasah:
+    row = await session.get(MapelMadrasah, mapel_id)
+    if not row:
+        raise MadrasahNotFoundError("Mapel tidak ditemukan")
+    if payload.kode is not None:
+        row.kode = payload.kode
+    if payload.nama is not None:
+        row.nama = payload.nama
+    await session.flush()
+    return row
+
+
+async def delete_mapel(session: AsyncSession, mapel_id: str) -> None:
+    row = await session.get(MapelMadrasah, mapel_id)
+    if not row:
+        raise MadrasahNotFoundError("Mapel tidak ditemukan")
+    await session.delete(row)
+
+
+async def delete_materi(session: AsyncSession, materi_id: str) -> None:
+    row = await session.get(MateriTarget, materi_id)
+    if not row:
+        raise MadrasahNotFoundError("Materi tidak ditemukan")
+    await session.delete(row)
+
+
+async def delete_jadwal(session: AsyncSession, jadwal_id: str) -> None:
+    row = await session.get(JadwalMadrasah, jadwal_id)
+    if not row:
+        raise MadrasahNotFoundError("Jadwal tidak ditemukan")
+    await session.delete(row)
 
 
 async def create_materi(session: AsyncSession, payload: MateriIn) -> MateriTarget:
