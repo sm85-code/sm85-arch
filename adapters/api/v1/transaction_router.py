@@ -210,6 +210,16 @@ async def delete_transaction(
                 await delete_file_from_gdrive(fid)
             except Exception:
                 pass
+    # Delete the journal entry (+ items via ORM cascade) explicitly first.
+    # ORM delete of Transaction alone would try to SET NULL
+    # journal_entries.transaction_id, which violates NOT NULL and 500s —
+    # same class of bug already worked around in cancel_inventory_journal.
+    existing_entry = await session.scalar(
+        select(JournalEntry).where(JournalEntry.transaction_id == tx.id)
+    )
+    if existing_entry:
+        await session.delete(existing_entry)
+        await session.flush()
     await session.delete(tx)
     return {"deleted": 1}
 
