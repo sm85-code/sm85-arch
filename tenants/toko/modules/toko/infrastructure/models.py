@@ -125,3 +125,38 @@ class ItemPesanan(TokoBase):
     subtotal: Mapped[Decimal] = mapped_column(Numeric(20, 2), nullable=False)
 
     pesanan: Mapped["PesananToko"] = relationship(back_populates="items")
+
+
+# Status pengiriman: menunggu_pickup -> dikirim -> diterima (atau
+# bermasalah, untuk kasus retur/gagal antar).
+STATUS_PENGIRIMAN = ("menunggu_pickup", "dikirim", "diterima", "bermasalah")
+
+
+class PengirimanToko(TokoBase):
+    """1:1 dengan PesananToko. Alamat & data penerima disnapshot di sini
+    (bukan referensi ke profil user) supaya perubahan alamat user nanti
+    tidak mengubah riwayat pengiriman pesanan lama."""
+
+    __tablename__ = "toko_pengiriman"
+
+    id: Mapped[str] = mapped_column(String(64), primary_key=True, default=_uuid)
+    pesanan_id: Mapped[str] = mapped_column(
+        String(64), ForeignKey("toko_pesanan.id", ondelete="CASCADE"), nullable=False, unique=True, index=True
+    )
+    kurir: Mapped[str] = mapped_column(String(64), nullable=False, default="")
+    layanan: Mapped[str] = mapped_column(String(64), nullable=False, default="")
+    ongkir: Mapped[Decimal] = mapped_column(Numeric(20, 2), nullable=False, default=Decimal("0"))
+    nama_penerima: Mapped[str] = mapped_column(String(255), nullable=False)
+    telepon_penerima: Mapped[str] = mapped_column(String(32), nullable=False)
+    alamat_tujuan: Mapped[str] = mapped_column(Text, nullable=False)
+    kota_tujuan: Mapped[str] = mapped_column(String(128), nullable=False, default="")
+    provinsi_tujuan: Mapped[str] = mapped_column(String(128), nullable=False, default="")
+    kode_pos_tujuan: Mapped[str] = mapped_column(String(16), nullable=False, default="")
+    # Diisi setelah Biteship benar-benar assign kurir (lihat
+    # infrastructure/shipping_biteship.py -- belum terhubung ke API asli).
+    tracking_id: Mapped[Optional[str]] = mapped_column(String(128), nullable=True)
+    status: Mapped[str] = mapped_column(String(32), nullable=False, default="menunggu_pickup", index=True)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=_utcnow)
+    updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=_utcnow, onupdate=_utcnow)
+
+    pesanan: Mapped["PesananToko"] = relationship()

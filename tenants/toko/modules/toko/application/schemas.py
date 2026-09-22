@@ -47,3 +47,26 @@ class KeranjangItemPatch(BaseModel):
 
 class StatusPesananIn(BaseModel):
     status: str
+
+
+class CekOngkirIn(BaseModel):
+    kode_pos_asal: str
+    kode_pos_tujuan: str
+    berat_gram: int = 1000
+    nilai_barang: Decimal = Decimal("0")
+
+
+class PengirimanIn(BaseModel):
+    kurir: str
+    layanan: str
+    nama_penerima: str
+    telepon_penerima: str
+    alamat_tujuan: str
+    kota_tujuan: str = ""
+    provinsi_tujuan: str = ""
+    kode_pos_tujuan: str = ""
+
+
+class StatusPengirimanIn(BaseModel):
+    status: str
+    tracking_id: Optional[str] = None
