@@ -47,4 +47,11 @@ async def upload_org_logo(file_bytes: bytes, file_name: str, content_type: str) 
     file_id = result["id"]
     await set_gdrive_file_public(file_id)
 
-    return f"https://drive.google.com/uc?export=view&id={file_id}"
+    # NOT drive.google.com/uc?export=view&id=... -- Google now frequently
+    # serves that URL as an HTML "can't scan this file for viruses" /
+    # download-confirmation interstitial instead of the actual image bytes,
+    # both for <img> hotlinking in the browser and for our own server-side
+    # fetch_logo_bytes() (used to embed the logo in Word/Excel). The
+    # thumbnail endpoint reliably returns real image bytes for a publicly
+    # shared file.
+    return f"https://drive.google.com/thumbnail?id={file_id}&sz=w512"

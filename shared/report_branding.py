@@ -108,11 +108,28 @@ def branding_from_org_profile(profile) -> ReportBranding:
 def fetch_logo_bytes(url: str, *, timeout: float = 5.0) -> Optional[bytes]:
     """Best-effort fetch of the letterhead logo for formats that need raw
     image bytes (Excel, Word -- WeasyPrint fetches the URL itself). Returns
-    None (never raises) so a slow/broken logo URL never breaks a report."""
+    None (never raises) so a slow/broken logo URL never breaks a report.
+
+    Some hosts (Google Drive's own hotlink URLs included) serve an HTML
+    interstitial instead of the image for a plain, cookie-less, no-UA
+    request -- send a browser-like User-Agent and refuse to return anything
+    whose Content-Type isn't actually an image, so that HTML page never
+    gets embedded into a report as if it were the logo.
+    """
     if not url:
         return None
+    request = urllib.request.Request(url, headers={"User-Agent": "Mozilla/5.0 (compatible; BUMDesReportBot/1.0)"})
     try:
-        with urllib.request.urlopen(url, timeout=timeout) as resp:  # noqa: S310
+        with urllib.request.urlopen(request, timeout=timeout) as resp:  # noqa: S310
+            content_type = (resp.headers.get("Content-Type") or "").split(";")[0].strip().lower()
+            if content_type and not content_type.startswith("image/"):
+                logger.warning(
+                    "Logo BUMDes di %s bukan gambar (Content-Type: %s) -- kemungkinan halaman "
+                    "konfirmasi, bukan file gambar langsung",
+                    url,
+                    content_type,
+                )
+                return None
             return resp.read()
     except Exception as exc:  # noqa: BLE001
         logger.warning("Gagal mengambil logo BUMDes dari %s: %s", url, exc)
