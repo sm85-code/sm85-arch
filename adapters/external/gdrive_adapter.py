@@ -7,12 +7,20 @@ import json
 import os
 from typing import Any, Optional
 
+import httplib2
 from google.oauth2 import service_account
+from google_auth_httplib2 import AuthorizedHttp
 from googleapiclient.discovery import build
 from googleapiclient.errors import HttpError
 from googleapiclient.http import MediaIoBaseUpload
 
 _SCOPES = ["https://www.googleapis.com/auth/drive"]
+
+# Without an explicit socket timeout, a stalled request to the Drive API
+# (network blip, slow upload) hangs indefinitely -- the request then sits
+# until the platform's own gateway kills it with a bare 504, instead of
+# failing fast with a clear error we can log/return to the client.
+_REQUEST_TIMEOUT_SECONDS = 25
 
 
 def is_configured() -> bool:
@@ -32,7 +40,8 @@ def _drive_service() -> Any:
         creds = service_account.Credentials.from_service_account_file(path, scopes=_SCOPES)
     else:
         raise RuntimeError("Set GDRIVE_SERVICE_ACCOUNT_JSON or GOOGLE_APPLICATION_CREDENTIALS")
-    return build("drive", "v3", credentials=creds, cache_discovery=False)
+    http = AuthorizedHttp(creds, http=httplib2.Http(timeout=_REQUEST_TIMEOUT_SECONDS))
+    return build("drive", "v3", http=http, cache_discovery=False)
 
 
 def _upload_sync(
