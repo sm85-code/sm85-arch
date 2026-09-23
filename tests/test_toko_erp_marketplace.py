@@ -169,7 +169,7 @@ async def test_copy_produk_ke_web_rehosts_foto_to_our_own_drive(session, monkeyp
         assert url == "https://cdn.shopee.example/sandal.jpg"
         return b"fake-jpeg-bytes", "image/jpeg"
 
-    async def _fake_upload(file_bytes, file_name, content_type):
+    async def _fake_upload(file_bytes, content_type):
         assert file_bytes == b"fake-jpeg-bytes"
         assert content_type == "image/jpeg"
         return "https://drive.google.com/uc?export=view&id=abc123"
@@ -201,7 +201,7 @@ async def test_copy_produk_ke_web_falls_back_to_original_foto_url_when_upload_fa
     def _fake_download(url):
         return b"fake-jpeg-bytes", "image/jpeg"
 
-    async def _fake_upload_fails(file_bytes, file_name, content_type):
+    async def _fake_upload_fails(file_bytes, content_type):
         from tenants.toko.modules.toko.infrastructure.image_upload import UploadNotConfigured
 
         raise UploadNotConfigured()

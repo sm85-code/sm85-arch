@@ -155,4 +155,4 @@ async def test_image_upload_fails_loud_when_not_configured(monkeypatch):
     monkeypatch.setattr(image_upload, "GDRIVE_FOLDER_ID_TOKO", None)
 
     with pytest.raises(image_upload.UploadNotConfigured):
-        await image_upload.upload_produk_photo(b"fake-bytes", "foto.jpg", "image/jpeg")
+        await image_upload.upload_produk_photo(b"fake-bytes", "image/jpeg")

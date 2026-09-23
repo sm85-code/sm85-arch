@@ -281,8 +281,7 @@ async def _rehost_foto_erp_ke_drive(foto_url: str) -> str:
     if content_type not in _FOTO_ALLOWED_CONTENT_TYPES:
         raise ValueError(f"Content-Type foto dari foto_url ERP tidak didukung: {header_content_type!r}")
 
-    file_name = urlsplit(foto_url).path.rsplit("/", 1)[-1] or "produk.jpg"
-    return await upload_produk_photo(file_bytes, file_name, content_type)
+    return await upload_produk_photo(file_bytes, content_type)
 
 
 async def copy_produk_ke_web(session: AsyncSession, produk_erp_id: str) -> ProdukToko:
