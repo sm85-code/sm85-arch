@@ -43,6 +43,25 @@ async def _ensure_columns(conn) -> None:
     await conn.execute(text("ALTER TABLE IF EXISTS toko_erp_produk ADD COLUMN IF NOT EXISTS akun_id VARCHAR(64) NULL"))
     await conn.execute(text("ALTER TABLE IF EXISTS toko_erp_pesanan ADD COLUMN IF NOT EXISTS akun_id VARCHAR(64) NULL"))
     await conn.execute(text("ALTER TABLE IF EXISTS toko_erp_percakapan ADD COLUMN IF NOT EXISTS akun_id VARCHAR(64) NULL"))
+    # One-way local->marketplace sync outcome, recorded on order status
+    # changes that push to the platform adapter -- lihat
+    # modules/erp/application/services.py::ubah_status_pesanan_erp dan
+    # modules/erp/infrastructure/erp_<platform>.py::proses_pesanan.
+    await conn.execute(
+        text(
+            "ALTER TABLE IF EXISTS toko_erp_pesanan ADD COLUMN IF NOT EXISTS "
+            "tersinkron_marketplace BOOLEAN NOT NULL DEFAULT FALSE"
+        )
+    )
+    await conn.execute(text("ALTER TABLE IF EXISTS toko_erp_pesanan ADD COLUMN IF NOT EXISTS catatan_sinkron TEXT NULL"))
+    # Pengaturan global toko-web (bukan ERP) -- lihat
+    # modules/toko/infrastructure/models.py::PengaturanToko.
+    await conn.execute(
+        text(
+            "ALTER TABLE IF EXISTS toko_pengaturan ADD COLUMN IF NOT EXISTS "
+            "metode_proses_pesanan VARCHAR(16) NOT NULL DEFAULT 'drop_off'"
+        )
+    )
 
 
 async def _migrate_free_text_kategori(session: AsyncSession) -> None:

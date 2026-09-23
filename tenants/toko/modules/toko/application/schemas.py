@@ -139,3 +139,17 @@ class AlamatPatch(BaseModel):
 
 class PesanChatIn(BaseModel):
     isi: str
+
+
+class PengaturanPatch(BaseModel):
+    metode_proses_pesanan: str
+
+    @field_validator("metode_proses_pesanan")
+    @classmethod
+    def _v_metode(cls, v: str) -> str:
+        from tenants.toko.modules.toko.infrastructure.models import METODE_PROSES_PESANAN
+
+        v = (v or "").strip().lower()
+        if v not in METODE_PROSES_PESANAN:
+            raise ValueError(f"metode_proses_pesanan harus salah satu dari {METODE_PROSES_PESANAN}")
+        return v

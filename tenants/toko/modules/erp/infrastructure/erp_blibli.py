@@ -94,3 +94,14 @@ async def sync_chat(akun: Any) -> list[dict]:
     if not _is_app_configured() or not _is_akun_configured(akun):
         raise BlibliNotConfigured()
     raise NotImplementedError("Blibli sync_chat() belum diimplementasikan -- verifikasi bentuk API dulu.")
+
+
+async def proses_pesanan(akun: Any, pesanan: Any) -> None:
+    """Push a local "to_ship" ("Proses Pesanan") acknowledgement for one
+    order to Blibli. NOT IMPLEMENTED -- see module docstring. Caller
+    (erp.application.services) treats this as soft-fail: whatever this
+    raises is caught and recorded on the PesananERP row, the local status
+    change is applied regardless."""
+    if not _is_app_configured() or not _is_akun_configured(akun):
+        raise BlibliNotConfigured()
+    raise NotImplementedError("Blibli proses_pesanan() belum diimplementasikan -- verifikasi bentuk API dulu.")

@@ -13,6 +13,7 @@ from tenants.toko.modules.toko.application.schemas import (
     AlamatIn,
     AlamatPatch,
     KategoriIn,
+    PengaturanPatch,
     PengirimanIn,
     ProdukIn,
     ProdukPatch,
@@ -26,6 +27,7 @@ from tenants.toko.modules.toko.infrastructure.models import (
     ItemPesanan,
     KategoriToko,
     PercakapanToko,
+    PengaturanToko,
     PengirimanToko,
     PesanChatToko,
     PesananToko,
@@ -661,6 +663,32 @@ def pesan_out(pesan: PesanChatToko) -> dict:
         "isi": pesan.isi,
         "created_at": pesan.created_at.isoformat(),
     }
+
+
+# --- Pengaturan (global toko-web settings) --------------------------------
+
+
+def pengaturan_out(pengaturan: PengaturanToko) -> dict:
+    return {
+        "metode_proses_pesanan": pengaturan.metode_proses_pesanan,
+        "updated_at": pengaturan.updated_at.isoformat(),
+    }
+
+
+async def get_or_create_pengaturan(session: AsyncSession) -> PengaturanToko:
+    pengaturan = await session.get(PengaturanToko, PengaturanToko.SINGLETON_ID)
+    if not pengaturan:
+        pengaturan = PengaturanToko(id=PengaturanToko.SINGLETON_ID)
+        session.add(pengaturan)
+        await session.flush()
+    return pengaturan
+
+
+async def update_pengaturan(session: AsyncSession, payload: PengaturanPatch) -> PengaturanToko:
+    pengaturan = await get_or_create_pengaturan(session)
+    pengaturan.metode_proses_pesanan = payload.metode_proses_pesanan
+    await session.flush()
+    return pengaturan
 
 
 def percakapan_out(percakapan: PercakapanToko, *, dengan_pesan: bool = False) -> dict:

@@ -21,6 +21,7 @@ from tenants.toko.modules.toko.application.schemas import (
     KeranjangItemIn,
     KeranjangItemPatch,
     LoginRequest,
+    PengaturanPatch,
     PengirimanIn,
     PesanChatIn,
     ProdukIn,
@@ -534,3 +535,25 @@ async def admin_kirim_pesan(
     await services.kirim_pesan(session, percakapan_id, user, payload.isi)
     percakapan = await services.get_percakapan(session, percakapan_id)
     return services.percakapan_out(percakapan, dengan_pesan=True)
+
+
+# --- Pengaturan (global toko-web settings, terpisah dari modul ERP) --------
+
+
+@toko_router.get("/admin/pengaturan")
+async def admin_get_pengaturan(
+    session: AsyncSession = Depends(get_db_toko),
+    _user: UserToko = Depends(require_roles_toko(*ADMIN_ROLES)),
+):
+    pengaturan = await services.get_or_create_pengaturan(session)
+    return services.pengaturan_out(pengaturan)
+
+
+@toko_router.patch("/admin/pengaturan")
+async def admin_patch_pengaturan(
+    payload: PengaturanPatch,
+    session: AsyncSession = Depends(get_db_toko),
+    _user: UserToko = Depends(require_roles_toko(*ADMIN_ROLES)),
+):
+    pengaturan = await services.update_pengaturan(session, payload)
+    return services.pengaturan_out(pengaturan)
