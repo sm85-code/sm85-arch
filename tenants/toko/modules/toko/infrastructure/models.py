@@ -69,6 +69,19 @@ class ProdukToko(TokoBase):
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=_utcnow)
     updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=_utcnow, onupdate=_utcnow)
 
+    # Provenance opsional untuk produk yang di-copy sekali dari katalog ERP
+    # marketplace (tenants/toko/modules/erp/) lewat
+    # POST /admin/erp/produk/{id}/copy-ke-web -- lihat
+    # erp.application.services.copy_produk_ke_web. Ini SNAPSHOT satu arah
+    # (ERP -> web), bukan referensi live: begitu di-copy, baris ProdukToko
+    # ini berdiri sendiri dan tidak lagi mengikuti perubahan ProdukERP.
+    # Nullable & additive -- produk yang dibuat langsung di toko web (jalur
+    # lama) tetap NULL di kedua kolom ini, tidak ada perubahan perilaku.
+    sumber_erp_produk_id: Mapped[Optional[str]] = mapped_column(
+        String(64), ForeignKey("toko_erp_produk.id", ondelete="SET NULL"), nullable=True, index=True
+    )
+    platform_asal: Mapped[Optional[str]] = mapped_column(String(16), nullable=True)
+
     kategori: Mapped[Optional["KategoriToko"]] = relationship()
 
 

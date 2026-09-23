@@ -22,6 +22,7 @@ from adapters.api.v1.public_router import router as public_router
 from adapters.api.v1.reports_router import router as reports_router
 from adapters.api.v1.transaction_router import router as transaction_router
 from tenants.madrasah.adapters.api.v1.madrasah_router import madrasah_router
+from tenants.toko.adapters.api.v1.erp_router import erp_router
 from tenants.toko.adapters.api.v1.toko_router import toko_router
 from shared.config import APP_TITLE, CORS_ORIGIN_REGEX, CORS_ORIGINS, origin_allowed
 from shared.database import engine
@@ -71,6 +72,7 @@ app.include_router(siabumdes_router.router)
 app.include_router(uu05_inventory_router.router)
 app.include_router(madrasah_router, prefix="/api/madrasah", tags=["Madrasah"])
 app.include_router(toko_router, prefix="/api/toko", tags=["Toko"])
+app.include_router(erp_router, prefix="/api/toko/marketplace", tags=["Toko ERP"])
 
 
 def _apply_cors(response, origin: str | None) -> None:
