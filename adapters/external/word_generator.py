@@ -15,7 +15,7 @@ from docx.enum.text import WD_ALIGN_PARAGRAPH
 from docx.oxml.ns import qn
 from docx.shared import Pt, RGBColor, Cm
 
-from adapters.external.report_formatting import format_money, is_money_header, row_is_total
+from adapters.external.report_formatting import format_money, is_money_header, looks_numeric, row_is_total
 from shared.report_branding import ReportBranding, fetch_logo_bytes, get_report_branding
 
 _is_money_header = is_money_header
@@ -159,11 +159,12 @@ def generate_word_report(
             is_total = _row_is_total(row)
             cells = table.add_row().cells
             for i, value in enumerate(row):
-                if i in money_cols:
+                is_num = i in money_cols and looks_numeric(value)
+                if is_num:
                     text = format_money(value)
                 else:
                     text = "" if value is None else str(value)
-                align = WD_ALIGN_PARAGRAPH.RIGHT if i in money_cols else WD_ALIGN_PARAGRAPH.LEFT
+                align = WD_ALIGN_PARAGRAPH.RIGHT if is_num else WD_ALIGN_PARAGRAPH.LEFT
                 _set_cell_text(cells[i], text, bold=is_total, size=9, align=align)
                 if is_total:
                     _shade_cell(cells[i], "DCE8F8")

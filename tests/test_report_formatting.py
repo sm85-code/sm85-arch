@@ -63,3 +63,31 @@ def test_branding_from_org_profile_converts_db_row_to_report_branding():
     assert branding.logo_url == "https://drive.google.com/uc?export=view&id=abc123"
     assert branding.primary_color == "1F4E79"  # leading '#' stripped
     assert "Desa Sukamaju, Kec. Cikupa, Kab. Tangerang, Banten" in branding.address_block
+
+
+def test_row_is_total_ignores_long_free_text_mentioning_total_keywords():
+    """Regression: a CaLK policy paragraph mentioning 'Laba Bersih Operasional'
+    in passing must not be shaded/bolded like a real total row."""
+    from adapters.external.report_formatting import row_is_total
+
+    real_total_row = ["Laba Bersih", 40315951.0]
+    long_note_row = [
+        "",
+        "a. Kantor Pusat BUM Desa (BUMDES): Setiap akhir bulan berjalan, "
+        "Laba Bersih Operasional dialokasikan dengan memindahkan porsi 52%.",
+    ]
+    assert row_is_total(real_total_row) is True
+    assert row_is_total(long_note_row) is False
+
+
+def test_looks_numeric_distinguishes_amounts_from_notes_in_the_same_column():
+    """Regression: a CaLK 'Nilai' column mixes real amounts with long notes;
+    only genuine numbers should be treated as numeric (right-aligned, no wrap)."""
+    from adapters.external.report_formatting import looks_numeric
+
+    assert looks_numeric(40315951.0) is True
+    assert looks_numeric("2026-01-01") is False
+    assert looks_numeric("BUMDes") is False
+    assert looks_numeric(
+        "Berdasarkan kepatuhan terhadap Kepmendesa No. 136 Tahun 2022, ..."
+    ) is False
