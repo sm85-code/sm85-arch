@@ -44,6 +44,60 @@ def _utcnow() -> datetime:
 PLATFORM_ERP = ("shopee", "lazada", "blibli")
 
 
+STATUS_AKUN_ERP = ("aktif", "nonaktif")
+
+
+class AkunMarketplace(TokoBase):
+    """Satu baris = satu toko/shop yang sudah (atau sedang proses)
+    terautentikasi di satu platform marketplace. Diperkenalkan karena
+    admin toko bisa punya BEBERAPA toko pada platform yang sama (mis. 3
+    toko Shopee) -- `platform` saja tidak cukup untuk membedakan baris
+    ProdukERP/PesananERP/PercakapanERP milik toko yang mana, maka semua
+    baris itu sekarang juga membawa `akun_id` yang menunjuk ke sini.
+
+    Kredensial (access_token/refresh_token/token_kedaluwarsa): disimpan
+    sebagai kolom biasa (bukan terenkripsi) karena DB toko ini sudah
+    terisolasi/dedicated untuk tenant ini (lihat database.py) -- enkripsi
+    at-rest di luar scope task ini. Yang WAJIB dijaga: kolom-kolom ini
+    TIDAK boleh ikut ke response list/summary manapun secara default,
+    lihat services.akun_out() (list/summary) vs services.akun_out_detail()
+    (satu-satunya tempat token bisa muncul, dan itupun di-mask). Endpoint
+    yang mengisi kredensial ini untuk sekarang adalah PATCH admin biasa
+    (lihat erp_router.py) -- bukan callback OAuth sungguhan, karena
+    aplikasi partner Shopee/Lazada/Blibli belum ada (lihat
+    infrastructure/erp_<platform>.py); OAuth beneran adalah pekerjaan
+    lanjutan begitu partner_id/partner_key/app_key nyata sudah ada.
+    """
+
+    __tablename__ = "toko_erp_akun"
+    __table_args__ = (
+        # Partial unique constraint: (platform, id_toko_eksternal) unik
+        # HANYA saat id_toko_eksternal terisi (akun yang belum diotorisasi
+        # / belum tahu shop id-nya boleh punya id_toko_eksternal NULL
+        # lebih dari satu baris -- dicegah menduplikasi toko yang SAMA di
+        # platform yang sama, bukan mencegah banyak akun "belum
+        # terhubung"). SQLite (dipakai di tests) tidak mendukung partial
+        # unique index lewat UniqueConstraint biasa, jadi ini didukung
+        # dengan pengecekan duplikat di service layer
+        # (services.create_akun_marketplace) -- constraint DB di sini
+        # sengaja tidak ditulis sebagai partial unique index untuk
+        # menghindari perbedaan perilaku SQLite vs Postgres; lihat
+        # services.py untuk penjelasan lebih lanjut.
+    )
+
+    id: Mapped[str] = mapped_column(String(64), primary_key=True, default=_uuid)
+    platform: Mapped[str] = mapped_column(String(16), nullable=False, index=True)
+    nama_toko: Mapped[str] = mapped_column(String(255), nullable=False)
+    id_toko_eksternal: Mapped[Optional[str]] = mapped_column(String(255), nullable=True, index=True)
+    access_token: Mapped[Optional[str]] = mapped_column(Text, nullable=True)
+    refresh_token: Mapped[Optional[str]] = mapped_column(Text, nullable=True)
+    token_kedaluwarsa: Mapped[Optional[datetime]] = mapped_column(DateTime(timezone=True), nullable=True)
+    status: Mapped[str] = mapped_column(String(16), nullable=False, default="aktif")
+    catatan: Mapped[Optional[str]] = mapped_column(Text, nullable=True)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=_utcnow)
+    updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=_utcnow, onupdate=_utcnow)
+
+
 class ProdukERP(TokoBase):
     """Snapshot produk dari seller-center marketplace. `id_eksternal` adalah
     ID produk di platform asal -- dipakai bareng `platform` sebagai kunci
@@ -56,6 +110,12 @@ class ProdukERP(TokoBase):
     id: Mapped[str] = mapped_column(String(64), primary_key=True, default=_uuid)
     platform: Mapped[str] = mapped_column(String(16), nullable=False, index=True)
     id_eksternal: Mapped[str] = mapped_column(String(255), nullable=False, index=True)
+    # Nullable karena baris lama (sebelum AkunMarketplace ada) atau baris
+    # yang dibuat tanpa memilih akun tidak boleh rusak -- tapi create_*
+    # baru di service layer mewajibkan akun_id (lihat services.py).
+    akun_id: Mapped[Optional[str]] = mapped_column(
+        String(64), ForeignKey("toko_erp_akun.id", ondelete="SET NULL"), nullable=True, index=True
+    )
     nama: Mapped[str] = mapped_column(String(255), nullable=False)
     deskripsi: Mapped[str] = mapped_column(Text, nullable=False, default="")
     harga: Mapped[Decimal] = mapped_column(Numeric(20, 2), nullable=False, default=Decimal("0"))
@@ -84,6 +144,9 @@ class PesananERP(TokoBase):
     id: Mapped[str] = mapped_column(String(64), primary_key=True, default=_uuid)
     platform: Mapped[str] = mapped_column(String(16), nullable=False, index=True)
     id_eksternal: Mapped[str] = mapped_column(String(255), nullable=False, index=True)
+    akun_id: Mapped[Optional[str]] = mapped_column(
+        String(64), ForeignKey("toko_erp_akun.id", ondelete="SET NULL"), nullable=True, index=True
+    )
     status: Mapped[str] = mapped_column(String(32), nullable=False, default="unpaid", index=True)
     nama_pembeli: Mapped[str] = mapped_column(String(255), nullable=False, default="")
     total: Mapped[Decimal] = mapped_column(Numeric(20, 2), nullable=False, default=Decimal("0"))
@@ -128,6 +191,9 @@ class PercakapanERP(TokoBase):
 
     id: Mapped[str] = mapped_column(String(64), primary_key=True, default=_uuid)
     platform: Mapped[str] = mapped_column(String(16), nullable=False, index=True)
+    akun_id: Mapped[Optional[str]] = mapped_column(
+        String(64), ForeignKey("toko_erp_akun.id", ondelete="SET NULL"), nullable=True, index=True
+    )
     id_eksternal_pembeli: Mapped[str] = mapped_column(String(255), nullable=False, index=True)
     nama_pembeli: Mapped[str] = mapped_column(String(255), nullable=False, default="")
     unread_admin: Mapped[bool] = mapped_column(Boolean, nullable=False, default=False)

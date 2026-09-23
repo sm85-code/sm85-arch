@@ -19,6 +19,8 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from tenants.toko.modules.erp.application import services
 from tenants.toko.modules.erp.application.schemas import (
+    AkunMarketplaceIn,
+    AkunMarketplacePatch,
     PercakapanERPIn,
     PesanChatERPIn,
     ProdukERPIn,
@@ -35,16 +37,71 @@ erp_router = APIRouter()
 ADMIN_ROLES = ("admin_toko", "owner")
 
 
+# --- Akun Marketplace ---------------------------------------------------
+
+
+@erp_router.get("/admin/akun")
+async def admin_list_akun_marketplace(
+    platform: str | None = None,
+    session: AsyncSession = Depends(get_db_toko),
+    _user: UserToko = Depends(require_roles_toko(*ADMIN_ROLES)),
+):
+    akun = await services.list_akun_marketplace(session, platform=platform)
+    return [services.akun_out(a) for a in akun]
+
+
+@erp_router.post("/admin/akun")
+async def admin_create_akun_marketplace(
+    payload: AkunMarketplaceIn,
+    session: AsyncSession = Depends(get_db_toko),
+    _user: UserToko = Depends(require_roles_toko(*ADMIN_ROLES)),
+):
+    akun = await services.create_akun_marketplace(session, payload)
+    return services.akun_out(akun)
+
+
+@erp_router.get("/admin/akun/{akun_id}")
+async def admin_get_akun_marketplace(
+    akun_id: str,
+    session: AsyncSession = Depends(get_db_toko),
+    _user: UserToko = Depends(require_roles_toko(*ADMIN_ROLES)),
+):
+    akun = await services.get_akun_marketplace(session, akun_id)
+    return services.akun_out(akun)
+
+
+@erp_router.patch("/admin/akun/{akun_id}")
+async def admin_patch_akun_marketplace(
+    akun_id: str,
+    payload: AkunMarketplacePatch,
+    session: AsyncSession = Depends(get_db_toko),
+    _user: UserToko = Depends(require_roles_toko(*ADMIN_ROLES)),
+):
+    akun = await services.update_akun_marketplace(session, akun_id, payload)
+    return services.akun_out(akun)
+
+
+@erp_router.delete("/admin/akun/{akun_id}")
+async def admin_delete_akun_marketplace(
+    akun_id: str,
+    session: AsyncSession = Depends(get_db_toko),
+    _user: UserToko = Depends(require_roles_toko(*ADMIN_ROLES)),
+):
+    await services.delete_akun_marketplace(session, akun_id)
+    return {"ok": True}
+
+
 # --- Produk ERP --------------------------------------------------------------
 
 
 @erp_router.get("/admin/erp/produk")
 async def admin_list_produk_erp(
     platform: str | None = None,
+    akun_id: str | None = None,
     session: AsyncSession = Depends(get_db_toko),
     _user: UserToko = Depends(require_roles_toko(*ADMIN_ROLES)),
 ):
-    produk = await services.list_produk_erp(session, platform=platform)
+    produk = await services.list_produk_erp(session, platform=platform, akun_id=akun_id)
     return [services.produk_erp_out(p) for p in produk]
 
 
@@ -108,10 +165,11 @@ async def admin_copy_produk_ke_web(
 @erp_router.get("/admin/erp/pesanan")
 async def admin_list_pesanan_erp(
     platform: str | None = None,
+    akun_id: str | None = None,
     session: AsyncSession = Depends(get_db_toko),
     _user: UserToko = Depends(require_roles_toko(*ADMIN_ROLES)),
 ):
-    pesanan = await services.list_pesanan_erp(session, platform=platform)
+    pesanan = await services.list_pesanan_erp(session, platform=platform, akun_id=akun_id)
     return [services.pesanan_erp_out(p) for p in pesanan]
 
 
@@ -142,10 +200,11 @@ async def admin_ubah_status_pesanan_erp(
 @erp_router.get("/admin/erp/chat")
 async def admin_list_percakapan_erp(
     platform: str | None = None,
+    akun_id: str | None = None,
     session: AsyncSession = Depends(get_db_toko),
     _user: UserToko = Depends(require_roles_toko(*ADMIN_ROLES)),
 ):
-    percakapan = await services.list_percakapan_erp(session, platform=platform)
+    percakapan = await services.list_percakapan_erp(session, platform=platform, akun_id=akun_id)
     return [services.percakapan_erp_out(p) for p in percakapan]
 
 

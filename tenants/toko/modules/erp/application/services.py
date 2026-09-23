@@ -5,10 +5,17 @@ from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import selectinload
 
-from tenants.toko.modules.erp.application.schemas import PercakapanERPIn, ProdukERPIn, ProdukERPPatch
+from tenants.toko.modules.erp.application.schemas import (
+    AkunMarketplaceIn,
+    AkunMarketplacePatch,
+    PercakapanERPIn,
+    ProdukERPIn,
+    ProdukERPPatch,
+)
 from tenants.toko.modules.erp.infrastructure.models import (
     PLATFORM_ERP,
     STATUS_PESANAN_ERP,
+    AkunMarketplace,
     PercakapanERP,
     PesanChatERP,
     PesananERP,
@@ -35,6 +42,112 @@ def _validate_platform(platform: str) -> str:
     return platform
 
 
+# --- Akun Marketplace --------------------------------------------------------
+
+
+def akun_out(akun: AkunMarketplace) -> dict:
+    """Ringkasan akun untuk list/detail -- SENGAJA TIDAK menyertakan
+    access_token/refresh_token (lihat models.py::AkunMarketplace
+    docstring). token_kedaluwarsa & status boleh muncul karena itu bukan
+    rahasia, cuma metadata."""
+    return {
+        "id": akun.id,
+        "platform": akun.platform,
+        "nama_toko": akun.nama_toko,
+        "id_toko_eksternal": akun.id_toko_eksternal,
+        "status": akun.status,
+        "catatan": akun.catatan,
+        "token_kedaluwarsa": akun.token_kedaluwarsa.isoformat() if akun.token_kedaluwarsa else None,
+        "sudah_terautentikasi": bool(akun.access_token),
+        "created_at": akun.created_at.isoformat(),
+        "updated_at": akun.updated_at.isoformat(),
+    }
+
+
+async def list_akun_marketplace(session: AsyncSession, *, platform: str | None = None) -> list[AkunMarketplace]:
+    stmt = select(AkunMarketplace).order_by(AkunMarketplace.created_at.desc())
+    if platform:
+        stmt = stmt.where(AkunMarketplace.platform == _validate_platform(platform))
+    return list((await session.execute(stmt)).scalars().all())
+
+
+async def get_akun_marketplace(session: AsyncSession, akun_id: str) -> AkunMarketplace:
+    akun = await session.get(AkunMarketplace, akun_id)
+    if not akun:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Akun marketplace tidak ditemukan")
+    return akun
+
+
+async def _cek_duplikat_id_toko_eksternal(
+    session: AsyncSession, *, platform: str, id_toko_eksternal: str | None, exclude_id: str | None = None
+) -> None:
+    """Partial-unique-constraint pengganti di service layer: (platform,
+    id_toko_eksternal) harus unik HANYA saat id_toko_eksternal terisi.
+    Dilakukan di sini (bukan lewat DB constraint) supaya perilakunya sama
+    persis di SQLite (dipakai tests) maupun Postgres -- lihat catatan di
+    models.py::AkunMarketplace."""
+    if not id_toko_eksternal:
+        return
+    stmt = select(AkunMarketplace).where(
+        AkunMarketplace.platform == platform, AkunMarketplace.id_toko_eksternal == id_toko_eksternal
+    )
+    if exclude_id:
+        stmt = stmt.where(AkunMarketplace.id != exclude_id)
+    existing = (await session.execute(stmt)).scalar_one_or_none()
+    if existing:
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail="Toko dengan id_toko_eksternal ini sudah terdaftar untuk platform tsb",
+        )
+
+
+async def create_akun_marketplace(session: AsyncSession, payload: AkunMarketplaceIn) -> AkunMarketplace:
+    platform = _validate_platform(payload.platform)
+    await _cek_duplikat_id_toko_eksternal(session, platform=platform, id_toko_eksternal=payload.id_toko_eksternal)
+    akun = AkunMarketplace(
+        platform=platform,
+        nama_toko=payload.nama_toko,
+        id_toko_eksternal=payload.id_toko_eksternal,
+        catatan=payload.catatan,
+    )
+    session.add(akun)
+    await session.flush()
+    return akun
+
+
+async def update_akun_marketplace(session: AsyncSession, akun_id: str, payload: AkunMarketplacePatch) -> AkunMarketplace:
+    akun = await get_akun_marketplace(session, akun_id)
+    data = payload.model_dump(exclude_unset=True)
+    if "id_toko_eksternal" in data:
+        await _cek_duplikat_id_toko_eksternal(
+            session, platform=akun.platform, id_toko_eksternal=data["id_toko_eksternal"], exclude_id=akun.id
+        )
+    for field, value in data.items():
+        setattr(akun, field, value)
+    await session.flush()
+    return akun
+
+
+async def delete_akun_marketplace(session: AsyncSession, akun_id: str) -> None:
+    akun = await get_akun_marketplace(session, akun_id)
+    await session.delete(akun)
+    await session.flush()
+
+
+async def _validate_akun_untuk_platform(session: AsyncSession, akun_id: str, platform: str) -> AkunMarketplace:
+    """Dipakai oleh create produk/pesanan/percakapan ERP: akun_id harus
+    menunjuk ke AkunMarketplace yang benar-benar ada DAN platform-nya
+    sama dengan platform baris yang mau dibuat (mencegah salah tempel,
+    mis. akun Shopee dipakai untuk baris berplatform lazada)."""
+    akun = await get_akun_marketplace(session, akun_id)
+    if akun.platform != platform:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail=f"akun_id ini adalah akun platform '{akun.platform}', tidak cocok dengan platform '{platform}'",
+        )
+    return akun
+
+
 # --- Produk ERP -------------------------------------------------------------
 
 
@@ -42,6 +155,7 @@ def produk_erp_out(produk: ProdukERP) -> dict:
     return {
         "id": produk.id,
         "platform": produk.platform,
+        "akun_id": produk.akun_id,
         "id_eksternal": produk.id_eksternal,
         "nama": produk.nama,
         "deskripsi": produk.deskripsi,
@@ -51,10 +165,14 @@ def produk_erp_out(produk: ProdukERP) -> dict:
     }
 
 
-async def list_produk_erp(session: AsyncSession, *, platform: str | None = None) -> list[ProdukERP]:
+async def list_produk_erp(
+    session: AsyncSession, *, platform: str | None = None, akun_id: str | None = None
+) -> list[ProdukERP]:
     stmt = select(ProdukERP).order_by(ProdukERP.created_at.desc())
     if platform:
         stmt = stmt.where(ProdukERP.platform == _validate_platform(platform))
+    if akun_id:
+        stmt = stmt.where(ProdukERP.akun_id == akun_id)
     return list((await session.execute(stmt)).scalars().all())
 
 
@@ -67,6 +185,7 @@ async def get_produk_erp(session: AsyncSession, produk_id: str) -> ProdukERP:
 
 async def create_produk_erp(session: AsyncSession, payload: ProdukERPIn) -> ProdukERP:
     platform = _validate_platform(payload.platform)
+    await _validate_akun_untuk_platform(session, payload.akun_id, platform)
     existing = (
         await session.execute(
             select(ProdukERP).where(ProdukERP.platform == platform, ProdukERP.id_eksternal == payload.id_eksternal)
@@ -127,6 +246,7 @@ def pesanan_erp_out(pesanan: PesananERP) -> dict:
     return {
         "id": pesanan.id,
         "platform": pesanan.platform,
+        "akun_id": pesanan.akun_id,
         "id_eksternal": pesanan.id_eksternal,
         "status": pesanan.status,
         "nama_pembeli": pesanan.nama_pembeli,
@@ -145,11 +265,39 @@ def pesanan_erp_out(pesanan: PesananERP) -> dict:
     }
 
 
-async def list_pesanan_erp(session: AsyncSession, *, platform: str | None = None) -> list[PesananERP]:
+async def list_pesanan_erp(
+    session: AsyncSession, *, platform: str | None = None, akun_id: str | None = None
+) -> list[PesananERP]:
     stmt = select(PesananERP).options(selectinload(PesananERP.items)).order_by(PesananERP.created_at.desc())
     if platform:
         stmt = stmt.where(PesananERP.platform == _validate_platform(platform))
+    if akun_id:
+        stmt = stmt.where(PesananERP.akun_id == akun_id)
     return list((await session.execute(stmt)).scalars().all())
+
+
+async def terima_pesanan_erp(
+    session: AsyncSession, *, platform: str, akun_id: str, id_eksternal: str, nama_pembeli: str = "", total=None
+) -> PesananERP:
+    """Terima pesanan baru dari hasil sync marketplace (atau input manual
+    admin) -- dipakai adapter masa depan (lihat infrastructure/
+    erp_<platform>.py) sebagai satu-satunya jalur pembuatan PesananERP,
+    supaya akun_id selalu tervalidasi cocok dengan platform-nya, sama
+    seperti create_produk_erp."""
+    platform = _validate_platform(platform)
+    await _validate_akun_untuk_platform(session, akun_id, platform)
+    from decimal import Decimal as _Decimal
+
+    pesanan = PesananERP(
+        platform=platform,
+        akun_id=akun_id,
+        id_eksternal=id_eksternal,
+        nama_pembeli=nama_pembeli,
+        total=total if total is not None else _Decimal("0"),
+    )
+    session.add(pesanan)
+    await session.flush()
+    return pesanan
 
 
 async def get_pesanan_erp(session: AsyncSession, pesanan_id: str) -> PesananERP:
@@ -190,6 +338,7 @@ def percakapan_erp_out(percakapan: PercakapanERP, *, dengan_pesan: bool = False)
     out = {
         "id": percakapan.id,
         "platform": percakapan.platform,
+        "akun_id": percakapan.akun_id,
         "id_eksternal_pembeli": percakapan.id_eksternal_pembeli,
         "nama_pembeli": percakapan.nama_pembeli,
         "unread_admin": percakapan.unread_admin,
@@ -200,17 +349,23 @@ def percakapan_erp_out(percakapan: PercakapanERP, *, dengan_pesan: bool = False)
     return out
 
 
-async def list_percakapan_erp(session: AsyncSession, *, platform: str | None = None) -> list[PercakapanERP]:
+async def list_percakapan_erp(
+    session: AsyncSession, *, platform: str | None = None, akun_id: str | None = None
+) -> list[PercakapanERP]:
     """Inbox gabungan: satu daftar berisi thread dari ketiga platform
-    sekaligus, sort terbaru dulu, opsional difilter ke satu platform saja."""
+    sekaligus, sort terbaru dulu, opsional difilter ke satu platform dan/
+    atau satu akun saja."""
     stmt = select(PercakapanERP).order_by(PercakapanERP.updated_at.desc())
     if platform:
         stmt = stmt.where(PercakapanERP.platform == _validate_platform(platform))
+    if akun_id:
+        stmt = stmt.where(PercakapanERP.akun_id == akun_id)
     return list((await session.execute(stmt)).scalars().all())
 
 
 async def get_or_create_percakapan_erp(session: AsyncSession, payload: PercakapanERPIn) -> PercakapanERP:
     platform = _validate_platform(payload.platform)
+    await _validate_akun_untuk_platform(session, payload.akun_id, platform)
     stmt = select(PercakapanERP).where(
         PercakapanERP.platform == platform, PercakapanERP.id_eksternal_pembeli == payload.id_eksternal_pembeli
     )
@@ -218,6 +373,7 @@ async def get_or_create_percakapan_erp(session: AsyncSession, payload: Percakapa
     if not percakapan:
         percakapan = PercakapanERP(
             platform=platform,
+            akun_id=payload.akun_id,
             id_eksternal_pembeli=payload.id_eksternal_pembeli,
             nama_pembeli=payload.nama_pembeli,
         )

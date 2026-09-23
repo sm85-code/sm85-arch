@@ -37,6 +37,12 @@ async def _ensure_columns(conn) -> None:
         text("ALTER TABLE IF EXISTS toko_produk ADD COLUMN IF NOT EXISTS sumber_erp_produk_id VARCHAR(64) NULL")
     )
     await conn.execute(text("ALTER TABLE IF EXISTS toko_produk ADD COLUMN IF NOT EXISTS platform_asal VARCHAR(16) NULL"))
+    # akun_id: menautkan baris ERP ke AkunMarketplace (toko_erp_akun) yang
+    # baru -- nullable & additive, baris lama tetap NULL, lihat
+    # modules/erp/infrastructure/models.py.
+    await conn.execute(text("ALTER TABLE IF EXISTS toko_erp_produk ADD COLUMN IF NOT EXISTS akun_id VARCHAR(64) NULL"))
+    await conn.execute(text("ALTER TABLE IF EXISTS toko_erp_pesanan ADD COLUMN IF NOT EXISTS akun_id VARCHAR(64) NULL"))
+    await conn.execute(text("ALTER TABLE IF EXISTS toko_erp_percakapan ADD COLUMN IF NOT EXISTS akun_id VARCHAR(64) NULL"))
 
 
 async def _migrate_free_text_kategori(session: AsyncSession) -> None:
