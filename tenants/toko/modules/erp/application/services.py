@@ -1,5 +1,9 @@
 from __future__ import annotations
 
+import asyncio
+from urllib.parse import urlsplit
+
+import requests
 from fastapi import HTTPException, status
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -21,6 +25,13 @@ from tenants.toko.modules.erp.infrastructure.models import (
     PesananERP,
     ProdukERP,
 )
+from tenants.toko.modules.toko.infrastructure.image_upload import (
+    _ALLOWED_CONTENT_TYPES as _FOTO_ALLOWED_CONTENT_TYPES,
+)
+from tenants.toko.modules.toko.infrastructure.image_upload import (
+    _MAX_BYTES as _FOTO_MAX_BYTES,
+)
+from tenants.toko.modules.toko.infrastructure.image_upload import upload_produk_photo
 from tenants.toko.modules.toko.infrastructure.models import ProdukToko
 
 # Platform -> adapter module dispatch for the one-way local->marketplace
@@ -30,6 +41,19 @@ from tenants.toko.modules.toko.infrastructure.models import ProdukToko
 from tenants.toko.modules.erp.infrastructure import erp_blibli, erp_lazada, erp_shopee
 
 _ADAPTER_MODULES = {"shopee": erp_shopee, "lazada": erp_lazada, "blibli": erp_blibli}
+
+# Same timeout convention as adapters/external/gdrive_adapter.py's
+# _REQUEST_TIMEOUT_SECONDS -- one-off download of a marketplace photo, not
+# high-throughput, so a sync requests.get() wrapped in asyncio.to_thread is
+# enough (no new async HTTP dependency needed).
+_FOTO_DOWNLOAD_TIMEOUT_SECONDS = 25
+
+_EXT_TO_CONTENT_TYPE = {
+    ".jpg": "image/jpeg",
+    ".jpeg": "image/jpeg",
+    ".png": "image/png",
+    ".webp": "image/webp",
+}
 
 # Transisi status pesanan marketplace yang diizinkan -- linear, tanpa
 # jalur retur/refund (di luar scope modul ini, sama seperti
@@ -222,6 +246,45 @@ async def delete_produk_erp(session: AsyncSession, produk_id: str) -> None:
     await session.delete(produk)
 
 
+def _guess_content_type(url: str, header_content_type: str | None) -> str | None:
+    """Cek Content-Type dari response header dulu, fallback ke ekstensi
+    di URL kalau header kosong/tidak dikenali."""
+    header_content_type = (header_content_type or "").split(";")[0].strip().lower()
+    if header_content_type in _FOTO_ALLOWED_CONTENT_TYPES:
+        return header_content_type
+    path = urlsplit(url).path
+    for ext, content_type in _EXT_TO_CONTENT_TYPE.items():
+        if path.lower().endswith(ext):
+            return content_type
+    return None
+
+
+def _download_foto_sync(url: str) -> tuple[bytes, str | None]:
+    resp = requests.get(url, timeout=_FOTO_DOWNLOAD_TIMEOUT_SECONDS)
+    resp.raise_for_status()
+    return resp.content, resp.headers.get("Content-Type")
+
+
+async def _rehost_foto_erp_ke_drive(foto_url: str) -> str:
+    """Download foto dari foto_url ERP (link marketplace/manual) dan
+    upload ulang ke folder Drive kita sendiri (GDRIVE_FOLDER_ID_TOKO)
+    lewat upload_produk_photo yang sudah ada, supaya foto produk web
+    benar-benar kita miliki, bukan cuma referensi ke URL luar yang bisa
+    berubah/hilang kapan saja. Raise kalau gagal di langkah manapun --
+    pemanggil (copy_produk_ke_web) yang soft-fail-kan ini."""
+    file_bytes, header_content_type = await asyncio.to_thread(_download_foto_sync, foto_url)
+
+    if len(file_bytes) > _FOTO_MAX_BYTES:
+        raise ValueError("Foto dari foto_url ERP melebihi ukuran maksimal")
+
+    content_type = _guess_content_type(foto_url, header_content_type)
+    if content_type not in _FOTO_ALLOWED_CONTENT_TYPES:
+        raise ValueError(f"Content-Type foto dari foto_url ERP tidak didukung: {header_content_type!r}")
+
+    file_name = urlsplit(foto_url).path.rsplit("/", 1)[-1] or "produk.jpg"
+    return await upload_produk_photo(file_bytes, file_name, content_type)
+
+
 async def copy_produk_ke_web(session: AsyncSession, produk_erp_id: str) -> ProdukToko:
     """Salin satu ProdukERP ke katalog toko web sebagai baris ProdukToko
     BARU dan independen -- snapshot nama/deskripsi/harga/foto/stok saat ini
@@ -232,12 +295,24 @@ async def copy_produk_ke_web(session: AsyncSession, produk_erp_id: str) -> Produ
     menampilkan "produk ini berasal dari mana", bukan untuk sinkron
     lanjutan -- tidak ada jalur sebaliknya (web -> ERP)."""
     produk_erp = await get_produk_erp(session, produk_erp_id)
+
+    foto_url = produk_erp.foto_url
+    if foto_url:
+        try:
+            foto_url = await _rehost_foto_erp_ke_drive(foto_url)
+        except Exception:  # noqa: BLE001 -- deliberate soft-fail, see docstring
+            # Rehosting gagal (network error, format tak didukung, ukuran
+            # kelebihan, Drive belum dikonfigurasi, dll) -- jangan gagalkan
+            # seluruh proses copy karenanya, fallback ke foto_url asli
+            # persis seperti perilaku sebelum perbaikan ini.
+            foto_url = produk_erp.foto_url
+
     produk_toko = ProdukToko(
         nama=produk_erp.nama,
         deskripsi=produk_erp.deskripsi,
         harga=produk_erp.harga,
         stok=produk_erp.stok,
-        foto_url=produk_erp.foto_url,
+        foto_url=foto_url,
         aktif=True,
         sumber_erp_produk_id=produk_erp.id,
         platform_asal=produk_erp.platform,

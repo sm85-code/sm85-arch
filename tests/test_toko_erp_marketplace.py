@@ -92,7 +92,15 @@ async def test_create_produk_erp_rejects_mismatched_akun_platform(session):
 
 
 @pytest.mark.asyncio
-async def test_copy_produk_ke_web_creates_independent_snapshot(session):
+async def test_copy_produk_ke_web_creates_independent_snapshot(session, monkeypatch):
+    # Rehosting foto tidak jadi fokus test ini -- paksa gagal (network
+    # tidak tersedia di lingkungan test) supaya fallback ke foto_url asli,
+    # sama seperti perilaku sebelum fitur rehost ditambahkan.
+    def _boom(url):
+        raise ConnectionError("no network in tests")
+
+    monkeypatch.setattr(erp_services, "_download_foto_sync", _boom)
+
     akun = await _make_akun(session, platform="lazada")
     produk_erp = await erp_services.create_produk_erp(
         session,
@@ -140,6 +148,116 @@ async def test_copy_produk_ke_web_unknown_id_raises_404(session):
     with pytest.raises(HTTPException) as exc_info:
         await erp_services.copy_produk_ke_web(session, "does-not-exist")
     assert exc_info.value.status_code == 404
+
+
+@pytest.mark.asyncio
+async def test_copy_produk_ke_web_rehosts_foto_to_our_own_drive(session, monkeypatch):
+    akun = await _make_akun(session, platform="shopee")
+    produk_erp = await erp_services.create_produk_erp(
+        session,
+        ProdukERPIn(
+            platform="shopee",
+            akun_id=akun.id,
+            id_eksternal="SP-1",
+            nama="Sandal Jepit",
+            harga=Decimal("15000"),
+            foto_url="https://cdn.shopee.example/sandal.jpg",
+        ),
+    )
+
+    def _fake_download(url):
+        assert url == "https://cdn.shopee.example/sandal.jpg"
+        return b"fake-jpeg-bytes", "image/jpeg"
+
+    async def _fake_upload(file_bytes, file_name, content_type):
+        assert file_bytes == b"fake-jpeg-bytes"
+        assert content_type == "image/jpeg"
+        return "https://drive.google.com/uc?export=view&id=abc123"
+
+    monkeypatch.setattr(erp_services, "_download_foto_sync", _fake_download)
+    monkeypatch.setattr(erp_services, "upload_produk_photo", _fake_upload)
+
+    produk_toko = await erp_services.copy_produk_ke_web(session, produk_erp.id)
+
+    assert produk_toko.foto_url == "https://drive.google.com/uc?export=view&id=abc123"
+    assert produk_toko.foto_url != produk_erp.foto_url
+
+
+@pytest.mark.asyncio
+async def test_copy_produk_ke_web_falls_back_to_original_foto_url_when_upload_fails(session, monkeypatch):
+    akun = await _make_akun(session, platform="shopee")
+    produk_erp = await erp_services.create_produk_erp(
+        session,
+        ProdukERPIn(
+            platform="shopee",
+            akun_id=akun.id,
+            id_eksternal="SP-2",
+            nama="Topi",
+            harga=Decimal("20000"),
+            foto_url="https://cdn.shopee.example/topi.jpg",
+        ),
+    )
+
+    def _fake_download(url):
+        return b"fake-jpeg-bytes", "image/jpeg"
+
+    async def _fake_upload_fails(file_bytes, file_name, content_type):
+        from tenants.toko.modules.toko.infrastructure.image_upload import UploadNotConfigured
+
+        raise UploadNotConfigured()
+
+    monkeypatch.setattr(erp_services, "_download_foto_sync", _fake_download)
+    monkeypatch.setattr(erp_services, "upload_produk_photo", _fake_upload_fails)
+
+    # Should not raise -- copy still succeeds, falls back to original URL.
+    produk_toko = await erp_services.copy_produk_ke_web(session, produk_erp.id)
+
+    assert produk_toko.foto_url == "https://cdn.shopee.example/topi.jpg"
+
+
+@pytest.mark.asyncio
+async def test_copy_produk_ke_web_falls_back_when_download_fails(session, monkeypatch):
+    akun = await _make_akun(session, platform="shopee")
+    produk_erp = await erp_services.create_produk_erp(
+        session,
+        ProdukERPIn(
+            platform="shopee",
+            akun_id=akun.id,
+            id_eksternal="SP-3",
+            nama="Jaket",
+            harga=Decimal("120000"),
+            foto_url="https://cdn.shopee.example/jaket.jpg",
+        ),
+    )
+
+    def _fake_download_boom(url):
+        raise ConnectionError("network unreachable")
+
+    monkeypatch.setattr(erp_services, "_download_foto_sync", _fake_download_boom)
+
+    produk_toko = await erp_services.copy_produk_ke_web(session, produk_erp.id)
+
+    assert produk_toko.foto_url == "https://cdn.shopee.example/jaket.jpg"
+
+
+@pytest.mark.asyncio
+async def test_copy_produk_ke_web_empty_foto_url_unchanged(session):
+    akun = await _make_akun(session, platform="shopee")
+    produk_erp = await erp_services.create_produk_erp(
+        session,
+        ProdukERPIn(
+            platform="shopee",
+            akun_id=akun.id,
+            id_eksternal="SP-4",
+            nama="Kemeja",
+            harga=Decimal("80000"),
+        ),
+    )
+    assert not produk_erp.foto_url
+
+    produk_toko = await erp_services.copy_produk_ke_web(session, produk_erp.id)
+
+    assert produk_toko.foto_url == produk_erp.foto_url
 
 
 # --- Pesanan ERP: list/filter by platform + status transitions -------------
