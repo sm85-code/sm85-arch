@@ -11,6 +11,8 @@ jalan (bukan diam-diam fallback) di lingkungan test/CI.
 """
 from __future__ import annotations
 
+import pytest
+
 from adapters.external.excel_adapter import generate_excel_report
 from adapters.external.html_pdf import render_pdf_from_html, build_report_html
 from adapters.external.pdf_generator import generate_pdf_report_platypus
@@ -66,3 +68,29 @@ def test_generate_word_report_is_a_valid_docx_with_letterhead_and_table():
     assert len(doc.tables) == 2  # data table + signature table
     header_cells = [c.text for c in doc.tables[0].rows[0].cells]
     assert header_cells == SAMPLE_HEADERS
+
+
+@pytest.mark.asyncio
+async def test_report_router_pdf_excel_word_helpers_run_off_the_event_loop():
+    """adapters.api.v1.reports_router._pdf/_xlsx/_docx wrap the blocking
+    generate_*_report calls in starlette's run_in_threadpool. This smoke
+    test exercises them the same way the report_pdf/report_excel/report_word
+    route handlers do, confirming they still produce valid output once
+    awaited from a thread pool instead of being called directly."""
+    from adapters.api.v1.reports_router import _docx, _pdf, _xlsx
+
+    pdf_response = await _pdf("Laba Rugi", SAMPLE_HEADERS, SAMPLE_ROWS, "Jan 2024")
+    assert pdf_response.media_type == "application/pdf"
+    assert bytes(pdf_response.body).startswith(b"%PDF")
+
+    xlsx_response = await _xlsx("Laba Rugi", SAMPLE_HEADERS, SAMPLE_ROWS, "Jan 2024")
+    assert xlsx_response.media_type == (
+        "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
+    )
+    assert bytes(xlsx_response.body).startswith(b"PK")
+
+    docx_response = await _docx("Laba Rugi", SAMPLE_HEADERS, SAMPLE_ROWS, "Jan 2024")
+    assert docx_response.media_type == (
+        "application/vnd.openxmlformats-officedocument.wordprocessingml.document"
+    )
+    assert bytes(docx_response.body).startswith(b"PK")
