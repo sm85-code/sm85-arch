@@ -2,6 +2,7 @@ from __future__ import annotations
 
 from datetime import date
 from decimal import Decimal
+from typing import TYPE_CHECKING
 
 from fastapi import HTTPException, status
 from sqlalchemy import func, select
@@ -13,11 +14,15 @@ from tenants.toko.modules.toko.application.schemas import (
     AlamatIn,
     AlamatPatch,
     KategoriIn,
+    PengaturanPatch,
     PengirimanIn,
     ProdukIn,
     ProdukPatch,
     RegisterRequest,
 )
+
+if TYPE_CHECKING:
+    from tenants.toko.modules.toko.application.schemas import StaffIn, StaffPatch
 from tenants.toko.modules.toko.infrastructure.models import (
     STATUS_PENGIRIMAN,
     STATUS_PESANAN,
@@ -26,6 +31,7 @@ from tenants.toko.modules.toko.infrastructure.models import (
     ItemPesanan,
     KategoriToko,
     PercakapanToko,
+    PengaturanToko,
     PengirimanToko,
     PesanChatToko,
     PesananToko,
@@ -663,6 +669,32 @@ def pesan_out(pesan: PesanChatToko) -> dict:
     }
 
 
+# --- Pengaturan (global toko-web settings) --------------------------------
+
+
+def pengaturan_out(pengaturan: PengaturanToko) -> dict:
+    return {
+        "metode_proses_pesanan": pengaturan.metode_proses_pesanan,
+        "updated_at": pengaturan.updated_at.isoformat(),
+    }
+
+
+async def get_or_create_pengaturan(session: AsyncSession) -> PengaturanToko:
+    pengaturan = await session.get(PengaturanToko, PengaturanToko.SINGLETON_ID)
+    if not pengaturan:
+        pengaturan = PengaturanToko(id=PengaturanToko.SINGLETON_ID)
+        session.add(pengaturan)
+        await session.flush()
+    return pengaturan
+
+
+async def update_pengaturan(session: AsyncSession, payload: PengaturanPatch) -> PengaturanToko:
+    pengaturan = await get_or_create_pengaturan(session)
+    pengaturan.metode_proses_pesanan = payload.metode_proses_pesanan
+    await session.flush()
+    return pengaturan
+
+
 def percakapan_out(percakapan: PercakapanToko, *, dengan_pesan: bool = False) -> dict:
     out = {
         "id": percakapan.id,
@@ -675,3 +707,121 @@ def percakapan_out(percakapan: PercakapanToko, *, dengan_pesan: bool = False) ->
     if dengan_pesan:
         out["pesan"] = [pesan_out(p) for p in percakapan.pesan]
     return out
+
+
+# --- Staff management (owner/admin_toko only, lihat toko_router.py) --------
+#
+# Staff = semua UserToko dengan role selain "pembeli" (owner, admin_toko,
+# admin_toko_web, admin_marketplace). POST/PATCH di sini sengaja hanya
+# menerima role admin_toko_web/admin_marketplace (lihat StaffIn/StaffPatch
+# validator) -- owner/admin_toko tetap seed-only/manual, tidak bisa dibuat
+# atau diubah jadi role itu lewat sini.
+#
+# Hard delete: diperiksa, PesananERP/PercakapanERP/PesanChatERP (lihat
+# tenants/toko/modules/erp/infrastructure/models.py) TIDAK menyimpan
+# referensi apa pun ke UserToko yang memprosesnya (pengirim_admin cuma
+# boolean, bukan FK) -- jadi hapus baris UserToko staff aman, tidak ada
+# riwayat yang jadi yatim/kena FK error. toko_staff_akun (StaffAkunMarketplace)
+# di-cascade delete lewat ondelete="CASCADE" pada FK user_id-nya.
+
+
+async def _staff_akun_ids(session: AsyncSession, user_id: str) -> list[str]:
+    from tenants.toko.modules.erp.infrastructure.models import StaffAkunMarketplace
+
+    rows = (
+        await session.execute(select(StaffAkunMarketplace.akun_id).where(StaffAkunMarketplace.user_id == user_id))
+    ).scalars().all()
+    return list(rows)
+
+
+async def staff_out(session: AsyncSession, user: UserToko) -> dict:
+    out = {
+        "id": user.id,
+        "nama": user.nama,
+        "email": user.email,
+        "role": user.role,
+        "created_at": user.created_at.isoformat(),
+    }
+    if (user.role or "").strip().lower() == "admin_marketplace":
+        out["akun_ids"] = await _staff_akun_ids(session, user.id)
+    return out
+
+
+async def list_staff(session: AsyncSession) -> list[dict]:
+    stmt = select(UserToko).where(UserToko.role != "pembeli").order_by(UserToko.created_at.desc())
+    users = (await session.execute(stmt)).scalars().all()
+    return [await staff_out(session, u) for u in users]
+
+
+async def _set_staff_akun(session: AsyncSession, user_id: str, akun_ids: list[str]) -> None:
+    """Replace the full set of AkunMarketplace this admin_marketplace staff
+    user is assigned to. Validates every akun_id actually exists first."""
+    from tenants.toko.modules.erp.infrastructure.models import AkunMarketplace, StaffAkunMarketplace
+
+    for akun_id in akun_ids:
+        akun = await session.get(AkunMarketplace, akun_id)
+        if not akun:
+            raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=f"Akun marketplace '{akun_id}' tidak ditemukan")
+
+    existing = (
+        await session.execute(select(StaffAkunMarketplace).where(StaffAkunMarketplace.user_id == user_id))
+    ).scalars().all()
+    for row in existing:
+        await session.delete(row)
+    await session.flush()
+
+    for akun_id in dict.fromkeys(akun_ids):  # dedupe, preserve order
+        session.add(StaffAkunMarketplace(user_id=user_id, akun_id=akun_id))
+    await session.flush()
+
+
+async def create_staff(session: AsyncSession, payload: "StaffIn") -> UserToko:
+    existing = (await session.execute(select(UserToko).where(UserToko.email == payload.email))).scalar_one_or_none()
+    if existing:
+        raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail="Email sudah terdaftar")
+    user = UserToko(
+        nama=payload.nama,
+        email=payload.email,
+        password_hash=hash_password(payload.password),
+        role=payload.role,
+    )
+    session.add(user)
+    await session.flush()
+    if payload.role == "admin_marketplace" and payload.akun_ids:
+        await _set_staff_akun(session, user.id, payload.akun_ids)
+    return user
+
+
+async def get_staff(session: AsyncSession, staff_id: str) -> UserToko:
+    user = await session.get(UserToko, staff_id)
+    if not user or (user.role or "").strip().lower() == "pembeli":
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Staff tidak ditemukan")
+    return user
+
+
+async def update_staff(session: AsyncSession, staff_id: str, payload: "StaffPatch") -> UserToko:
+    user = await get_staff(session, staff_id)
+    data = payload.model_dump(exclude_unset=True, exclude={"akun_ids"})
+    for field, value in data.items():
+        setattr(user, field, value)
+    await session.flush()
+    if payload.akun_ids is not None:
+        role = (payload.role or user.role or "").strip().lower()
+        if role != "admin_marketplace" and payload.akun_ids:
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail="akun_ids hanya berlaku untuk role admin_marketplace",
+            )
+        await _set_staff_akun(session, user.id, payload.akun_ids)
+    return user
+
+
+async def delete_staff(session: AsyncSession, staff_id: str) -> None:
+    user = await get_staff(session, staff_id)
+    if (user.role or "").strip().lower() in ("owner", "admin_toko"):
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="Tidak bisa menghapus akun owner/admin_toko lewat endpoint staff",
+        )
+    await session.delete(user)
+    await session.flush()

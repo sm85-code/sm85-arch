@@ -139,3 +139,57 @@ class AlamatPatch(BaseModel):
 
 class PesanChatIn(BaseModel):
     isi: str
+
+
+class StaffIn(BaseModel):
+    """POST /admin/staff -- role dibatasi ke 2 role staff baru saja (lihat
+    validator); owner/admin_toko tetap seed-only/manual, tidak bisa dibuat
+    lewat endpoint ini."""
+
+    nama: str
+    email: EmailStr
+    password: str
+    role: str
+    akun_ids: list[str] = []
+
+    @field_validator("role")
+    @classmethod
+    def _v_role(cls, v: str) -> str:
+        from tenants.toko.modules.toko.infrastructure.auth import STAFF_ROLES_TOKO
+
+        v = (v or "").strip().lower()
+        if v not in STAFF_ROLES_TOKO:
+            raise ValueError(f"role harus salah satu dari {STAFF_ROLES_TOKO}")
+        return v
+
+
+class StaffPatch(BaseModel):
+    nama: Optional[str] = None
+    role: Optional[str] = None
+    akun_ids: Optional[list[str]] = None
+
+    @field_validator("role")
+    @classmethod
+    def _v_role(cls, v: Optional[str]) -> Optional[str]:
+        if v is None:
+            return v
+        from tenants.toko.modules.toko.infrastructure.auth import STAFF_ROLES_TOKO
+
+        v = v.strip().lower()
+        if v not in STAFF_ROLES_TOKO:
+            raise ValueError(f"role harus salah satu dari {STAFF_ROLES_TOKO}")
+        return v
+
+
+class PengaturanPatch(BaseModel):
+    metode_proses_pesanan: str
+
+    @field_validator("metode_proses_pesanan")
+    @classmethod
+    def _v_metode(cls, v: str) -> str:
+        from tenants.toko.modules.toko.infrastructure.models import METODE_PROSES_PESANAN
+
+        v = (v or "").strip().lower()
+        if v not in METODE_PROSES_PESANAN:
+            raise ValueError(f"metode_proses_pesanan harus salah satu dari {METODE_PROSES_PESANAN}")
+        return v

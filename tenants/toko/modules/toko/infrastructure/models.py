@@ -39,11 +39,43 @@ class UserToko(TokoBase):
     # menautkan akun Google ke UserToko secara stabil, bukan cuma
     # mengandalkan kecocokan email (email teknisnya bisa berubah pemilik).
     google_sub: Mapped[Optional[str]] = mapped_column(String(255), unique=True, nullable=True, index=True)
-    # admin_toko: kelola produk & pesanan. owner: full akses + laporan.
+    # admin_toko: kelola produk & pesanan (toko-web + marketplace ERP, full
+    # akses ke keduanya). owner: full akses + laporan (juga ke keduanya).
     # pembeli: akun customer (opsional -- checkout sebagai guest juga didukung
     # nanti di modul pesanan).
+    # admin_toko_web: staff baru, full akses ke modul toko-web SAJA (tidak
+    # bisa ke marketplace ERP). admin_marketplace: staff baru, akses ke modul
+    # marketplace ERP SAJA, dan dibatasi lagi ke AkunMarketplace (toko) yang
+    # ditugaskan lewat toko_staff_akun (StaffAkunMarketplace) -- lihat
+    # tenants/toko/modules/toko/infrastructure/auth.py::akun_ids_diizinkan.
     role: Mapped[str] = mapped_column(String(32), nullable=False, index=True, default="pembeli")
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=_utcnow)
+
+
+METODE_PROSES_PESANAN = ("pickup", "drop_off")
+
+
+class PengaturanToko(TokoBase):
+    """Single-row global settings for the web storefront's own order
+    processing -- separate from the marketplace ERP module entirely (see
+    tenants/toko/modules/erp/), and separate from any per-order or
+    per-product setting. Currently holds one preference:
+    metode_proses_pesanan (pickup/drop_off), which governs how the admin
+    is expected to fulfil web orders. This is a STORED PREFERENCE only for
+    now -- the real Biteship pickup-request API call is still a stub, see
+    infrastructure/shipping_biteship.py. Singleton pattern: id is a fixed
+    constant so there is always at most one row (see
+    application/services.py::get_or_create_pengaturan), simplest option for
+    a single boolean-ish setting -- a generic key/value table would be
+    overkill for one field."""
+
+    __tablename__ = "toko_pengaturan"
+
+    SINGLETON_ID = "global"
+
+    id: Mapped[str] = mapped_column(String(64), primary_key=True, default=lambda: PengaturanToko.SINGLETON_ID)
+    metode_proses_pesanan: Mapped[str] = mapped_column(String(16), nullable=False, default="drop_off")
+    updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=_utcnow, onupdate=_utcnow)
 
 
 class KategoriToko(TokoBase):

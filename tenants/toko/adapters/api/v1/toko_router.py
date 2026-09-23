@@ -21,15 +21,20 @@ from tenants.toko.modules.toko.application.schemas import (
     KeranjangItemIn,
     KeranjangItemPatch,
     LoginRequest,
+    PengaturanPatch,
     PengirimanIn,
     PesanChatIn,
     ProdukIn,
     ProdukPatch,
     RegisterRequest,
+    StaffIn,
+    StaffPatch,
     StatusPengirimanIn,
     StatusPesananIn,
 )
 from tenants.toko.modules.toko.infrastructure.auth import (
+    FULL_ACCESS_ROLES_TOKO,
+    ROLE_ADMIN_TOKO_WEB,
     clear_toko_cookie,
     get_current_user_toko,
     issue_toko_token,
@@ -48,7 +53,16 @@ from tenants.toko.modules.toko.infrastructure.shipping_biteship import parse_web
 
 toko_router = APIRouter()
 
-ADMIN_ROLES = ("admin_toko", "owner")
+# Toko-web admin surface: legacy full-access roles + the new admin_toko_web
+# staff role (full access to THIS module only, no marketplace ERP access --
+# naturally true since admin_marketplace is not in this tuple, see
+# erp_router.py::ADMIN_ROLES for the marketplace-side mirror of this).
+ADMIN_ROLES = (*FULL_ACCESS_ROLES_TOKO, ROLE_ADMIN_TOKO_WEB)
+
+# Staff account management (create/list/update/delete admin_toko_web /
+# admin_marketplace accounts): legacy full-access roles ONLY -- staff must
+# not be able to manage other staff accounts, including their own role.
+STAFF_MANAGE_ROLES = FULL_ACCESS_ROLES_TOKO
 
 
 @toko_router.get("/seed-now")
@@ -155,7 +169,7 @@ async def upload_foto_produk(
     butuh GDRIVE_FOLDER_ID_TOKO + kredensial service account terisi) lalu
     simpan URL-nya ke produk.foto_url."""
     file_bytes = await file.read()
-    foto_url = await upload_produk_photo(file_bytes, file.filename or produk_id, file.content_type or "")
+    foto_url = await upload_produk_photo(file_bytes, file.content_type or "")
     produk = await services.update_produk(session, produk_id, ProdukPatch(foto_url=foto_url))
     return services.produk_out(produk)
 
@@ -534,3 +548,73 @@ async def admin_kirim_pesan(
     await services.kirim_pesan(session, percakapan_id, user, payload.isi)
     percakapan = await services.get_percakapan(session, percakapan_id)
     return services.percakapan_out(percakapan, dengan_pesan=True)
+
+
+# --- Pengaturan (global toko-web settings, terpisah dari modul ERP) --------
+
+
+@toko_router.get("/admin/pengaturan")
+async def admin_get_pengaturan(
+    session: AsyncSession = Depends(get_db_toko),
+    _user: UserToko = Depends(require_roles_toko(*ADMIN_ROLES)),
+):
+    pengaturan = await services.get_or_create_pengaturan(session)
+    return services.pengaturan_out(pengaturan)
+
+
+@toko_router.patch("/admin/pengaturan")
+async def admin_patch_pengaturan(
+    payload: PengaturanPatch,
+    session: AsyncSession = Depends(get_db_toko),
+    _user: UserToko = Depends(require_roles_toko(*ADMIN_ROLES)),
+):
+    pengaturan = await services.update_pengaturan(session, payload)
+    return services.pengaturan_out(pengaturan)
+
+
+# --- Staff management (owner/admin_toko only) -------------------------------
+#
+# Cross-module concern (creates admin_toko_web AND admin_marketplace staff,
+# the latter with AkunMarketplace assignments from the ERP submodule), kept
+# here in toko_router.py rather than a new file since it is toko-tenant-wide,
+# not specific to either capability -- mirrors how seeder.py already treats
+# both submodules' schema as one tenant.
+
+
+@toko_router.get("/admin/staff")
+async def admin_list_staff(
+    session: AsyncSession = Depends(get_db_toko),
+    _user: UserToko = Depends(require_roles_toko(*STAFF_MANAGE_ROLES)),
+):
+    return await services.list_staff(session)
+
+
+@toko_router.post("/admin/staff")
+async def admin_create_staff(
+    payload: StaffIn,
+    session: AsyncSession = Depends(get_db_toko),
+    _user: UserToko = Depends(require_roles_toko(*STAFF_MANAGE_ROLES)),
+):
+    staff = await services.create_staff(session, payload)
+    return await services.staff_out(session, staff)
+
+
+@toko_router.patch("/admin/staff/{staff_id}")
+async def admin_patch_staff(
+    staff_id: str,
+    payload: StaffPatch,
+    session: AsyncSession = Depends(get_db_toko),
+    _user: UserToko = Depends(require_roles_toko(*STAFF_MANAGE_ROLES)),
+):
+    staff = await services.update_staff(session, staff_id, payload)
+    return await services.staff_out(session, staff)
+
+
+@toko_router.delete("/admin/staff/{staff_id}")
+async def admin_delete_staff(
+    staff_id: str,
+    session: AsyncSession = Depends(get_db_toko),
+    _user: UserToko = Depends(require_roles_toko(*STAFF_MANAGE_ROLES)),
+):
+    await services.delete_staff(session, staff_id)
+    return {"ok": True}

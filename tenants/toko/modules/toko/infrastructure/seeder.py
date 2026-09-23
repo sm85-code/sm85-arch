@@ -11,8 +11,14 @@ from tenants.toko.modules.erp.infrastructure import models as _erp_models  # noq
 from tenants.toko.modules.toko.infrastructure.database import TokoBase, engine
 from tenants.toko.modules.toko.infrastructure.models import UserToko
 
-OWNER_EMAIL = "owner@toko.test"
-ADMIN_EMAIL = "admin@toko.test"
+
+# NOTE: auth schemas validate email with pydantic's EmailStr, which rejects
+# RFC 2606 reserved TLDs (.test/.example/.invalid/.localhost) as
+# "special-use or reserved" -- an address on one of those domains can never
+# pass login/register validation. Use a non-reserved placeholder domain so
+# these default accounts are actually usable.
+OWNER_EMAIL = "owner@toko.internal"
+ADMIN_EMAIL = "admin@toko.internal"
 DEFAULT_PASSWORD = "password123"
 
 
@@ -31,6 +37,37 @@ async def _ensure_columns(conn) -> None:
         text("ALTER TABLE IF EXISTS toko_produk ADD COLUMN IF NOT EXISTS sumber_erp_produk_id VARCHAR(64) NULL")
     )
     await conn.execute(text("ALTER TABLE IF EXISTS toko_produk ADD COLUMN IF NOT EXISTS platform_asal VARCHAR(16) NULL"))
+    # akun_id: menautkan baris ERP ke AkunMarketplace (toko_erp_akun) yang
+    # baru -- nullable & additive, baris lama tetap NULL, lihat
+    # modules/erp/infrastructure/models.py.
+    await conn.execute(text("ALTER TABLE IF EXISTS toko_erp_produk ADD COLUMN IF NOT EXISTS akun_id VARCHAR(64) NULL"))
+    await conn.execute(text("ALTER TABLE IF EXISTS toko_erp_pesanan ADD COLUMN IF NOT EXISTS akun_id VARCHAR(64) NULL"))
+    await conn.execute(text("ALTER TABLE IF EXISTS toko_erp_percakapan ADD COLUMN IF NOT EXISTS akun_id VARCHAR(64) NULL"))
+    # One-way local->marketplace sync outcome, recorded on order status
+    # changes that push to the platform adapter -- lihat
+    # modules/erp/application/services.py::ubah_status_pesanan_erp dan
+    # modules/erp/infrastructure/erp_<platform>.py::proses_pesanan.
+    await conn.execute(
+        text(
+            "ALTER TABLE IF EXISTS toko_erp_pesanan ADD COLUMN IF NOT EXISTS "
+            "tersinkron_marketplace BOOLEAN NOT NULL DEFAULT FALSE"
+        )
+    )
+    await conn.execute(text("ALTER TABLE IF EXISTS toko_erp_pesanan ADD COLUMN IF NOT EXISTS catatan_sinkron TEXT NULL"))
+    # Pengaturan global toko-web (bukan ERP) -- lihat
+    # modules/toko/infrastructure/models.py::PengaturanToko.
+    await conn.execute(
+        text(
+            "ALTER TABLE IF EXISTS toko_pengaturan ADD COLUMN IF NOT EXISTS "
+            "metode_proses_pesanan VARCHAR(16) NOT NULL DEFAULT 'drop_off'"
+        )
+    )
+    # toko_staff_akun (StaffAkunMarketplace, modules/erp/infrastructure/
+    # models.py) is a BRAND NEW table -- no ALTER TABLE needed, it is picked
+    # up entirely by TokoBase.metadata.create_all() above (registered on the
+    # metadata via the `_erp_models` import at the top of this file). New
+    # roles admin_toko_web/admin_marketplace on toko_users.role need no
+    # schema change either -- role stays free-text (see UserToko.role).
 
 
 async def _migrate_free_text_kategori(session: AsyncSession) -> None:
