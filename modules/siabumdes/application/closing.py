@@ -128,9 +128,8 @@ async def run_monthly_close(
     group: str,
     actor_id: str,
 ) -> dict[str, Any]:
-    """Despite the name (kept for API stability), the period granularity
-    depends on the group: BUMDES (Pusat) closes per triwulan/tahun, unit
-    usaha (UU01..UU06) close monthly -- see assert_period_kind_matches_group."""
+    """Both BUMDES (Pusat) and unit usaha (UU01..UU06) close monthly
+    ("YYYY-MM") -- see assert_period_kind_matches_group."""
     group_code = (group or "BUMDES").strip().upper()
     if group_code not in {"BUMDES", *UNIT_GROUP_CODES}:
         raise ValueError(f"Grup {group_code} tidak valid")
@@ -279,10 +278,6 @@ async def run_monthly_close(
 
 
 async def undo_monthly_close(session: AsyncSession, period: str, group: str) -> int:
-    # Only checks the period is one of the three known shapes -- not that it
-    # matches the group's current granularity -- so a pre-existing monthly
-    # BUMDES close (from before quarter/year closing existed) can still be
-    # reopened.
     period_kind(period or "")
     group_code = (group or "BUMDES").strip().upper()
     row = (

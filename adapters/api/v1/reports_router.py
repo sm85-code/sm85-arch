@@ -7,6 +7,7 @@ from typing import Optional
 from fastapi import APIRouter, Depends, HTTPException
 from fastapi.responses import Response
 from sqlalchemy.ext.asyncio import AsyncSession
+from starlette.concurrency import run_in_threadpool
 
 from adapters.api.deps import get_current_user, require_roles
 from adapters.api.scope import is_pengelola, parse_date, scoped_unit_id
@@ -38,7 +39,7 @@ def _need_dates(start_date: Optional[str], end_date: Optional[str]) -> tuple[dat
     return start, end
 
 
-def _pdf(
+async def _pdf(
     title: str,
     headers: list[str],
     rows: list[list],
@@ -47,7 +48,11 @@ def _pdf(
     landscape: bool = False,
     branding: Optional[ReportBranding] = None,
 ) -> Response:
-    blob = generate_pdf_report(
+    # generate_pdf_report ultimately calls weasyprint's HTML().write_pdf(),
+    # which is synchronous and CPU/IO-bound -- run it in a thread pool so it
+    # doesn't block the event loop for the duration of PDF rendering.
+    blob = await run_in_threadpool(
+        generate_pdf_report,
         title=title,
         subtitle=subtitle,
         table_headers=headers,
@@ -62,7 +67,7 @@ def _pdf(
     )
 
 
-def _xlsx(
+async def _xlsx(
     title: str,
     headers: list[str],
     rows: list[list],
@@ -71,7 +76,8 @@ def _xlsx(
     landscape: bool = False,
     branding: Optional[ReportBranding] = None,
 ) -> Response:
-    blob = generate_excel_report(
+    blob = await run_in_threadpool(
+        generate_excel_report,
         headers,
         rows,
         title,
@@ -86,7 +92,7 @@ def _xlsx(
     )
 
 
-def _docx(
+async def _docx(
     title: str,
     headers: list[str],
     rows: list[list],
@@ -95,7 +101,8 @@ def _docx(
     landscape: bool = False,
     branding: Optional[ReportBranding] = None,
 ) -> Response:
-    blob = generate_word_report(
+    blob = await run_in_threadpool(
+        generate_word_report,
         title=title,
         subtitle=subtitle,
         table_headers=headers,
@@ -270,7 +277,7 @@ async def report_pdf(
         subtitle = f"Per {as_of_date}"
     landscape = report_key in {"ledger", "buku-besar"}
     branding = branding_from_org_profile(await get_org_profile(session))
-    return _pdf(title, headers, rows, subtitle, landscape=landscape, branding=branding)
+    return await _pdf(title, headers, rows, subtitle, landscape=landscape, branding=branding)
 
 
 @router.get("/reports/{report_key}/excel")
@@ -294,7 +301,7 @@ async def report_excel(
         subtitle = f"Per {as_of_date}"
     landscape = report_key in {"ledger", "buku-besar"}
     branding = branding_from_org_profile(await get_org_profile(session))
-    return _xlsx(title, headers, rows, subtitle, landscape=landscape, branding=branding)
+    return await _xlsx(title, headers, rows, subtitle, landscape=landscape, branding=branding)
 
 
 @router.get("/reports/{report_key}/word")
@@ -318,7 +325,7 @@ async def report_word(
         subtitle = f"Per {as_of_date}"
     landscape = report_key in {"ledger", "buku-besar"}
     branding = branding_from_org_profile(await get_org_profile(session))
-    return _docx(title, headers, rows, subtitle, landscape=landscape, branding=branding)
+    return await _docx(title, headers, rows, subtitle, landscape=landscape, branding=branding)
 
 
 async def _materialize(
