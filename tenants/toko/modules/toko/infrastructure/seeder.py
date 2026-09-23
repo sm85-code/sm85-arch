@@ -7,6 +7,7 @@ from sqlalchemy import select, text
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from shared.security import hash_password
+from tenants.toko.modules.erp.infrastructure import models as _erp_models  # noqa: F401 -- registers toko_erp_* tables on TokoBase.metadata
 from tenants.toko.modules.toko.infrastructure.database import TokoBase, engine
 from tenants.toko.modules.toko.infrastructure.models import UserToko
 
@@ -23,6 +24,13 @@ async def _ensure_columns(conn) -> None:
     await conn.execute(text("ALTER TABLE IF EXISTS toko_users ADD COLUMN IF NOT EXISTS google_sub VARCHAR(255) NULL"))
     await conn.execute(text("ALTER TABLE IF EXISTS toko_users ALTER COLUMN password_hash DROP NOT NULL"))
     await conn.execute(text("ALTER TABLE IF EXISTS toko_produk ADD COLUMN IF NOT EXISTS kategori_id VARCHAR(64) NULL"))
+    # Provenance kolom untuk produk yang di-copy dari katalog ERP marketplace
+    # (lihat modules/erp/application/services.py::copy_produk_ke_web) --
+    # nullable & additive, produk lama/produk toko-web murni tetap NULL.
+    await conn.execute(
+        text("ALTER TABLE IF EXISTS toko_produk ADD COLUMN IF NOT EXISTS sumber_erp_produk_id VARCHAR(64) NULL")
+    )
+    await conn.execute(text("ALTER TABLE IF EXISTS toko_produk ADD COLUMN IF NOT EXISTS platform_asal VARCHAR(16) NULL"))
 
 
 async def _migrate_free_text_kategori(session: AsyncSession) -> None:
