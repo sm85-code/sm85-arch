@@ -1,8 +1,6 @@
 """Automated monthly closing journals (per-entity, slug-mapped)."""
 from __future__ import annotations
 
-import re
-from calendar import monthrange
 from datetime import date, datetime, timezone
 from decimal import Decimal, ROUND_HALF_UP
 from typing import Any, Optional
@@ -26,8 +24,13 @@ from shared.coa_taxonomy import (
     SUB_LABA_DICADANGKAN,
     SUB_SALDO_LABA,
 )
+from shared.period import (
+    UNIT_GROUP_CODES,
+    assert_period_kind_matches_group,
+    period_kind,
+    period_range as _period_range,
+)
 
-_PERIOD_RE = re.compile(r"^\d{4}-\d{2}$")
 CENT = Decimal("0.01")
 
 SUB_UTANG_BH_BUMDES = "utang_bagi_hasil_bumdes"
@@ -42,11 +45,6 @@ BUMDES_ALLOC = (
 
 def _money(value: float | Decimal | int) -> Decimal:
     return Decimal(str(value or 0)).quantize(CENT, rounding=ROUND_HALF_UP)
-
-
-def _period_range(period: str) -> tuple[date, date]:
-    year, month = int(period[:4]), int(period[5:7])
-    return date(year, month, 1), date(year, month, monthrange(year, month)[1])
 
 
 def _close_ref(period: str, group: str) -> str:
@@ -130,11 +128,13 @@ async def run_monthly_close(
     group: str,
     actor_id: str,
 ) -> dict[str, Any]:
-    if not _PERIOD_RE.match(period or ""):
-        raise ValueError("Format period harus YYYY-MM")
+    """Despite the name (kept for API stability), the period granularity
+    depends on the group: BUMDES (Pusat) closes per triwulan/tahun, unit
+    usaha (UU01..UU06) close monthly -- see assert_period_kind_matches_group."""
     group_code = (group or "BUMDES").strip().upper()
-    if group_code not in {"BUMDES", "UU01", "UU02", "UU03", "UU04", "UU05", "UU06"}:
+    if group_code not in {"BUMDES", *UNIT_GROUP_CODES}:
         raise ValueError(f"Grup {group_code} tidak valid")
+    assert_period_kind_matches_group(period or "", group_code)
 
     existing = (
         await session.execute(
@@ -279,8 +279,11 @@ async def run_monthly_close(
 
 
 async def undo_monthly_close(session: AsyncSession, period: str, group: str) -> int:
-    if not _PERIOD_RE.match(period or ""):
-        raise ValueError("Format period harus YYYY-MM")
+    # Only checks the period is one of the three known shapes -- not that it
+    # matches the group's current granularity -- so a pre-existing monthly
+    # BUMDES close (from before quarter/year closing existed) can still be
+    # reopened.
+    period_kind(period or "")
     group_code = (group or "BUMDES").strip().upper()
     row = (
         await session.execute(
