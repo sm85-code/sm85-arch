@@ -98,6 +98,30 @@ class AkunMarketplace(TokoBase):
     updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=_utcnow, onupdate=_utcnow)
 
 
+class StaffAkunMarketplace(TokoBase):
+    """Many-to-many link: which AkunMarketplace (shop) rows a staff user
+    with role `admin_marketplace` (tenants/toko/modules/toko/infrastructure/
+    models.py::UserToko.role) is allowed to touch. One row per (user, akun)
+    pair. Enforcement lives in
+    tenants/toko/modules/toko/infrastructure/auth.py::akun_ids_diizinkan and
+    is applied across erp_router.py's produk/pesanan/chat/laporan endpoints
+    -- `owner`/`admin_toko` never consult this table, they stay unrestricted.
+    Brand new table, no data migration needed -- added via
+    TokoBase.metadata.create_all() like the rest of this tenant's schema."""
+
+    __tablename__ = "toko_staff_akun"
+    __table_args__ = (UniqueConstraint("user_id", "akun_id", name="uq_staff_akun_user_akun"),)
+
+    id: Mapped[str] = mapped_column(String(64), primary_key=True, default=_uuid)
+    user_id: Mapped[str] = mapped_column(
+        String(64), ForeignKey("toko_users.id", ondelete="CASCADE"), nullable=False, index=True
+    )
+    akun_id: Mapped[str] = mapped_column(
+        String(64), ForeignKey("toko_erp_akun.id", ondelete="CASCADE"), nullable=False, index=True
+    )
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=_utcnow)
+
+
 class ProdukERP(TokoBase):
     """Snapshot produk dari seller-center marketplace. `id_eksternal` adalah
     ID produk di platform asal -- dipakai bareng `platform` sebagai kunci
