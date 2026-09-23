@@ -372,7 +372,10 @@ async def _materialize(
         }
         rows += [[kinerja_labels.get(k, k.replace("_", " ").title()), v] for k, v in data["ringkasan_kinerja"].items()]
         rows.append(["3. KEBIJAKAN AKUNTANSI", ""])
-        rows += [["", note] for note in data["kebijakan_akuntansi"]]
+        # Notes go in the first ("Uraian") column, flush-left with the
+        # section heading above -- putting them in "Nilai" instead visually
+        # indents every note under a heading that isn't actually a label.
+        rows += [[note, ""] for note in data["kebijakan_akuntansi"]]
         return data, "CaLK", ["Uraian", "Nilai"], rows
     if report_key in {"ledger", "buku-besar"}:
         if not account_code:
