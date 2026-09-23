@@ -13,6 +13,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from modules.identity.infrastructure.models import ClosedPeriod, OrgProfile, SystemControl, User
 from modules.siabumdes.infrastructure.models import Transaction, UnitUsaha
 from shared.config import PUBLIC_ROLES, public_role
+from shared.period import period_contains
 from shared.report_branding import get_report_branding
 from shared.security import hash_password, verify_password
 
@@ -193,14 +194,19 @@ async def assert_recording_allowed(
         period = tx_date.strftime("%Y-%m")
         if period in (user.blocked_periods or []) and role != "admin":
             raise PermissionError(f"Periode {period} terkunci untuk akun ini")
-        closed = await session.execute(
-            select(ClosedPeriod).where(
-                ClosedPeriod.period == period,
-                ClosedPeriod.group_code == group_code,
-            )
-        )
-        if closed.scalar_one_or_none() and role != "admin":
-            raise PermissionError(f"Buku periode {period} ({group_code}) sudah ditutup")
+        if role != "admin":
+            # BUMDES closes are now quarter/year strings (e.g. "2026-Q1",
+            # "2026"), not just "YYYY-MM", so this can't be an exact-string
+            # match against tx_date's month -- check date-range containment
+            # against every closed period recorded for this group instead.
+            closed_rows = (
+                await session.execute(
+                    select(ClosedPeriod).where(ClosedPeriod.group_code == group_code)
+                )
+            ).scalars()
+            for row in closed_rows:
+                if period_contains(row.period, tx_date):
+                    raise PermissionError(f"Buku periode {row.period} ({group_code}) sudah ditutup")
 
 
 async def close_period(
