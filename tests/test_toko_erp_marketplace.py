@@ -12,7 +12,7 @@ from fastapi import HTTPException
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker, create_async_engine
 
 from tenants.toko.modules.erp.application import services as erp_services
-from tenants.toko.modules.erp.application.schemas import PercakapanERPIn, ProdukERPIn, ProdukERPPatch
+from tenants.toko.modules.erp.application.schemas import AkunMarketplaceIn, PercakapanERPIn, ProdukERPIn, ProdukERPPatch
 from tenants.toko.modules.erp.infrastructure.models import ItemPesananERP, PesananERP
 from tenants.toko.modules.toko.application import services as toko_services
 from tenants.toko.modules.toko.infrastructure.auth import require_roles_toko
@@ -38,36 +38,67 @@ async def _make_user(session, email="pembeli@test.com", role="pembeli") -> UserT
     return user
 
 
+async def _make_akun(session, *, platform: str, nama_toko: str = "Toko Test"):
+    return await erp_services.create_akun_marketplace(
+        session, AkunMarketplaceIn(platform=platform, nama_toko=nama_toko)
+    )
+
+
 # --- Produk ERP + copy-to-web -----------------------------------------------
 
 
 @pytest.mark.asyncio
 async def test_create_produk_erp_rejects_duplicate_platform_id_eksternal(session):
+    akun = await _make_akun(session, platform="shopee")
     await erp_services.create_produk_erp(
-        session, ProdukERPIn(platform="shopee", id_eksternal="SHP-1", nama="Sabun", harga=Decimal("5000"), stok=10)
+        session,
+        ProdukERPIn(
+            platform="shopee", akun_id=akun.id, id_eksternal="SHP-1", nama="Sabun", harga=Decimal("5000"), stok=10
+        ),
     )
     with pytest.raises(HTTPException) as exc_info:
         await erp_services.create_produk_erp(
-            session, ProdukERPIn(platform="shopee", id_eksternal="SHP-1", nama="Sabun v2", harga=Decimal("6000"))
+            session,
+            ProdukERPIn(platform="shopee", akun_id=akun.id, id_eksternal="SHP-1", nama="Sabun v2", harga=Decimal("6000")),
         )
     assert exc_info.value.status_code == 409
 
 
 @pytest.mark.asyncio
 async def test_create_produk_erp_rejects_unknown_platform(session):
+    akun = await _make_akun(session, platform="shopee")
     with pytest.raises(HTTPException) as exc_info:
         await erp_services.create_produk_erp(
-            session, ProdukERPIn(platform="tokopedia", id_eksternal="X-1", nama="Sabun", harga=Decimal("5000"))
+            session, ProdukERPIn(platform="tokopedia", akun_id=akun.id, id_eksternal="X-1", nama="Sabun", harga=Decimal("5000"))
+        )
+    assert exc_info.value.status_code == 400
+
+
+@pytest.mark.asyncio
+async def test_create_produk_erp_requires_akun_id(session):
+    with pytest.raises(Exception):
+        ProdukERPIn(platform="shopee", id_eksternal="X-2", nama="Sabun", harga=Decimal("5000"))
+
+
+@pytest.mark.asyncio
+async def test_create_produk_erp_rejects_mismatched_akun_platform(session):
+    akun_lazada = await _make_akun(session, platform="lazada")
+    with pytest.raises(HTTPException) as exc_info:
+        await erp_services.create_produk_erp(
+            session,
+            ProdukERPIn(platform="shopee", akun_id=akun_lazada.id, id_eksternal="X-3", nama="Sabun", harga=Decimal("5000")),
         )
     assert exc_info.value.status_code == 400
 
 
 @pytest.mark.asyncio
 async def test_copy_produk_ke_web_creates_independent_snapshot(session):
+    akun = await _make_akun(session, platform="lazada")
     produk_erp = await erp_services.create_produk_erp(
         session,
         ProdukERPIn(
             platform="lazada",
+            akun_id=akun.id,
             id_eksternal="LZD-9",
             nama="Kaos Polos",
             deskripsi="Katun combed 30s",
@@ -115,7 +146,10 @@ async def test_copy_produk_ke_web_unknown_id_raises_404(session):
 
 
 async def _make_pesanan_erp(session, *, platform: str, id_eksternal: str, status_: str = "unpaid") -> PesananERP:
-    pesanan = PesananERP(platform=platform, id_eksternal=id_eksternal, status=status_, nama_pembeli="Budi", total=Decimal("10000"))
+    akun = await _make_akun(session, platform=platform, nama_toko=f"Toko {platform} {id_eksternal}")
+    pesanan = PesananERP(
+        platform=platform, akun_id=akun.id, id_eksternal=id_eksternal, status=status_, nama_pembeli="Budi", total=Decimal("10000")
+    )
     session.add(pesanan)
     await session.flush()
     session.add(
@@ -143,6 +177,16 @@ async def test_list_pesanan_erp_filters_by_platform(session):
 
 
 @pytest.mark.asyncio
+async def test_list_pesanan_erp_filters_by_akun_id(session):
+    p1 = await _make_pesanan_erp(session, platform="shopee", id_eksternal="S-10")
+    await _make_pesanan_erp(session, platform="shopee", id_eksternal="S-11")
+
+    hanya_akun_1 = await erp_services.list_pesanan_erp(session, akun_id=p1.akun_id)
+    assert len(hanya_akun_1) == 1
+    assert hanya_akun_1[0].id == p1.id
+
+
+@pytest.mark.asyncio
 async def test_ubah_status_pesanan_erp_valid_and_invalid_transition(session):
     pesanan = await _make_pesanan_erp(session, platform="blibli", id_eksternal="B-2", status_="unpaid")
 
@@ -159,11 +203,13 @@ async def test_ubah_status_pesanan_erp_valid_and_invalid_transition(session):
 
 @pytest.mark.asyncio
 async def test_chat_erp_send_and_list_grouped_inbox(session):
+    akun_shopee = await _make_akun(session, platform="shopee")
+    akun_lazada = await _make_akun(session, platform="lazada")
     percakapan_shopee = await erp_services.get_or_create_percakapan_erp(
-        session, PercakapanERPIn(platform="shopee", id_eksternal_pembeli="buyer-1", nama_pembeli="Ani")
+        session, PercakapanERPIn(platform="shopee", akun_id=akun_shopee.id, id_eksternal_pembeli="buyer-1", nama_pembeli="Ani")
     )
     percakapan_lazada = await erp_services.get_or_create_percakapan_erp(
-        session, PercakapanERPIn(platform="lazada", id_eksternal_pembeli="buyer-2", nama_pembeli="Budi")
+        session, PercakapanERPIn(platform="lazada", akun_id=akun_lazada.id, id_eksternal_pembeli="buyer-2", nama_pembeli="Budi")
     )
 
     await erp_services.kirim_pesan_erp(session, percakapan_shopee.id, isi="Halo, pesanan saya kapan dikirim?", pengirim_admin=False)
@@ -174,6 +220,10 @@ async def test_chat_erp_send_and_list_grouped_inbox(session):
 
     hanya_shopee = await erp_services.list_percakapan_erp(session, platform="shopee")
     assert len(hanya_shopee) == 1
+
+    hanya_akun_shopee = await erp_services.list_percakapan_erp(session, akun_id=akun_shopee.id)
+    assert len(hanya_akun_shopee) == 1
+    assert hanya_akun_shopee[0].id == percakapan_shopee.id
 
     detail = await erp_services.get_percakapan_erp(session, percakapan_shopee.id)
     out = erp_services.percakapan_erp_out(detail, dengan_pesan=True)
