@@ -6,7 +6,7 @@ import logging
 from datetime import datetime
 from typing import Any, Optional, Sequence
 
-from adapters.external.report_formatting import format_money, is_money_header
+from adapters.external.report_formatting import format_money, is_money_header, looks_numeric, row_is_total
 from shared.report_branding import ReportBranding, get_report_branding
 
 logger = logging.getLogger(__name__)
@@ -35,13 +35,15 @@ body {
 .doc-title { text-align: center; font-size: 12.5pt; font-weight: 700; margin: 10px 0 2px; text-transform: uppercase; }
 .doc-sub { text-align: center; font-size: 9pt; color: #444; margin-bottom: 4px; }
 .meta { text-align: center; font-size: 8pt; color: #666; margin-bottom: 12px; }
-table.report { width: 100%%; border-collapse: collapse; margin-top: 6px; }
+table.report { width: 100%%; border-collapse: collapse; margin-top: 6px; table-layout: fixed; }
 table.report th {
   background: #%(primary)s; color: #fff; font-weight: 700; font-size: 8.5pt;
   padding: 6px 5px; border: 0.4pt solid #%(primary)s; text-align: left;
+  overflow-wrap: break-word;
 }
 table.report td {
   padding: 4px 5px; border: 0.35pt solid #c8c8c8; vertical-align: top; font-size: 8.5pt;
+  overflow-wrap: break-word; word-break: break-word;
 }
 table.report tr.section td { background: #e8eef5; font-weight: 700; }
 table.report tr.total td { background: #dce8f8; font-weight: 700; border-top: 1.2pt solid #%(primary)s; }
@@ -72,9 +74,16 @@ _is_money_header = is_money_header
 
 
 def _row_class(row: Sequence[Any]) -> str:
-    joined = " ".join(str(c or "").lower() for c in row)
-    if any(k in joined for k in ("total", "jumlah", "laba bersih", "saldo akhir", "saldo awal")):
+    if row_is_total(list(row)):
         return "total"
+    cells = [str(c or "") for c in row]
+    # A free-text sentence (e.g. a CaLK policy note) is never a section
+    # header, even if it happens to mention "aset"/"kewajiban"/"pendapatan" --
+    # only a short label-only row like ["", "ASET"] should get that styling.
+    # A period, or more than a handful of words, means it's prose, not a label.
+    if any("." in c or len(c.split()) > 5 for c in cells):
+        return ""
+    joined = " ".join(c.lower() for c in cells)
     if (
         any(
             k in joined
@@ -116,8 +125,8 @@ def build_report_html(
     for row in rows:
         cls = _row_class(row)
         tds = "".join(
-            f'<td class="{"num" if i in money_cols else ""}">'
-            f'{_esc(format_money(cell) if i in money_cols else cell)}</td>'
+            f'<td class="{"num" if i in money_cols and looks_numeric(cell) else ""}">'
+            f'{_esc(format_money(cell) if i in money_cols and looks_numeric(cell) else cell)}</td>'
             for i, cell in enumerate(row)
         )
         body_rows.append(f'<tr class="{cls}">{tds}</tr>')

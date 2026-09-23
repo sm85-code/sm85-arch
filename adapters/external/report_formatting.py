@@ -22,8 +22,35 @@ def is_money_header(h: str) -> bool:
 
 
 def row_is_total(row: list[Any]) -> bool:
-    joined = " ".join(str(c or "").lower() for c in row)
+    """True for a genuine total/summary line (short label + amount), never
+    for a long free-text note. Without the length guard, a CaLK policy
+    paragraph mentioning "Laba Bersih Operasional" in passing would get
+    shaded and bolded like an actual total row."""
+    cells = [str(c or "") for c in row]
+    if any(len(c) > 60 for c in cells):
+        return False
+    joined = " ".join(c.lower() for c in cells)
     return any(k in joined for k in ("total", "jumlah", "laba bersih", "saldo akhir", "saldo awal"))
+
+
+def looks_numeric(value: Any) -> bool:
+    """True only for a value that is actually a number, not just a cell that
+    happens to sit in a column whose header matches a money keyword. A CaLK
+    column literally titled "Nilai" mixes real amounts with long free-text
+    policy notes -- treating every cell in it as numeric (right-aligned,
+    non-wrapping) makes those notes overflow off the page."""
+    if isinstance(value, (int, float, Decimal)):
+        return True
+    if isinstance(value, str):
+        s = value.strip()
+        if not s:
+            return False
+        try:
+            float(s)
+            return True
+        except ValueError:
+            return False
+    return False
 
 
 def format_money(value: Any) -> str:
