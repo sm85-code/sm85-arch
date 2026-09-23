@@ -11,8 +11,14 @@ from tenants.toko.modules.erp.infrastructure import models as _erp_models  # noq
 from tenants.toko.modules.toko.infrastructure.database import TokoBase, engine
 from tenants.toko.modules.toko.infrastructure.models import UserToko
 
-OWNER_EMAIL = "owner@toko.test"
-ADMIN_EMAIL = "admin@toko.test"
+
+# NOTE: auth schemas validate email with pydantic's EmailStr, which rejects
+# RFC 2606 reserved TLDs (.test/.example/.invalid/.localhost) as
+# "special-use or reserved" -- an address on one of those domains can never
+# pass login/register validation. Use a non-reserved placeholder domain so
+# these default accounts are actually usable.
+OWNER_EMAIL = "owner@toko.internal"
+ADMIN_EMAIL = "admin@toko.internal"
 DEFAULT_PASSWORD = "password123"
 
 
