@@ -13,6 +13,8 @@ in with financial report exports.
 from __future__ import annotations
 
 import os
+import secrets
+from datetime import datetime, timezone
 
 from fastapi import HTTPException, status
 
@@ -22,6 +24,25 @@ GDRIVE_FOLDER_ID_TOKO = os.getenv("GDRIVE_FOLDER_ID_TOKO")
 
 _ALLOWED_CONTENT_TYPES = {"image/jpeg", "image/png", "image/webp"}
 _MAX_BYTES = 5 * 1024 * 1024  # 5 MB
+
+_NAMA_FILE_PREFIX = "ampelkuning"
+_CONTENT_TYPE_TO_EXT = {
+    "image/jpeg": ".jpg",
+    "image/png": ".png",
+    "image/webp": ".webp",
+}
+
+
+def build_nama_file_foto(content_type: str) -> str:
+    """Builds a standardized filename for every photo we upload to our own
+    Google Drive: ampelkuning_yyyymmdd_random.ext. `content_type` must
+    already be validated against _ALLOWED_CONTENT_TYPES -- the extension is
+    always derived from it, never trusted from any caller-supplied filename,
+    so the extension is guaranteed to match the actual file content."""
+    ext = _CONTENT_TYPE_TO_EXT[content_type]
+    tanggal = datetime.now(timezone.utc).strftime("%Y%m%d")
+    random_part = secrets.token_hex(4)
+    return f"{_NAMA_FILE_PREFIX}_{tanggal}_{random_part}{ext}"
 
 
 class UploadNotConfigured(HTTPException):
@@ -37,10 +58,13 @@ def _is_configured() -> bool:
     return bool(GDRIVE_FOLDER_ID_TOKO and has_creds)
 
 
-async def upload_produk_photo(file_bytes: bytes, file_name: str, content_type: str) -> str:
+async def upload_produk_photo(file_bytes: bytes, content_type: str) -> str:
     """Uploads to the toko Drive folder, makes it publicly viewable, and
     returns a direct embeddable image URL (not the Drive web viewer link,
-    which can't be used in an <img> tag)."""
+    which can't be used in an <img> tag). The uploaded filename is always
+    generated internally (see build_nama_file_foto) -- callers no longer
+    control it, so every file in GDRIVE_FOLDER_ID_TOKO follows the same
+    ampelkuning_yyyymmdd_random.ext pattern regardless of upload path."""
     if not _is_configured():
         raise UploadNotConfigured()
     if content_type not in _ALLOWED_CONTENT_TYPES:
@@ -51,6 +75,7 @@ async def upload_produk_photo(file_bytes: bytes, file_name: str, content_type: s
     if len(file_bytes) > _MAX_BYTES:
         raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Ukuran foto maksimal 5 MB")
 
+    file_name = build_nama_file_foto(content_type)
     result = await upload_file_to_gdrive(file_bytes, file_name, content_type, folder_id=GDRIVE_FOLDER_ID_TOKO)
     file_id = result["id"]
     await set_gdrive_file_public(file_id)

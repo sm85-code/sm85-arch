@@ -156,7 +156,7 @@ async def upload_foto_produk(
     butuh GDRIVE_FOLDER_ID_TOKO + kredensial service account terisi) lalu
     simpan URL-nya ke produk.foto_url."""
     file_bytes = await file.read()
-    foto_url = await upload_produk_photo(file_bytes, file.filename or produk_id, file.content_type or "")
+    foto_url = await upload_produk_photo(file_bytes, file.content_type or "")
     produk = await services.update_produk(session, produk_id, ProdukPatch(foto_url=foto_url))
     return services.produk_out(produk)
 
