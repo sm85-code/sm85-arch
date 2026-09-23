@@ -255,3 +255,89 @@ async def test_require_roles_toko_allows_admin_toko():
 
     result = await guard(user=admin)
     assert result is admin
+
+
+# --- Status change -> one-way marketplace sync (product decision A) --------
+
+
+@pytest.mark.asyncio
+async def test_ubah_status_to_ship_attempts_adapter_push_and_still_updates_locally(session):
+    """No credentials configured on the akun/adapter, so the Shopee adapter
+    raises ShopeeNotConfigured (503) -- the push attempt must be soft-fail:
+    the local status still moves to to_ship, and the outcome is recorded."""
+    pesanan = await _make_pesanan_erp(session, platform="shopee", id_eksternal="S-SYNC-1", status_="unpaid")
+
+    updated = await erp_services.ubah_status_pesanan_erp(session, pesanan.id, "to_ship")
+
+    assert updated.status == "to_ship"
+    assert updated.tersinkron_marketplace is False
+    assert updated.catatan_sinkron
+    assert "shopee" in updated.catatan_sinkron.lower() or "Shopee" in updated.catatan_sinkron
+
+
+@pytest.mark.asyncio
+async def test_ubah_status_to_ship_success_marks_tersinkron_true(session, monkeypatch):
+    """When the adapter call actually succeeds (mocked here since real
+    credentials never exist in tests), tersinkron_marketplace must be True
+    and catatan_sinkron should say so."""
+    from tenants.toko.modules.erp.infrastructure import erp_shopee
+
+    async def _fake_proses_pesanan(akun, pesanan):
+        return None
+
+    monkeypatch.setattr(erp_shopee, "proses_pesanan", _fake_proses_pesanan)
+
+    pesanan = await _make_pesanan_erp(session, platform="shopee", id_eksternal="S-SYNC-2", status_="unpaid")
+    updated = await erp_services.ubah_status_pesanan_erp(session, pesanan.id, "to_ship")
+
+    assert updated.status == "to_ship"
+    assert updated.tersinkron_marketplace is True
+    assert "berhasil" in updated.catatan_sinkron.lower()
+
+
+@pytest.mark.asyncio
+async def test_ubah_status_to_ship_dispatches_by_platform(session, monkeypatch):
+    from tenants.toko.modules.erp.infrastructure import erp_lazada
+
+    called = {}
+
+    async def _fake_proses_pesanan(akun, pesanan):
+        called["platform"] = akun.platform
+
+    monkeypatch.setattr(erp_lazada, "proses_pesanan", _fake_proses_pesanan)
+
+    pesanan = await _make_pesanan_erp(session, platform="lazada", id_eksternal="L-SYNC-1", status_="unpaid")
+    await erp_services.ubah_status_pesanan_erp(session, pesanan.id, "to_ship")
+
+    assert called["platform"] == "lazada"
+
+
+@pytest.mark.asyncio
+async def test_ubah_status_to_shipped_does_not_call_adapter(session, monkeypatch):
+    """'shipped' (Kirim Pesanan) must NOT touch any adapter at all -- the
+    marketplace's own logistics handles pickup automatically once to_ship
+    was acknowledged."""
+    from tenants.toko.modules.erp.infrastructure import erp_shopee
+
+    def _boom(*args, **kwargs):
+        raise AssertionError("proses_pesanan should not be called for 'shipped' transition")
+
+    monkeypatch.setattr(erp_shopee, "proses_pesanan", _boom)
+
+    pesanan = await _make_pesanan_erp(session, platform="shopee", id_eksternal="S-SYNC-3", status_="to_ship")
+
+    updated = await erp_services.ubah_status_pesanan_erp(session, pesanan.id, "shipped")
+
+    assert updated.status == "shipped"
+    # No push attempted for this transition -- sync fields stay at default.
+    assert updated.tersinkron_marketplace is False
+    assert updated.catatan_sinkron is None
+
+
+@pytest.mark.asyncio
+async def test_pesanan_erp_out_includes_sync_fields(session):
+    pesanan = await _make_pesanan_erp(session, platform="blibli", id_eksternal="B-SYNC-1", status_="unpaid")
+    updated = await erp_services.ubah_status_pesanan_erp(session, pesanan.id, "to_ship")
+    out = erp_services.pesanan_erp_out(updated)
+    assert "tersinkron_marketplace" in out
+    assert "catatan_sinkron" in out

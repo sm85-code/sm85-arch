@@ -23,6 +23,14 @@ from tenants.toko.modules.erp.infrastructure.models import (
 )
 from tenants.toko.modules.toko.infrastructure.models import ProdukToko
 
+# Platform -> adapter module dispatch for the one-way local->marketplace
+# push on order status change (see ubah_status_pesanan_erp). Imported
+# lazily-by-name here (not per-call) so a missing/broken adapter module
+# fails at import time, same as any other module-level wiring.
+from tenants.toko.modules.erp.infrastructure import erp_blibli, erp_lazada, erp_shopee
+
+_ADAPTER_MODULES = {"shopee": erp_shopee, "lazada": erp_lazada, "blibli": erp_blibli}
+
 # Transisi status pesanan marketplace yang diizinkan -- linear, tanpa
 # jalur retur/refund (di luar scope modul ini, sama seperti
 # tenants/toko/modules/toko/application/services.py::_TRANSISI_STATUS).
@@ -251,6 +259,8 @@ def pesanan_erp_out(pesanan: PesananERP) -> dict:
         "status": pesanan.status,
         "nama_pembeli": pesanan.nama_pembeli,
         "total": str(pesanan.total),
+        "tersinkron_marketplace": pesanan.tersinkron_marketplace,
+        "catatan_sinkron": pesanan.catatan_sinkron,
         "created_at": pesanan.created_at.isoformat(),
         "items": [
             {
@@ -301,11 +311,42 @@ async def terima_pesanan_erp(
 
 
 async def get_pesanan_erp(session: AsyncSession, pesanan_id: str) -> PesananERP:
-    stmt = select(PesananERP).where(PesananERP.id == pesanan_id).options(selectinload(PesananERP.items))
+    stmt = (
+        select(PesananERP)
+        .where(PesananERP.id == pesanan_id)
+        .options(selectinload(PesananERP.items), selectinload(PesananERP.akun))
+    )
     pesanan = (await session.execute(stmt)).scalar_one_or_none()
     if not pesanan:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Pesanan ERP tidak ditemukan")
     return pesanan
+
+
+async def _dorong_proses_pesanan_ke_marketplace(session: AsyncSession, pesanan: PesananERP) -> None:
+    """Attempt the one-way local->marketplace push for the "to_ship"
+    ("Proses Pesanan") transition -- soft-fail: whatever the platform
+    adapter raises (NotConfigured 503, NotImplementedError, or anything
+    else) is caught here and recorded on the row via
+    tersinkron_marketplace/catatan_sinkron. The caller's local status
+    change is never rolled back because of this, by design (see PR
+    description / product decision A)."""
+    adapter = _ADAPTER_MODULES.get(pesanan.platform)
+    akun = pesanan.akun if pesanan.akun_id else None
+    if adapter is None or akun is None:
+        pesanan.tersinkron_marketplace = False
+        pesanan.catatan_sinkron = "Tidak bisa disinkronkan: akun marketplace untuk pesanan ini tidak ditemukan"
+        return
+    try:
+        await adapter.proses_pesanan(akun, pesanan)
+    except HTTPException as exc:
+        pesanan.tersinkron_marketplace = False
+        pesanan.catatan_sinkron = str(exc.detail)
+    except Exception as exc:  # noqa: BLE001 -- deliberately broad, see docstring
+        pesanan.tersinkron_marketplace = False
+        pesanan.catatan_sinkron = str(exc)
+    else:
+        pesanan.tersinkron_marketplace = True
+        pesanan.catatan_sinkron = f"Berhasil disinkronkan ke {pesanan.platform.capitalize()}"
 
 
 async def ubah_status_pesanan_erp(session: AsyncSession, pesanan_id: str, status_baru: str) -> PesananERP:
@@ -318,6 +359,12 @@ async def ubah_status_pesanan_erp(session: AsyncSession, pesanan_id: str, status
             detail=f"Tidak bisa ubah status dari '{pesanan.status}' ke '{status_baru}'",
         )
     pesanan.status = status_baru
+    if status_baru == "to_ship":
+        # "Proses Pesanan": attempt to push this to the marketplace --
+        # "shipped" ("Kirim Pesanan") deliberately does NOT call any
+        # adapter, the platform's own logistics system handles
+        # pickup/drop-off automatically once "to_ship" was acknowledged.
+        await _dorong_proses_pesanan_ke_marketplace(session, pesanan)
     await session.flush()
     return pesanan
 

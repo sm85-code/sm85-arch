@@ -46,6 +46,32 @@ class UserToko(TokoBase):
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=_utcnow)
 
 
+METODE_PROSES_PESANAN = ("pickup", "drop_off")
+
+
+class PengaturanToko(TokoBase):
+    """Single-row global settings for the web storefront's own order
+    processing -- separate from the marketplace ERP module entirely (see
+    tenants/toko/modules/erp/), and separate from any per-order or
+    per-product setting. Currently holds one preference:
+    metode_proses_pesanan (pickup/drop_off), which governs how the admin
+    is expected to fulfil web orders. This is a STORED PREFERENCE only for
+    now -- the real Biteship pickup-request API call is still a stub, see
+    infrastructure/shipping_biteship.py. Singleton pattern: id is a fixed
+    constant so there is always at most one row (see
+    application/services.py::get_or_create_pengaturan), simplest option for
+    a single boolean-ish setting -- a generic key/value table would be
+    overkill for one field."""
+
+    __tablename__ = "toko_pengaturan"
+
+    SINGLETON_ID = "global"
+
+    id: Mapped[str] = mapped_column(String(64), primary_key=True, default=lambda: PengaturanToko.SINGLETON_ID)
+    metode_proses_pesanan: Mapped[str] = mapped_column(String(16), nullable=False, default="drop_off")
+    updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=_utcnow, onupdate=_utcnow)
+
+
 class KategoriToko(TokoBase):
     __tablename__ = "toko_kategori"
 

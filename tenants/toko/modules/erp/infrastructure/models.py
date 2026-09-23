@@ -150,10 +150,24 @@ class PesananERP(TokoBase):
     status: Mapped[str] = mapped_column(String(32), nullable=False, default="unpaid", index=True)
     nama_pembeli: Mapped[str] = mapped_column(String(255), nullable=False, default="")
     total: Mapped[Decimal] = mapped_column(Numeric(20, 2), nullable=False, default=Decimal("0"))
+    # One-way local->marketplace sync attempt outcome, recorded on every
+    # status-change attempt that pushes to the platform adapter (currently
+    # only the transition to "to_ship" -- see services.ubah_status_pesanan_erp
+    # and infrastructure/erp_<platform>.py::proses_pesanan). Nullable/
+    # additive; rows never pushed (or created before this field existed)
+    # stay at the default. tersinkron_marketplace is only ever True when the
+    # adapter call actually completed without raising -- both the
+    # "not configured" (503) and "not implemented" adapter paths, and any
+    # other exception, are recorded as a failed attempt (False) with the
+    # reason in catatan_sinkron so the local status update is never blocked
+    # by the marketplace push not being wired up yet.
+    tersinkron_marketplace: Mapped[bool] = mapped_column(Boolean, nullable=False, default=False)
+    catatan_sinkron: Mapped[Optional[str]] = mapped_column(Text, nullable=True)
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=_utcnow)
     updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=_utcnow, onupdate=_utcnow)
 
     items: Mapped[list["ItemPesananERP"]] = relationship(back_populates="pesanan")
+    akun: Mapped[Optional["AkunMarketplace"]] = relationship()
 
 
 class ItemPesananERP(TokoBase):
