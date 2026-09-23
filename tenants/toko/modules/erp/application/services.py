@@ -1,11 +1,13 @@
 from __future__ import annotations
 
 import asyncio
+from datetime import date
+from decimal import Decimal
 from urllib.parse import urlsplit
 
 import requests
 from fastapi import HTTPException, status
-from sqlalchemy import select
+from sqlalchemy import func, select
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import selectinload
 
@@ -20,6 +22,7 @@ from tenants.toko.modules.erp.infrastructure.models import (
     PLATFORM_ERP,
     STATUS_PESANAN_ERP,
     AkunMarketplace,
+    ItemPesananERP,
     PercakapanERP,
     PesanChatERP,
     PesananERP,
@@ -65,6 +68,15 @@ _TRANSISI_STATUS_ERP = {
     "completed": set(),
     "cancelled": set(),
 }
+
+# Status pesanan ERP yang dihitung sebagai penjualan sah untuk laporan --
+# "unpaid" belum tentu jadi uang (pembeli belum bayar) dan "cancelled" jelas
+# bukan penjualan, jadi keduanya dikecualikan; "to_ship"/"shipped"/
+# "completed" berarti pembayaran sudah diterima dari marketplace, sama
+# persis dengan logika _STATUS_TERHITUNG_PENJUALAN di toko web module
+# (tenants/toko/modules/toko/application/services.py) -- "sudah lewat tahap
+# unpaid/cancelled berarti terhitung".
+_STATUS_TERHITUNG_PENJUALAN_ERP = ("to_ship", "shipped", "completed")
 
 
 def _validate_platform(platform: str) -> str:
@@ -521,3 +533,147 @@ async def kirim_pesan_erp(session: AsyncSession, percakapan_id: str, *, isi: str
     await session.flush()
     session.expire(percakapan, ["pesan"])
     return pesan
+
+
+# --- Laporan Penjualan ERP ---------------------------------------------------
+#
+# Mirror laporan_penjualan/laporan_produk_terlaris/laporan_ringkasan_status
+# di toko web module, tapi khusus PesananERP/ItemPesananERP, dan dengan
+# tambahan filter platform/akun_id -- admin toko bisa punya BEBERAPA toko
+# pada platform yang sama (mis. 3 toko Shopee), jadi laporan yang cuma bisa
+# dipotong per-platform tidak cukup untuk membandingkan performa per toko.
+
+
+def _apply_filter_platform_akun(stmt, *, platform: str | None, akun_id: str | None):
+    if platform:
+        stmt = stmt.where(PesananERP.platform == _validate_platform(platform))
+    if akun_id:
+        stmt = stmt.where(PesananERP.akun_id == akun_id)
+    return stmt
+
+
+async def laporan_penjualan_erp(
+    session: AsyncSession,
+    dari: date,
+    sampai: date,
+    *,
+    platform: str | None = None,
+    akun_id: str | None = None,
+) -> dict:
+    """Total penjualan per hari, dalam rentang [dari, sampai] inklusif.
+    Hanya menghitung pesanan berstatus to_ship/shipped/completed -- lihat
+    _STATUS_TERHITUNG_PENJUALAN_ERP. Opsional difilter ke satu platform dan/
+    atau satu akun (toko) saja."""
+    stmt = (
+        select(
+            func.date(PesananERP.created_at).label("tanggal"),
+            func.count(PesananERP.id).label("jumlah_pesanan"),
+            func.sum(PesananERP.total).label("total_penjualan"),
+        )
+        .where(
+            PesananERP.status.in_(_STATUS_TERHITUNG_PENJUALAN_ERP),
+            func.date(PesananERP.created_at) >= dari,
+            func.date(PesananERP.created_at) <= sampai,
+        )
+        .group_by(func.date(PesananERP.created_at))
+        .order_by(func.date(PesananERP.created_at))
+    )
+    stmt = _apply_filter_platform_akun(stmt, platform=platform, akun_id=akun_id)
+    rows = (await session.execute(stmt)).all()
+    harian = [
+        {
+            "tanggal": r.tanggal if isinstance(r.tanggal, str) else r.tanggal.isoformat(),
+            "jumlah_pesanan": r.jumlah_pesanan,
+            "total_penjualan": str(r.total_penjualan or Decimal("0")),
+        }
+        for r in rows
+    ]
+    grand_total = sum((Decimal(h["total_penjualan"]) for h in harian), Decimal("0"))
+    return {"dari": dari.isoformat(), "sampai": sampai.isoformat(), "harian": harian, "grand_total": str(grand_total)}
+
+
+async def laporan_produk_terlaris_erp(
+    session: AsyncSession,
+    dari: date,
+    sampai: date,
+    limit: int = 10,
+    *,
+    platform: str | None = None,
+    akun_id: str | None = None,
+) -> list[dict]:
+    stmt = (
+        select(
+            ItemPesananERP.produk_erp_id,
+            ItemPesananERP.nama_produk,
+            func.sum(ItemPesananERP.qty).label("total_qty"),
+            func.sum(ItemPesananERP.subtotal).label("total_omzet"),
+        )
+        .join(PesananERP, PesananERP.id == ItemPesananERP.pesanan_id)
+        .where(
+            PesananERP.status.in_(_STATUS_TERHITUNG_PENJUALAN_ERP),
+            func.date(PesananERP.created_at) >= dari,
+            func.date(PesananERP.created_at) <= sampai,
+        )
+        .group_by(ItemPesananERP.produk_erp_id, ItemPesananERP.nama_produk)
+        .order_by(func.sum(ItemPesananERP.qty).desc())
+        .limit(limit)
+    )
+    stmt = _apply_filter_platform_akun(stmt, platform=platform, akun_id=akun_id)
+    rows = (await session.execute(stmt)).all()
+    return [
+        {
+            "produk_erp_id": r.produk_erp_id,
+            "nama_produk": r.nama_produk,
+            "total_qty": r.total_qty,
+            "total_omzet": str(r.total_omzet or Decimal("0")),
+        }
+        for r in rows
+    ]
+
+
+async def laporan_ringkasan_status_erp(
+    session: AsyncSession, *, platform: str | None = None, akun_id: str | None = None
+) -> dict:
+    stmt = select(PesananERP.status, func.count(PesananERP.id)).group_by(PesananERP.status)
+    stmt = _apply_filter_platform_akun(stmt, platform=platform, akun_id=akun_id)
+    rows = (await session.execute(stmt)).all()
+    return {status_: jumlah for status_, jumlah in rows}
+
+
+async def laporan_per_akun(session: AsyncSession, dari: date, sampai: date) -> list[dict]:
+    """Total penjualan per akun (toko) marketplace, dalam rentang [dari,
+    sampai] inklusif -- supaya admin bisa membandingkan performa toko demi
+    toko lintas platform dalam satu tampilan, bukan cuma dipotong per
+    platform. Hanya menyertakan akun yang punya minimal satu pesanan
+    terhitung (lihat _STATUS_TERHITUNG_PENJUALAN_ERP) dalam rentang -- akun
+    yang belum/tidak berjualan pada rentang itu tidak muncul dengan angka
+    nol, supaya daftar tetap ringkas dan fokus ke toko yang sedang aktif
+    berjualan (bukan seluruh akun terdaftar, termasuk yang nonaktif)."""
+    stmt = (
+        select(
+            AkunMarketplace.id.label("akun_id"),
+            AkunMarketplace.nama_toko,
+            AkunMarketplace.platform,
+            func.count(PesananERP.id).label("jumlah_pesanan"),
+            func.sum(PesananERP.total).label("total_penjualan"),
+        )
+        .join(PesananERP, PesananERP.akun_id == AkunMarketplace.id)
+        .where(
+            PesananERP.status.in_(_STATUS_TERHITUNG_PENJUALAN_ERP),
+            func.date(PesananERP.created_at) >= dari,
+            func.date(PesananERP.created_at) <= sampai,
+        )
+        .group_by(AkunMarketplace.id, AkunMarketplace.nama_toko, AkunMarketplace.platform)
+        .order_by(func.sum(PesananERP.total).desc())
+    )
+    rows = (await session.execute(stmt)).all()
+    return [
+        {
+            "akun_id": r.akun_id,
+            "nama_toko": r.nama_toko,
+            "platform": r.platform,
+            "jumlah_pesanan": r.jumlah_pesanan,
+            "total_penjualan": str(r.total_penjualan or Decimal("0")),
+        }
+        for r in rows
+    ]

@@ -14,6 +14,8 @@ the toko admin surface.
 """
 from __future__ import annotations
 
+from datetime import date
+
 from fastapi import APIRouter, Depends
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -242,3 +244,51 @@ async def admin_kirim_pesan_erp(
     await services.kirim_pesan_erp(session, percakapan_id, isi=payload.isi, pengirim_admin=True)
     percakapan = await services.get_percakapan_erp(session, percakapan_id)
     return services.percakapan_erp_out(percakapan, dengan_pesan=True)
+
+
+# --- Laporan Penjualan ERP ---------------------------------------------------
+
+
+@erp_router.get("/admin/laporan/penjualan")
+async def admin_laporan_penjualan_erp(
+    dari: date,
+    sampai: date,
+    platform: str | None = None,
+    akun_id: str | None = None,
+    session: AsyncSession = Depends(get_db_toko),
+    _user: UserToko = Depends(require_roles_toko(*ADMIN_ROLES)),
+):
+    return await services.laporan_penjualan_erp(session, dari, sampai, platform=platform, akun_id=akun_id)
+
+
+@erp_router.get("/admin/laporan/produk-terlaris")
+async def admin_laporan_produk_terlaris_erp(
+    dari: date,
+    sampai: date,
+    limit: int = 10,
+    platform: str | None = None,
+    akun_id: str | None = None,
+    session: AsyncSession = Depends(get_db_toko),
+    _user: UserToko = Depends(require_roles_toko(*ADMIN_ROLES)),
+):
+    return await services.laporan_produk_terlaris_erp(session, dari, sampai, limit, platform=platform, akun_id=akun_id)
+
+
+@erp_router.get("/admin/laporan/ringkasan-status")
+async def admin_laporan_ringkasan_status_erp(
+    platform: str | None = None,
+    akun_id: str | None = None,
+    session: AsyncSession = Depends(get_db_toko),
+    _user: UserToko = Depends(require_roles_toko(*ADMIN_ROLES)),
+):
+    return await services.laporan_ringkasan_status_erp(session, platform=platform, akun_id=akun_id)
+
+
+@erp_router.get("/admin/laporan/per-akun")
+async def admin_laporan_per_akun(
+    dari: date,
+    sampai: date,
+    session: AsyncSession = Depends(get_db_toko),
+    _user: UserToko = Depends(require_roles_toko(*ADMIN_ROLES)),
+):
+    return await services.laporan_per_akun(session, dari, sampai)
