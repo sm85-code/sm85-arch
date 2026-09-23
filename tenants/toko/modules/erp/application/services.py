@@ -210,13 +210,19 @@ def produk_erp_out(produk: ProdukERP) -> dict:
 
 
 async def list_produk_erp(
-    session: AsyncSession, *, platform: str | None = None, akun_id: str | None = None
+    session: AsyncSession,
+    *,
+    platform: str | None = None,
+    akun_id: str | None = None,
+    akun_ids: list[str] | None = None,
 ) -> list[ProdukERP]:
     stmt = select(ProdukERP).order_by(ProdukERP.created_at.desc())
     if platform:
         stmt = stmt.where(ProdukERP.platform == _validate_platform(platform))
     if akun_id:
         stmt = stmt.where(ProdukERP.akun_id == akun_id)
+    if akun_ids is not None:
+        stmt = stmt.where(ProdukERP.akun_id.in_(akun_ids))
     return list((await session.execute(stmt)).scalars().all())
 
 
@@ -362,13 +368,19 @@ def pesanan_erp_out(pesanan: PesananERP) -> dict:
 
 
 async def list_pesanan_erp(
-    session: AsyncSession, *, platform: str | None = None, akun_id: str | None = None
+    session: AsyncSession,
+    *,
+    platform: str | None = None,
+    akun_id: str | None = None,
+    akun_ids: list[str] | None = None,
 ) -> list[PesananERP]:
     stmt = select(PesananERP).options(selectinload(PesananERP.items)).order_by(PesananERP.created_at.desc())
     if platform:
         stmt = stmt.where(PesananERP.platform == _validate_platform(platform))
     if akun_id:
         stmt = stmt.where(PesananERP.akun_id == akun_id)
+    if akun_ids is not None:
+        stmt = stmt.where(PesananERP.akun_id.in_(akun_ids))
     return list((await session.execute(stmt)).scalars().all())
 
 
@@ -483,7 +495,11 @@ def percakapan_erp_out(percakapan: PercakapanERP, *, dengan_pesan: bool = False)
 
 
 async def list_percakapan_erp(
-    session: AsyncSession, *, platform: str | None = None, akun_id: str | None = None
+    session: AsyncSession,
+    *,
+    platform: str | None = None,
+    akun_id: str | None = None,
+    akun_ids: list[str] | None = None,
 ) -> list[PercakapanERP]:
     """Inbox gabungan: satu daftar berisi thread dari ketiga platform
     sekaligus, sort terbaru dulu, opsional difilter ke satu platform dan/
@@ -493,6 +509,8 @@ async def list_percakapan_erp(
         stmt = stmt.where(PercakapanERP.platform == _validate_platform(platform))
     if akun_id:
         stmt = stmt.where(PercakapanERP.akun_id == akun_id)
+    if akun_ids is not None:
+        stmt = stmt.where(PercakapanERP.akun_id.in_(akun_ids))
     return list((await session.execute(stmt)).scalars().all())
 
 
@@ -544,11 +562,15 @@ async def kirim_pesan_erp(session: AsyncSession, percakapan_id: str, *, isi: str
 # dipotong per-platform tidak cukup untuk membandingkan performa per toko.
 
 
-def _apply_filter_platform_akun(stmt, *, platform: str | None, akun_id: str | None):
+def _apply_filter_platform_akun(
+    stmt, *, platform: str | None, akun_id: str | None, akun_ids: list[str] | None = None
+):
     if platform:
         stmt = stmt.where(PesananERP.platform == _validate_platform(platform))
     if akun_id:
         stmt = stmt.where(PesananERP.akun_id == akun_id)
+    if akun_ids is not None:
+        stmt = stmt.where(PesananERP.akun_id.in_(akun_ids))
     return stmt
 
 
@@ -559,6 +581,7 @@ async def laporan_penjualan_erp(
     *,
     platform: str | None = None,
     akun_id: str | None = None,
+    akun_ids: list[str] | None = None,
 ) -> dict:
     """Total penjualan per hari, dalam rentang [dari, sampai] inklusif.
     Hanya menghitung pesanan berstatus to_ship/shipped/completed -- lihat
@@ -578,7 +601,7 @@ async def laporan_penjualan_erp(
         .group_by(func.date(PesananERP.created_at))
         .order_by(func.date(PesananERP.created_at))
     )
-    stmt = _apply_filter_platform_akun(stmt, platform=platform, akun_id=akun_id)
+    stmt = _apply_filter_platform_akun(stmt, platform=platform, akun_id=akun_id, akun_ids=akun_ids)
     rows = (await session.execute(stmt)).all()
     harian = [
         {
@@ -600,6 +623,7 @@ async def laporan_produk_terlaris_erp(
     *,
     platform: str | None = None,
     akun_id: str | None = None,
+    akun_ids: list[str] | None = None,
 ) -> list[dict]:
     stmt = (
         select(
@@ -618,7 +642,7 @@ async def laporan_produk_terlaris_erp(
         .order_by(func.sum(ItemPesananERP.qty).desc())
         .limit(limit)
     )
-    stmt = _apply_filter_platform_akun(stmt, platform=platform, akun_id=akun_id)
+    stmt = _apply_filter_platform_akun(stmt, platform=platform, akun_id=akun_id, akun_ids=akun_ids)
     rows = (await session.execute(stmt)).all()
     return [
         {
@@ -632,15 +656,21 @@ async def laporan_produk_terlaris_erp(
 
 
 async def laporan_ringkasan_status_erp(
-    session: AsyncSession, *, platform: str | None = None, akun_id: str | None = None
+    session: AsyncSession,
+    *,
+    platform: str | None = None,
+    akun_id: str | None = None,
+    akun_ids: list[str] | None = None,
 ) -> dict:
     stmt = select(PesananERP.status, func.count(PesananERP.id)).group_by(PesananERP.status)
-    stmt = _apply_filter_platform_akun(stmt, platform=platform, akun_id=akun_id)
+    stmt = _apply_filter_platform_akun(stmt, platform=platform, akun_id=akun_id, akun_ids=akun_ids)
     rows = (await session.execute(stmt)).all()
     return {status_: jumlah for status_, jumlah in rows}
 
 
-async def laporan_per_akun(session: AsyncSession, dari: date, sampai: date) -> list[dict]:
+async def laporan_per_akun(
+    session: AsyncSession, dari: date, sampai: date, *, akun_ids: list[str] | None = None
+) -> list[dict]:
     """Total penjualan per akun (toko) marketplace, dalam rentang [dari,
     sampai] inklusif -- supaya admin bisa membandingkan performa toko demi
     toko lintas platform dalam satu tampilan, bukan cuma dipotong per
@@ -666,6 +696,8 @@ async def laporan_per_akun(session: AsyncSession, dari: date, sampai: date) -> l
         .group_by(AkunMarketplace.id, AkunMarketplace.nama_toko, AkunMarketplace.platform)
         .order_by(func.sum(PesananERP.total).desc())
     )
+    if akun_ids is not None:
+        stmt = stmt.where(AkunMarketplace.id.in_(akun_ids))
     rows = (await session.execute(stmt)).all()
     return [
         {

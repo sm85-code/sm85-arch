@@ -39,9 +39,15 @@ class UserToko(TokoBase):
     # menautkan akun Google ke UserToko secara stabil, bukan cuma
     # mengandalkan kecocokan email (email teknisnya bisa berubah pemilik).
     google_sub: Mapped[Optional[str]] = mapped_column(String(255), unique=True, nullable=True, index=True)
-    # admin_toko: kelola produk & pesanan. owner: full akses + laporan.
+    # admin_toko: kelola produk & pesanan (toko-web + marketplace ERP, full
+    # akses ke keduanya). owner: full akses + laporan (juga ke keduanya).
     # pembeli: akun customer (opsional -- checkout sebagai guest juga didukung
     # nanti di modul pesanan).
+    # admin_toko_web: staff baru, full akses ke modul toko-web SAJA (tidak
+    # bisa ke marketplace ERP). admin_marketplace: staff baru, akses ke modul
+    # marketplace ERP SAJA, dan dibatasi lagi ke AkunMarketplace (toko) yang
+    # ditugaskan lewat toko_staff_akun (StaffAkunMarketplace) -- lihat
+    # tenants/toko/modules/toko/infrastructure/auth.py::akun_ids_diizinkan.
     role: Mapped[str] = mapped_column(String(32), nullable=False, index=True, default="pembeli")
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=_utcnow)
 

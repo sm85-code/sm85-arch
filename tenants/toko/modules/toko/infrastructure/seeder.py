@@ -62,6 +62,12 @@ async def _ensure_columns(conn) -> None:
             "metode_proses_pesanan VARCHAR(16) NOT NULL DEFAULT 'drop_off'"
         )
     )
+    # toko_staff_akun (StaffAkunMarketplace, modules/erp/infrastructure/
+    # models.py) is a BRAND NEW table -- no ALTER TABLE needed, it is picked
+    # up entirely by TokoBase.metadata.create_all() above (registered on the
+    # metadata via the `_erp_models` import at the top of this file). New
+    # roles admin_toko_web/admin_marketplace on toko_users.role need no
+    # schema change either -- role stays free-text (see UserToko.role).
 
 
 async def _migrate_free_text_kategori(session: AsyncSession) -> None:
