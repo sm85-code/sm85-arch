@@ -18,20 +18,29 @@ from modules.siabumdes.adapters.api.scope import (
     scoped_unit_id,
 )
 from modules.siabumdes.adapters.external.excel_adapter import generate_excel_report, parse_excel_rows
+from modules.siabumdes.coa_taxonomy import categories_map, valid_pair
 from modules.siabumdes.identity.infrastructure.models import User
 from modules.siabumdes.infrastructure.models import Account, Mitra, TransactionType, UnitUsaha
 from shared.database import get_db
 
 router = APIRouter(prefix="/api", tags=["master-data"])
 
-VALID_CATEGORIES = {
-    "aset": {"kas_bank", "piutang", "persediaan", "aset_tetap", "aset_lain"},
-    "kewajiban": {"utang_usaha", "utang_lain", "utang_pajak"},
-    "ekuitas": {"modal", "saldo_laba"},
-    "pendapatan": {"pendapatan_usaha", "pendapatan_lain"},
-    "hpp": {"hpp"},
-    "beban": {"beban_operasi", "beban_lain"},
-}
+
+def _validate_category_pair(category: str, subcategory: str) -> Optional[str]:
+    """Validate (category, subcategory) against data/coa_taxonomy.xlsx -- the
+    single source of truth for what pairs are allowed (shared with the
+    startup seed via modules.siabumdes.coa_taxonomy). Returns an error
+    message, or None if valid.
+
+    A blank subcategory is accepted (kept backward compatible with accounts
+    that were created without one) -- only a *non-empty* subcategory must
+    match a real pair from the taxonomy.
+    """
+    if category not in categories_map():
+        return f"Kategori '{category}' tidak dikenal (lihat data/coa_taxonomy.xlsx)"
+    if subcategory and not valid_pair(category, subcategory):
+        return f"Subkategori '{subcategory}' tidak valid untuk kategori '{category}' (lihat data/coa_taxonomy.xlsx)"
+    return None
 
 
 class AccountIn(BaseModel):
@@ -160,16 +169,19 @@ async def create_account(
     ).scalar_one_or_none()
     if exists:
         raise HTTPException(status_code=400, detail=f"Kode akun {payload.code} sudah ada di kelompok {group}")
-    if payload.category not in VALID_CATEGORIES:
-        raise HTTPException(status_code=400, detail="Kategori tidak valid")
+    category = payload.category.strip().lower()
+    subcategory = (payload.subcategory or "").strip().lower()
+    error = _validate_category_pair(category, subcategory)
+    if error:
+        raise HTTPException(status_code=400, detail=error)
     if payload.normal_balance not in {"debit", "kredit"}:
         raise HTTPException(status_code=400, detail="normal_balance harus debit atau kredit")
     unit = (await session.execute(select(UnitUsaha).where(UnitUsaha.code == group))).scalar_one_or_none()
     row = Account(
         code=payload.code.strip(),
         name=payload.name.strip(),
-        category=payload.category.strip().lower(),
-        subcategory=(payload.subcategory or "").strip().lower(),
+        category=category,
+        subcategory=subcategory,
         normal_balance=payload.normal_balance,
         group_code=group,
         unit_usaha_id=unit.id if unit else None,
@@ -192,11 +204,18 @@ async def update_account(
     ).scalar_one_or_none()
     if not row:
         raise HTTPException(status_code=404, detail=f"Kode akun {code} tidak ditemukan di kelompok {group}")
+    category = payload.category.strip().lower()
+    subcategory = (payload.subcategory or "").strip().lower()
+    error = _validate_category_pair(category, subcategory)
+    if error:
+        raise HTTPException(status_code=400, detail=error)
+    if payload.normal_balance not in {"debit", "kredit"}:
+        raise HTTPException(status_code=400, detail="normal_balance harus debit atau kredit")
     target_group = (payload.group or group).strip().upper()
     row.code = payload.code.strip()
     row.name = payload.name.strip()
-    row.category = payload.category.strip().lower()
-    row.subcategory = (payload.subcategory or "").strip().lower()
+    row.category = category
+    row.subcategory = subcategory
     row.normal_balance = payload.normal_balance
     row.group_code = target_group
     await session.flush()
@@ -401,6 +420,11 @@ async def import_accounts(
             normal_balance = str(values[4] or "").strip().lower()
             if not (code and name and category and normal_balance):
                 skipped += 1
+                continue
+            pair_error = _validate_category_pair(category, subcategory)
+            if pair_error or normal_balance not in {"debit", "kredit"}:
+                skipped += 1
+                errors.append(f"Sheet '{sheet_name}' baris {idx} ({code}): {pair_error or 'normal_balance harus debit atau kredit'}")
                 continue
             exists = (
                 await session.execute(select(Account).where(Account.code == code, Account.group_code == sheet_name))
