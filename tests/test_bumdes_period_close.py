@@ -80,7 +80,7 @@ async def session():
 
 
 async def _seed_bumdes_accounts(session: AsyncSession) -> None:
-    from shared.coa_taxonomy import (
+    from modules.siabumdes.coa_taxonomy import (
         SUB_BAGI_HASIL_DESA,
         SUB_IKHTISAR_LR,
         SUB_LABA_DICADANGKAN,

@@ -29,7 +29,7 @@ def test_format_money_passes_through_non_numeric_and_empty():
 def test_branding_from_org_profile_converts_db_row_to_report_branding():
     from types import SimpleNamespace
 
-    from shared.report_branding import branding_from_org_profile
+    from modules.siabumdes.report_branding import branding_from_org_profile
 
     # A plain stand-in for the OrgProfile ORM row: branding_from_org_profile
     # only reads attributes, and importing the real model would pull in

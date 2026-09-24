@@ -18,13 +18,13 @@ from modules.siabumdes.infrastructure.models import (
     Transaction,
     UnitUsaha,
 )
-from shared.coa_taxonomy import (
+from modules.siabumdes.coa_taxonomy import (
     SUB_BAGI_HASIL_DESA,
     SUB_IKHTISAR_LR,
     SUB_LABA_DICADANGKAN,
     SUB_SALDO_LABA,
 )
-from shared.period import (
+from modules.siabumdes.period import (
     UNIT_GROUP_CODES,
     assert_period_kind_matches_group,
     period_kind,

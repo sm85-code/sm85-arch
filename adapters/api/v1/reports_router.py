@@ -19,7 +19,7 @@ from modules.siabumdes.identity.infrastructure.models import User
 from modules.siabumdes.application.reporting import ReportingService
 from shared.config import REPORT_READ_LEVEL
 from shared.database import get_db
-from shared.report_branding import ReportBranding, branding_from_org_profile
+from modules.siabumdes.report_branding import ReportBranding, branding_from_org_profile
 
 router = APIRouter(prefix="/api", tags=["reports"])
 READ = require_roles(*REPORT_READ_LEVEL)

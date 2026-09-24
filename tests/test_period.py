@@ -1,4 +1,4 @@
-"""shared.period: both BUMDES (Pusat) and unit usaha (UU01..UU06) close
+"""modules.siabumdes.period: both BUMDES (Pusat) and unit usaha (UU01..UU06) close
 monthly ("YYYY-MM"). Deliberately DB-independent (no import of
 modules.siabumdes.identity/siabumdes models, which require DATABASE_URL) so it runs
 in CI same as everything else in this file's suite."""
@@ -8,7 +8,7 @@ from datetime import date
 
 import pytest
 
-from shared.period import (
+from modules.siabumdes.period import (
     assert_period_kind_matches_group,
     period_kind,
     period_range,

@@ -10,7 +10,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from modules.siabumdes.identity.infrastructure.models import ClosedPeriod, OrgProfile, SystemControl, User
 from shared.config import PUBLIC_ROLES, public_role
-from shared.report_branding import get_report_branding
+from modules.siabumdes.report_branding import get_report_branding
 from shared.security import hash_password, verify_password
 
 _PERIOD_RE = re.compile(r"^\d{4}-\d{2}$")

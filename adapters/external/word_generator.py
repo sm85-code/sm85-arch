@@ -16,7 +16,7 @@ from docx.oxml.ns import qn
 from docx.shared import Pt, RGBColor, Cm
 
 from adapters.external.report_formatting import format_money, is_money_header, looks_numeric, row_is_total
-from shared.report_branding import ReportBranding, fetch_logo_bytes, get_report_branding
+from modules.siabumdes.report_branding import ReportBranding, fetch_logo_bytes, get_report_branding
 
 _is_money_header = is_money_header
 _row_is_total = row_is_total
