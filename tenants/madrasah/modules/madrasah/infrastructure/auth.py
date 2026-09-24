@@ -1,7 +1,7 @@
 """Authentication dependencies isolated to the madrasah module.
 
-This file is new and does not modify anything under shared/, adapters/api/deps.py,
-or adapters/api/scope.py (the BUMDes auth stack). It reuses only the generic
+This file is new and does not modify anything under shared/, modules/siabumdes/adapters/api/deps.py,
+or modules/siabumdes/adapters/api/scope.py (the BUMDes auth stack). It reuses only the generic
 JWT encode/decode primitives from shared.security, but never the BUMDes-specific
 cookie name (JWT_COOKIE_NAME/bumdes_token) or set_auth_cookie/clear_auth_cookie/
 token_from_request helpers, since those are hardcoded to that cookie name and
