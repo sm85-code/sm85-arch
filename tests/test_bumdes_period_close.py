@@ -18,14 +18,20 @@ import os
 
 import pytest
 import pytest_asyncio
-from fastapi import HTTPException
-from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker, create_async_engine
 
-from adapters.api.scope import assert_can_mutate_period
-from modules.identity.infrastructure.models import ClosedPeriod, SystemControl, User
-from modules.siabumdes.application.closing import run_monthly_close
-from modules.siabumdes.infrastructure.models import Account
-from shared.database import Base
+# Skip before importing any project module: they pull in shared.database,
+# which raises at import time when DATABASE_URL is unset (as in CI).
+if not os.getenv("DATABASE_URL", "").startswith("postgresql"):
+    pytest.skip("Requires a real Postgres DATABASE_URL", allow_module_level=True)
+
+from fastapi import HTTPException  # noqa: E402
+from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker, create_async_engine  # noqa: E402
+
+from adapters.api.scope import assert_can_mutate_period  # noqa: E402
+from modules.identity.infrastructure.models import ClosedPeriod, SystemControl, User  # noqa: E402
+from modules.siabumdes.application.closing import run_monthly_close  # noqa: E402
+from modules.siabumdes.infrastructure.models import Account  # noqa: E402
+from shared.database import Base  # noqa: E402
 
 DATABASE_URL = os.getenv("DATABASE_URL", "")
 pytestmark = pytest.mark.skipif(

@@ -11,6 +11,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from modules.siabumdes.infrastructure.models import Account, Transaction, UnitUsaha
 from shared.coa_taxonomy import SUB_BAGI_HASIL_DESA, SUB_LABA_DICADANGKAN, SUB_MODAL_DESA
+from shared.period import seed_period_buckets
 
 
 def _f(value: Decimal | float | int | None) -> float:
@@ -19,34 +20,6 @@ def _f(value: Decimal | float | int | None) -> float:
 
 def _r(value: float | Decimal | int | None) -> float:
     return round(float(value or 0), 2)
-
-
-def _seed_period_buckets(
-    monthly: dict[str, dict[str, float]], start: date, end: date, bucket_len: int
-) -> None:
-    """Pre-fill every bucket in [start, end] with a zero-value row.
-
-    Matches /api/public/summary's behavior of always returning a full,
-    contiguous set of periods (e.g. all 12 months of a year) rather than
-    only the periods that happen to contain a transaction -- otherwise a
-    trend chart for the current year silently stops at the last month with
-    data instead of showing the full year with trailing zeros.
-    """
-    if bucket_len == 10:  # daily buckets, key = "YYYY-MM-DD"
-        cur = start
-        while cur <= end:
-            key = cur.isoformat()
-            monthly.setdefault(key, {"month": key, "pendapatan": 0.0, "beban": 0.0})
-            cur += timedelta(days=1)
-    else:  # monthly buckets, key = "YYYY-MM"
-        y, m = start.year, start.month
-        while (y, m) <= (end.year, end.month):
-            key = f"{y}-{m:02d}"
-            monthly.setdefault(key, {"month": key, "pendapatan": 0.0, "beban": 0.0})
-            m += 1
-            if m > 12:
-                m = 1
-                y += 1
 
 
 def _acc_text(acc: Account) -> str:
@@ -516,7 +489,7 @@ class ReportingService:
         bucket_len = 10 if granularity == "day" else 7
         monthly: dict[str, dict[str, float]] = {}
         if start and end:
-            _seed_period_buckets(monthly, start, end, bucket_len)
+            seed_period_buckets(monthly, start, end, bucket_len)
         group = await self._group_for(unit_usaha_id)
         accounts = {a.code: a for a in await self._accounts(group)}
         trend_txs = txs if unit_usaha_id or pusat_kpis else await self._txs(start=start, end=end, pusat_only=True)

@@ -170,32 +170,31 @@ async def run_monthly_close(
         amt = _money(amount)
         raw = (code or "").strip()
         acc = accounts.get(raw) or by_plain.get(raw) or by_plain.get(raw.split("-", 1)[-1])
-        if not acc or amt <= 0:
+        if not acc or amt == 0:
             return
-        if income:
-            await _post_pair(
-                session,
-                end=end,
-                unit_id=unit_id,
-                debit=acc,
-                credit=ikhtisar,
-                amount=amt,
-                desc=f"Tutup pendapatan {acc.code} {period}",
-                reference=reference,
-                actor_id=actor_id,
-            )
-        else:
-            await _post_pair(
-                session,
-                end=end,
-                unit_id=unit_id,
-                debit=ikhtisar,
-                credit=acc,
-                amount=amt,
-                desc=f"Tutup beban/HPP {acc.code} {period}",
-                reference=reference,
-                actor_id=actor_id,
-            )
+        # `amount`'s sign follows the account's normal side (positive = a
+        # pendapatan account sitting in credit, or a beban/HPP account
+        # sitting in debit, as expected). A reversed balance for the
+        # period (e.g. a correcting entry that nets a pendapatan account
+        # into debit, or a beban account into credit) must still be
+        # closed to zero -- just via the opposite pair -- so it doesn't
+        # carry a leftover balance into the next period while laba_bersih
+        # (computed independently above) already accounted for it.
+        reversed_balance = amt < 0
+        acc_is_debit = income != reversed_balance
+        debit, credit = (acc, ikhtisar) if acc_is_debit else (ikhtisar, acc)
+        label = "pendapatan" if income else "beban/HPP"
+        await _post_pair(
+            session,
+            end=end,
+            unit_id=unit_id,
+            debit=debit,
+            credit=credit,
+            amount=abs(amt),
+            desc=f"Tutup {label} {acc.code} {period}",
+            reference=reference,
+            actor_id=actor_id,
+        )
         created += 1
 
     for row in lr.get("pendapatan") or []:
