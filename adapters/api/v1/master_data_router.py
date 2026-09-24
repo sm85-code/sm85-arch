@@ -18,7 +18,7 @@ from adapters.api.scope import (
     scoped_unit_id,
 )
 from adapters.external.excel_adapter import generate_excel_report, parse_excel_rows
-from modules.identity.infrastructure.models import User
+from modules.siabumdes.identity.infrastructure.models import User
 from modules.siabumdes.infrastructure.models import Account, Mitra, TransactionType, UnitUsaha
 from shared.database import get_db
 

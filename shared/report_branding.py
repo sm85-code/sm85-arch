@@ -1,7 +1,7 @@
 """Organization letterhead for financial PDF/Excel/Word exports.
 
 Historically env-var driven (get_report_branding); now editable at runtime
-via the Profil BUMDES menu (OrgProfile row, see modules.identity) and
+via the Profil BUMDES menu (OrgProfile row, see modules.siabumdes.identity) and
 converted here with branding_from_org_profile(). The env-var path stays as
 a seed/fallback for deployments that haven't opened that menu yet, and for
 call sites (kwitansi/invoice) that don't have a DB row to read.
@@ -81,7 +81,7 @@ def get_report_branding() -> ReportBranding:
 
 
 def branding_from_org_profile(profile) -> ReportBranding:
-    """Convert an OrgProfile DB row (modules.identity.infrastructure.models)
+    """Convert an OrgProfile DB row (modules.siabumdes.identity.infrastructure.models)
     into the ReportBranding shape the PDF/Excel/Word generators expect."""
     return ReportBranding(
         org_name=profile.org_name,

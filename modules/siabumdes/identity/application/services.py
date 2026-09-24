@@ -8,7 +8,7 @@ from typing import Any, Optional
 from sqlalchemy import Select, or_, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from modules.identity.infrastructure.models import ClosedPeriod, OrgProfile, SystemControl, User
+from modules.siabumdes.identity.infrastructure.models import ClosedPeriod, OrgProfile, SystemControl, User
 from shared.config import PUBLIC_ROLES, public_role
 from shared.report_branding import get_report_branding
 from shared.security import hash_password, verify_password

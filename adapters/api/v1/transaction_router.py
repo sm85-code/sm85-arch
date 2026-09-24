@@ -29,7 +29,7 @@ from adapters.external.gdrive_adapter import (
     is_configured,
     upload_file_to_gdrive,
 )
-from modules.identity.infrastructure.models import User
+from modules.siabumdes.identity.infrastructure.models import User
 from modules.siabumdes.application.services import FinanceService
 from modules.siabumdes.infrastructure.models import Account, JournalEntry, Transaction
 from shared.database import get_db

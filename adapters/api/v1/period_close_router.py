@@ -6,8 +6,8 @@ from pydantic import BaseModel, Field
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from adapters.api.deps import get_current_user, require_roles
-from modules.identity.application.services import list_closed_periods
-from modules.identity.infrastructure.models import User
+from modules.siabumdes.identity.application.services import list_closed_periods
+from modules.siabumdes.identity.infrastructure.models import User
 from modules.siabumdes.application.closing import run_monthly_close, undo_monthly_close
 from shared.database import get_db
 

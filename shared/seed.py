@@ -8,7 +8,7 @@ from openpyxl import load_workbook
 from sqlalchemy import select
 from sqlalchemy.dialects.postgresql import insert as pg_insert
 
-from modules.identity.infrastructure.models import SystemControl, User
+from modules.siabumdes.identity.infrastructure.models import SystemControl, User
 from modules.siabumdes.infrastructure.models import (
     Account,
     AccountCategory,
