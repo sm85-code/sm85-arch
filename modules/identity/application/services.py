@@ -2,16 +2,13 @@
 from __future__ import annotations
 
 import re
-from calendar import monthrange
-from datetime import date, datetime, timezone
-from decimal import Decimal
+from datetime import datetime, timezone
 from typing import Any, Optional
 
-from sqlalchemy import Select, func, or_, select
+from sqlalchemy import Select, or_, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from modules.identity.infrastructure.models import ClosedPeriod, OrgProfile, SystemControl, User
-from modules.siabumdes.infrastructure.models import Transaction, UnitUsaha
 from shared.config import PUBLIC_ROLES, public_role
 from shared.report_branding import get_report_branding
 from shared.security import hash_password, verify_password
@@ -179,80 +176,8 @@ async def set_recording_lock(
 
 
 
-async def close_period(
-    session: AsyncSession,
-    *,
-    period: str,
-    group: str,
-    actor_id: str,
-) -> ClosedPeriod:
-    if not _PERIOD_RE.match(period):
-        raise ValueError("Format period harus YYYY-MM")
-    group_code = (group or "BUMDES").strip().upper()
-    existing = await session.execute(
-        select(ClosedPeriod).where(
-            ClosedPeriod.period == period,
-            ClosedPeriod.group_code == group_code,
-        )
-    )
-    if existing.scalar_one_or_none():
-        raise ValueError(f"Periode {period} untuk {group_code} sudah ditutup")
-
-    year, month = int(period[:4]), int(period[5:7])
-    start = date(year, month, 1)
-    end = date(year, month, monthrange(year, month)[1])
-
-    unit_id = None
-    if group_code != "BUMDES":
-        unit = (
-            await session.execute(select(UnitUsaha).where(UnitUsaha.code == group_code))
-        ).scalar_one_or_none()
-        unit_id = unit.id if unit else None
-
-    stmt = select(func.count(Transaction.id), func.coalesce(func.sum(Transaction.amount), 0)).where(
-        Transaction.date >= start,
-        Transaction.date <= end,
-    )
-    if unit_id:
-        stmt = stmt.where(Transaction.unit_usaha_id == unit_id)
-    else:
-        stmt = stmt.where(Transaction.unit_usaha_id.is_(None))
-    count, total = (await session.execute(stmt)).one()
-
-    row = ClosedPeriod(
-        period=period,
-        group_code=group_code,
-        entries=int(count or 0),
-        laba_bersih=Decimal(str(total or 0)),
-        closed_by=actor_id,
-    )
-    session.add(row)
-    await session.flush()
-    return row
-
-
 async def list_closed_periods(session: AsyncSession) -> list[ClosedPeriod]:
     rows = await session.execute(
         select(ClosedPeriod).order_by(ClosedPeriod.period.desc(), ClosedPeriod.group_code.asc())
     )
     return list(rows.scalars())
-
-
-async def reopen_period(session: AsyncSession, period: str, group: str) -> int:
-    if not _PERIOD_RE.match(period):
-        raise ValueError("Format period harus YYYY-MM")
-    group_code = (group or "BUMDES").strip().upper()
-    row = (
-        await session.execute(
-            select(ClosedPeriod).where(
-                ClosedPeriod.period == period,
-                ClosedPeriod.group_code == group_code,
-            )
-        )
-    ).scalar_one_or_none()
-    if not row:
-        raise LookupError("Periode tertutup tidak ditemukan")
-    deleted_entries = row.entries
-    await session.delete(row)
-    await session.flush()
-    return deleted_entries
