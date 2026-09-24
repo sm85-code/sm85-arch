@@ -8,7 +8,7 @@ from pydantic import BaseModel, Field
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from adapters.api.deps import get_current_user, require_roles
+from modules.siabumdes.adapters.api.deps import get_current_user, require_roles
 from modules.siabumdes.identity.application.services import (
     authenticate,
     create_user,

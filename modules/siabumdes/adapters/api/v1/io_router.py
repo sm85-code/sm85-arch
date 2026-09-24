@@ -13,8 +13,8 @@ from openpyxl.styles import Font, PatternFill
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from adapters.api.deps import require_roles
-from adapters.api.scope import (
+from modules.siabumdes.adapters.api.deps import require_roles
+from modules.siabumdes.adapters.api.scope import (
     WRITE_ROLES,
     assert_can_mutate_period,
     assert_not_readonly,

@@ -9,7 +9,7 @@ from fastapi import APIRouter, Depends, File, HTTPException, UploadFile, status
 from pydantic import BaseModel, Field
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from adapters.api.deps import get_current_user, require_roles
+from modules.siabumdes.adapters.api.deps import get_current_user, require_roles
 from adapters.external.org_logo_upload import upload_org_logo
 from modules.siabumdes.identity.application.services import get_org_profile, update_org_profile
 from modules.siabumdes.identity.infrastructure.models import OrgProfile

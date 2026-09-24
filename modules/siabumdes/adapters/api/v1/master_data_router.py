@@ -9,8 +9,8 @@ from pydantic import BaseModel, Field
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from adapters.api.deps import get_current_user, require_roles
-from adapters.api.scope import (
+from modules.siabumdes.adapters.api.deps import get_current_user, require_roles
+from modules.siabumdes.adapters.api.scope import (
     MASTER_WRITE_ROLES,
     UNIT_WRITE_ROLES,
     is_pengelola,

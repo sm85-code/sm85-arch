@@ -74,7 +74,7 @@ def test_generate_word_report_is_a_valid_docx_with_letterhead_and_table():
 
 @pytest.mark.asyncio
 async def test_report_router_pdf_excel_word_helpers_run_off_the_event_loop(monkeypatch):
-    """adapters.api.v1.reports_router._pdf/_xlsx/_docx wrap the blocking
+    """modules.siabumdes.adapters.api.v1.reports_router._pdf/_xlsx/_docx wrap the blocking
     generate_*_report calls in starlette's run_in_threadpool. This smoke
     test exercises them the same way the report_pdf/report_excel/report_word
     route handlers do, confirming they still produce valid output once
@@ -85,7 +85,7 @@ async def test_report_router_pdf_excel_word_helpers_run_off_the_event_loop(monke
     # placeholder URL is enough to get past the import.
     if not (os.getenv("DATABASE_URL") or os.getenv("POSTGRES_URL")):
         monkeypatch.setenv("DATABASE_URL", "postgresql://placeholder@localhost/placeholder")
-    from adapters.api.v1.reports_router import _docx, _pdf, _xlsx
+    from modules.siabumdes.adapters.api.v1.reports_router import _docx, _pdf, _xlsx
 
     pdf_response = await _pdf("Laba Rugi", SAMPLE_HEADERS, SAMPLE_ROWS, "Jan 2024")
     assert pdf_response.media_type == "application/pdf"

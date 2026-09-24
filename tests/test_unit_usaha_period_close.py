@@ -16,7 +16,7 @@ from fastapi import HTTPException  # noqa: E402
 from sqlalchemy import select  # noqa: E402
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker, create_async_engine  # noqa: E402
 
-from adapters.api.scope import assert_can_mutate_period  # noqa: E402
+from modules.siabumdes.adapters.api.scope import assert_can_mutate_period  # noqa: E402
 from modules.siabumdes.identity.infrastructure.models import ClosedPeriod, SystemControl, User  # noqa: E402
 from modules.siabumdes.application.closing import run_monthly_close, undo_monthly_close, SUB_UTANG_BH_UNIT  # noqa: E402
 from modules.siabumdes.infrastructure.models import Account, Transaction, UnitUsaha  # noqa: E402

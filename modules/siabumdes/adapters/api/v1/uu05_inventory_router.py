@@ -10,7 +10,7 @@ from pydantic import BaseModel, Field
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from adapters.api.deps import require_roles
+from modules.siabumdes.adapters.api.deps import require_roles
 from modules.siabumdes.identity.infrastructure.models import User
 from modules.siabumdes.infrastructure.models import UnitUsaha
 from modules.siabumdes.inventory.application.services import InventoryService, UU05_CODE

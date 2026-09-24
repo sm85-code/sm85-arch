@@ -11,8 +11,8 @@ from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import selectinload
 
-from adapters.api.deps import get_current_user, require_roles
-from adapters.api.scope import (
+from modules.siabumdes.adapters.api.deps import get_current_user, require_roles
+from modules.siabumdes.adapters.api.scope import (
     TX_DELETE_ROLES,
     WRITE_ROLES,
     assert_can_mutate_period,
