@@ -6,7 +6,7 @@ import logging
 from datetime import datetime
 from typing import Any, Optional, Sequence
 
-from adapters.external.report_formatting import format_money, is_money_header, looks_numeric, row_is_total
+from modules.siabumdes.adapters.external.report_formatting import format_money, is_money_header, looks_numeric, row_is_total
 from modules.siabumdes.report_branding import ReportBranding, get_report_branding
 
 logger = logging.getLogger(__name__)
@@ -217,7 +217,7 @@ def generate_audit_pdf(
     blob = render_pdf_from_html(doc)
     if blob is not None:
         return blob
-    from adapters.external.pdf_generator import generate_pdf_report_platypus
+    from modules.siabumdes.adapters.external.pdf_generator import generate_pdf_report_platypus
 
     return generate_pdf_report_platypus(
         title=title,

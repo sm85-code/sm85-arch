@@ -11,9 +11,9 @@ from starlette.concurrency import run_in_threadpool
 
 from modules.siabumdes.adapters.api.deps import get_current_user, require_roles
 from modules.siabumdes.adapters.api.scope import is_pengelola, parse_date, scoped_unit_id
-from adapters.external.excel_adapter import generate_excel_report
-from adapters.external.pdf_generator import generate_pdf_report
-from adapters.external.word_generator import generate_word_report
+from modules.siabumdes.adapters.external.excel_adapter import generate_excel_report
+from modules.siabumdes.adapters.external.pdf_generator import generate_pdf_report
+from modules.siabumdes.adapters.external.word_generator import generate_word_report
 from modules.siabumdes.identity.application.services import get_org_profile, list_closed_periods
 from modules.siabumdes.identity.infrastructure.models import User
 from modules.siabumdes.application.reporting import ReportingService

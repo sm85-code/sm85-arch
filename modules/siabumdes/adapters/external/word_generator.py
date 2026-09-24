@@ -1,6 +1,6 @@
 """Audit-ready .docx report generator (letterhead, table, signatures).
 
-Mirrors the layout of adapters.external.pdf_generator / excel_adapter so PDF,
+Mirrors the layout of modules.siabumdes.adapters.external.pdf_generator / excel_adapter so PDF,
 Excel and Word exports of the same report look consistent.
 """
 from __future__ import annotations
@@ -15,7 +15,7 @@ from docx.enum.text import WD_ALIGN_PARAGRAPH
 from docx.oxml.ns import qn
 from docx.shared import Pt, RGBColor, Cm
 
-from adapters.external.report_formatting import format_money, is_money_header, looks_numeric, row_is_total
+from modules.siabumdes.adapters.external.report_formatting import format_money, is_money_header, looks_numeric, row_is_total
 from modules.siabumdes.report_branding import ReportBranding, fetch_logo_bytes, get_report_branding
 
 _is_money_header = is_money_header
