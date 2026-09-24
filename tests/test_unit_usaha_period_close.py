@@ -1,6 +1,8 @@
 from __future__ import annotations
 
 import os
+from datetime import date
+from decimal import Decimal
 
 import pytest
 import pytest_asyncio
@@ -17,7 +19,7 @@ from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker, create_asyn
 from adapters.api.scope import assert_can_mutate_period  # noqa: E402
 from modules.identity.infrastructure.models import ClosedPeriod, SystemControl, User  # noqa: E402
 from modules.siabumdes.application.closing import run_monthly_close, undo_monthly_close, SUB_UTANG_BH_UNIT  # noqa: E402
-from modules.siabumdes.infrastructure.models import Account, UnitUsaha  # noqa: E402
+from modules.siabumdes.infrastructure.models import Account, Transaction, UnitUsaha  # noqa: E402
 from shared.database import Base  # noqa: E402
 from shared.coa_taxonomy import SUB_IKHTISAR_LR, SUB_SALDO_LABA  # noqa: E402
 
@@ -97,3 +99,62 @@ async def test_unit_usaha_reopen_then_can_close_again(session):
     assert len(rows) == 0
     result = await run_monthly_close(session, period="2026-09", group="UU01", actor_id="admin-1")
     assert result["closed"] is True
+
+
+@pytest.mark.asyncio
+async def test_closing_zeroes_a_pendapatan_account_whose_period_balance_is_reversed(session):
+    """A pendapatan account normally carries a credit balance for the
+    period. If a correcting entry debits it for more than it was
+    credited (e.g. fixing an earlier overstated posting), _net_rows
+    reports a *negative* amount for that account -- laba_bersih already
+    accounts for it correctly, but the account itself must still be
+    closed to zero via the opposite pair (credit acc / debit ikhtisar),
+    not skipped."""
+    unit = await _seed_unit(session)
+    session.add(
+        Account(code="4100", name="Pendapatan Usaha", category="pendapatan",
+                 subcategory="pendapatan_operasional", normal_balance="kredit",
+                 group_code="UU01", active=True)
+    )
+    session.add(
+        Account(code="1100", name="Kas", category="aset", subcategory="kas_bank",
+                 normal_balance="debit", group_code="UU01", active=True)
+    )
+    await session.flush()
+
+    # Correcting entry: debit the revenue account directly (credit kas),
+    # netting it to a reversed (debit) balance of -500_000 for the period.
+    session.add(
+        Transaction(
+            date=date(2026, 9, 10), unit_usaha_id=unit.id, transaction_type="koreksi",
+            description="Koreksi pendapatan lebih catat", amount=Decimal("500000"),
+            debit_account_code="4100", credit_account_code="1100",
+            created_by="admin-1",
+        )
+    )
+    await session.flush()
+
+    result = await run_monthly_close(session, period="2026-09", group="UU01", actor_id="admin-1")
+    assert result["outcome"] == "rugi"  # only a reversed-revenue debit this month -> a loss
+
+    closing_txs = (
+        await session.execute(
+            select(Transaction).where(Transaction.is_closing.is_(True), Transaction.reference.contains("UU01"))
+        )
+    ).scalars().all()
+    pend_close = [t for t in closing_txs if t.credit_account_code == "4100" or t.debit_account_code == "4100"]
+    assert len(pend_close) == 1, "the reversed pendapatan account must still get exactly one closing entry"
+    # Reversed balance closes via the opposite pair: credit the account, debit ikhtisar.
+    assert pend_close[0].credit_account_code == "4100"
+    assert pend_close[0].amount == Decimal("500000.00")
+
+    # The account's net balance across all its transactions (original +
+    # closing) must be exactly zero once the period is closed.
+    all_txs = (await session.execute(select(Transaction))).scalars().all()
+    net = Decimal("0")
+    for tx in all_txs:
+        if tx.debit_account_code == "4100":
+            net -= tx.amount
+        if tx.credit_account_code == "4100":
+            net += tx.amount
+    assert net == Decimal("0")
