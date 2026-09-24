@@ -6,14 +6,14 @@ from typing import Optional
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from modules.siabumdes.public_service import SiabumdesPublicService
-from modules.uu05_inventory.application.catalog import (
+from modules.siabumdes.inventory.application.catalog import (
     DEFAULT_CATEGORIES,
     InventoryCatalogMixin,
     UU05_CODE,
 )
-from modules.uu05_inventory.application.stock_mixin import InventoryStockMixin
-from modules.uu05_inventory.application.adjust_reports_mixin import InventoryAdjustReportsMixin
-from modules.uu05_inventory.application.trade_mixin import InventoryTradeMixin
+from modules.siabumdes.inventory.application.stock_mixin import InventoryStockMixin
+from modules.siabumdes.inventory.application.adjust_reports_mixin import InventoryAdjustReportsMixin
+from modules.siabumdes.inventory.application.trade_mixin import InventoryTradeMixin
 
 __all__ = ["InventoryService", "UU05_CODE", "DEFAULT_CATEGORIES"]
 

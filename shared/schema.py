@@ -13,7 +13,7 @@ from shared.database import Base, engine
 
 from modules.siabumdes.identity.infrastructure import models as _identity_models  # noqa: F401
 from modules.siabumdes.infrastructure import models as _siabumdes_models  # noqa: F401
-from modules.uu05_inventory.infrastructure import models as _inventory_models  # noqa: F401
+from modules.siabumdes.inventory.infrastructure import models as _inventory_models  # noqa: F401
 
 logger = logging.getLogger("sm85.schema")
 

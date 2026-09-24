@@ -8,8 +8,8 @@ from typing import Any, Optional
 from sqlalchemy import select
 from sqlalchemy.orm import selectinload
 
-from modules.uu05_inventory.application.coa import validate_coa_codes
-from modules.uu05_inventory.infrastructure.models import (
+from modules.siabumdes.inventory.application.coa import validate_coa_codes
+from modules.siabumdes.inventory.infrastructure.models import (
     Product,
     Purchase,
     Sale,
