@@ -4,7 +4,7 @@ from __future__ import annotations
 
 from decimal import Decimal
 
-from adapters.external.report_formatting import format_money
+from modules.siabumdes.adapters.external.report_formatting import format_money
 
 
 def test_format_money_formats_float_as_indonesian_rupiah():
@@ -68,7 +68,7 @@ def test_branding_from_org_profile_converts_db_row_to_report_branding():
 def test_row_is_total_ignores_long_free_text_mentioning_total_keywords():
     """Regression: a CaLK policy paragraph mentioning 'Laba Bersih Operasional'
     in passing must not be shaded/bolded like a real total row."""
-    from adapters.external.report_formatting import row_is_total
+    from modules.siabumdes.adapters.external.report_formatting import row_is_total
 
     real_total_row = ["Laba Bersih", 40315951.0]
     long_note_row = [
@@ -83,7 +83,7 @@ def test_row_is_total_ignores_long_free_text_mentioning_total_keywords():
 def test_looks_numeric_distinguishes_amounts_from_notes_in_the_same_column():
     """Regression: a CaLK 'Nilai' column mixes real amounts with long notes;
     only genuine numbers should be treated as numeric (right-aligned, no wrap)."""
-    from adapters.external.report_formatting import looks_numeric
+    from modules.siabumdes.adapters.external.report_formatting import looks_numeric
 
     assert looks_numeric(40315951.0) is True
     assert looks_numeric("2026-01-01") is False

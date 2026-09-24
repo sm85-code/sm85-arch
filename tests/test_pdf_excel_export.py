@@ -15,10 +15,10 @@ import os
 
 import pytest
 
-from adapters.external.excel_adapter import generate_excel_report
-from adapters.external.html_pdf import render_pdf_from_html, build_report_html
-from adapters.external.pdf_generator import generate_pdf_report_platypus
-from adapters.external.word_generator import generate_word_report
+from modules.siabumdes.adapters.external.excel_adapter import generate_excel_report
+from modules.siabumdes.adapters.external.html_pdf import render_pdf_from_html, build_report_html
+from modules.siabumdes.adapters.external.pdf_generator import generate_pdf_report_platypus
+from modules.siabumdes.adapters.external.word_generator import generate_word_report
 
 SAMPLE_HEADERS = ["Kode", "Nama", "Nominal"]
 SAMPLE_ROWS = [

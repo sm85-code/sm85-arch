@@ -12,7 +12,7 @@ from reportlab.lib.styles import ParagraphStyle, getSampleStyleSheet
 from reportlab.lib.units import cm, mm
 from reportlab.platypus import Image, Paragraph, SimpleDocTemplate, Spacer, Table, TableStyle
 
-from adapters.external.report_formatting import format_money, is_money_header, row_is_total
+from modules.siabumdes.adapters.external.report_formatting import format_money, is_money_header, row_is_total
 from modules.siabumdes.report_branding import ReportBranding, fetch_logo_bytes, get_report_branding
 
 _is_money_header = is_money_header
@@ -219,7 +219,7 @@ def generate_pdf_report(
             branding=branding,
             generated_by=generated_by,
         )
-    from adapters.external.html_pdf import generate_audit_pdf
+    from modules.siabumdes.adapters.external.html_pdf import generate_audit_pdf
 
     return generate_audit_pdf(
         title=title,
