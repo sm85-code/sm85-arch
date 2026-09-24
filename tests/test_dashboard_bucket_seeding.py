@@ -6,7 +6,7 @@ from __future__ import annotations
 
 from datetime import date
 
-from shared.period import seed_period_buckets
+from modules.siabumdes.period import seed_period_buckets
 
 
 def test_seed_monthly_buckets_fills_full_year_even_with_no_transactions_yet():

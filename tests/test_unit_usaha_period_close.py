@@ -21,7 +21,7 @@ from modules.siabumdes.identity.infrastructure.models import ClosedPeriod, Syste
 from modules.siabumdes.application.closing import run_monthly_close, undo_monthly_close, SUB_UTANG_BH_UNIT  # noqa: E402
 from modules.siabumdes.infrastructure.models import Account, Transaction, UnitUsaha  # noqa: E402
 from shared.database import Base  # noqa: E402
-from shared.coa_taxonomy import SUB_IKHTISAR_LR, SUB_SALDO_LABA  # noqa: E402
+from modules.siabumdes.coa_taxonomy import SUB_IKHTISAR_LR, SUB_SALDO_LABA  # noqa: E402
 
 DATABASE_URL = os.getenv("DATABASE_URL", "")
 pytestmark = pytest.mark.skipif(not DATABASE_URL.startswith("postgresql"), reason="needs postgres")

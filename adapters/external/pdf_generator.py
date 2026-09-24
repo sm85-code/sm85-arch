@@ -13,7 +13,7 @@ from reportlab.lib.units import cm, mm
 from reportlab.platypus import Image, Paragraph, SimpleDocTemplate, Spacer, Table, TableStyle
 
 from adapters.external.report_formatting import format_money, is_money_header, row_is_total
-from shared.report_branding import ReportBranding, fetch_logo_bytes, get_report_branding
+from modules.siabumdes.report_branding import ReportBranding, fetch_logo_bytes, get_report_branding
 
 _is_money_header = is_money_header
 _row_is_total = row_is_total

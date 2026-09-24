@@ -15,7 +15,7 @@ from modules.siabumdes.infrastructure.models import (
     AccountSubcategory,
     UnitUsaha,
 )
-from shared.coa_taxonomy import COA_PATH, TAXONOMY_PATH, load_taxonomy_rows, valid_pair
+from modules.siabumdes.coa_taxonomy import COA_PATH, TAXONOMY_PATH, load_taxonomy_rows, valid_pair
 from shared.database import SessionLocal
 from shared.security import hash_password
 

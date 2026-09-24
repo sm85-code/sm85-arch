@@ -8,7 +8,7 @@ from http.server import BaseHTTPRequestHandler, HTTPServer
 
 import pytest
 
-from shared.report_branding import fetch_logo_bytes
+from modules.siabumdes.report_branding import fetch_logo_bytes
 
 _PNG_1PX = bytes.fromhex(
     "89504e470d0a1a0a0000000d4948445200000001000000010802000000907753"

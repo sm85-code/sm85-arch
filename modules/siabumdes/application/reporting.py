@@ -10,8 +10,8 @@ from sqlalchemy import not_, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from modules.siabumdes.infrastructure.models import Account, Transaction, UnitUsaha
-from shared.coa_taxonomy import SUB_BAGI_HASIL_DESA, SUB_LABA_DICADANGKAN, SUB_MODAL_DESA
-from shared.period import seed_period_buckets
+from modules.siabumdes.coa_taxonomy import SUB_BAGI_HASIL_DESA, SUB_LABA_DICADANGKAN, SUB_MODAL_DESA
+from modules.siabumdes.period import seed_period_buckets
 
 
 def _f(value: Decimal | float | int | None) -> float:

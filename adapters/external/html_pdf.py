@@ -7,7 +7,7 @@ from datetime import datetime
 from typing import Any, Optional, Sequence
 
 from adapters.external.report_formatting import format_money, is_money_header, looks_numeric, row_is_total
-from shared.report_branding import ReportBranding, get_report_branding
+from modules.siabumdes.report_branding import ReportBranding, get_report_branding
 
 logger = logging.getLogger(__name__)
 

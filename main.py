@@ -26,8 +26,8 @@ from tenants.toko.adapters.api.v1.erp_router import erp_router
 from tenants.toko.adapters.api.v1.toko_router import toko_router
 from shared.config import APP_TITLE, CORS_ORIGIN_REGEX, CORS_ORIGINS, origin_allowed
 from shared.database import engine
-from shared.schema import ensure_schema
-from shared.seed import seed_if_needed
+from modules.siabumdes.schema import ensure_schema
+from modules.siabumdes.seed import seed_if_needed
 
 logging.basicConfig(
     level=logging.INFO,

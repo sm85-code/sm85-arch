@@ -11,7 +11,7 @@ from openpyxl.drawing.image import Image as XlImage
 from openpyxl.styles import Alignment, Border, Font, PatternFill, Side
 from openpyxl.utils import get_column_letter
 
-from shared.report_branding import ReportBranding, fetch_logo_bytes, get_report_branding
+from modules.siabumdes.report_branding import ReportBranding, fetch_logo_bytes, get_report_branding
 
 
 def parse_excel_rows(
