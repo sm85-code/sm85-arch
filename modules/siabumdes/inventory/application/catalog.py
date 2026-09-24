@@ -8,7 +8,7 @@ from sqlalchemy import Select, or_, select
 from sqlalchemy.orm import selectinload
 
 from modules.siabumdes.infrastructure.models import UnitUsaha
-from modules.uu05_inventory.infrastructure.models import Product, StockAdjustment, StockCard, StockCategory
+from modules.siabumdes.inventory.infrastructure.models import Product, StockAdjustment, StockCard, StockCategory
 
 UU05_CODE = "UU05"
 
