@@ -6,8 +6,8 @@ from pydantic import BaseModel
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from adapters.api.deps import require_roles
-from modules.identity.application.services import get_system_control, set_recording_lock
-from modules.identity.infrastructure.models import User
+from modules.siabumdes.identity.application.services import get_system_control, set_recording_lock
+from modules.siabumdes.identity.infrastructure.models import User
 from shared.database import get_db
 
 router = APIRouter(prefix="/api", tags=["admin-control"])

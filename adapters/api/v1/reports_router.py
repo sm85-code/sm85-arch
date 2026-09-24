@@ -14,8 +14,8 @@ from adapters.api.scope import is_pengelola, parse_date, scoped_unit_id
 from adapters.external.excel_adapter import generate_excel_report
 from adapters.external.pdf_generator import generate_pdf_report
 from adapters.external.word_generator import generate_word_report
-from modules.identity.application.services import get_org_profile, list_closed_periods
-from modules.identity.infrastructure.models import User
+from modules.siabumdes.identity.application.services import get_org_profile, list_closed_periods
+from modules.siabumdes.identity.infrastructure.models import User
 from modules.siabumdes.application.reporting import ReportingService
 from shared.config import REPORT_READ_LEVEL
 from shared.database import get_db

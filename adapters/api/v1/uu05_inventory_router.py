@@ -11,7 +11,7 @@ from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from adapters.api.deps import require_roles
-from modules.identity.infrastructure.models import User
+from modules.siabumdes.identity.infrastructure.models import User
 from modules.siabumdes.infrastructure.models import UnitUsaha
 from modules.uu05_inventory.application.services import InventoryService, UU05_CODE
 from shared.config import public_role

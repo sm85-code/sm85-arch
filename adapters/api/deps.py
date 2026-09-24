@@ -6,8 +6,8 @@ from typing import Callable
 from fastapi import Depends, HTTPException, Request, status
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from modules.identity.application.services import get_system_control
-from modules.identity.infrastructure.models import User
+from modules.siabumdes.identity.application.services import get_system_control
+from modules.siabumdes.identity.infrastructure.models import User
 from shared.config import public_role
 from shared.database import get_db
 from shared.security import decode_access_token, token_from_request

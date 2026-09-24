@@ -8,7 +8,7 @@ from typing import Any, Optional
 from sqlalchemy import delete, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from modules.identity.infrastructure.models import ClosedPeriod
+from modules.siabumdes.identity.infrastructure.models import ClosedPeriod
 from modules.siabumdes.application.reporting import ReportingService
 from modules.siabumdes.application.services import FinanceService
 from modules.siabumdes.infrastructure.models import (

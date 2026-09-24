@@ -11,7 +11,7 @@ from sqlalchemy import text
 
 from shared.database import Base, engine
 
-from modules.identity.infrastructure import models as _identity_models  # noqa: F401
+from modules.siabumdes.identity.infrastructure import models as _identity_models  # noqa: F401
 from modules.siabumdes.infrastructure import models as _siabumdes_models  # noqa: F401
 from modules.uu05_inventory.infrastructure import models as _inventory_models  # noqa: F401
 

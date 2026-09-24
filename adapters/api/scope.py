@@ -8,8 +8,8 @@ from fastapi import HTTPException, status
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from modules.identity.application.services import get_system_control
-from modules.identity.infrastructure.models import ClosedPeriod, User
+from modules.siabumdes.identity.application.services import get_system_control
+from modules.siabumdes.identity.infrastructure.models import ClosedPeriod, User
 from modules.siabumdes.infrastructure.models import UnitUsaha
 from shared.config import READONLY_ROLES, public_role
 

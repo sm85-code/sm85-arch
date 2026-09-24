@@ -21,7 +21,7 @@ from adapters.api.scope import (
     is_pengelola,
     unit_code_for,
 )
-from modules.identity.infrastructure.models import User
+from modules.siabumdes.identity.infrastructure.models import User
 from modules.siabumdes.application.services import FinanceService
 from modules.siabumdes.infrastructure.models import Account, Transaction, TransactionType, UnitUsaha
 from shared.config import REPORT_READ_LEVEL

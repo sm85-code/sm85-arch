@@ -9,7 +9,7 @@ from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from adapters.api.deps import get_current_user, require_roles
-from modules.identity.application.services import (
+from modules.siabumdes.identity.application.services import (
     authenticate,
     create_user,
     get_system_control,
@@ -17,7 +17,7 @@ from modules.identity.application.services import (
     set_blocked_periods,
     user_to_out,
 )
-from modules.identity.infrastructure.models import User
+from modules.siabumdes.identity.infrastructure.models import User
 from shared.config import public_role
 from shared.database import get_db
 from shared.security import (
