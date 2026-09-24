@@ -8,7 +8,7 @@ from __future__ import annotations
 
 import re
 from calendar import monthrange
-from datetime import date
+from datetime import date, timedelta
 
 _PERIOD_MONTH_RE = re.compile(r"^\d{4}-\d{2}$")
 
@@ -35,3 +35,31 @@ def assert_period_kind_matches_group(period: str, group_code: str) -> str:
     on success ("month"); raises ValueError with a user-facing message
     otherwise."""
     return period_kind(period)
+
+
+def seed_period_buckets(
+    monthly: dict[str, dict[str, float]], start: date, end: date, bucket_len: int
+) -> None:
+    """Pre-fill every bucket in [start, end] with a zero-value row.
+
+    Matches /api/public/summary's behavior of always returning a full,
+    contiguous set of periods (e.g. all 12 months of a year) rather than
+    only the periods that happen to contain a transaction -- otherwise a
+    trend chart for the current year silently stops at the last month with
+    data instead of showing the full year with trailing zeros.
+    """
+    if bucket_len == 10:  # daily buckets, key = "YYYY-MM-DD"
+        cur = start
+        while cur <= end:
+            key = cur.isoformat()
+            monthly.setdefault(key, {"month": key, "pendapatan": 0.0, "beban": 0.0})
+            cur += timedelta(days=1)
+    else:  # monthly buckets, key = "YYYY-MM"
+        y, m = start.year, start.month
+        while (y, m) <= (end.year, end.month):
+            key = f"{y}-{m:02d}"
+            monthly.setdefault(key, {"month": key, "pendapatan": 0.0, "beban": 0.0})
+            m += 1
+            if m > 12:
+                m = 1
+                y += 1
