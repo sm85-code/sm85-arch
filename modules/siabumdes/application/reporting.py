@@ -205,10 +205,14 @@ class ReportingService:
         for tx in txs:
             debit = accounts.get(tx.debit_account_code)
             credit = accounts.get(tx.credit_account_code)
+            debit_is_kas = bool(debit and debit.subcategory == "kas_bank")
+            credit_is_kas = bool(credit and credit.subcategory == "kas_bank")
+            if debit_is_kas and credit_is_kas:
+                continue  # mutasi internal antar kas/bank (mis. setor Kas -> Bank): tidak ada uang masuk/keluar dari BUMDes
             item = {"date": tx.date.isoformat(), "description": tx.description or tx.transaction_type, "amount": _f(tx.amount)}
-            if debit and debit.subcategory == "kas_bank":
+            if debit_is_kas:
                 masuk.append(item)
-            elif credit and credit.subcategory == "kas_bank":
+            elif credit_is_kas:
                 keluar.append(item)
         total_masuk = sum(i["amount"] for i in masuk)
         total_keluar = sum(i["amount"] for i in keluar)
