@@ -185,6 +185,11 @@ class ReportingService:
         total_kew = sum(r["amount"] for r in kewajiban)
         total_eku = sum(r["amount"] for r in ekuitas)
         total_pasiva = total_kew + total_eku
+        kas_bank = sum(
+            _f(bal.get(code, Decimal("0")))
+            for code, acc in accounts.items()
+            if acc.subcategory == "kas_bank"
+        )
         return {
             "as_of": as_of.isoformat(),
             "aset": aset,
@@ -194,6 +199,7 @@ class ReportingService:
             "total_kewajiban": total_kew,
             "total_ekuitas": total_eku,
             "total_pasiva": total_pasiva,
+            "kas_bank": kas_bank,
             "balanced": abs(total_aset - total_pasiva) < 0.5,
             "group": group,
         }
@@ -498,6 +504,14 @@ class ReportingService:
                 "beban": u_lr["total_beban"],
                 "laba": u_lr["laba_bersih"],
             })
+
+        # Posisi keuangan (Neraca) per akhir periode -- dasar KPI rasio
+        # keuangan (margin, rasio kas, rasio solvabilitas) di dashboard.
+        # Entitas yang dipakai sama dengan lr di atas: unit tertentu kalau
+        # unit_usaha_id diisi, kalau tidak selalu BUMDES pusat (unit_usaha_id
+        # None -> neraca() resolve ke grup "BUMDES").
+        nr = await self.neraca(end or date.today(), unit_usaha_id)
+
         return {
             "total_pendapatan": lr["total_pendapatan"],
             "total_beban": lr["total_beban"],
@@ -505,4 +519,8 @@ class ReportingService:
             "total_transactions": len(txs),
             "monthly": series,
             "unit_summaries": unit_summaries,
+            "total_aset": nr["total_aset"],
+            "total_kewajiban": nr["total_kewajiban"],
+            "total_ekuitas": nr["total_ekuitas"],
+            "kas_bank": nr["kas_bank"],
         }
