@@ -77,6 +77,13 @@ def oauth_flow(redirect_uri: str) -> Flow:
         }
     }
     flow = Flow.from_client_config(client_config, scopes=_SCOPES, redirect_uri=redirect_uri)
+    # /connect and /oauth-callback are two separate HTTP requests (no shared
+    # in-memory state between them, and possibly different worker processes)
+    # -- PKCE's code_verifier generated in /connect would never make it to
+    # /oauth-callback's fresh Flow instance, causing "invalid_grant: Missing
+    # code verifier". Our client is a confidential "Web" app (has a client
+    # secret), so PKCE isn't required the way it is for public/native apps.
+    flow.autogenerate_code_verifier = False
     return flow
 
 
