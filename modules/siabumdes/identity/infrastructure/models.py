@@ -37,6 +37,7 @@ class User(Base):
     must_change_password: Mapped[bool] = mapped_column(Boolean, nullable=False, default=False)
     session_version: Mapped[int] = mapped_column(Integer, nullable=False, default=1)
     blocked_periods: Mapped[list[str]] = mapped_column(ARRAY(String(7)), nullable=False, default=list)
+    photo_url: Mapped[str] = mapped_column(String(500), nullable=False, default="")
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=_utcnow)
 
 

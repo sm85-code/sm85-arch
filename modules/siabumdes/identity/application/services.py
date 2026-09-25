@@ -27,6 +27,7 @@ def user_to_out(user: User, *, recording_locked: bool = False) -> dict[str, Any]
         "active": user.active,
         "must_change_password": user.must_change_password,
         "blocked_periods": list(user.blocked_periods or []),
+        "photo_url": user.photo_url,
         "edits_locked": recording_locked,
     }
 

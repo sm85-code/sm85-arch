@@ -3,12 +3,13 @@ from __future__ import annotations
 
 from typing import Optional
 
-from fastapi import APIRouter, Depends, HTTPException, Response, status
+from fastapi import APIRouter, Depends, File, HTTPException, Response, UploadFile, status
 from pydantic import BaseModel, Field
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from modules.siabumdes.adapters.api.deps import get_current_user, require_roles
+from modules.siabumdes.adapters.external.user_photo_upload import upload_user_photo
 from modules.siabumdes.identity.application.services import (
     authenticate,
     create_user,
@@ -234,6 +235,25 @@ async def admin_update_user(
     control = await get_system_control(session)
     await session.flush()
     return user_to_out(target, recording_locked=control.recording_locked)
+
+
+@router.post("/auth/profile/photo")
+async def upload_profile_photo(
+    file: UploadFile = File(...),
+    user: User = Depends(get_current_user),
+    session: AsyncSession = Depends(get_db),
+):
+    data = await file.read()
+    try:
+        photo_url = await upload_user_photo(data, file.filename or "photo.jpg", file.content_type or "image/jpeg")
+    except HTTPException:
+        raise
+    except Exception as exc:  # noqa: BLE001
+        raise HTTPException(status_code=status.HTTP_502_BAD_GATEWAY, detail=f"Gagal upload foto: {exc}") from exc
+    user.photo_url = photo_url
+    control = await get_system_control(session)
+    await session.flush()
+    return user_to_out(user, recording_locked=control.recording_locked)
 
 
 @router.post("/auth/register")

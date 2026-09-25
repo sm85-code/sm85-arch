@@ -40,6 +40,7 @@ _ADD_COLUMNS = [
     ("org_profiles", "share_modal_bumdes", "NUMERIC(5,2) NOT NULL DEFAULT 18"),
     ("org_profiles", "share_unit_pengelola", "NUMERIC(5,2) NOT NULL DEFAULT 30"),
     ("org_profiles", "share_unit_bumdes", "NUMERIC(5,2) NOT NULL DEFAULT 70"),
+    ("users", "photo_url", "VARCHAR(500) NOT NULL DEFAULT ''"),
 ]
 
 
