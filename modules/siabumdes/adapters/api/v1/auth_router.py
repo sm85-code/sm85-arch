@@ -18,7 +18,7 @@ from modules.siabumdes.identity.application.services import (
     user_to_out,
 )
 from modules.siabumdes.identity.infrastructure.models import User
-from shared.config import public_role
+from shared.config import PUBLIC_ROLES, public_role
 from shared.database import get_db
 from shared.security import (
     clear_auth_cookie,
@@ -64,6 +64,8 @@ class AdminUserUpdateRequest(BaseModel):
     name: Optional[str] = None
     email: Optional[str] = None
     username: Optional[str] = None
+    role: Optional[str] = None
+    unit_usaha_id: Optional[str] = None
 
 
 class BlockedPeriodsRequest(BaseModel):
@@ -213,6 +215,22 @@ async def admin_update_user(
         if await _username_taken(session, username, target.id):
             raise HTTPException(status_code=400, detail="Username sudah dipakai")
         target.username = username
+    if payload.role is not None:
+        new_role = public_role(payload.role)
+        if new_role not in PUBLIC_ROLES:
+            raise HTTPException(status_code=400, detail="Role tidak valid")
+        if public_role(target.role) == "admin" and new_role != "admin":
+            all_users = (await session.execute(select(User))).scalars().all()
+            admin_count = sum(1 for u in all_users if public_role(u.role) == "admin")
+            if admin_count <= 1:
+                raise HTTPException(status_code=400, detail="Tidak bisa mengubah role admin terakhir")
+        unit_usaha_id = payload.unit_usaha_id if payload.unit_usaha_id is not None else target.unit_usaha_id
+        if new_role == "pengelola" and not unit_usaha_id:
+            raise HTTPException(status_code=400, detail="Pengelola harus memiliki unit_usaha_id")
+        target.role = new_role
+        target.unit_usaha_id = unit_usaha_id if new_role == "pengelola" else None
+    elif payload.unit_usaha_id is not None and public_role(target.role) == "pengelola":
+        target.unit_usaha_id = payload.unit_usaha_id
     control = await get_system_control(session)
     await session.flush()
     return user_to_out(target, recording_locked=control.recording_locked)
