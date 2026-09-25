@@ -9,6 +9,7 @@ from sqlalchemy import delete, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from modules.siabumdes.identity.infrastructure.models import ClosedPeriod
+from modules.siabumdes.application.bagi_hasil import get_bagi_hasil_config
 from modules.siabumdes.application.reporting import ReportingService
 from modules.siabumdes.application.services import FinanceService
 from modules.siabumdes.infrastructure.models import (
@@ -19,9 +20,7 @@ from modules.siabumdes.infrastructure.models import (
     UnitUsaha,
 )
 from modules.siabumdes.coa_taxonomy import (
-    SUB_BAGI_HASIL_DESA,
     SUB_IKHTISAR_LR,
-    SUB_LABA_DICADANGKAN,
     SUB_SALDO_LABA,
 )
 from modules.siabumdes.period import (
@@ -36,11 +35,9 @@ CENT = Decimal("0.01")
 SUB_UTANG_BH_BUMDES = "utang_bagi_hasil_bumdes"
 SUB_UTANG_BH_UNIT = "utang_bagi_hasil_unit"
 
-BUMDES_ALLOC = (
-    (SUB_UTANG_BH_BUMDES, Decimal("0.52")),
-    (SUB_BAGI_HASIL_DESA, Decimal("0.30")),
-    (SUB_LABA_DICADANGKAN, Decimal("0.18")),
-)
+# Rasio alokasi laba BUMDES (dulu konstanta BUMDES_ALLOC hardcode di sini) kini
+# dibaca dari OrgProfile lewat bagi_hasil.get_bagi_hasil_config() -- lihat
+# BagiHasilConfig.bumdes_alloc(), dipanggil di run_monthly_close() di bawah.
 
 
 def _money(value: float | Decimal | int) -> Decimal:
@@ -204,9 +201,10 @@ async def run_monthly_close(
 
     if laba > 0:
         if group_code == "BUMDES":
+            bumdes_alloc = (await get_bagi_hasil_config(session)).bumdes_alloc()
             remaining = laba
-            last_idx = len(BUMDES_ALLOC) - 1
-            for i, (slug, ratio) in enumerate(BUMDES_ALLOC):
+            last_idx = len(bumdes_alloc) - 1
+            for i, (slug, ratio) in enumerate(bumdes_alloc):
                 dest = await _account_by_slug(session, group_code, slug)
                 portion = remaining if i == last_idx else _money(laba * ratio)
                 remaining -= portion

@@ -78,6 +78,21 @@ class OrgProfile(Base):
     signatory_right_title: Mapped[str] = mapped_column(String(120), nullable=False, default="Mengetahui")
     signatory_right_name: Mapped[str] = mapped_column(String(255), nullable=False, default="")
     primary_color: Mapped[str] = mapped_column(String(6), nullable=False, default="1F4E79")
+
+    # Proporsi bagi hasil (persen, 0-100). Dipakai saat tutup buku bulanan
+    # (modules.siabumdes.application.bagi_hasil / closing.py) dan di laporan
+    # (perubahan_ekuitas/per_unit di reporting.py) -- diedit lewat menu Profil
+    # BUMDES, bukan lagi konstanta hardcode. Grup BUMDES (6 angka) wajib total
+    # 100; grup unit usaha (2 angka) wajib total 100 -- divalidasi di router.
+    share_pengurus: Mapped[Decimal] = mapped_column(Numeric(5, 2), nullable=False, default=Decimal("35"))
+    share_penasihat: Mapped[Decimal] = mapped_column(Numeric(5, 2), nullable=False, default=Decimal("7"))
+    share_pengawas: Mapped[Decimal] = mapped_column(Numeric(5, 2), nullable=False, default=Decimal("5"))
+    share_dana_sosial: Mapped[Decimal] = mapped_column(Numeric(5, 2), nullable=False, default=Decimal("5"))
+    share_pades: Mapped[Decimal] = mapped_column(Numeric(5, 2), nullable=False, default=Decimal("30"))
+    share_modal_bumdes: Mapped[Decimal] = mapped_column(Numeric(5, 2), nullable=False, default=Decimal("18"))
+    share_unit_pengelola: Mapped[Decimal] = mapped_column(Numeric(5, 2), nullable=False, default=Decimal("30"))
+    share_unit_bumdes: Mapped[Decimal] = mapped_column(Numeric(5, 2), nullable=False, default=Decimal("70"))
+
     updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=_utcnow, onupdate=_utcnow)
 
 

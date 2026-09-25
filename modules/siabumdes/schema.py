@@ -27,6 +27,21 @@ _WIDEN = [
     ("accounts", "subcategory", "VARCHAR(128)"),
 ]
 
+# Kolom baru pada tabel yang SUDAH ADA -- create_all() di atas cuma bikin tabel
+# yang belum ada, tidak menambah kolom ke tabel existing. Proporsi bagi hasil
+# (dulu hardcode di closing.py/reporting.py, sekarang diedit lewat menu Profil
+# BUMDES) butuh ADD COLUMN eksplisit di sini.
+_ADD_COLUMNS = [
+    ("org_profiles", "share_pengurus", "NUMERIC(5,2) NOT NULL DEFAULT 35"),
+    ("org_profiles", "share_penasihat", "NUMERIC(5,2) NOT NULL DEFAULT 7"),
+    ("org_profiles", "share_pengawas", "NUMERIC(5,2) NOT NULL DEFAULT 5"),
+    ("org_profiles", "share_dana_sosial", "NUMERIC(5,2) NOT NULL DEFAULT 5"),
+    ("org_profiles", "share_pades", "NUMERIC(5,2) NOT NULL DEFAULT 30"),
+    ("org_profiles", "share_modal_bumdes", "NUMERIC(5,2) NOT NULL DEFAULT 18"),
+    ("org_profiles", "share_unit_pengelola", "NUMERIC(5,2) NOT NULL DEFAULT 30"),
+    ("org_profiles", "share_unit_bumdes", "NUMERIC(5,2) NOT NULL DEFAULT 70"),
+]
+
 
 async def ensure_schema() -> None:
     async with engine.begin() as conn:
@@ -50,4 +65,6 @@ async def ensure_schema() -> None:
                     """
                 )
             )
+        for table, column, col_def in _ADD_COLUMNS:
+            await conn.execute(text(f"ALTER TABLE {table} ADD COLUMN IF NOT EXISTS {column} {col_def}"))
     logger.info("schema ready")

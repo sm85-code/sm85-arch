@@ -9,6 +9,7 @@ from typing import Any, Optional
 from sqlalchemy import not_, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from modules.siabumdes.application.bagi_hasil import get_bagi_hasil_config
 from modules.siabumdes.infrastructure.models import Account, Transaction, UnitUsaha
 from modules.siabumdes.coa_taxonomy import SUB_BAGI_HASIL_DESA, SUB_LABA_DICADANGKAN, SUB_MODAL_DESA
 from modules.siabumdes.period import seed_period_buckets
@@ -247,6 +248,7 @@ class ReportingService:
 
     async def perubahan_ekuitas(self, start: date, end: date, unit_usaha_id: Optional[str] = None) -> dict[str, Any]:
         unit_usaha_id = None
+        bh = await get_bagi_hasil_config(self.session)
         prev_year = start.year - 1
         prev_end = date(prev_year, 12, 31)
         curr_lr = await self.laba_rugi(start, end, None, entity="BUMDES")
@@ -298,19 +300,25 @@ class ReportingService:
             "modal_akhir": n18,
             "laba_dicadangkan_periode": n13_cadangan,
             "alokasi": {
-                "pengurus_35": _r(laba_asli * 0.35),
-                "penasihat_7": _r(laba_asli * 0.07),
-                "pengawas_5": _r(laba_asli * 0.05),
-                "dana_sosial_5": _r(laba_asli * 0.05),
-                "pades_desa_30": n15,
+                "pengurus": _r(laba_asli * float(bh.pengurus) / 100),
+                "penasihat": _r(laba_asli * float(bh.penasihat) / 100),
+                "pengawas": _r(laba_asli * float(bh.pengawas) / 100),
+                "dana_sosial": _r(laba_asli * float(bh.dana_sosial) / 100),
+                "pades_desa": n15,
                 "laba_dicadangkan_tahun_lalu": n12,
             },
+            "bagi_hasil_pct": bh.to_dict(),
         }
 
     async def calk(self, start: date, end: date, unit_usaha_id: Optional[str] = None) -> dict[str, Any]:
         lr = await self.laba_rugi(start, end, unit_usaha_id)
         nr = await self.neraca(end, unit_usaha_id)
         ak = await self.arus_kas(start, end, unit_usaha_id)
+        bh = await get_bagi_hasil_config(self.session)
+
+        def pct(value: Decimal) -> str:
+            return f"{value:.2f}".rstrip("0").rstrip(".") if value % 1 else str(int(value))
+
         return {
             "informasi_umum": {"nama": "BUMDes", "periode_awal": start.isoformat(), "periode_akhir": end.isoformat()},
             "ringkasan_kinerja": {
@@ -333,14 +341,14 @@ class ReportingService:
                     "manajemen menerapkan kebijakan penutupan pembukuan bulanan (Accrual Monthly Closing Entries) sebagai berikut:"
                 ),
                 (
-                    "a. Kantor Pusat BUM Desa (BUMDES): Setiap akhir bulan berjalan, Laba Bersih Operasional dialokasikan "
-                    "dengan memindahkan porsi 52% ke pos Kewajiban Lancar pada akun 'utang_bagi_hasil_bumdes' "
-                    "(untuk Pengurus 35%, Penasihat 7%, Pengawas 5%, dan Dana Sosial 5%). "
+                    f"a. Kantor Pusat BUM Desa (BUMDES): Setiap akhir bulan berjalan, Laba Bersih Operasional dialokasikan "
+                    f"dengan memindahkan porsi {pct(bh.utang_bh_bumdes_pct)}% ke pos Kewajiban Lancar pada akun 'utang_bagi_hasil_bumdes' "
+                    f"(untuk Pengurus {pct(bh.pengurus)}%, Penasihat {pct(bh.penasihat)}%, Pengawas {pct(bh.pengawas)}%, dan Dana Sosial {pct(bh.dana_sosial)}%). "
                     "Proporsi pembagian bagi hasil BUMDES pusat serta jangka waktu pencairannya secara berkala (per 3 bulan) "
                     "telah diatur secara mengikat dan sah di dalam AD/ART BUM Desa kami. "
-                    "Sisa porsi laba sebesar 48% diakui secara instan sebagai penambah komponen Ekuitas pada akun "
-                    "'bagi_hasil_desa' (PADes 30%) dan 'laba_dicadangkan' (Penguatan Modal 18%). "
-                    "Kebijakan ini memastikan Baris 13 pada LPE Pusat menyajikan porsi modal 48% yang stabil dan terintegrasi secara balance."
+                    f"Sisa porsi laba sebesar {pct(bh.ekuitas_pct)}% diakui secara instan sebagai penambah komponen Ekuitas pada akun "
+                    f"'bagi_hasil_desa' (PADes {pct(bh.pades)}%) dan 'laba_dicadangkan' (Penguatan Modal {pct(bh.modal_bumdes)}%). "
+                    f"Kebijakan ini memastikan Baris 13 pada LPE Pusat menyajikan porsi modal {pct(bh.ekuitas_pct)}% yang stabil dan terintegrasi secara balance."
                 ),
                 (
                     "b. Unit Usaha BUM Desa (UU01 s.d UU06): Setiap akhir bulan berjalan, 100% Laba Bersih Operasional "
@@ -412,14 +420,18 @@ class ReportingService:
         }
 
     async def per_unit(self, start: date, end: date) -> dict[str, Any]:
+        bh = await get_bagi_hasil_config(self.session)
         lr_pusat = await self.laba_rugi(start, end, None)
         bumdes = {
             "pendapatan": lr_pusat["total_pendapatan"],
             "beban": lr_pusat["total_beban"],
             "laba_bersih": lr_pusat["laba_bersih"],
-            "share_pades_30": round(lr_pusat["laba_bersih"] * 0.30),
-            "share_modal_18": round(lr_pusat["laba_bersih"] * 0.18),
-            "share_lain": round(lr_pusat["laba_bersih"] * 0.52),
+            # Nama field mempertahankan akhiran "_30"/"_18"/dst demi kompatibilitas
+            # dengan frontend yang sudah memakainya -- nilainya sendiri sudah
+            # dari config (bisa beda dari angka di nama field kalau admin ubah).
+            "share_pades_30": round(lr_pusat["laba_bersih"] * float(bh.pades) / 100),
+            "share_modal_18": round(lr_pusat["laba_bersih"] * float(bh.modal_bumdes) / 100),
+            "share_lain": round(lr_pusat["laba_bersih"] * float(bh.utang_bh_bumdes_pct) / 100),
         }
         units = []
         for unit in await self._units():
@@ -431,8 +443,8 @@ class ReportingService:
                 "pendapatan": lr["total_pendapatan"],
                 "beban": lr["total_beban"],
                 "laba_bersih": lr["laba_bersih"],
-                "share_pengelola_30": round(lr["laba_bersih"] * 0.30),
-                "share_bumdes_70": round(lr["laba_bersih"] * 0.70),
+                "share_pengelola_30": round(lr["laba_bersih"] * float(bh.unit_pengelola) / 100),
+                "share_bumdes_70": round(lr["laba_bersih"] * float(bh.unit_bumdes) / 100),
             })
         return {"bumdes": bumdes, "units": units}
 
