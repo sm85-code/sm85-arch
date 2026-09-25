@@ -162,3 +162,4 @@ diverifikasi dengan checklist yang sama sebelum di-PR-kan:
 Folder `adapters/api/` (lama) dan `modules/identity/`, `modules/uu05_inventory/`
 (lama) sudah tidak ada lagi. Struktur saat ini persis sama dengan "Struktur akhir
 yang dituju" di atas.
+oke
