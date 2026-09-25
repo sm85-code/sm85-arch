@@ -259,7 +259,10 @@ async def delete_user(
     if not target:
         raise HTTPException(status_code=404, detail="User tidak ditemukan")
     if public_role(target.role) == "admin":
-        raise HTTPException(status_code=400, detail="Admin tidak dapat dihapus")
+        admin_count = (await session.execute(select(User))).scalars().all()
+        admin_count = sum(1 for u in admin_count if public_role(u.role) == "admin")
+        if admin_count <= 1:
+            raise HTTPException(status_code=400, detail="Tidak bisa menghapus admin terakhir")
     await session.delete(target)
     return {"deleted": 1}
 
