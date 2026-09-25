@@ -3,6 +3,7 @@ lewat UI alih-alih env var statis. Baca boleh siapa saja yang login (dipakai
 di halaman Laporan); ubah/upload logo khusus admin."""
 from __future__ import annotations
 
+from decimal import Decimal
 from typing import Optional
 
 from fastapi import APIRouter, Depends, File, HTTPException, UploadFile, status
@@ -11,6 +12,11 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from modules.siabumdes.adapters.api.deps import get_current_user, require_roles
 from modules.siabumdes.adapters.external.org_logo_upload import upload_org_logo
+from modules.siabumdes.application.bagi_hasil import (
+    SHARE_FIELDS_BUMDES,
+    SHARE_FIELDS_UNIT,
+    validate_bagi_hasil_fields,
+)
 from modules.siabumdes.identity.application.services import get_org_profile, update_org_profile
 from modules.siabumdes.identity.infrastructure.models import OrgProfile
 from shared.database import get_db
@@ -38,6 +44,14 @@ def _out(row: OrgProfile) -> dict:
         "signatory_right_title": row.signatory_right_title,
         "signatory_right_name": row.signatory_right_name,
         "primary_color": row.primary_color,
+        "share_pengurus": float(row.share_pengurus),
+        "share_penasihat": float(row.share_penasihat),
+        "share_pengawas": float(row.share_pengawas),
+        "share_dana_sosial": float(row.share_dana_sosial),
+        "share_pades": float(row.share_pades),
+        "share_modal_bumdes": float(row.share_modal_bumdes),
+        "share_unit_pengelola": float(row.share_unit_pengelola),
+        "share_unit_bumdes": float(row.share_unit_bumdes),
         "updated_at": row.updated_at.isoformat() if row.updated_at else None,
     }
 
@@ -60,6 +74,14 @@ class OrgProfilePatch(BaseModel):
     signatory_right_title: Optional[str] = Field(None, max_length=120)
     signatory_right_name: Optional[str] = Field(None, max_length=255)
     primary_color: Optional[str] = Field(None, min_length=6, max_length=7)
+    share_pengurus: Optional[Decimal] = Field(None, ge=0, le=100)
+    share_penasihat: Optional[Decimal] = Field(None, ge=0, le=100)
+    share_pengawas: Optional[Decimal] = Field(None, ge=0, le=100)
+    share_dana_sosial: Optional[Decimal] = Field(None, ge=0, le=100)
+    share_pades: Optional[Decimal] = Field(None, ge=0, le=100)
+    share_modal_bumdes: Optional[Decimal] = Field(None, ge=0, le=100)
+    share_unit_pengelola: Optional[Decimal] = Field(None, ge=0, le=100)
+    share_unit_bumdes: Optional[Decimal] = Field(None, ge=0, le=100)
 
 
 @router.get("")
@@ -80,6 +102,16 @@ async def write_org_profile(
     fields = payload.model_dump(exclude_unset=True)
     if "primary_color" in fields and fields["primary_color"]:
         fields["primary_color"] = fields["primary_color"].lstrip("#").upper()
+
+    # Validasi total 100% pakai nilai gabungan (existing + patch), bukan cuma
+    # field yang dikirim di PATCH ini -- supaya PATCH parsial (mis. cuma ubah
+    # share_pengurus saja) tetap divalidasi terhadap 5 angka lain yang sudah
+    # tersimpan sebelumnya, bukan divalidasi seolah field lain itu 0.
+    if any(f in fields for f in (*SHARE_FIELDS_BUMDES, *SHARE_FIELDS_UNIT)):
+        current = await get_org_profile(session)
+        merged = {f: fields.get(f, getattr(current, f)) for f in (*SHARE_FIELDS_BUMDES, *SHARE_FIELDS_UNIT)}
+        validate_bagi_hasil_fields(merged)
+
     row = await update_org_profile(session, **fields)
     return _out(row)
 
