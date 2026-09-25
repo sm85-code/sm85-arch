@@ -1,4 +1,17 @@
-"""Google Drive adapter using a shared service account (no user OAuth)."""
+"""Google Drive adapter.
+
+Two auth modes, tried in this order:
+
+1. OAuth 2.0 as a real Google account (GOOGLE_OAUTH_CLIENT_ID/SECRET +
+   GOOGLE_OAUTH_REFRESH_TOKEN) -- uploads count against THAT account's own
+   Drive quota, so this works for plain "My Drive" folders. Needed because
+   a service account (mode 2) has 0 bytes of its own quota and can only
+   write into a Shared Drive -- which requires Google Workspace, not
+   available on a personal Gmail account.
+2. Service account (GDRIVE_SERVICE_ACCOUNT_JSON / GOOGLE_APPLICATION_CREDENTIALS)
+   -- kept for setups that DO have a Workspace Shared Drive configured
+   (e.g. a different tenant than the one that hit the quota issue).
+"""
 from __future__ import annotations
 
 import asyncio
@@ -9,12 +22,15 @@ from typing import Any, Optional
 
 import httplib2
 from google.oauth2 import service_account
+from google.oauth2.credentials import Credentials as OAuthCredentials
 from google_auth_httplib2 import AuthorizedHttp
+from google_auth_oauthlib.flow import Flow
 from googleapiclient.discovery import build
 from googleapiclient.errors import HttpError
 from googleapiclient.http import MediaIoBaseUpload
 
 _SCOPES = ["https://www.googleapis.com/auth/drive"]
+_TOKEN_URI = "https://oauth2.googleapis.com/token"
 
 # Without an explicit socket timeout, a stalled request to the Drive API
 # (network blip, slow upload) hangs indefinitely -- the request then sits
@@ -23,23 +39,71 @@ _SCOPES = ["https://www.googleapis.com/auth/drive"]
 _REQUEST_TIMEOUT_SECONDS = 25
 
 
+def _oauth_env() -> tuple[Optional[str], Optional[str], Optional[str]]:
+    return (
+        os.getenv("GOOGLE_OAUTH_CLIENT_ID"),
+        os.getenv("GOOGLE_OAUTH_CLIENT_SECRET"),
+        os.getenv("GOOGLE_OAUTH_REFRESH_TOKEN"),
+    )
+
+
+def is_oauth_configured() -> bool:
+    client_id, client_secret, refresh_token = _oauth_env()
+    return bool(client_id and client_secret and refresh_token)
+
+
 def is_configured() -> bool:
+    folder = os.getenv("GDRIVE_FOLDER_ID")
+    if not folder:
+        return False
+    if is_oauth_configured():
+        return True
     raw = os.getenv("GDRIVE_SERVICE_ACCOUNT_JSON")
     path = os.getenv("GOOGLE_APPLICATION_CREDENTIALS")
-    folder = os.getenv("GDRIVE_FOLDER_ID")
-    return bool(folder and (raw or (path and os.path.isfile(path))))
+    return bool(raw or (path and os.path.isfile(path)))
+
+
+def oauth_flow(redirect_uri: str) -> Flow:
+    """Builds the Flow used by /admin/gdrive/connect + /oauth-callback."""
+    client_id, client_secret, _ = _oauth_env()
+    if not client_id or not client_secret:
+        raise RuntimeError("Set GOOGLE_OAUTH_CLIENT_ID and GOOGLE_OAUTH_CLIENT_SECRET first")
+    client_config = {
+        "web": {
+            "client_id": client_id,
+            "client_secret": client_secret,
+            "auth_uri": "https://accounts.google.com/o/oauth2/auth",
+            "token_uri": _TOKEN_URI,
+        }
+    }
+    flow = Flow.from_client_config(client_config, scopes=_SCOPES, redirect_uri=redirect_uri)
+    return flow
 
 
 def _drive_service() -> Any:
-    raw = os.getenv("GDRIVE_SERVICE_ACCOUNT_JSON")
-    path = os.getenv("GOOGLE_APPLICATION_CREDENTIALS")
-    if raw:
-        info = json.loads(raw)
-        creds = service_account.Credentials.from_service_account_info(info, scopes=_SCOPES)
-    elif path and os.path.isfile(path):
-        creds = service_account.Credentials.from_service_account_file(path, scopes=_SCOPES)
+    client_id, client_secret, refresh_token = _oauth_env()
+    if client_id and client_secret and refresh_token:
+        creds = OAuthCredentials(
+            None,
+            refresh_token=refresh_token,
+            token_uri=_TOKEN_URI,
+            client_id=client_id,
+            client_secret=client_secret,
+            scopes=_SCOPES,
+        )
     else:
-        raise RuntimeError("Set GDRIVE_SERVICE_ACCOUNT_JSON or GOOGLE_APPLICATION_CREDENTIALS")
+        raw = os.getenv("GDRIVE_SERVICE_ACCOUNT_JSON")
+        path = os.getenv("GOOGLE_APPLICATION_CREDENTIALS")
+        if raw:
+            info = json.loads(raw)
+            creds = service_account.Credentials.from_service_account_info(info, scopes=_SCOPES)
+        elif path and os.path.isfile(path):
+            creds = service_account.Credentials.from_service_account_file(path, scopes=_SCOPES)
+        else:
+            raise RuntimeError(
+                "Set GOOGLE_OAUTH_CLIENT_ID/SECRET/REFRESH_TOKEN, or "
+                "GDRIVE_SERVICE_ACCOUNT_JSON/GOOGLE_APPLICATION_CREDENTIALS"
+            )
     http = AuthorizedHttp(creds, http=httplib2.Http(timeout=_REQUEST_TIMEOUT_SECONDS))
     return build("drive", "v3", http=http, cache_discovery=False)
 

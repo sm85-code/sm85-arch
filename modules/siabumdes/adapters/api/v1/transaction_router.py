@@ -27,6 +27,8 @@ from adapters.external.gdrive_adapter import (
     delete_file_from_gdrive,
     gdrive_file_exists,
     is_configured,
+    is_oauth_configured,
+    oauth_flow,
     upload_file_to_gdrive,
 )
 from modules.siabumdes.identity.infrastructure.models import User
@@ -344,28 +346,53 @@ async def verify_proofs(
 
 @router.get("/admin/gdrive/status")
 async def gdrive_status(_: User = Depends(get_current_user)):
-    """Compatibility stub: SPA treats connected=true as 'no need to OAuth'."""
+    oauth = is_oauth_configured()
     return {
-        "connected": True,
-        "mode": "service_account",
+        "connected": is_configured(),
+        "mode": "oauth" if oauth else "service_account",
         "configured": is_configured(),
-        "email": "service-account",
     }
 
 
 @router.get("/admin/gdrive/connect")
 async def gdrive_connect(request: Request, _: User = Depends(require_roles("admin"))):
+    """Mulai alur OAuth: kembalikan link consent Google. Admin buka link itu,
+    login/izinkan akses Drive, lalu Google redirect balik ke
+    /admin/gdrive/oauth-callback dengan refresh token yang perlu ditempel
+    manual sebagai env var GOOGLE_OAUTH_REFRESH_TOKEN (App Platform tidak
+    punya API untuk backend menulis env var dirinya sendiri saat runtime)."""
     base = str(request.base_url).rstrip("/")
-    return {
-        "connected": True,
-        "auth_url": f"{base}/api/admin/gdrive/already-connected",
-        "detail": "Google Drive memakai service account. OAuth admin tidak diperlukan.",
-    }
+    redirect_uri = f"{base}/api/admin/gdrive/oauth-callback"
+    flow = oauth_flow(redirect_uri)
+    auth_url, _state = flow.authorization_url(
+        access_type="offline",
+        prompt="consent",
+        include_granted_scopes="true",
+    )
+    return {"auth_url": auth_url}
 
 
-@router.get("/admin/gdrive/already-connected")
-async def gdrive_already_connected():
+@router.get("/admin/gdrive/oauth-callback")
+async def gdrive_oauth_callback(request: Request, code: str):
+    base = str(request.base_url).rstrip("/")
+    redirect_uri = f"{base}/api/admin/gdrive/oauth-callback"
+    flow = oauth_flow(redirect_uri)
+    flow.fetch_token(code=code)
+    refresh_token = flow.credentials.refresh_token
+    if not refresh_token:
+        raise HTTPException(
+            status_code=400,
+            detail=(
+                "Google tidak mengembalikan refresh token (biasanya karena akun ini sudah "
+                "pernah kasih izin sebelumnya). Buka https://myaccount.google.com/permissions, "
+                "cabut akses aplikasi ini, lalu ulangi proses connect dari awal."
+            ),
+        )
     return {
-        "connected": True,
-        "detail": "Google Drive terhubung melalui service account.",
+        "detail": (
+            "Berhasil. Copy nilai refresh_token di bawah, tempel sebagai env var "
+            "GOOGLE_OAUTH_REFRESH_TOKEN di App Platform (bareng GOOGLE_OAUTH_CLIENT_ID "
+            "dan GOOGLE_OAUTH_CLIENT_SECRET), lalu redeploy."
+        ),
+        "refresh_token": refresh_token,
     }
