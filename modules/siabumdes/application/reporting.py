@@ -79,25 +79,6 @@ class ReportingService:
 
     _HPP_ENTITIES = {"UU05", "UU06"}
 
-    @staticmethod
-    def _entity_prefix(entity: str) -> str:
-        return f"{(entity or 'BUMDES').strip().upper()}-"
-
-    def _account_index(self, accounts: list[Account], entity: str) -> dict[str, Account]:
-        prefix = self._entity_prefix(entity)
-        idx: dict[str, Account] = {}
-        for acc in accounts:
-            idx[acc.code] = acc
-            if not acc.code.upper().startswith(prefix):
-                idx[f"{entity}-{acc.code}"] = acc
-        return idx
-
-    def _code_in_entity(self, code: str, entity: str) -> bool:
-        if not code:
-            return False
-        prefix = self._entity_prefix(entity)
-        return code.strip().upper().startswith(prefix)
-
     async def _resolve_entity(
         self,
         unit_usaha_id: Optional[str] = None,
@@ -115,9 +96,8 @@ class ReportingService:
         entity: Optional[str] = None,
     ) -> dict[str, Any]:
         group = await self._resolve_entity(unit_usaha_id, entity)
-        prefix = self._entity_prefix(group)
         has_hpp = group in self._HPP_ENTITIES
-        accounts = self._account_index(await self._accounts(group), group)
+        accounts = {a.code: a for a in await self._accounts(group)}
         txs = await self._txs(
             start=start,
             end=end,
@@ -128,39 +108,23 @@ class ReportingService:
         debit: dict[str, Decimal] = defaultdict(lambda: Decimal("0"))
         credit: dict[str, Decimal] = defaultdict(lambda: Decimal("0"))
         for tx in txs:
-            d_code = (tx.debit_account_code or "").strip()
-            c_code = (tx.credit_account_code or "").strip()
-            if not (
-                self._code_in_entity(d_code, group)
-                or self._code_in_entity(c_code, group)
-                or d_code in accounts
-                or c_code in accounts
-            ):
-                continue
-            if d_code:
+            d_code, c_code = tx.debit_account_code, tx.credit_account_code
+            if d_code in accounts:
                 debit[d_code] += tx.amount
-            if c_code:
+            if c_code in accounts:
                 credit[c_code] += tx.amount
 
         def _net_rows(category: str, formula: str) -> list[dict[str, Any]]:
             rows = []
-            seen: set[str] = set()
-            for code in sorted(set(debit) | set(credit) | set(accounts)):
-                acc = accounts.get(code)
-                if not acc or acc.category != category or acc.code in seen:
+            for code, acc in sorted(accounts.items()):
+                if acc.category != category:
                     continue
-                seen.add(acc.code)
-                keys = {acc.code, f"{group}-{acc.code}"}
-                d = sum((debit.get(k, Decimal("0")) for k in keys), Decimal("0"))
-                c = sum((credit.get(k, Decimal("0")) for k in keys), Decimal("0"))
+                d = debit.get(code, Decimal("0"))
+                c = credit.get(code, Decimal("0"))
                 amt = (c - d) if formula == "kredit" else (d - c)
                 if amt == 0:
                     continue
-                rows.append({
-                    "code": acc.code if acc.code.upper().startswith(prefix) else f"{group}-{acc.code}",
-                    "name": acc.name,
-                    "amount": _f(amt),
-                })
+                rows.append({"code": code, "name": acc.name, "amount": _f(amt)})
             return rows
 
         pend_rows = _net_rows("pendapatan", "kredit")
@@ -186,7 +150,6 @@ class ReportingService:
             "end_date": end.isoformat(),
             "group": group,
             "entity": group,
-            "account_prefix": prefix.rstrip("-"),
         }
 
     async def neraca(self, as_of: date, unit_usaha_id: Optional[str] = None) -> dict[str, Any]:
