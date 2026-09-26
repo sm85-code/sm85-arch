@@ -42,10 +42,13 @@ from tenants.madrasah.modules.madrasah.application.schemas import (
 )
 from tenants.madrasah.modules.madrasah.infrastructure.models import (
     AbsensiMadrasah,
+    AkunMadrasah,
     AuditLogMadrasah,
     BukuKasMadrasah,
     GuruMapelRombel,
+    HonorMengajar,
     JadwalMadrasah,
+    JurnalMadrasah,
     KelasMadrasah,
     MapelMadrasah,
     MateriTarget,
@@ -68,6 +71,25 @@ STATUS_BELUM = "Belum Bayar"
 STATUS_MENUNGGU = "Menunggu Verifikasi"
 STATUS_LUNAS = "Lunas"
 DEFAULT_SPP_NOMINAL = Decimal(os.getenv("SPP_NOMINAL", "50000"))
+DEFAULT_HONOR_PER_SESI = Decimal(os.getenv("HONOR_PER_SESI", "10000"))
+
+# Chart of Accounts minimal & tetap -- lihat AkunMadrasah. Diseed idempoten
+# oleh seed_akun_default() (dipanggil dari ensure_madrasah_schema()).
+AKUN_KAS = "KAS-001"
+AKUN_PENDAPATAN_SPP = "PSP-001"
+AKUN_PENDAPATAN_LAIN = "PDL-001"
+AKUN_BEBAN_ATK = "BATK-001"
+AKUN_BEBAN_HONOR = "BHNR-001"
+AKUN_BEBAN_LAIN = "BLN-001"
+
+AKUN_DEFAULT: list[tuple[str, str, str]] = [
+    (AKUN_KAS, "Kas", "aset"),
+    (AKUN_PENDAPATAN_SPP, "Pendapatan SPP/Syahriyah", "pendapatan"),
+    (AKUN_PENDAPATAN_LAIN, "Pendapatan Lain-lain", "pendapatan"),
+    (AKUN_BEBAN_ATK, "Beban ATK", "beban"),
+    (AKUN_BEBAN_HONOR, "Beban Honor Mengajar", "beban"),
+    (AKUN_BEBAN_LAIN, "Beban Lain-lain", "beban"),
+]
 
 
 class MadrasahAuthError(Exception):
@@ -541,6 +563,16 @@ async def pay_spp_manual(session: AsyncSession, target_id: str) -> TagihanSyahri
         jumlah=row.nominal,
         keterangan=f"SPP {row.santri.nama} -- {row.bulan_tahun}",
     ))
+    await catat_jurnal(
+        session,
+        tanggal=_utcnow().date(),
+        akun_debit=AKUN_KAS,
+        akun_kredit=AKUN_PENDAPATAN_SPP,
+        jumlah=row.nominal,
+        keterangan=f"SPP {row.santri.nama} -- {row.bulan_tahun}",
+        sumber_tipe="spp",
+        sumber_id=row.id,
+    )
     await session.flush()
     return row
 
@@ -556,6 +588,24 @@ async def list_buku_kas(session: AsyncSession, bulan: str | None = None) -> list
     return rows
 
 
+def _akun_lawan_kas(kategori: str, tipe: str) -> str:
+    """Memetakan kategori bebas (field teks BukuKasIn.kategori) ke akun COA
+    tetap, supaya setiap baris buku kas otomatis punya pasangan jurnal yang
+    masuk akal tanpa memaksa pencatat kas memilih kode akun sendiri.
+    Kategori yang tidak dikenali jatuh ke akun "lain-lain" sesuai tipenya --
+    tidak pernah gagal, cuma kurang rinci di laporan laba-rugi."""
+    key = (kategori or "").strip().lower()
+    if tipe == "masuk":
+        if "spp" in key or "syahriyah" in key:
+            return AKUN_PENDAPATAN_SPP
+        return AKUN_PENDAPATAN_LAIN
+    if "atk" in key:
+        return AKUN_BEBAN_ATK
+    if "honor" in key:
+        return AKUN_BEBAN_HONOR
+    return AKUN_BEBAN_LAIN
+
+
 async def create_buku_kas_entry(session: AsyncSession, payload: BukuKasIn, dicatat_oleh: str) -> BukuKasMadrasah:
     row = BukuKasMadrasah(
         tanggal=payload.tanggal,
@@ -567,6 +617,18 @@ async def create_buku_kas_entry(session: AsyncSession, payload: BukuKasIn, dicat
     )
     session.add(row)
     await session.flush()
+    akun_lawan = _akun_lawan_kas(payload.kategori, payload.tipe)
+    await catat_jurnal(
+        session,
+        tanggal=payload.tanggal,
+        akun_debit=AKUN_KAS if payload.tipe == "masuk" else akun_lawan,
+        akun_kredit=akun_lawan if payload.tipe == "masuk" else AKUN_KAS,
+        jumlah=payload.jumlah,
+        keterangan=payload.keterangan or payload.kategori,
+        sumber_tipe="buku_kas",
+        sumber_id=row.id,
+        dibuat_oleh=dicatat_oleh,
+    )
     return row
 
 
@@ -590,6 +652,110 @@ async def laporan_keuangan(session: AsyncSession, bulan: str | None = None) -> d
         "total_keluar": str(total_keluar),
         "saldo": str(total_masuk - total_keluar),
         "entries": [buku_kas_out(r) for r in rows],
+    }
+
+
+# --- Chart of Accounts & jurnal double-entry (Fase 2.1) ---
+
+async def seed_akun_default(session: AsyncSession) -> None:
+    """Idempoten: hanya menambah kode akun yang belum ada, tidak pernah
+    menimpa `nama`/`tipe` akun yang sudah ada (kalau admin pernah
+    mengubahnya secara manual lewat DB). Dipanggil dari
+    seeder.ensure_madrasah_schema() setiap startup."""
+    existing = set((await session.execute(select(AkunMadrasah.kode))).scalars())
+    for kode, nama, tipe in AKUN_DEFAULT:
+        if kode not in existing:
+            session.add(AkunMadrasah(kode=kode, nama=nama, tipe=tipe))
+    await session.flush()
+
+
+async def list_akun(session: AsyncSession) -> list[AkunMadrasah]:
+    return list((await session.execute(select(AkunMadrasah).order_by(AkunMadrasah.kode))).scalars())
+
+
+def akun_out(row: AkunMadrasah) -> dict:
+    return {"kode": row.kode, "nama": row.nama, "tipe": row.tipe}
+
+
+async def catat_jurnal(
+    session: AsyncSession,
+    *,
+    tanggal: date,
+    akun_debit: str,
+    akun_kredit: str,
+    jumlah: Decimal,
+    keterangan: str = "",
+    sumber_tipe: str = "",
+    sumber_id: str | None = None,
+    dibuat_oleh: str | None = None,
+) -> JurnalMadrasah:
+    row = JurnalMadrasah(
+        tanggal=tanggal,
+        akun_debit=akun_debit,
+        akun_kredit=akun_kredit,
+        jumlah=jumlah,
+        keterangan=keterangan,
+        sumber_tipe=sumber_tipe,
+        sumber_id=sumber_id,
+        dibuat_oleh=dibuat_oleh,
+    )
+    session.add(row)
+    await session.flush()
+    return row
+
+
+def jurnal_out(row: JurnalMadrasah) -> dict:
+    return {
+        "id": row.id,
+        "tanggal": row.tanggal.isoformat(),
+        "akun_debit": row.akun_debit,
+        "akun_kredit": row.akun_kredit,
+        "jumlah": str(row.jumlah),
+        "keterangan": row.keterangan,
+        "sumber_tipe": row.sumber_tipe,
+        "sumber_id": row.sumber_id,
+    }
+
+
+async def list_jurnal(session: AsyncSession, bulan: str | None = None) -> list[JurnalMadrasah]:
+    stmt = select(JurnalMadrasah).order_by(JurnalMadrasah.tanggal.desc(), JurnalMadrasah.created_at.desc())
+    rows = list((await session.execute(stmt)).scalars())
+    if bulan:
+        rows = [r for r in rows if r.tanggal.strftime("%Y-%m") == bulan]
+    return rows
+
+
+async def laba_rugi(session: AsyncSession, bulan: str | None = None) -> dict:
+    """Laba-rugi sederhana: setiap baris jurnal menambah SALDO akun
+    kreditnya dan mengurangi saldo akun debitnya (konvensi normal
+    akuntansi), lalu akun tipe pendapatan/beban diringkas per akun."""
+    rows = await list_jurnal(session, bulan)
+    akun_map = {a.kode: a for a in await list_akun(session)}
+    saldo: dict[str, Decimal] = {}
+    for r in rows:
+        saldo[r.akun_kredit] = saldo.get(r.akun_kredit, Decimal("0")) + r.jumlah
+        saldo[r.akun_debit] = saldo.get(r.akun_debit, Decimal("0")) - r.jumlah
+
+    pendapatan = []
+    beban = []
+    total_pendapatan = Decimal("0")
+    total_beban = Decimal("0")
+    for kode, jumlah in saldo.items():
+        akun = akun_map.get(kode)
+        if not akun:
+            continue
+        if akun.tipe == "pendapatan" and jumlah > 0:
+            pendapatan.append({"kode": kode, "nama": akun.nama, "jumlah": str(jumlah)})
+            total_pendapatan += jumlah
+        elif akun.tipe == "beban" and jumlah < 0:
+            beban.append({"kode": kode, "nama": akun.nama, "jumlah": str(-jumlah)})
+            total_beban += -jumlah
+    return {
+        "pendapatan": pendapatan,
+        "beban": beban,
+        "total_pendapatan": str(total_pendapatan),
+        "total_beban": str(total_beban),
+        "laba_bersih": str(total_pendapatan - total_beban),
     }
 
 
@@ -1053,7 +1219,9 @@ async def assign_guru_mapel(session: AsyncSession, payload: PenugasanIn) -> Guru
     ).scalar_one_or_none()
     if existing:
         return existing
-    row = GuruMapelRombel(guru_id=payload.guru_id, mapel_id=payload.mapel_id, rombel_id=payload.rombel_id)
+    row = GuruMapelRombel(
+        guru_id=payload.guru_id, mapel_id=payload.mapel_id, rombel_id=payload.rombel_id, tarif_per_sesi=payload.tarif_per_sesi
+    )
     session.add(row)
     await session.flush()
     return row
@@ -1117,6 +1285,127 @@ async def rekap_absensi_mapel(session: AsyncSession, rombel_id: str, mapel_id: s
     )
     rows = list((await session.execute(stmt)).scalars())
     return [{"id": r.id, "tanggal": r.tanggal.isoformat(), "santri_id": r.santri_id, "status": r.status} for r in rows]
+
+
+# --- Honor mengajar (Fase 2.2): dihitung dari sesi yang benar-benar
+# tercatat di AbsensiMadrasah, bukan cuma dari penugasan GuruMapelRombel --
+# guru yang ditugaskan tapi tidak pernah mengisi absensi di bulan itu tidak
+# ikut dihitung honornya. ---
+
+def honor_out(row: HonorMengajar) -> dict:
+    return {
+        "id": row.id,
+        "guru_id": row.guru_id,
+        "guru": row.guru.nama if getattr(row, "guru", None) else None,
+        "mapel_id": row.mapel_id,
+        "mapel": row.mapel.nama if getattr(row, "mapel", None) else None,
+        "bulan_tahun": row.bulan_tahun,
+        "jumlah_sesi": row.jumlah_sesi,
+        "tarif_per_sesi": str(row.tarif_per_sesi),
+        "total": str(row.total),
+        "status_bayar": row.status_bayar,
+        "dibayar_pada": row.dibayar_pada.isoformat() if row.dibayar_pada else None,
+    }
+
+
+async def list_honor(session: AsyncSession, bulan: str | None = None) -> list[HonorMengajar]:
+    stmt = select(HonorMengajar).options(selectinload(HonorMengajar.guru), selectinload(HonorMengajar.mapel))
+    if bulan:
+        stmt = stmt.where(HonorMengajar.bulan_tahun == bulan)
+    stmt = stmt.order_by(HonorMengajar.bulan_tahun.desc())
+    return list((await session.execute(stmt)).scalars())
+
+
+async def generate_honor_massal(session: AsyncSession, bulan_tahun: str | None = None) -> list[HonorMengajar]:
+    """Satu baris per (guru, mapel) yang punya minimal satu sesi absensi di
+    bulan itu. Idempoten per periode: guru+mapel yang sudah punya baris
+    honor untuk bulan_tahun ini dilewati, tidak dibuat dobel maupun
+    ditimpa -- generate ulang setelah honor sudah dibayar tidak mengubah
+    baris yang sudah lunas."""
+    period = bulan_tahun or _bulan_tahun()
+
+    tarif_map = {
+        (r.guru_id, r.mapel_id): r.tarif_per_sesi
+        for r in (await session.execute(select(GuruMapelRombel))).scalars()
+        if r.tarif_per_sesi is not None
+    }
+
+    # Filter bulan di Python (sama seperti list_buku_kas): tanggal per baris
+    # absensi harus dilihat satu-satu untuk dihitung tanggal UNIK per
+    # (guru, mapel) -- agregasi SQL count(distinct tanggal) tidak bisa
+    # dikombinasikan dengan filter bulan_tahun karena itu bukan kolom asli,
+    # jadi diambil mentah lalu dikelompokkan di Python (volume kecil).
+    absensi_rows = list(
+        (
+            await session.execute(
+                select(AbsensiMadrasah.guru_id, AbsensiMadrasah.mapel_id, AbsensiMadrasah.tanggal).where(
+                    AbsensiMadrasah.mapel_id.is_not(None), AbsensiMadrasah.guru_id.is_not(None)
+                )
+            )
+        ).all()
+    )
+    tanggal_unik: dict[tuple[str, str], set] = {}
+    for guru_id, mapel_id, tanggal in absensi_rows:
+        if _bulan_tahun(tanggal) != period:
+            continue
+        key = (guru_id, mapel_id)
+        tanggal_unik.setdefault(key, set()).add(tanggal)
+    sesi_per_guru_mapel = {key: len(dates) for key, dates in tanggal_unik.items()}
+
+    existing = {
+        (r.guru_id, r.mapel_id)
+        for r in (await session.execute(select(HonorMengajar).where(HonorMengajar.bulan_tahun == period))).scalars()
+    }
+
+    hasil: list[HonorMengajar] = []
+    for (guru_id, mapel_id), jumlah_sesi in sesi_per_guru_mapel.items():
+        if (guru_id, mapel_id) in existing or jumlah_sesi == 0:
+            continue
+        tarif = tarif_map.get((guru_id, mapel_id), DEFAULT_HONOR_PER_SESI)
+        row = HonorMengajar(
+            guru_id=guru_id,
+            mapel_id=mapel_id,
+            bulan_tahun=period,
+            jumlah_sesi=jumlah_sesi,
+            tarif_per_sesi=tarif,
+            total=tarif * jumlah_sesi,
+        )
+        session.add(row)
+        hasil.append(row)
+    await session.flush()
+    for row in hasil:
+        await session.refresh(row, attribute_names=["guru", "mapel"])
+    return hasil
+
+
+async def pay_honor(session: AsyncSession, honor_id: str) -> HonorMengajar:
+    row = await session.get(HonorMengajar, honor_id)
+    if not row:
+        raise MadrasahNotFoundError("Honor tidak ditemukan")
+    if row.status_bayar:
+        raise MadrasahForbiddenError("Honor ini sudah dibayar")
+    row.status_bayar = True
+    row.dibayar_pada = _utcnow()
+    await session.flush()
+    await session.refresh(row, attribute_names=["guru", "mapel"])
+    keterangan = f"Honor {row.guru.nama} -- {row.mapel.nama if row.mapel else '-'} ({row.bulan_tahun})"
+    session.add(
+        BukuKasMadrasah(
+            tanggal=_utcnow().date(), tipe="keluar", kategori="Honor Mengajar", jumlah=row.total, keterangan=keterangan
+        )
+    )
+    await catat_jurnal(
+        session,
+        tanggal=_utcnow().date(),
+        akun_debit=AKUN_BEBAN_HONOR,
+        akun_kredit=AKUN_KAS,
+        jumlah=row.total,
+        keterangan=keterangan,
+        sumber_tipe="honor",
+        sumber_id=row.id,
+    )
+    await session.flush()
+    return row
 
 
 # --- Rapor: baca riwayat progres gabungan seorang santri, dengan cek ---

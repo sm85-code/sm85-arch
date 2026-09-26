@@ -1107,6 +1107,79 @@ async def keuangan_laporan(
     return await services.laporan_keuangan(session, bulan)
 
 
+# --- COA & jurnal double-entry (Fase 2.1) ---
+
+@keuangan_r.get("/akun")
+async def keuangan_akun_list(
+    session: AsyncSession = Depends(get_db_madrasah),
+    _: UserMadrasah = Depends(require_roles_madrasah(*ADMIN_ROLES)),
+):
+    return [services.akun_out(r) for r in await services.list_akun(session)]
+
+
+@keuangan_r.get("/jurnal")
+async def keuangan_jurnal_list(
+    bulan: str | None = Query(None, description="Filter YYYY-MM"),
+    session: AsyncSession = Depends(get_db_madrasah),
+    _: UserMadrasah = Depends(require_roles_madrasah(*ADMIN_ROLES)),
+):
+    return [services.jurnal_out(r) for r in await services.list_jurnal(session, bulan)]
+
+
+@keuangan_r.get("/laba-rugi")
+async def keuangan_laba_rugi(
+    bulan: str | None = Query(None, description="Filter YYYY-MM"),
+    session: AsyncSession = Depends(get_db_madrasah),
+    _: UserMadrasah = Depends(require_roles_madrasah(*ADMIN_ROLES)),
+):
+    return await services.laba_rugi(session, bulan)
+
+
+# --- Honor mengajar / payroll (Fase 2.2) ---
+
+@keuangan_r.get("/honor")
+async def keuangan_honor_list(
+    bulan: str | None = Query(None, description="Filter YYYY-MM"),
+    session: AsyncSession = Depends(get_db_madrasah),
+    _: UserMadrasah = Depends(require_roles_madrasah(*ADMIN_ROLES)),
+):
+    return [services.honor_out(r) for r in await services.list_honor(session, bulan)]
+
+
+@keuangan_r.post("/honor/generate", status_code=status.HTTP_201_CREATED)
+async def keuangan_honor_generate(
+    bulan: str | None = Query(None, description="Default bulan berjalan (YYYY-MM)"),
+    session: AsyncSession = Depends(get_db_madrasah),
+    _: UserMadrasah = Depends(require_roles_madrasah(*ADMIN_ROLES)),
+):
+    return [services.honor_out(r) for r in await services.generate_honor_massal(session, bulan)]
+
+
+@keuangan_r.post("/honor/pay/{honor_id}")
+async def keuangan_honor_pay(
+    honor_id: str,
+    request: Request,
+    session: AsyncSession = Depends(get_db_madrasah),
+    user: UserMadrasah = Depends(require_roles_madrasah(*ADMIN_ROLES)),
+):
+    try:
+        row = await services.pay_honor(session, honor_id)
+    except services.MadrasahNotFoundError as exc:
+        raise HTTPException(status_code=404, detail=str(exc)) from exc
+    except services.MadrasahForbiddenError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+    await services.record_audit(
+        session,
+        aktor=user,
+        aksi="honor_dibayar",
+        entitas="madrasah_honor_mengajar",
+        entitas_id=row.id,
+        keterangan=f"{row.guru.nama if row.guru else '-'} {row.bulan_tahun} = {row.total}",
+        ip=_client_ip(request),
+    )
+    return services.honor_out(row)
+
+
 @admin_r.get("/audit-log")
 async def admin_audit_log(
     limit: int = Query(default=200, le=500),

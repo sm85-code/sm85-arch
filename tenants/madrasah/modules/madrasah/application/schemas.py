@@ -139,6 +139,9 @@ class PenugasanIn(BaseModel):
     guru_id: str
     mapel_id: str
     rombel_id: str
+    # Kosong -> generate_honor_massal() jatuh ke tarif default (env
+    # HONOR_PER_SESI) untuk penugasan ini.
+    tarif_per_sesi: Optional[Decimal] = Field(default=None, gt=0)
 
 
 class ProgresPatch(BaseModel):
