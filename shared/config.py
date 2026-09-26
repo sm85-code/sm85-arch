@@ -36,6 +36,7 @@ ROLE_ALIASES_TO_PUBLIC = {
 
 EXTRA_CORS_ORIGINS = [
     "https://banihusen-sgxg4.ondigitalocean.app",
+    "https://madrasah-l7kl7.ondigitalocean.app",
 ]
 
 
