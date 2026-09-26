@@ -9,7 +9,11 @@ from pydantic import BaseModel, Field
 
 
 class LoginRequest(BaseModel):
-    no_hp: str = Field(..., min_length=8, max_length=32)
+    # Nama field tetap "no_hp" (kolom UserMadrasah.no_hp yang sudah ada --
+    # unique string identifier tanpa validasi format telepon di mana pun),
+    # tapi min_length direlaksasi supaya username biasa (mis. "admin", 5
+    # karakter) bisa dipakai, bukan cuma nomor HP.
+    no_hp: str = Field(..., min_length=3, max_length=32)
     password: str = Field(..., min_length=4, max_length=72)
 
 
