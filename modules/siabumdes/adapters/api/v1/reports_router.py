@@ -345,6 +345,10 @@ async def _materialize(
         data = await svc.laba_rugi(start, end, unit_id)
         rows = [["Pendapatan", "", data["total_pendapatan"]]]
         rows += [[r["code"], r["name"], r["amount"]] for r in data["pendapatan"]]
+        if data["has_hpp"]:
+            rows += [["Harga Pokok Penjualan", "", data["total_hpp"]]]
+            rows += [[r["code"], r["name"], r["amount"]] for r in data["hpp"]]
+            rows.append(["Laba kotor", "", data["laba_kotor"]])
         rows += [["Beban", "", data["total_beban"]]]
         rows += [[r["code"], r["name"], r["amount"]] for r in data["beban"]]
         rows.append(["Laba bersih", "", data["laba_bersih"]])
