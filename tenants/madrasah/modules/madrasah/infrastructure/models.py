@@ -29,6 +29,13 @@ class UserMadrasah(MadrasahBase):
     password_hash: Mapped[str] = mapped_column(String(255), nullable=False)
     role: Mapped[str] = mapped_column(String(32), nullable=False, index=True)
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=_utcnow)
+    # Dibandingkan dengan klaim "sv" di JWT saat setiap request (lihat
+    # get_current_user_madrasah). Dinaikkan setiap kali password diganti atau
+    # akun di-nonaktifkan/hapus paksa, supaya token lama langsung tidak valid
+    # tanpa perlu tabel blacklist token terpisah. Kolom baru di tabel yang
+    # sudah ada -> perlu ALTER TABLE ADD COLUMN IF NOT EXISTS untuk database
+    # produksi lama (lihat self-heal di login_by_phone).
+    session_version: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
 
     santri_asuh: Mapped[list["SantriMadrasah"]] = relationship(back_populates="orang_tua")
     absensi_dicatat: Mapped[list["AbsensiMadrasah"]] = relationship(back_populates="guru")
@@ -300,3 +307,24 @@ class PesanMadrasah(MadrasahBase):
 
     santri: Mapped["SantriMadrasah"] = relationship()
     dari_user: Mapped["UserMadrasah"] = relationship()
+
+
+class AuditLogMadrasah(MadrasahBase):
+    """Jejak audit untuk aksi sensitif (login, keuangan, hapus akun/data,
+    reset destruktif). Tabel baru, additive -- tidak mengubah tabel manapun
+    yang sudah ada. dilihat via GET /admin/audit-log (ADMIN_ROLES saja)."""
+
+    __tablename__ = "madrasah_audit_log"
+
+    id: Mapped[str] = mapped_column(String(64), primary_key=True, default=_uuid)
+    waktu: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=_utcnow, index=True)
+    aktor_id: Mapped[Optional[str]] = mapped_column(
+        String(64), ForeignKey("madrasah_users.id", ondelete="SET NULL"), nullable=True, index=True
+    )
+    aktor_nama: Mapped[str] = mapped_column(String(255), nullable=False, default="")
+    aktor_role: Mapped[str] = mapped_column(String(32), nullable=False, default="")
+    aksi: Mapped[str] = mapped_column(String(64), nullable=False, index=True)
+    entitas: Mapped[str] = mapped_column(String(64), nullable=False, default="")
+    entitas_id: Mapped[Optional[str]] = mapped_column(String(64), nullable=True)
+    keterangan: Mapped[str] = mapped_column(Text, nullable=False, default="")
+    ip: Mapped[str] = mapped_column(String(64), nullable=False, default="")

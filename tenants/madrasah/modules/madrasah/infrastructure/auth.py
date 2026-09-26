@@ -62,11 +62,13 @@ def reset_login_attempts(request: Request, no_hp: str) -> None:
 def issue_madrasah_token(user: UserMadrasah) -> str:
     """Create a JWT for a madrasah user, reusing the shared encode primitive.
 
-    session_version is fixed at 0 since UserMadrasah has no session_version
-    column (unlike the BUMDes User model) -- there is currently no
-    forced-logout-all-sessions feature for madrasah accounts.
+    session_version is now taken from UserMadrasah.session_version (mirrors
+    the BUMDes User model). Bumping that column -- done in
+    services.patch_guru whenever a password or role changes -- invalidates
+    every JWT issued before the bump on its next request, without needing a
+    token blacklist table.
     """
-    return create_access_token(subject=user.id, role=user.role, session_version=0)
+    return create_access_token(subject=user.id, role=user.role, session_version=user.session_version)
 
 
 def set_madrasah_cookie(response: Response, token: str) -> None:
@@ -111,6 +113,11 @@ async def get_current_user_madrasah(
     user = await session.get(UserMadrasah, user_id)
     if not user:
         raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="Sesi tidak valid")
+    # Token dikeluarkan sebelum password/role terakhir diubah (sv lama) --
+    # tolak, supaya token yang bocor/lama tidak bisa dipakai lagi setelah
+    # pemilik akun mengganti password. Lihat services.patch_guru.
+    if int(payload.get("sv", 0)) != user.session_version:
+        raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="Sesi tidak valid, silakan login ulang")
     return user
 
 

@@ -75,6 +75,10 @@ def _user_out(user) -> dict:
     return services.user_out(user)
 
 
+def _client_ip(request: Request) -> str:
+    return request.client.host if request.client else "unknown"
+
+
 @madrasah_router.get("/seed-now")
 async def seed_now(session: AsyncSession = Depends(get_db_madrasah)):
     try:
@@ -86,8 +90,9 @@ async def seed_now(session: AsyncSession = Depends(get_db_madrasah)):
 
 @madrasah_router.post("/reset-now")
 async def reset_now(
+    request: Request,
     session: AsyncSession = Depends(get_db_madrasah),
-    _: UserMadrasah = Depends(require_roles_madrasah(*ADMIN_ROLES)),
+    user: UserMadrasah = Depends(require_roles_madrasah(*ADMIN_ROLES)),
 ):
     # DESTRUCTIVE -- lihat docstring reset_madrasah(). Dibuat sebagai
     # endpoint terpisah dari /seed-now yang idempotent, supaya redeploy
@@ -99,6 +104,21 @@ async def reset_now(
         ids = await reset_madrasah(session)
     except RuntimeError as exc:
         raise HTTPException(status_code=status.HTTP_503_SERVICE_UNAVAILABLE, detail=str(exc)) from exc
+    # reset_madrasah men-drop+membuat ulang tabel lewat koneksi engine
+    # terpisah (engine.begin()), jadi baris audit ini aman ditulis lewat
+    # `session` milik request seperti biasa -- ditulis SETELAH reset. aktor
+    # dikirim None (bukan objek `user`): baris madrasah_users milik admin
+    # yang memicu reset ini sendiri sudah ikut di-drop, jadi FK aktor_id
+    # tidak lagi merujuk baris yang ada -- nama/role disimpan sebagai teks
+    # di keterangan saja.
+    await services.record_audit(
+        session,
+        aktor=None,
+        aksi="reset_database",
+        entitas="madrasah_*",
+        keterangan=f"Dipicu oleh {user.nama} ({user.role}) -- reset total ke 2 akun default",
+        ip=_client_ip(request),
+    )
     return {"status": "Database madrasah di-reset total ke 2 akun default (admin, guru)", "ids": ids}
 
 
@@ -118,8 +138,19 @@ async def login(
         user = await services.login_by_phone(session, payload)
     except services.MadrasahAuthError as exc:
         record_failed_login(request, payload.no_hp)
+        await services.record_audit(
+            session,
+            aktor=None,
+            aksi="login_gagal",
+            entitas="madrasah_users",
+            keterangan=f"no_hp={payload.no_hp.strip()}",
+            ip=_client_ip(request),
+        )
         raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail=str(exc)) from exc
     reset_login_attempts(request, payload.no_hp)
+    await services.record_audit(
+        session, aktor=user, aksi="login_sukses", entitas="madrasah_users", entitas_id=user.id, ip=_client_ip(request)
+    )
     token = issue_madrasah_token(user)
     set_madrasah_cookie(response, token)
     return {"user": _user_out(user)}
@@ -196,13 +227,18 @@ async def spp_generate(
 @madrasah_router.post("/spp/pay/{id}")
 async def spp_pay(
     id: str,
+    request: Request,
     session: AsyncSession = Depends(get_db_madrasah),
-    _: UserMadrasah = Depends(require_roles_madrasah(*BENDAHARA_ROLES)),
+    user: UserMadrasah = Depends(require_roles_madrasah(*BENDAHARA_ROLES)),
 ):
     try:
-        return services.tagihan_out(await services.pay_spp_manual(session, id))
+        row = await services.pay_spp_manual(session, id)
     except services.MadrasahNotFoundError as exc:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=str(exc)) from exc
+    await services.record_audit(
+        session, aktor=user, aksi="spp_lunas", entitas="madrasah_tagihan_syahriyah", entitas_id=row.id, ip=_client_ip(request)
+    )
+    return services.tagihan_out(row)
 
 
 @madrasah_router.get("/pengaturan")
@@ -358,13 +394,17 @@ async def admin_guru_patch(
 @admin_r.delete("/guru/{user_id}", status_code=status.HTTP_204_NO_CONTENT)
 async def admin_guru_delete(
     user_id: str,
+    request: Request,
     session: AsyncSession = Depends(get_db_madrasah),
-    _: UserMadrasah = Depends(require_roles_madrasah(*ADMIN_ROLES)),
+    user: UserMadrasah = Depends(require_roles_madrasah(*ADMIN_ROLES)),
 ):
     try:
         await services.delete_guru(session, user_id)
     except services.MadrasahNotFoundError as exc:
         raise HTTPException(status_code=404, detail=str(exc)) from exc
+    await services.record_audit(
+        session, aktor=user, aksi="hapus_akun", entitas="madrasah_users", entitas_id=user_id, ip=_client_ip(request)
+    )
 
 
 @admin_r.post("/wali-santri", status_code=status.HTTP_201_CREATED)
@@ -393,13 +433,17 @@ async def admin_wali_santri_patch(
 @admin_r.delete("/wali-santri/{user_id}", status_code=status.HTTP_204_NO_CONTENT)
 async def admin_wali_santri_delete(
     user_id: str,
+    request: Request,
     session: AsyncSession = Depends(get_db_madrasah),
-    _: UserMadrasah = Depends(require_roles_madrasah(*ADMIN_ROLES)),
+    user: UserMadrasah = Depends(require_roles_madrasah(*ADMIN_ROLES)),
 ):
     try:
         await services.delete_guru(session, user_id)
     except services.MadrasahNotFoundError as exc:
         raise HTTPException(status_code=404, detail=str(exc)) from exc
+    await services.record_audit(
+        session, aktor=user, aksi="hapus_akun", entitas="madrasah_users", entitas_id=user_id, ip=_client_ip(request)
+    )
 
 
 @admin_r.post("/santri", status_code=status.HTTP_201_CREATED)
@@ -440,13 +484,17 @@ async def admin_santri_patch(
 @admin_r.delete("/santri/{santri_id}", status_code=status.HTTP_204_NO_CONTENT)
 async def admin_santri_delete(
     santri_id: str,
+    request: Request,
     session: AsyncSession = Depends(get_db_madrasah),
-    _: UserMadrasah = Depends(require_roles_madrasah(*ADMIN_ROLES)),
+    user: UserMadrasah = Depends(require_roles_madrasah(*ADMIN_ROLES)),
 ):
     try:
         await services.delete_santri(session, santri_id)
     except services.MadrasahNotFoundError as exc:
         raise HTTPException(status_code=404, detail=str(exc)) from exc
+    await services.record_audit(
+        session, aktor=user, aksi="hapus_santri", entitas="madrasah_santri", entitas_id=santri_id, ip=_client_ip(request)
+    )
 
 
 @admin_r.post("/pengumuman", status_code=status.HTTP_201_CREATED)
@@ -631,13 +679,18 @@ async def ben_menunggu(
 @bendahara_r.post("/spp/pay/{id}")
 async def ben_pay(
     id: str,
+    request: Request,
     session: AsyncSession = Depends(get_db_madrasah),
-    _: UserMadrasah = Depends(require_roles_madrasah(*BENDAHARA_ROLES)),
+    user: UserMadrasah = Depends(require_roles_madrasah(*BENDAHARA_ROLES)),
 ):
     try:
-        return services.tagihan_out(await services.pay_spp_manual(session, id))
+        row = await services.pay_spp_manual(session, id)
     except services.MadrasahNotFoundError as exc:
         raise HTTPException(status_code=404, detail=str(exc)) from exc
+    await services.record_audit(
+        session, aktor=user, aksi="spp_lunas", entitas="madrasah_tagihan_syahriyah", entitas_id=row.id, ip=_client_ip(request)
+    )
+    return services.tagihan_out(row)
 
 
 @wali_kelas_r.get("/kurikulum")
@@ -964,10 +1017,20 @@ async def keuangan_buku_kas_list(
 @keuangan_r.post("/buku-kas", status_code=status.HTTP_201_CREATED)
 async def keuangan_buku_kas_create(
     payload: BukuKasIn,
+    request: Request,
     session: AsyncSession = Depends(get_db_madrasah),
     user: UserMadrasah = Depends(require_roles_madrasah(*ADMIN_ROLES)),
 ):
     row = await services.create_buku_kas_entry(session, payload, dicatat_oleh=user.id)
+    await services.record_audit(
+        session,
+        aktor=user,
+        aksi="buku_kas_catat",
+        entitas="madrasah_buku_kas",
+        entitas_id=row.id,
+        keterangan=f"{row.tipe} {row.kategori} {row.jumlah}",
+        ip=_client_ip(request),
+    )
     return services.buku_kas_out(row)
 
 
@@ -978,6 +1041,15 @@ async def keuangan_laporan(
     _: UserMadrasah = Depends(require_roles_madrasah(*ADMIN_ROLES)),
 ):
     return await services.laporan_keuangan(session, bulan)
+
+
+@admin_r.get("/audit-log")
+async def admin_audit_log(
+    limit: int = Query(default=200, le=500),
+    session: AsyncSession = Depends(get_db_madrasah),
+    _: UserMadrasah = Depends(require_roles_madrasah(*ADMIN_ROLES)),
+):
+    return [services.audit_out(r) for r in await services.list_audit_log(session, limit)]
 
 
 madrasah_router.include_router(admin_r)
