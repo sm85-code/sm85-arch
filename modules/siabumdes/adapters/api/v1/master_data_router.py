@@ -52,11 +52,23 @@ class AccountIn(BaseModel):
     group: str = "BUMDES"
 
 
+BUSINESS_TYPES = {"jasa", "perdagangan", "manufaktur"}
+
+
 class UnitIn(BaseModel):
     code: str
     name: str
+    business_type: str = "jasa"
     description: str = ""
     revenue_scheme: str = ""
+
+
+class UnitPatch(BaseModel):
+    name: Optional[str] = None
+    business_type: Optional[str] = None
+    description: Optional[str] = None
+    revenue_scheme: Optional[str] = None
+    active: Optional[bool] = None
 
 
 class TxTypeIn(BaseModel):
@@ -119,6 +131,7 @@ async def list_units(user: User = Depends(get_current_user), session: AsyncSessi
             "id": row.id,
             "code": row.code,
             "name": row.name,
+            "business_type": row.business_type,
             "description": row.description,
             "revenue_scheme": row.revenue_scheme,
             "active": row.active,
@@ -133,18 +146,62 @@ async def create_unit(
     _: User = Depends(require_roles(*UNIT_WRITE_ROLES)),
     session: AsyncSession = Depends(get_db),
 ):
+    if payload.business_type not in BUSINESS_TYPES:
+        raise HTTPException(status_code=422, detail="Jenis usaha tidak valid")
     exists = (await session.execute(select(UnitUsaha).where(UnitUsaha.code == payload.code.strip()))).scalar_one_or_none()
     if exists:
         raise HTTPException(status_code=400, detail="Kode unit sudah ada")
     row = UnitUsaha(
         code=payload.code.strip().upper(),
         name=payload.name.strip(),
+        business_type=payload.business_type,
         description=payload.description,
         revenue_scheme=payload.revenue_scheme,
     )
     session.add(row)
     await session.flush()
-    return {"id": row.id, "code": row.code, "name": row.name, "description": row.description, "revenue_scheme": row.revenue_scheme}
+    return {
+        "id": row.id,
+        "code": row.code,
+        "name": row.name,
+        "business_type": row.business_type,
+        "description": row.description,
+        "revenue_scheme": row.revenue_scheme,
+    }
+
+
+@router.patch("/unit-usaha/{unit_id}")
+async def update_unit(
+    unit_id: str,
+    payload: UnitPatch,
+    _: User = Depends(require_roles(*UNIT_WRITE_ROLES)),
+    session: AsyncSession = Depends(get_db),
+):
+    row = await session.get(UnitUsaha, unit_id)
+    if not row:
+        raise HTTPException(status_code=404, detail="Unit usaha tidak ditemukan")
+    if payload.business_type is not None and payload.business_type not in BUSINESS_TYPES:
+        raise HTTPException(status_code=422, detail="Jenis usaha tidak valid")
+    if payload.name is not None:
+        row.name = payload.name.strip()
+    if payload.business_type is not None:
+        row.business_type = payload.business_type
+    if payload.description is not None:
+        row.description = payload.description
+    if payload.revenue_scheme is not None:
+        row.revenue_scheme = payload.revenue_scheme
+    if payload.active is not None:
+        row.active = payload.active
+    await session.flush()
+    return {
+        "id": row.id,
+        "code": row.code,
+        "name": row.name,
+        "business_type": row.business_type,
+        "description": row.description,
+        "revenue_scheme": row.revenue_scheme,
+        "active": row.active,
+    }
 
 
 @router.get("/accounts")

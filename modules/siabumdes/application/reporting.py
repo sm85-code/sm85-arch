@@ -78,7 +78,7 @@ class ReportingService:
         unit = await self.session.get(UnitUsaha, unit_usaha_id)
         return unit.code if unit else "BUMDES"
 
-    _HPP_ENTITIES = {"UU05", "UU06"}
+    _HPP_BUSINESS_TYPES = {"perdagangan", "manufaktur"}
 
     async def _resolve_entity(
         self,
@@ -89,6 +89,12 @@ class ReportingService:
             return entity.strip().upper()
         return await self._group_for(unit_usaha_id)
 
+    async def _has_hpp(self, group: str) -> bool:
+        unit = (
+            await self.session.execute(select(UnitUsaha).where(UnitUsaha.code == group))
+        ).scalar_one_or_none()
+        return bool(unit and unit.business_type in self._HPP_BUSINESS_TYPES)
+
     async def laba_rugi(
         self,
         start: date,
@@ -97,7 +103,7 @@ class ReportingService:
         entity: Optional[str] = None,
     ) -> dict[str, Any]:
         group = await self._resolve_entity(unit_usaha_id, entity)
-        has_hpp = group in self._HPP_ENTITIES
+        has_hpp = await self._has_hpp(group)
         accounts = {a.code: a for a in await self._accounts(group)}
         txs = await self._txs(
             start=start,

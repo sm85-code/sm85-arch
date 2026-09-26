@@ -42,6 +42,7 @@ _ADD_COLUMNS = [
     ("org_profiles", "share_unit_bumdes", "NUMERIC(5,2) NOT NULL DEFAULT 70"),
     ("users", "photo_url", "VARCHAR(500) NOT NULL DEFAULT ''"),
     ("stock_cards", "movement_kind", "VARCHAR(16) NOT NULL DEFAULT 'sale'"),
+    ("unit_usaha", "business_type", "VARCHAR(20) NOT NULL DEFAULT 'jasa'"),
 ]
 
 
@@ -67,6 +68,28 @@ async def ensure_schema() -> None:
                     """
                 )
             )
+        business_type_existed = (
+            await conn.execute(
+                text(
+                    "SELECT 1 FROM information_schema.columns "
+                    "WHERE table_schema = 'public' AND table_name = 'unit_usaha' "
+                    "AND column_name = 'business_type'"
+                )
+            )
+        ).first() is not None
         for table, column, col_def in _ADD_COLUMNS:
             await conn.execute(text(f"ALTER TABLE {table} ADD COLUMN IF NOT EXISTS {column} {col_def}"))
+        if not business_type_existed:
+            # unit_usaha.business_type baru ditambahkan dengan default 'jasa' di atas;
+            # UU05/UU06 sudah dipakai sebagai unit dagang (HPP) sebelum kolom ini ada,
+            # jadi tanpa backfill ini laporan laba-rugi mereka kehilangan baris HPP.
+            # Hanya dijalankan sekali persis saat kolom ini baru dibuat (dicek di atas
+            # SEBELUM ALTER TABLE), supaya perubahan admin lewat Profil Unit Usaha
+            # sesudahnya tidak pernah ditimpa balik di boot berikutnya.
+            await conn.execute(
+                text(
+                    "UPDATE unit_usaha SET business_type = 'perdagangan' "
+                    "WHERE code IN ('UU05', 'UU06')"
+                )
+            )
     logger.info("schema ready")
