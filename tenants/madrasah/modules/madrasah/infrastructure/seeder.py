@@ -58,6 +58,10 @@ async def ensure_madrasah_schema() -> None:
             "madrasah_jadwal",
         ):
             await conn.execute(text(f"ALTER TABLE IF EXISTS {table} ADD COLUMN IF NOT EXISTS semester_id VARCHAR(64) NULL"))
+        await conn.execute(
+            text("ALTER TABLE IF EXISTS madrasah_santri ADD COLUMN IF NOT EXISTS status VARCHAR(16) NOT NULL DEFAULT 'aktif'")
+        )
+        await conn.execute(text("ALTER TABLE IF EXISTS madrasah_santri ADD COLUMN IF NOT EXISTS tanggal_status DATE NULL"))
 
 
 async def seed_madrasah(session: AsyncSession) -> dict[str, str]:

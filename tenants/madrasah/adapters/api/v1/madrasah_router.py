@@ -20,6 +20,7 @@ from tenants.madrasah.modules.madrasah.application.schemas import (
     MateriIn,
     MateriPatch,
     PenugasanIn,
+    KenaikanKelasRequest,
     PengaturanPatch,
     PengumumanIn,
     PesanIn,
@@ -30,6 +31,7 @@ from tenants.madrasah.modules.madrasah.application.schemas import (
     RombelPatch,
     SantriIn,
     SantriPatch,
+    SantriStatusIn,
     SemesterIn,
     TahunAjaranIn,
     TingkatIn,
@@ -460,13 +462,18 @@ async def admin_santri_create(
 
 @admin_r.get("/santri")
 async def admin_santri_list(
+    status: str | None = Query(default="semua"),
     session: AsyncSession = Depends(get_db_madrasah),
     _: UserMadrasah = Depends(require_roles_madrasah(*ADMIN_ROLES)),
 ):
     # Beda dari GET /santri (root, di-scope per-role): ini khusus admin untuk
-    # keperluan kelola data lengkap -- selalu daftar semua santri apa adanya.
-    rows = await services.list_santri(session, None)
-    return [{"id": r.id, "nama": r.nama, "rombel_id": r.rombel_id, "orang_tua_id": r.orang_tua_id} for r in rows]
+    # keperluan kelola data lengkap -- default "semua" (termasuk lulus/keluar/
+    # pindah), beda dari list_santri() lain yang default cuma santri aktif.
+    rows = await services.list_santri(session, None, status=status)
+    return [
+        {"id": r.id, "nama": r.nama, "rombel_id": r.rombel_id, "orang_tua_id": r.orang_tua_id, "status": r.status}
+        for r in rows
+    ]
 
 
 @admin_r.patch("/santri/{santri_id}")
@@ -528,6 +535,61 @@ async def admin_place(
     except services.MadrasahNotFoundError as exc:
         raise HTTPException(status_code=404, detail=str(exc)) from exc
     return {"id": row.id, "nama": row.nama, "rombel_id": row.rombel_id}
+
+
+@admin_r.get("/santri/{santri_id}/riwayat-kelas")
+async def admin_santri_riwayat_kelas(
+    santri_id: str,
+    session: AsyncSession = Depends(get_db_madrasah),
+    _: UserMadrasah = Depends(require_roles_madrasah(*ADMIN_ROLES, *KURIKULUM_ROLES)),
+):
+    return await services.riwayat_kelas_santri(session, santri_id)
+
+
+@admin_r.post("/santri/{santri_id}/status")
+async def admin_santri_status(
+    santri_id: str,
+    payload: SantriStatusIn,
+    request: Request,
+    session: AsyncSession = Depends(get_db_madrasah),
+    user: UserMadrasah = Depends(require_roles_madrasah(*ADMIN_ROLES)),
+):
+    try:
+        row = await services.set_status_santri(session, santri_id, payload)
+    except services.MadrasahNotFoundError as exc:
+        raise HTTPException(status_code=404, detail=str(exc)) from exc
+    await services.record_audit(
+        session,
+        aktor=user,
+        aksi="ubah_status_santri",
+        entitas="madrasah_santri",
+        entitas_id=santri_id,
+        keterangan=f"status -> {payload.status}",
+        ip=_client_ip(request),
+    )
+    return {"id": row.id, "nama": row.nama, "status": row.status, "tanggal_status": row.tanggal_status.isoformat() if row.tanggal_status else None}
+
+
+@admin_r.post("/kenaikan-kelas", status_code=status.HTTP_201_CREATED)
+async def admin_kenaikan_kelas(
+    payload: KenaikanKelasRequest,
+    request: Request,
+    session: AsyncSession = Depends(get_db_madrasah),
+    user: UserMadrasah = Depends(require_roles_madrasah(*ADMIN_ROLES)),
+):
+    try:
+        hasil = await services.kenaikan_kelas_massal(session, payload)
+    except services.MadrasahNotFoundError as exc:
+        raise HTTPException(status_code=404, detail=str(exc)) from exc
+    await services.record_audit(
+        session,
+        aktor=user,
+        aksi="kenaikan_kelas_massal",
+        entitas="madrasah_santri",
+        keterangan=f"dipindah={len(hasil['dipindah'])} diluluskan={len(hasil['diluluskan'])}",
+        ip=_client_ip(request),
+    )
+    return hasil
 
 
 @kurikulum_r.get("/mapel")
