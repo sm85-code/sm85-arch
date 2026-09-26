@@ -37,12 +37,16 @@ class ProgresCreateRequest(BaseModel):
 class TingkatIn(BaseModel):
     nama: str
     urutan: int = 1
+    # Kosong -> jatuh ke unit default (satu-satunya unit untuk pelanggan
+    # yang belum multi-madrasah). Lihat services._default_unit_id().
+    madrasah_unit_id: Optional[str] = None
 
 
 class RombelIn(BaseModel):
     nama: str
     tingkat_id: Optional[str] = None
     wali_kelas_id: Optional[str] = None
+    madrasah_unit_id: Optional[str] = None
 
 
 class GuruIn(BaseModel):
@@ -50,6 +54,7 @@ class GuruIn(BaseModel):
     no_hp: str
     password: str = Field(default="password123", max_length=72)
     role: str = "wali_kelas"
+    madrasah_unit_id: Optional[str] = None
 
 
 class SantriIn(BaseModel):
@@ -58,6 +63,7 @@ class SantriIn(BaseModel):
     kelas_id: Optional[str] = None
     orang_tua_id: Optional[str] = None
     no_hp_wali: Optional[str] = None
+    madrasah_unit_id: Optional[str] = None
 
 
 class PlacementIn(BaseModel):
@@ -68,6 +74,7 @@ class PlacementIn(BaseModel):
 class MapelIn(BaseModel):
     kode: str
     nama: str
+    madrasah_unit_id: Optional[str] = None
 
 
 class MateriIn(BaseModel):
@@ -167,6 +174,24 @@ class PengaturanPatch(BaseModel):
     tagline: Optional[str] = Field(None, max_length=255)
     logo_url: Optional[str] = Field(None, max_length=500)
     alamat: Optional[str] = Field(None, max_length=500)
+
+
+class YayasanPatch(BaseModel):
+    nama: Optional[str] = Field(None, min_length=1, max_length=255)
+    alamat: Optional[str] = Field(None, max_length=500)
+
+
+class MadrasahUnitIn(BaseModel):
+    nama: str = Field(..., min_length=1, max_length=255)
+    alamat: str = ""
+    kepala_unit: str = ""
+
+
+class MadrasahUnitPatch(BaseModel):
+    nama: Optional[str] = Field(None, min_length=1, max_length=255)
+    alamat: Optional[str] = None
+    kepala_unit: Optional[str] = None
+    aktif: Optional[bool] = None
 
 
 class SantriStatusIn(BaseModel):

@@ -1,0 +1,144 @@
+"""Regression tests for Fase 3 (Multi-Madrasah/Yayasan):
+
+- ensure_default_unit_and_backfill() membuat "Unit Utama" kalau belum ada
+  unit sama sekali, dan menandai baris lama (madrasah_unit_id=NULL) ke unit
+  itu -- idempoten, tidak menyentuh baris yang sudah punya unit.
+- create_tingkat/create_rombel/create_santri/create_mapel/create_guru jatuh
+  ke unit default kalau madrasah_unit_id tidak disebutkan, tapi menghormati
+  unit yang dipilih eksplisit untuk setup multi-unit.
+- rekap_yayasan() meringkas per unit tanpa mencampur data unit lain.
+"""
+from __future__ import annotations
+
+import pytest
+import pytest_asyncio
+from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker, create_async_engine
+
+from tenants.madrasah.modules.madrasah.application import services
+from tenants.madrasah.modules.madrasah.application.schemas import (
+    GuruIn,
+    MadrasahUnitIn,
+    RombelIn,
+    SantriIn,
+    TingkatIn,
+)
+from tenants.madrasah.modules.madrasah.infrastructure.database import MadrasahBase
+from tenants.madrasah.modules.madrasah.infrastructure.models import RombelMadrasah, SantriMadrasah, TingkatMadrasah, UserMadrasah
+
+
+@pytest_asyncio.fixture
+async def session():
+    engine = create_async_engine("sqlite+aiosqlite:///:memory:")
+    async with engine.begin() as conn:
+        await conn.run_sync(MadrasahBase.metadata.create_all)
+    session_local = async_sessionmaker(engine, class_=AsyncSession, expire_on_commit=False)
+    async with session_local() as s:
+        yield s
+    await engine.dispose()
+
+
+@pytest.mark.asyncio
+async def test_backfill_creates_default_unit_when_none_exists(session):
+    tingkat = TingkatMadrasah(nama="Jilid 1", urutan=1)
+    session.add(tingkat)
+    await session.flush()
+    assert tingkat.madrasah_unit_id is None
+
+    await services.ensure_default_unit_and_backfill(session)
+
+    units = await services.list_unit(session)
+    assert len(units) == 1
+    assert units[0].nama == "Unit Utama"
+
+    await session.refresh(tingkat)
+    assert tingkat.madrasah_unit_id == units[0].id
+
+
+@pytest.mark.asyncio
+async def test_backfill_is_idempotent_and_does_not_touch_rows_with_a_unit(session):
+    await services.ensure_default_unit_and_backfill(session)
+    unit_a = (await services.list_unit(session))[0]
+
+    unit_b = await services.create_unit(session, MadrasahUnitIn(nama="Unit Cabang"))
+    santri = SantriMadrasah(nama="Santri Cabang", madrasah_unit_id=unit_b.id)
+    session.add(santri)
+    await session.flush()
+
+    await services.ensure_default_unit_and_backfill(session)
+
+    await session.refresh(santri)
+    assert santri.madrasah_unit_id == unit_b.id  # tidak ditimpa balik ke unit_a
+
+    units = await services.list_unit(session)
+    assert len(units) == 2  # tidak dibuat "Unit Utama" kedua
+
+
+@pytest.mark.asyncio
+async def test_create_functions_fall_back_to_default_unit(session):
+    await services.ensure_default_unit_and_backfill(session)
+    default_unit = (await services.list_unit(session))[0]
+
+    tingkat = await services.create_tingkat(session, TingkatIn(nama="Jilid 2"))
+    rombel = await services.create_rombel(session, RombelIn(nama="Jilid 2 A"))
+    santri = await services.create_santri(session, SantriIn(nama="Santri Baru"))
+    guru = await services.create_guru(session, GuruIn(nama="Guru Baru", no_hp="081377770001"))
+
+    assert tingkat.madrasah_unit_id == default_unit.id
+    assert rombel.madrasah_unit_id == default_unit.id
+    assert santri.madrasah_unit_id == default_unit.id
+    assert guru.madrasah_unit_id == default_unit.id
+
+
+@pytest.mark.asyncio
+async def test_create_functions_respect_explicit_unit(session):
+    await services.ensure_default_unit_and_backfill(session)
+    unit_b = await services.create_unit(session, MadrasahUnitIn(nama="Unit Cabang"))
+
+    rombel = await services.create_rombel(session, RombelIn(nama="Jilid 3 Cabang", madrasah_unit_id=unit_b.id))
+    assert rombel.madrasah_unit_id == unit_b.id
+
+
+@pytest.mark.asyncio
+async def test_rekap_yayasan_keeps_units_separate(session):
+    await services.ensure_default_unit_and_backfill(session)
+    unit_a = (await services.list_unit(session))[0]
+    unit_b = await services.create_unit(session, MadrasahUnitIn(nama="Unit Cabang"))
+
+    santri_a = SantriMadrasah(nama="Santri A", madrasah_unit_id=unit_a.id)
+    santri_b1 = SantriMadrasah(nama="Santri B1", madrasah_unit_id=unit_b.id)
+    santri_b2 = SantriMadrasah(nama="Santri B2", madrasah_unit_id=unit_b.id)
+    rombel_b = RombelMadrasah(nama="Rombel B", madrasah_unit_id=unit_b.id)
+    guru_b = UserMadrasah(nama="Guru B", no_hp="081377770002", password_hash="x", role="guru", madrasah_unit_id=unit_b.id)
+    session.add_all([santri_a, santri_b1, santri_b2, rombel_b, guru_b])
+    await session.flush()
+
+    hasil = await services.rekap_yayasan(session)
+    by_id = {r["unit_id"]: r for r in hasil}
+
+    assert by_id[unit_a.id]["total_santri"] == 1
+    assert by_id[unit_b.id]["total_santri"] == 2
+    assert by_id[unit_b.id]["total_rombel"] == 1
+    assert by_id[unit_b.id]["total_guru"] == 1
+    assert by_id[unit_a.id]["total_rombel"] == 0
+
+
+@pytest.mark.asyncio
+async def test_update_yayasan_and_patch_unit(session):
+    from tenants.madrasah.modules.madrasah.application.schemas import MadrasahUnitPatch, YayasanPatch
+
+    await services.update_yayasan(session, YayasanPatch(nama="Yayasan Al-Barokah"))
+    yayasan = await services.get_or_create_yayasan(session)
+    assert yayasan.nama == "Yayasan Al-Barokah"
+
+    unit = await services.create_unit(session, MadrasahUnitIn(nama="Unit Awal"))
+    patched = await services.patch_unit(session, unit.id, MadrasahUnitPatch(nama="Unit Baru", aktif=False))
+    assert patched.nama == "Unit Baru"
+    assert patched.aktif is False
+
+
+@pytest.mark.asyncio
+async def test_patch_unit_rejects_unknown_id(session):
+    from tenants.madrasah.modules.madrasah.application.schemas import MadrasahUnitPatch
+
+    with pytest.raises(services.MadrasahNotFoundError):
+        await services.patch_unit(session, "tidak-ada", MadrasahUnitPatch(nama="X"))

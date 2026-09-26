@@ -31,6 +31,8 @@ from tenants.madrasah.modules.madrasah.application.schemas import (
     SantriIn,
     SantriPatch,
     KenaikanKelasRequest,
+    MadrasahUnitIn,
+    MadrasahUnitPatch,
     PengumumanIn,
     PesanIn,
     SantriStatusIn,
@@ -39,6 +41,7 @@ from tenants.madrasah.modules.madrasah.application.schemas import (
     TingkatIn,
     TingkatPatch,
     UserPatch,
+    YayasanPatch,
 )
 from tenants.madrasah.modules.madrasah.infrastructure.models import (
     AbsensiMadrasah,
@@ -50,6 +53,7 @@ from tenants.madrasah.modules.madrasah.infrastructure.models import (
     JadwalMadrasah,
     JurnalMadrasah,
     KelasMadrasah,
+    MadrasahUnit,
     MapelMadrasah,
     MateriTarget,
     PengaturanSekolah,
@@ -64,6 +68,7 @@ from tenants.madrasah.modules.madrasah.infrastructure.models import (
     TahunAjaranMadrasah,
     TingkatMadrasah,
     UserMadrasah,
+    Yayasan,
 )
 from shared.security import hash_password, verify_password
 
@@ -764,7 +769,9 @@ async def list_tingkat(session: AsyncSession) -> list[TingkatMadrasah]:
 
 
 async def create_tingkat(session: AsyncSession, payload: TingkatIn) -> TingkatMadrasah:
-    row = TingkatMadrasah(nama=payload.nama, urutan=payload.urutan)
+    row = TingkatMadrasah(
+        nama=payload.nama, urutan=payload.urutan, madrasah_unit_id=payload.madrasah_unit_id or await _default_unit_id(session)
+    )
     session.add(row)
     await session.flush()
     return row
@@ -775,7 +782,12 @@ async def list_rombel(session: AsyncSession) -> list[RombelMadrasah]:
 
 
 async def create_rombel(session: AsyncSession, payload: RombelIn) -> RombelMadrasah:
-    row = RombelMadrasah(nama=payload.nama, tingkat_id=payload.tingkat_id, wali_kelas_id=payload.wali_kelas_id)
+    row = RombelMadrasah(
+        nama=payload.nama,
+        tingkat_id=payload.tingkat_id,
+        wali_kelas_id=payload.wali_kelas_id,
+        madrasah_unit_id=payload.madrasah_unit_id or await _default_unit_id(session),
+    )
     session.add(row)
     await session.flush()
     if not (await session.execute(select(KelasMadrasah).where(KelasMadrasah.nama_kelas == payload.nama))).scalar_one_or_none():
@@ -833,7 +845,13 @@ async def list_wali_santri(session: AsyncSession) -> list[UserMadrasah]:
 
 
 async def create_guru(session: AsyncSession, payload: GuruIn) -> UserMadrasah:
-    row = UserMadrasah(nama=payload.nama, no_hp=payload.no_hp.strip(), password_hash=hash_password(payload.password), role=payload.role or "wali_kelas")
+    row = UserMadrasah(
+        nama=payload.nama,
+        no_hp=payload.no_hp.strip(),
+        password_hash=hash_password(payload.password),
+        role=payload.role or "wali_kelas",
+        madrasah_unit_id=payload.madrasah_unit_id or await _default_unit_id(session),
+    )
     session.add(row)
     await session.flush()
     return row
@@ -890,7 +908,13 @@ async def delete_guru(session: AsyncSession, user_id: str) -> None:
 
 
 async def create_wali_santri(session: AsyncSession, payload: GuruIn) -> UserMadrasah:
-    row = UserMadrasah(nama=payload.nama, no_hp=payload.no_hp.strip(), password_hash=hash_password(payload.password), role="wali_santri")
+    row = UserMadrasah(
+        nama=payload.nama,
+        no_hp=payload.no_hp.strip(),
+        password_hash=hash_password(payload.password),
+        role="wali_santri",
+        madrasah_unit_id=payload.madrasah_unit_id or await _default_unit_id(session),
+    )
     session.add(row)
     await session.flush()
     return row
@@ -951,7 +975,13 @@ async def place_santri(session: AsyncSession, payload: PlacementIn) -> SantriMad
 
 
 async def create_santri(session: AsyncSession, payload: SantriIn) -> SantriMadrasah:
-    row = SantriMadrasah(nama=payload.nama, rombel_id=payload.rombel_id, kelas_id=payload.kelas_id or payload.rombel_id, orang_tua_id=payload.orang_tua_id)
+    row = SantriMadrasah(
+        nama=payload.nama,
+        rombel_id=payload.rombel_id,
+        kelas_id=payload.kelas_id or payload.rombel_id,
+        orang_tua_id=payload.orang_tua_id,
+        madrasah_unit_id=payload.madrasah_unit_id or await _default_unit_id(session),
+    )
     session.add(row)
     await session.flush()
     if payload.rombel_id:
@@ -1085,6 +1115,162 @@ async def create_pengumuman(session: AsyncSession, payload: PengumumanIn, dibuat
     return row
 
 
+# --- Yayasan & MadrasahUnit (Fase 3): satu yayasan bisa membawahi lebih
+# dari satu madrasah/unit dalam SATU database yang sama (beda dari
+# multi-tenancy existing produk ini, yang memisahkan pelanggan lewat
+# DATABASE_URL_MADRASAH terpisah per pelanggan). Pelanggan yang cuma punya
+# 1 madrasah otomatis punya SATU unit ("Unit Utama") -- lihat
+# ensure_default_unit_and_backfill(), dipanggil dari
+# seeder.ensure_madrasah_schema() setiap startup. ---
+
+async def get_or_create_yayasan(session: AsyncSession) -> Yayasan:
+    row = (await session.execute(select(Yayasan).limit(1))).scalar_one_or_none()
+    if not row:
+        row = Yayasan()
+        session.add(row)
+        await session.flush()
+    return row
+
+
+async def update_yayasan(session: AsyncSession, payload: YayasanPatch) -> Yayasan:
+    row = await get_or_create_yayasan(session)
+    data = payload.model_dump(exclude_unset=True)
+    for field, value in data.items():
+        setattr(row, field, value)
+    await session.flush()
+    return row
+
+
+def yayasan_out(row: Yayasan) -> dict:
+    return {"id": row.id, "nama": row.nama, "alamat": row.alamat}
+
+
+async def _default_unit_id(session: AsyncSession) -> str | None:
+    """Unit yang dipakai kalau caller tidak menyebutkan madrasah_unit_id
+    secara eksplisit -- unit pertama yang dibuat (created_at paling awal).
+    None kalau belum ada unit sama sekali (deployment yang belum sempat
+    menjalankan ensure_default_unit_and_backfill, mis. test unit murni)."""
+    return (
+        await session.execute(select(MadrasahUnit.id).order_by(MadrasahUnit.created_at.asc()).limit(1))
+    ).scalar_one_or_none()
+
+
+async def create_unit(session: AsyncSession, payload: MadrasahUnitIn) -> MadrasahUnit:
+    yayasan = await get_or_create_yayasan(session)
+    row = MadrasahUnit(
+        yayasan_id=yayasan.id, nama=payload.nama, alamat=payload.alamat, kepala_unit=payload.kepala_unit
+    )
+    session.add(row)
+    await session.flush()
+    return row
+
+
+async def list_unit(session: AsyncSession) -> list[MadrasahUnit]:
+    return list((await session.execute(select(MadrasahUnit).order_by(MadrasahUnit.created_at.asc()))).scalars())
+
+
+async def patch_unit(session: AsyncSession, unit_id: str, payload: MadrasahUnitPatch) -> MadrasahUnit:
+    row = await session.get(MadrasahUnit, unit_id)
+    if not row:
+        raise MadrasahNotFoundError("Unit madrasah tidak ditemukan")
+    data = payload.model_dump(exclude_unset=True)
+    for field, value in data.items():
+        setattr(row, field, value)
+    await session.flush()
+    return row
+
+
+def unit_out(row: MadrasahUnit) -> dict:
+    return {
+        "id": row.id,
+        "nama": row.nama,
+        "alamat": row.alamat,
+        "kepala_unit": row.kepala_unit,
+        "aktif": row.aktif,
+    }
+
+
+async def ensure_default_unit_and_backfill(session: AsyncSession) -> None:
+    """Idempoten, dipanggil setiap startup lewat seeder.ensure_madrasah_schema():
+    pastikan minimal satu MadrasahUnit ada ("Unit Utama" kalau belum ada
+    unit sama sekali), lalu tandai semua baris lama yang madrasah_unit_id-nya
+    masih NULL (Tingkat/Rombel/Santri/Mapel/User) sebagai milik unit itu.
+    Tidak pernah menyentuh baris yang sudah punya unit -- aman dijalankan
+    berkali-kali dan aman untuk deployment yang memang sudah multi-unit."""
+    unit_id = await _default_unit_id(session)
+    if unit_id is None:
+        yayasan = await get_or_create_yayasan(session)
+        unit = MadrasahUnit(yayasan_id=yayasan.id, nama="Unit Utama")
+        session.add(unit)
+        await session.flush()
+        unit_id = unit.id
+
+    for model in (TingkatMadrasah, RombelMadrasah, SantriMadrasah, MapelMadrasah, UserMadrasah):
+        await session.execute(
+            update(model).where(model.madrasah_unit_id.is_(None)).values(madrasah_unit_id=unit_id)
+        )
+    await session.flush()
+
+
+async def rekap_yayasan(session: AsyncSession) -> list[dict]:
+    """Rekap lintas-unit untuk role yayasan_admin -- satu baris per unit,
+    tidak menyingkap detail operasional (nama santri per orang, dsb),
+    cuma agregat yang relevan buat pengurus yayasan."""
+    units = await list_unit(session)
+    hasil = []
+    for unit in units:
+        total_santri = (
+            await session.execute(
+                select(func.count())
+                .select_from(SantriMadrasah)
+                .where(SantriMadrasah.madrasah_unit_id == unit.id, SantriMadrasah.status == "aktif")
+            )
+        ).scalar_one()
+        total_rombel = (
+            await session.execute(select(func.count()).select_from(RombelMadrasah).where(RombelMadrasah.madrasah_unit_id == unit.id))
+        ).scalar_one()
+        total_guru = (
+            await session.execute(
+                select(func.count())
+                .select_from(UserMadrasah)
+                .where(UserMadrasah.madrasah_unit_id == unit.id, UserMadrasah.role.in_(("guru", "wali_kelas")))
+            )
+        ).scalar_one()
+        santri_unit_ids = list(
+            (await session.execute(select(SantriMadrasah.id).where(SantriMadrasah.madrasah_unit_id == unit.id))).scalars()
+        )
+        tagihan_lunas = 0
+        tagihan_belum = 0
+        if santri_unit_ids:
+            tagihan_lunas = (
+                await session.execute(
+                    select(func.count())
+                    .select_from(TagihanSyahriyah)
+                    .where(TagihanSyahriyah.santri_id.in_(santri_unit_ids), TagihanSyahriyah.status_bayar.is_(True))
+                )
+            ).scalar_one()
+            tagihan_belum = (
+                await session.execute(
+                    select(func.count())
+                    .select_from(TagihanSyahriyah)
+                    .where(TagihanSyahriyah.santri_id.in_(santri_unit_ids), TagihanSyahriyah.status_bayar.is_(False))
+                )
+            ).scalar_one()
+        hasil.append(
+            {
+                "unit_id": unit.id,
+                "unit_nama": unit.nama,
+                "aktif": unit.aktif,
+                "total_santri": total_santri,
+                "total_rombel": total_rombel,
+                "total_guru": total_guru,
+                "tagihan_lunas": tagihan_lunas,
+                "tagihan_belum": tagihan_belum,
+            }
+        )
+    return hasil
+
+
 async def rekap_umum(session: AsyncSession) -> dict:
     total_santri = (await session.execute(select(func.count()).select_from(SantriMadrasah))).scalar_one()
     total_guru = (await session.execute(select(func.count()).select_from(UserMadrasah).where(UserMadrasah.role.in_(("guru", "wali_kelas"))))).scalar_one()
@@ -1117,7 +1303,9 @@ async def list_mapel(session: AsyncSession) -> list[MapelMadrasah]:
 
 
 async def create_mapel(session: AsyncSession, payload: MapelIn) -> MapelMadrasah:
-    row = MapelMadrasah(kode=payload.kode, nama=payload.nama)
+    row = MapelMadrasah(
+        kode=payload.kode, nama=payload.nama, madrasah_unit_id=payload.madrasah_unit_id or await _default_unit_id(session)
+    )
     session.add(row)
     await session.flush()
     return row
