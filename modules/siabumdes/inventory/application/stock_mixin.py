@@ -187,6 +187,71 @@ class InventoryStockMixin:
         await self.session.flush()
         return card
 
+    async def stock_out_internal(
+        self,
+        *,
+        product_id: str,
+        quantity: int,
+        movement_date: date,
+        unit_usaha_id: str,
+        debit_account_code: str,
+        credit_account_code: str,
+        note: str = "",
+        created_by: str = "system-inventory",
+    ) -> StockCard:
+        """Stock out untuk pemakaian/transfer internal -- bukan penjualan.
+
+        Beda dari stock_out(): tidak ada customer_id/sell_price, tidak ada
+        record Sale (jadi tidak muncul di tab Piutang), dan cuma posting
+        SATU jurnal (beban pemakaian, bukan HPP+Pendapatan) karena tidak
+        ada transaksi jual-beli dengan pihak luar yang terjadi.
+
+        Fungsi terpisah dari stock_out() (bukan parameter opsional di situ)
+        supaya alur penjualan yang sudah teruji tidak ikut berubah.
+        """
+        if quantity <= 0:
+            raise ValueError("quantity must be > 0")
+        product = await self.session.get(Product, product_id)
+        if not product:
+            raise ValueError("product not found")
+        if product.qty_on_hand < quantity:
+            raise ValueError("insufficient stock")
+        unit_cost = product.cost_price
+        total = (unit_cost * quantity).quantize(Decimal("0.01"))
+        card = StockCard(
+            product_id=product_id,
+            movement_date=movement_date,
+            direction="out",
+            movement_kind="internal_use",
+            quantity=quantity,
+            unit_cost=unit_cost,
+            total_value=total,
+            reference="",
+            finance_status="pending",
+        )
+        product.qty_on_hand -= quantity
+        self.session.add(card)
+        await self.session.flush()
+        card.reference = f"stock-out-internal:{card.id}"
+        await validate_coa_codes(self.session, debit_account_code, credit_account_code)
+        desc = f"Pemakaian internal {product.sku} x{quantity}"
+        if note.strip():
+            desc = f"{desc} ({note.strip()})"
+        await self.finance.record_inventory_journal(
+            movement_date=movement_date,
+            unit_usaha_id=unit_usaha_id,
+            amount=total,
+            debit_account_code=debit_account_code,
+            credit_account_code=credit_account_code,
+            description=desc,
+            reference=card.reference,
+            created_by=created_by,
+            transaction_type="inventory_internal_use",
+        )
+        card.finance_status = "posted"
+        await self.session.flush()
+        return card
+
     async def cancel_movement(self, stock_card_id: str) -> None:
         """Reverse qty, remove finance journal(s), purchase/sale records, and the stock card.
 
@@ -267,6 +332,7 @@ class InventoryStockMixin:
                 "product_name": c.product.name if c.product else None,
                 "movement_date": c.movement_date.isoformat(),
                 "direction": c.direction,
+                "movement_kind": c.movement_kind,
                 "quantity": c.quantity,
                 "unit_cost": str(c.unit_cost),
                 "total_value": str(c.total_value),

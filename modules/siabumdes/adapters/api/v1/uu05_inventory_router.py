@@ -44,6 +44,7 @@ def card_out(card) -> dict:
         "quantity": card.quantity,
         "total_value": str(card.total_value),
         "direction": card.direction,
+        "movement_kind": card.movement_kind,
         "product_id": card.product_id,
         "movement_date": card.movement_date.isoformat() if card.movement_date else None,
         "unit_cost": str(card.unit_cost),
@@ -78,6 +79,16 @@ class StockOutBody(BaseModel):
     invoice_number: str = ""
     payment_method: str = "cash"
     due_date: Optional[date] = None
+
+
+class StockOutInternalBody(BaseModel):
+    product_id: str
+    quantity: int = Field(gt=0)
+    movement_date: date
+    unit_usaha_id: Optional[str] = None
+    debit_account_code: str
+    credit_account_code: str
+    note: str = ""
 
 
 class VendorCreateBody(BaseModel):
@@ -290,6 +301,30 @@ async def stock_in(
             invoice_number=body.invoice_number,
             payment_method=body.payment_method,
             due_date=body.due_date,
+            created_by=user.username,
+        )
+    except ValueError as exc:
+        raise HTTPException(status_code=422, detail=str(exc)) from exc
+    return card_out(card)
+
+
+@router.post("/stock-out-internal")
+async def stock_out_internal(
+    body: StockOutInternalBody,
+    user: User = Depends(require_inventory_user),
+    session: AsyncSession = Depends(get_db),
+):
+    svc = InventoryService(session)
+    try:
+        uid = await resolve_unit_id(session, body.unit_usaha_id, user)
+        card = await svc.stock_out_internal(
+            product_id=body.product_id,
+            quantity=body.quantity,
+            movement_date=body.movement_date,
+            unit_usaha_id=uid,
+            debit_account_code=body.debit_account_code,
+            credit_account_code=body.credit_account_code,
+            note=body.note,
             created_by=user.username,
         )
     except ValueError as exc:
