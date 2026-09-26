@@ -12,8 +12,6 @@ from datetime import date, timedelta
 
 _PERIOD_MONTH_RE = re.compile(r"^\d{4}-\d{2}$")
 
-UNIT_GROUP_CODES = {"UU01", "UU02", "UU03", "UU04", "UU05", "UU06"}
-
 
 def period_kind(period: str) -> str:
     """Classify a period string. Only 'month' ("YYYY-MM") is supported;

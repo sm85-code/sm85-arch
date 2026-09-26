@@ -24,7 +24,6 @@ from modules.siabumdes.coa_taxonomy import (
     SUB_SALDO_LABA,
 )
 from modules.siabumdes.period import (
-    UNIT_GROUP_CODES,
     assert_period_kind_matches_group,
     period_kind,
     period_range as _period_range,
@@ -128,8 +127,10 @@ async def run_monthly_close(
     """Both BUMDES (Pusat) and unit usaha (UU01..UU06) close monthly
     ("YYYY-MM") -- see assert_period_kind_matches_group."""
     group_code = (group or "BUMDES").strip().upper()
-    if group_code not in {"BUMDES", *UNIT_GROUP_CODES}:
-        raise ValueError(f"Grup {group_code} tidak valid")
+    if group_code != "BUMDES":
+        unit_exists = await session.scalar(select(UnitUsaha.id).where(UnitUsaha.code == group_code))
+        if not unit_exists:
+            raise ValueError(f"Grup {group_code} tidak valid")
     assert_period_kind_matches_group(period or "", group_code)
 
     existing = (

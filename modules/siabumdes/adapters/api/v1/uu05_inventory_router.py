@@ -13,7 +13,11 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from modules.siabumdes.adapters.api.deps import require_roles
 from modules.siabumdes.identity.infrastructure.models import User
 from modules.siabumdes.infrastructure.models import UnitUsaha
-from modules.siabumdes.inventory.application.services import InventoryService, UU05_CODE
+from modules.siabumdes.inventory.application.services import (
+    InventoryService,
+    INVENTORY_BUSINESS_TYPES,
+    UU05_CODE,
+)
 from shared.config import public_role
 from shared.database import get_db
 
@@ -31,8 +35,8 @@ async def require_inventory_user(
     if not user.unit_usaha_id:
         raise HTTPException(status_code=403, detail="Pengelola belum terikat unit usaha")
     unit = await session.get(UnitUsaha, user.unit_usaha_id)
-    if not unit or unit.code != UU05_CODE:
-        raise HTTPException(status_code=403, detail="Inventory hanya untuk pengelola UU05")
+    if not unit or unit.business_type not in INVENTORY_BUSINESS_TYPES:
+        raise HTTPException(status_code=403, detail="Inventory hanya untuk unit usaha Perdagangan/Manufaktur")
     return user
 
 
@@ -180,9 +184,11 @@ async def resolve_unit_id(session: AsyncSession, body_unit_id: Optional[str], us
         return user.unit_usaha_id
     if body_unit_id:
         return body_unit_id
-    unit = await session.scalar(select(UnitUsaha).where(UnitUsaha.code == UU05_CODE))
+    unit = await session.scalar(
+        select(UnitUsaha).where(UnitUsaha.business_type.in_(INVENTORY_BUSINESS_TYPES)).order_by(UnitUsaha.code.asc())
+    )
     if not unit:
-        raise HTTPException(status_code=422, detail="Unit usaha UU05 belum terdaftar")
+        raise HTTPException(status_code=422, detail="Belum ada unit usaha berjenis Perdagangan/Manufaktur")
     return unit.id
 
 
@@ -191,10 +197,12 @@ async def inventory_meta(
     user: User = Depends(require_inventory_user),
     session: AsyncSession = Depends(get_db),
 ):
-    unit = await session.scalar(select(UnitUsaha).where(UnitUsaha.code == UU05_CODE))
+    unit = await session.scalar(
+        select(UnitUsaha).where(UnitUsaha.business_type.in_(INVENTORY_BUSINESS_TYPES)).order_by(UnitUsaha.code.asc())
+    )
     svc = InventoryService(session)
     return {
-        "unit_code": UU05_CODE,
+        "unit_code": unit.code if unit else UU05_CODE,
         "unit_usaha_id": unit.id if unit else None,
         "unit_name": unit.name if unit else None,
         "role": public_role(user.role),
