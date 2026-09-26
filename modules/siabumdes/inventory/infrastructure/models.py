@@ -89,6 +89,8 @@ class StockCard(Base):
     )
     movement_date: Mapped[date] = mapped_column(Date, nullable=False)
     direction: Mapped[str] = mapped_column(String(8), nullable=False)  # in | out
+    movement_kind: Mapped[str] = mapped_column(String(16), nullable=False, default="sale")
+    # sale (default, stock-out ke pihak luar) | internal_use (pemakaian/transfer internal)
     quantity: Mapped[int] = mapped_column(Integer, nullable=False)
     unit_cost: Mapped[Decimal] = mapped_column(Numeric(20, 2), nullable=False, default=Decimal("0.00"))
     total_value: Mapped[Decimal] = mapped_column(Numeric(20, 2), nullable=False, default=Decimal("0.00"))
