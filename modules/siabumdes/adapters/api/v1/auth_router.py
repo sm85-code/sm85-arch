@@ -34,25 +34,25 @@ router = APIRouter(prefix="/api", tags=["auth"])
 
 class LoginRequest(BaseModel):
     username: str
-    password: str
+    password: str = Field(..., max_length=72)
 
 
 class RegisterRequest(BaseModel):
     username: str
     email: str
     name: str
-    password: str
+    password: str = Field(..., max_length=72)
     role: str
     unit_usaha_id: Optional[str] = None
 
 
 class ChangePasswordRequest(BaseModel):
-    current_password: str
-    new_password: str
+    current_password: str = Field(..., max_length=72)
+    new_password: str = Field(..., max_length=72)
 
 
 class PasswordResetRequest(BaseModel):
-    new_password: str
+    new_password: str = Field(..., max_length=72)
 
 
 class ProfileUpdateRequest(BaseModel):

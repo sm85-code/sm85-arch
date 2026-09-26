@@ -4,7 +4,7 @@ import re
 from decimal import Decimal
 from typing import Optional
 
-from pydantic import BaseModel, EmailStr, field_validator
+from pydantic import BaseModel, EmailStr, Field, field_validator
 
 _TELEPON_RE = re.compile(r"^\+?[0-9][0-9\-\s]{7,19}$")
 _KODE_POS_RE = re.compile(r"^[0-9]{5}$")
@@ -26,13 +26,13 @@ def _validate_kode_pos(value: str) -> str:
 
 class LoginRequest(BaseModel):
     email: EmailStr
-    password: str
+    password: str = Field(..., max_length=72)
 
 
 class RegisterRequest(BaseModel):
     nama: str
     email: EmailStr
-    password: str
+    password: str = Field(..., max_length=72)
 
 
 class GoogleLoginRequest(BaseModel):
@@ -148,7 +148,7 @@ class StaffIn(BaseModel):
 
     nama: str
     email: EmailStr
-    password: str
+    password: str = Field(..., max_length=72)
     role: str
     akun_ids: list[str] = []
 
