@@ -32,6 +32,8 @@ from tenants.madrasah.modules.madrasah.application.schemas import (
     SantriPatch,
     PengumumanIn,
     PesanIn,
+    SemesterIn,
+    TahunAjaranIn,
     TingkatIn,
     TingkatPatch,
     UserPatch,
@@ -51,7 +53,9 @@ from tenants.madrasah.modules.madrasah.infrastructure.models import (
     ProgresHafalan,
     RombelMadrasah,
     SantriMadrasah,
+    SemesterMadrasah,
     TagihanSyahriyah,
+    TahunAjaranMadrasah,
     TingkatMadrasah,
     UserMadrasah,
 )
@@ -81,6 +85,115 @@ def _utcnow() -> datetime:
 
 def _bulan_tahun(value: date | None = None) -> str:
     return (value or date.today()).strftime("%Y-%m")
+
+
+# --- Tahun Ajaran & Semester: fondasi periode akademik. Entity transaksional
+# (absensi, progres, tagihan, jadwal) di-tag otomatis dengan semester aktif
+# saat dibuat lewat _semester_aktif_id() -- baris lama (sebelum fitur ini
+# ada) tetap semester_id=NULL, tidak di-backfill, supaya rilis fitur ini
+# tidak mengubah data historis siapa pun. ---
+
+def tahun_ajaran_out(row: TahunAjaranMadrasah) -> dict:
+    return {
+        "id": row.id,
+        "kode": row.kode,
+        "tanggal_mulai": row.tanggal_mulai.isoformat(),
+        "tanggal_selesai": row.tanggal_selesai.isoformat(),
+    }
+
+
+def semester_out(row: SemesterMadrasah) -> dict:
+    return {
+        "id": row.id,
+        "tahun_ajaran_id": row.tahun_ajaran_id,
+        "tahun_ajaran": row.tahun_ajaran.kode if getattr(row, "tahun_ajaran", None) else None,
+        "nama": row.nama,
+        "tanggal_mulai": row.tanggal_mulai.isoformat(),
+        "tanggal_selesai": row.tanggal_selesai.isoformat(),
+        "status": row.status,
+    }
+
+
+async def create_tahun_ajaran(session: AsyncSession, payload: TahunAjaranIn) -> TahunAjaranMadrasah:
+    row = TahunAjaranMadrasah(
+        kode=payload.kode, tanggal_mulai=payload.tanggal_mulai, tanggal_selesai=payload.tanggal_selesai
+    )
+    session.add(row)
+    await session.flush()
+    return row
+
+
+async def list_tahun_ajaran(session: AsyncSession) -> list[TahunAjaranMadrasah]:
+    return list((await session.execute(select(TahunAjaranMadrasah).order_by(TahunAjaranMadrasah.kode.desc()))).scalars())
+
+
+async def create_semester(session: AsyncSession, payload: SemesterIn) -> SemesterMadrasah:
+    if not await session.get(TahunAjaranMadrasah, payload.tahun_ajaran_id):
+        raise MadrasahNotFoundError("Tahun ajaran tidak ditemukan")
+    row = SemesterMadrasah(
+        tahun_ajaran_id=payload.tahun_ajaran_id,
+        nama=payload.nama,
+        tanggal_mulai=payload.tanggal_mulai,
+        tanggal_selesai=payload.tanggal_selesai,
+        status="draft",
+    )
+    session.add(row)
+    await session.flush()
+    return row
+
+
+async def list_semester(session: AsyncSession) -> list[SemesterMadrasah]:
+    stmt = (
+        select(SemesterMadrasah)
+        .options(selectinload(SemesterMadrasah.tahun_ajaran))
+        .order_by(SemesterMadrasah.tanggal_mulai.desc())
+    )
+    return list((await session.execute(stmt)).scalars())
+
+
+async def get_semester_aktif(session: AsyncSession) -> SemesterMadrasah | None:
+    stmt = (
+        select(SemesterMadrasah)
+        .options(selectinload(SemesterMadrasah.tahun_ajaran))
+        .where(SemesterMadrasah.status == "aktif")
+        .limit(1)
+    )
+    return (await session.execute(stmt)).scalar_one_or_none()
+
+
+async def _semester_aktif_id(session: AsyncSession) -> str | None:
+    row = (await session.execute(select(SemesterMadrasah.id).where(SemesterMadrasah.status == "aktif").limit(1))).scalar_one_or_none()
+    return row
+
+
+async def aktifkan_semester(session: AsyncSession, semester_id: str) -> SemesterMadrasah:
+    """Hanya satu semester boleh aktif sekaligus -- semester lain yang masih
+    "aktif" (seharusnya tidak ada lebih dari satu, tapi dijaga di sini)
+    diturunkan ke "ditutup" dulu sebelum yang baru diaktifkan."""
+    row = await session.get(SemesterMadrasah, semester_id)
+    if not row:
+        raise MadrasahNotFoundError("Semester tidak ditemukan")
+    await session.execute(
+        update(SemesterMadrasah).where(SemesterMadrasah.status == "aktif").values(status="ditutup")
+    )
+    row.status = "aktif"
+    await session.flush()
+    await session.refresh(row, attribute_names=["tahun_ajaran"])
+    return row
+
+
+async def tutup_semester(session: AsyncSession, semester_id: str) -> SemesterMadrasah:
+    """Mengunci semester ini: tidak ada lagi input baru yang akan di-tag ke
+    sini secara otomatis (lihat _semester_aktif_id -- setelah ditutup,
+    semester ini tidak lagi dikembalikan sebagai "aktif"). Data yang sudah
+    tercatat di dalamnya TIDAK dihapus atau diubah."""
+    row = await session.get(SemesterMadrasah, semester_id)
+    if not row:
+        raise MadrasahNotFoundError("Semester tidak ditemukan")
+    row.status = "ditutup"
+    await session.flush()
+    await session.refresh(row, attribute_names=["tahun_ajaran"])
+    return row
 
 
 def user_out(user: UserMadrasah) -> dict:
@@ -138,9 +251,12 @@ async def list_santri(session: AsyncSession, kelas_id: str | None = None) -> lis
 async def bulk_insert_absensi(session: AsyncSession, payload: AbsenBulkRequest, guru: UserMadrasah | None = None) -> list[AbsensiMadrasah]:
     if guru:
         await assert_own_rombel_santri(session, guru, [item.santri_id for item in payload.items])
+    semester_id = await _semester_aktif_id(session)
     rows: list[AbsensiMadrasah] = []
     for item in payload.items:
-        row = AbsensiMadrasah(tanggal=payload.tanggal, status=item.status, santri_id=item.santri_id, guru_id=payload.guru_id)
+        row = AbsensiMadrasah(
+            tanggal=payload.tanggal, status=item.status, santri_id=item.santri_id, guru_id=payload.guru_id, semester_id=semester_id
+        )
         session.add(row)
         rows.append(row)
     await session.flush()
@@ -265,6 +381,7 @@ async def create_progres(session: AsyncSession, payload: ProgresCreateRequest, g
         catatan_guru=payload.catatan_guru or "",
         mapel_id=payload.mapel_id,
         materi_id=payload.materi_id,
+        semester_id=await _semester_aktif_id(session),
     )
     session.add(row)
     await session.flush()
@@ -372,15 +489,27 @@ async def list_pengumuman(session: AsyncSession, limit: int = 50) -> list[Pengum
 
 
 async def generate_spp_massal(session: AsyncSession) -> list[TagihanSyahriyah]:
-    await session.execute(text("ALTER TABLE IF EXISTS madrasah_tagihan_syahriyah ADD COLUMN IF NOT EXISTS dibayar_pada TIMESTAMPTZ NULL"))
-    await session.execute(text("ALTER TABLE IF EXISTS madrasah_santri ADD COLUMN IF NOT EXISTS rombel_id VARCHAR(64) NULL"))
+    # "ALTER TABLE ... ADD COLUMN IF NOT EXISTS" is Postgres-only syntax
+    # (this is production self-heal for Neon) -- SQLite (used by the unit
+    # test suite) doesn't understand it, and unlike the other self-heal
+    # helpers in this file we can't rollback-and-retry here without
+    # discarding whatever else the caller already flushed in this same
+    # session/transaction. Just skip it outside Postgres.
+    if session.bind is not None and session.bind.dialect.name == "postgresql":
+        await session.execute(text("ALTER TABLE IF EXISTS madrasah_tagihan_syahriyah ADD COLUMN IF NOT EXISTS dibayar_pada TIMESTAMPTZ NULL"))
+        await session.execute(text("ALTER TABLE IF EXISTS madrasah_santri ADD COLUMN IF NOT EXISTS rombel_id VARCHAR(64) NULL"))
     period = _bulan_tahun()
+    semester_id = await _semester_aktif_id(session)
     santri_rows = list((await session.execute(select(SantriMadrasah))).scalars())
     existing = {r.santri_id for r in (await session.execute(select(TagihanSyahriyah).where(TagihanSyahriyah.bulan_tahun == period))).scalars()}
     for santri in santri_rows:
         if santri.id in existing:
             continue
-        session.add(TagihanSyahriyah(bulan_tahun=period, nominal=DEFAULT_SPP_NOMINAL, status_bayar=False, santri_id=santri.id))
+        session.add(
+            TagihanSyahriyah(
+                bulan_tahun=period, nominal=DEFAULT_SPP_NOMINAL, status_bayar=False, santri_id=santri.id, semester_id=semester_id
+            )
+        )
     await session.flush()
     return list((await session.execute(select(TagihanSyahriyah).options(selectinload(TagihanSyahriyah.santri)).where(TagihanSyahriyah.bulan_tahun == period))).scalars())
 
@@ -792,7 +921,14 @@ async def list_jadwal(session: AsyncSession, rombel_id: str | None = None) -> li
 
 
 async def create_jadwal(session: AsyncSession, payload: JadwalIn) -> JadwalMadrasah:
-    row = JadwalMadrasah(rombel_id=payload.rombel_id, mapel_id=payload.mapel_id, hari=payload.hari, jam_mulai=payload.jam_mulai, jam_selesai=payload.jam_selesai)
+    row = JadwalMadrasah(
+        rombel_id=payload.rombel_id,
+        mapel_id=payload.mapel_id,
+        hari=payload.hari,
+        jam_mulai=payload.jam_mulai,
+        jam_selesai=payload.jam_selesai,
+        semester_id=await _semester_aktif_id(session),
+    )
     session.add(row)
     await session.flush()
     return row
@@ -855,6 +991,7 @@ async def bulk_insert_absensi_mapel(session: AsyncSession, guru_id: str, payload
     if not penugasan:
         raise MadrasahNotFoundError("Anda tidak ditugaskan untuk mapel/rombel ini")
 
+    semester_id = await _semester_aktif_id(session)
     rows: list[AbsensiMadrasah] = []
     for item in payload.items:
         row = AbsensiMadrasah(
@@ -863,6 +1000,7 @@ async def bulk_insert_absensi_mapel(session: AsyncSession, guru_id: str, payload
             santri_id=item.santri_id,
             guru_id=guru_id,
             mapel_id=payload.mapel_id,
+            semester_id=semester_id,
         )
         session.add(row)
         rows.append(row)

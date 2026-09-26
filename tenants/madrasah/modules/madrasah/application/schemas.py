@@ -166,6 +166,19 @@ class PengaturanPatch(BaseModel):
     alamat: Optional[str] = Field(None, max_length=500)
 
 
+class TahunAjaranIn(BaseModel):
+    kode: str = Field(..., min_length=4, max_length=16, description='mis. "2025/2026"')
+    tanggal_mulai: date
+    tanggal_selesai: date
+
+
+class SemesterIn(BaseModel):
+    tahun_ajaran_id: str
+    nama: Literal["Ganjil", "Genap"]
+    tanggal_mulai: date
+    tanggal_selesai: date
+
+
 class AbsenMapelBulkRequest(BaseModel):
     """Sama seperti AbsenBulkRequest, tapi wajib menyertakan mapel_id +
     rombel_id karena ini absensi per sesi mapel (guru mapel), bukan absensi

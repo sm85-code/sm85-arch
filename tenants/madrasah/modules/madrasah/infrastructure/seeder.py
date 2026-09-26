@@ -43,10 +43,21 @@ async def ensure_madrasah_schema() -> None:
     if engine is None:
         return
     async with engine.begin() as conn:
+        # create_all membuat madrasah_tahun_ajaran & madrasah_semester untuk
+        # database yang belum punya keduanya (checkfirst) -- harus terjadi
+        # SEBELUM ALTER TABLE ADD COLUMN semester_id di bawah (FK-nya
+        # menunjuk ke madrasah_semester.id).
         await conn.run_sync(MadrasahBase.metadata.create_all)
         await conn.execute(
             text("ALTER TABLE IF EXISTS madrasah_users ADD COLUMN IF NOT EXISTS session_version INTEGER NOT NULL DEFAULT 0")
         )
+        for table in (
+            "madrasah_absensi",
+            "madrasah_progres_hafalan",
+            "madrasah_tagihan_syahriyah",
+            "madrasah_jadwal",
+        ):
+            await conn.execute(text(f"ALTER TABLE IF EXISTS {table} ADD COLUMN IF NOT EXISTS semester_id VARCHAR(64) NULL"))
 
 
 async def seed_madrasah(session: AsyncSession) -> dict[str, str]:
