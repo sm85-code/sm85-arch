@@ -9,7 +9,7 @@ from __future__ import annotations
 from sqlalchemy import select, text
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from tenants.madrasah.modules.madrasah.infrastructure.database import MadrasahBase, engine
+from tenants.madrasah.modules.madrasah.infrastructure.database import MadrasahBase, SessionLocal, engine
 from tenants.madrasah.modules.madrasah.infrastructure.models import UserMadrasah
 from shared.security import hash_password
 
@@ -62,6 +62,20 @@ async def ensure_madrasah_schema() -> None:
             text("ALTER TABLE IF EXISTS madrasah_santri ADD COLUMN IF NOT EXISTS status VARCHAR(16) NOT NULL DEFAULT 'aktif'")
         )
         await conn.execute(text("ALTER TABLE IF EXISTS madrasah_santri ADD COLUMN IF NOT EXISTS tanggal_status DATE NULL"))
+        await conn.execute(
+            text("ALTER TABLE IF EXISTS madrasah_guru_mapel_rombel ADD COLUMN IF NOT EXISTS tarif_per_sesi NUMERIC(20,2) NULL")
+        )
+
+    # Chart of Accounts (madrasah_akun) diseed lewat ORM session, bukan SQL
+    # mentah lewat `conn` di atas -- lebih sederhana untuk idempotency
+    # check-nya (SELECT kode yang sudah ada) daripada menulis INSERT ...
+    # ON CONFLICT manual yang beda syntax antar dialect.
+    if SessionLocal is not None:
+        from tenants.madrasah.modules.madrasah.application.services import seed_akun_default
+
+        async with SessionLocal() as session:
+            await seed_akun_default(session)
+            await session.commit()
 
 
 async def seed_madrasah(session: AsyncSession) -> dict[str, str]:
@@ -96,5 +110,9 @@ async def reset_madrasah(session: AsyncSession) -> dict[str, str]:
     guru = UserMadrasah(nama="Guru Madrasah", no_hp=GURU_HP, password_hash=hash_password(DEFAULT_PASSWORD), role="wali_kelas")
     session.add_all([admin, guru])
     await session.flush()
+
+    from tenants.madrasah.modules.madrasah.application.services import seed_akun_default
+
+    await seed_akun_default(session)
 
     return {"admin_id": admin.id, "guru_id": guru.id}

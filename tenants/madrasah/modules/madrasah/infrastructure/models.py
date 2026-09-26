@@ -331,6 +331,10 @@ class GuruMapelRombel(MadrasahBase):
         String(64), ForeignKey("madrasah_rombel.id", ondelete="CASCADE"), nullable=False, index=True
     )
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=_utcnow)
+    # Nullable: kalau kosong, generate_honor_massal() jatuh ke tarif default
+    # (env HONOR_PER_SESI) -- supaya penugasan lama tetap bisa dihitung
+    # honornya tanpa perlu admin mengisi tarif satu-satu dulu.
+    tarif_per_sesi: Mapped[Optional[Decimal]] = mapped_column(Numeric(20, 2), nullable=True)
 
     guru: Mapped["UserMadrasah"] = relationship()
     mapel: Mapped["MapelMadrasah"] = relationship()
@@ -357,6 +361,77 @@ class BukuKasMadrasah(MadrasahBase):
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=_utcnow)
 
     pencatat: Mapped[Optional["UserMadrasah"]] = relationship()
+
+
+class AkunMadrasah(MadrasahBase):
+    """Chart of Accounts minimal, khusus modul madrasah -- daftar tetap dan
+    kecil (Kas, Pendapatan SPP, Beban ATK, Beban Honor, dst), bukan COA
+    fleksibel seperti modul SIABUMDES. Diseed otomatis oleh
+    seeder.seed_akun_default() (dipanggil dari ensure_madrasah_schema),
+    idempotent -- tidak menyentuh baris yang sudah ada kalau admin
+    mengubah `nama`-nya."""
+
+    __tablename__ = "madrasah_akun"
+
+    kode: Mapped[str] = mapped_column(String(16), primary_key=True)
+    nama: Mapped[str] = mapped_column(String(128), nullable=False)
+    tipe: Mapped[str] = mapped_column(String(16), nullable=False)  # aset|kewajiban|ekuitas|pendapatan|beban
+
+
+class JurnalMadrasah(MadrasahBase):
+    """Baris jurnal double-entry: setiap baris SELALU punya akun_debit dan
+    akun_kredit dengan `jumlah` yang sama (bukan tabel debit/kredit
+    terpisah) -- representasi paling sederhana untuk volume transaksi kecil
+    madrasah, sambil tetap bisa diringkas jadi laba-rugi/neraca per akun.
+    Ditulis otomatis dari pay_spp_manual dan create_buku_kas_entry lewat
+    services.catat_jurnal(); tidak ada endpoint untuk menulis jurnal
+    manual langsung -- semua jurnal berasal dari transaksi kas/SPP yang
+    sudah tercatat di BukuKasMadrasah/TagihanSyahriyah, supaya jurnal dan
+    buku kas tidak pernah bisa berbeda."""
+
+    __tablename__ = "madrasah_jurnal"
+
+    id: Mapped[str] = mapped_column(String(64), primary_key=True, default=_uuid)
+    tanggal: Mapped[date] = mapped_column(Date, nullable=False, index=True)
+    akun_debit: Mapped[str] = mapped_column(String(16), ForeignKey("madrasah_akun.kode"), nullable=False, index=True)
+    akun_kredit: Mapped[str] = mapped_column(String(16), ForeignKey("madrasah_akun.kode"), nullable=False, index=True)
+    jumlah: Mapped[Decimal] = mapped_column(Numeric(20, 2), nullable=False)
+    keterangan: Mapped[str] = mapped_column(Text, nullable=False, default="")
+    sumber_tipe: Mapped[str] = mapped_column(String(32), nullable=False, default="")  # "spp" | "buku_kas" | "honor"
+    sumber_id: Mapped[Optional[str]] = mapped_column(String(64), nullable=True)
+    dibuat_oleh: Mapped[Optional[str]] = mapped_column(
+        String(64), ForeignKey("madrasah_users.id", ondelete="SET NULL"), nullable=True
+    )
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=_utcnow, index=True)
+
+
+class HonorMengajar(MadrasahBase):
+    """Honor bulanan seorang guru UNTUK SATU mapel yang dia ajar (bukan
+    digabung semua mapel per guru), dihitung dari jumlah sesi (hari unik dia
+    mencatat absensi mapel itu, lihat AbsensiMadrasah.mapel_id) di bulan itu
+    dikali tarif per sesi (GuruMapelRombel.tarif_per_sesi, atau tarif
+    default kalau kosong) -- setiap mapel bisa punya tarif berbeda, jadi
+    tidak digabung jadi satu baris per guru supaya breakdown-nya tetap
+    jelas. generate_honor_massal() idempoten per (guru, mapel, bulan)."""
+
+    __tablename__ = "madrasah_honor_mengajar"
+
+    id: Mapped[str] = mapped_column(String(64), primary_key=True, default=_uuid)
+    guru_id: Mapped[str] = mapped_column(
+        String(64), ForeignKey("madrasah_users.id", ondelete="CASCADE"), nullable=False, index=True
+    )
+    mapel_id: Mapped[Optional[str]] = mapped_column(
+        String(64), ForeignKey("madrasah_mapel.id", ondelete="SET NULL"), nullable=True, index=True
+    )
+    bulan_tahun: Mapped[str] = mapped_column(String(7), nullable=False, index=True)
+    jumlah_sesi: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
+    tarif_per_sesi: Mapped[Decimal] = mapped_column(Numeric(20, 2), nullable=False, default=Decimal("0"))
+    total: Mapped[Decimal] = mapped_column(Numeric(20, 2), nullable=False, default=Decimal("0"))
+    status_bayar: Mapped[bool] = mapped_column(Boolean, nullable=False, default=False)
+    dibayar_pada: Mapped[Optional[datetime]] = mapped_column(DateTime(timezone=True), nullable=True)
+
+    guru: Mapped["UserMadrasah"] = relationship()
+    mapel: Mapped[Optional["MapelMadrasah"]] = relationship()
 
 
 class PengaturanSekolah(MadrasahBase):
