@@ -10,7 +10,7 @@ from pydantic import BaseModel, Field
 
 class LoginRequest(BaseModel):
     no_hp: str = Field(..., min_length=8, max_length=32)
-    password: str = Field(..., min_length=4)
+    password: str = Field(..., min_length=4, max_length=72)
 
 
 class AbsenItem(BaseModel):
@@ -48,7 +48,7 @@ class RombelIn(BaseModel):
 class GuruIn(BaseModel):
     nama: str
     no_hp: str
-    password: str = "password123"
+    password: str = Field(default="password123", max_length=72)
     role: str = "wali_kelas"
 
 
@@ -107,7 +107,7 @@ class UserPatch(BaseModel):
     nama: Optional[str] = None
     no_hp: Optional[str] = None
     role: Optional[str] = None
-    password: Optional[str] = None
+    password: Optional[str] = Field(default=None, max_length=72)
 
 
 class TingkatPatch(BaseModel):
