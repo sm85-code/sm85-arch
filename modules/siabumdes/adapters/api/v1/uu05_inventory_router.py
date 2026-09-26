@@ -41,6 +41,19 @@ async def require_inventory_user(
     return user
 
 
+async def require_active_inventory_writer(
+    user: User = Depends(require_inventory_user),
+    session: AsyncSession = Depends(get_db),
+) -> User:
+    """Same access as require_inventory_user, plus: a pengelola whose own unit
+    has been deactivated by admin can still log in and view everything (read-
+    only), but cannot record/edit/cancel anything new. Used on every mutating
+    (POST/PUT/DELETE) endpoint in this router instead of require_inventory_user."""
+    if public_role(user.role) == "pengelola" and user.unit_usaha_id:
+        await assert_unit_active(session, user.unit_usaha_id)
+    return user
+
+
 def card_out(card) -> dict:
     return {
         "id": card.id,
@@ -242,7 +255,7 @@ async def list_products(
 @router.post("/products")
 async def create_product(
     body: ProductCreateBody,
-    user: User = Depends(require_inventory_user),
+    user: User = Depends(require_active_inventory_writer),
     session: AsyncSession = Depends(get_db),
 ):
     svc = InventoryService(session)
@@ -266,7 +279,7 @@ async def create_product(
 async def update_product(
     product_id: str,
     body: ProductUpdateBody,
-    _: User = Depends(require_inventory_user),
+    _: User = Depends(require_active_inventory_writer),
     session: AsyncSession = Depends(get_db),
 ):
     try:
@@ -285,7 +298,7 @@ async def update_product(
 @router.delete("/products/{product_id}")
 async def delete_product(
     product_id: str,
-    _: User = Depends(require_inventory_user),
+    _: User = Depends(require_active_inventory_writer),
     session: AsyncSession = Depends(get_db),
 ):
     try:
@@ -298,7 +311,7 @@ async def delete_product(
 @router.post("/stock-in")
 async def stock_in(
     body: StockInBody,
-    user: User = Depends(require_inventory_user),
+    user: User = Depends(require_active_inventory_writer),
     session: AsyncSession = Depends(get_db),
 ):
     svc = InventoryService(session)
@@ -326,7 +339,7 @@ async def stock_in(
 @router.post("/stock-out-internal")
 async def stock_out_internal(
     body: StockOutInternalBody,
-    user: User = Depends(require_inventory_user),
+    user: User = Depends(require_active_inventory_writer),
     session: AsyncSession = Depends(get_db),
 ):
     svc = InventoryService(session)
@@ -350,7 +363,7 @@ async def stock_out_internal(
 @router.post("/stock-out")
 async def stock_out(
     body: StockOutBody,
-    user: User = Depends(require_inventory_user),
+    user: User = Depends(require_active_inventory_writer),
     session: AsyncSession = Depends(get_db),
 ):
     svc = InventoryService(session)
@@ -380,7 +393,7 @@ async def stock_out(
 @router.post("/cancel-movement")
 async def cancel_movement(
     body: CancelBody,
-    _: User = Depends(require_inventory_user),
+    _: User = Depends(require_active_inventory_writer),
     session: AsyncSession = Depends(get_db),
 ):
     await InventoryService(session).cancel_movement(body.stock_card_id)
@@ -404,7 +417,7 @@ async def list_movements(
 @router.post("/cancel-adjustment")
 async def cancel_adjustment(
     body: CancelAdjustBody,
-    _: User = Depends(require_inventory_user),
+    _: User = Depends(require_active_inventory_writer),
     session: AsyncSession = Depends(get_db),
 ):
     await InventoryService(session).cancel_adjustment(body.adjustment_id)
@@ -423,7 +436,7 @@ async def list_adjustments(
 @router.post("/adjustments")
 async def create_adjustment(
     body: AdjustBody,
-    user: User = Depends(require_inventory_user),
+    user: User = Depends(require_active_inventory_writer),
     session: AsyncSession = Depends(get_db),
 ):
     try:
@@ -475,7 +488,7 @@ async def list_vendors(
 @router.post("/vendors")
 async def create_vendor(
     body: VendorCreateBody,
-    user: User = Depends(require_inventory_user),
+    user: User = Depends(require_active_inventory_writer),
     session: AsyncSession = Depends(get_db),
 ):
     try:
@@ -491,7 +504,7 @@ async def create_vendor(
 async def update_vendor(
     vendor_id: str,
     body: VendorUpdateBody,
-    _: User = Depends(require_inventory_user),
+    _: User = Depends(require_active_inventory_writer),
     session: AsyncSession = Depends(get_db),
 ):
     try:
@@ -514,7 +527,7 @@ async def list_customers(
 @router.post("/customers")
 async def create_customer(
     body: CustomerCreateBody,
-    user: User = Depends(require_inventory_user),
+    user: User = Depends(require_active_inventory_writer),
     session: AsyncSession = Depends(get_db),
 ):
     try:
@@ -530,7 +543,7 @@ async def create_customer(
 async def update_customer(
     customer_id: str,
     body: CustomerUpdateBody,
-    _: User = Depends(require_inventory_user),
+    _: User = Depends(require_active_inventory_writer),
     session: AsyncSession = Depends(get_db),
 ):
     try:
@@ -554,7 +567,7 @@ async def list_purchases(
 @router.post("/purchases/pay")
 async def pay_purchase(
     body: PayPurchaseBody,
-    user: User = Depends(require_inventory_user),
+    user: User = Depends(require_active_inventory_writer),
     session: AsyncSession = Depends(get_db),
 ):
     try:
@@ -585,7 +598,7 @@ async def list_sales(
 @router.post("/sales/pay")
 async def pay_sale(
     body: PaySaleBody,
-    user: User = Depends(require_inventory_user),
+    user: User = Depends(require_active_inventory_writer),
     session: AsyncSession = Depends(get_db),
 ):
     try:
