@@ -53,6 +53,7 @@ from tenants.madrasah.modules.madrasah.infrastructure.auth import (
 from tenants.madrasah.modules.madrasah.infrastructure.database import get_db_madrasah
 from tenants.madrasah.modules.madrasah.infrastructure.models import UserMadrasah
 from tenants.madrasah.modules.madrasah.infrastructure.seeder import reset_madrasah, seed_madrasah
+from tenants.madrasah.scripts.seed_demo_data import seed_demo_data
 
 madrasah_router = APIRouter()
 router = madrasah_router
@@ -97,6 +98,29 @@ async def seed_now(session: AsyncSession = Depends(get_db_madrasah)):
     except RuntimeError as exc:
         raise HTTPException(status_code=status.HTTP_503_SERVICE_UNAVAILABLE, detail=str(exc)) from exc
     return {"status": "Database madrasah berhasil diisi data awal JWT", "ids": ids}
+
+
+@admin_r.get("/seed-demo-data")
+async def seed_demo_data_now(
+    session: AsyncSession = Depends(get_db_madrasah),
+    user: UserMadrasah = Depends(require_roles_madrasah(*ADMIN_ROLES)),
+):
+    # Hanya untuk database trial/demo -- lihat docstring seed_demo_data().
+    # Login admin wajib (bukan endpoint publik seperti /seed-now) karena ini
+    # menulis puluhan baris data contoh, bukan sekadar 2 akun default.
+    # Idempotent: no-op kalau sudah pernah dipanggil sebelumnya (lihat
+    # TingkatMadrasah guard di seed_demo_data()).
+    try:
+        result = await seed_demo_data(session)
+    except RuntimeError as exc:
+        raise HTTPException(status_code=status.HTTP_503_SERVICE_UNAVAILABLE, detail=str(exc)) from exc
+    if result.get("status") == "created":
+        await services.record_audit(
+            session, aktor=user, aksi="seed_demo_data", entitas="madrasah_*",
+            keterangan="Mengisi database dengan data demo (santri, rombel, guru, dst).",
+        )
+        await session.commit()
+    return result
 
 
 @madrasah_router.post("/reset-now")
