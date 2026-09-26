@@ -38,6 +38,7 @@ from tenants.madrasah.modules.madrasah.application.schemas import (
 )
 from tenants.madrasah.modules.madrasah.infrastructure.models import (
     AbsensiMadrasah,
+    AuditLogMadrasah,
     BukuKasMadrasah,
     GuruMapelRombel,
     JadwalMadrasah,
@@ -545,6 +546,11 @@ async def patch_guru(session: AsyncSession, user_id: str, payload: UserPatch) ->
         row.role = payload.role
     if payload.password:
         row.password_hash = hash_password(payload.password)
+    if payload.role is not None or payload.password:
+        # Password atau role berubah -> setiap JWT yang sudah beredar untuk
+        # akun ini (termasuk yang bocor) langsung ditolak di request
+        # berikutnya, lihat get_current_user_madrasah.
+        row.session_version += 1
     await session.flush()
     return row
 
@@ -894,6 +900,65 @@ async def _can_view_santri(session: AsyncSession, guru: UserMadrasah, santri: Sa
         )
     ).scalar_one_or_none()
     return bool(penugasan)
+
+
+# --- Audit log: jejak untuk aksi sensitif (login, keuangan, hapus akun/
+# data, reset destruktif). Tabel baru; ensure_madrasah_schema membuatnya
+# saat startup, tapi self-heal di sini juga (pola sama seperti
+# get_pengaturan) untuk deployment yang belum sempat restart. ---
+
+async def record_audit(
+    session: AsyncSession,
+    *,
+    aktor: UserMadrasah | None,
+    aksi: str,
+    entitas: str = "",
+    entitas_id: str | None = None,
+    keterangan: str = "",
+    ip: str = "",
+) -> None:
+    row = AuditLogMadrasah(
+        aktor_id=aktor.id if aktor else None,
+        aktor_nama=aktor.nama if aktor else "-",
+        aktor_role=aktor.role if aktor else "-",
+        aksi=aksi,
+        entitas=entitas,
+        entitas_id=entitas_id,
+        keterangan=keterangan,
+        ip=ip,
+    )
+    try:
+        session.add(row)
+        await session.flush()
+    except (ProgrammingError, OperationalError):
+        await session.rollback()
+        conn = await session.connection()
+        await conn.run_sync(lambda sync_conn: AuditLogMadrasah.__table__.create(sync_conn, checkfirst=True))
+        session.add(row)
+        await session.flush()
+
+
+async def list_audit_log(session: AsyncSession, limit: int = 200) -> list[AuditLogMadrasah]:
+    stmt = select(AuditLogMadrasah).order_by(AuditLogMadrasah.waktu.desc()).limit(limit)
+    try:
+        return list((await session.execute(stmt)).scalars())
+    except (ProgrammingError, OperationalError):
+        await session.rollback()
+        return []
+
+
+def audit_out(row: AuditLogMadrasah) -> dict:
+    return {
+        "id": row.id,
+        "waktu": row.waktu.isoformat(),
+        "aktor_nama": row.aktor_nama,
+        "aktor_role": row.aktor_role,
+        "aksi": row.aksi,
+        "entitas": row.entitas,
+        "entitas_id": row.entitas_id,
+        "keterangan": row.keterangan,
+        "ip": row.ip,
+    }
 
 
 async def rapor_santri(session: AsyncSession, guru: UserMadrasah, santri_id: str) -> dict:

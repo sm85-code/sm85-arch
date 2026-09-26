@@ -23,6 +23,7 @@ from modules.siabumdes.adapters.api.v1.public_router import router as public_rou
 from modules.siabumdes.adapters.api.v1.reports_router import router as reports_router
 from modules.siabumdes.adapters.api.v1.transaction_router import router as transaction_router
 from tenants.madrasah.adapters.api.v1.madrasah_router import madrasah_router
+from tenants.madrasah.modules.madrasah.infrastructure.seeder import ensure_madrasah_schema
 from tenants.marketplace_erp.adapters.api.v1.marketplace_erp_router import marketplace_erp_router
 from tenants.toko.adapters.api.v1.erp_router import erp_router
 from tenants.toko.adapters.api.v1.toko_router import toko_router
@@ -45,6 +46,13 @@ async def lifespan(_: FastAPI):
         await seed_if_needed()
     except Exception:
         logger.exception("startup schema/seed failed — app continues")
+    try:
+        # Isolated from the BUMDes schema/seed above: a failure repairing the
+        # madrasah schema (e.g. DATABASE_URL_MADRASAH unset) must not affect,
+        # and is not affected by, BUMDes/Toko startup.
+        await ensure_madrasah_schema()
+    except Exception:
+        logger.exception("madrasah schema repair failed — app continues")
     yield
 
 

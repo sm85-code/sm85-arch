@@ -6,7 +6,7 @@ accounts to log in and start configuring the school from the UI.
 """
 from __future__ import annotations
 
-from sqlalchemy import select
+from sqlalchemy import select, text
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from tenants.madrasah.modules.madrasah.infrastructure.database import MadrasahBase, engine
@@ -25,6 +25,28 @@ async def _ensure_user(session: AsyncSession, *, no_hp: str, nama: str, role: st
         session.add(user)
         await session.flush()
     return user
+
+
+async def ensure_madrasah_schema() -> None:
+    """Idempotent schema repair, meant to be called once on every app
+    startup (see main.py lifespan) -- not tied to /seed-now, since a
+    customer's Neon database might never see that endpoint called again
+    after initial setup. Creates any table added to this module after a
+    customer's first deploy (checkfirst, safe no-op if already there) and
+    adds columns added to an *existing* table since then (session_version
+    on madrasah_users), which metadata.create_all alone cannot do.
+
+    Any failure here is caught by the caller and logged, never raised --
+    a stale schema must not prevent the whole app (BUMDes, Toko, etc.) from
+    starting.
+    """
+    if engine is None:
+        return
+    async with engine.begin() as conn:
+        await conn.run_sync(MadrasahBase.metadata.create_all)
+        await conn.execute(
+            text("ALTER TABLE IF EXISTS madrasah_users ADD COLUMN IF NOT EXISTS session_version INTEGER NOT NULL DEFAULT 0")
+        )
 
 
 async def seed_madrasah(session: AsyncSession) -> dict[str, str]:
