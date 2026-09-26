@@ -4,7 +4,7 @@ Mounted in main.py as prefix=/api/madrasah only. Does not touch BUMDes routers.
 """
 from __future__ import annotations
 
-from fastapi import APIRouter, Depends, HTTPException, Query, Response, status
+from fastapi import APIRouter, Depends, HTTPException, Query, Request, Response, status
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from tenants.madrasah.modules.madrasah.application import services
@@ -35,9 +35,12 @@ from tenants.madrasah.modules.madrasah.application.schemas import (
     UserPatch,
 )
 from tenants.madrasah.modules.madrasah.infrastructure.auth import (
+    check_login_rate_limit,
     clear_madrasah_cookie,
     issue_madrasah_token,
+    record_failed_login,
     require_roles_madrasah,
+    reset_login_attempts,
     set_madrasah_cookie,
 )
 from tenants.madrasah.modules.madrasah.infrastructure.database import get_db_madrasah
@@ -82,10 +85,16 @@ async def seed_now(session: AsyncSession = Depends(get_db_madrasah)):
 
 
 @madrasah_router.post("/reset-now")
-async def reset_now(session: AsyncSession = Depends(get_db_madrasah)):
+async def reset_now(
+    session: AsyncSession = Depends(get_db_madrasah),
+    _: UserMadrasah = Depends(require_roles_madrasah(*ADMIN_ROLES)),
+):
     # DESTRUCTIVE -- lihat docstring reset_madrasah(). Dibuat sebagai
     # endpoint terpisah dari /seed-now yang idempotent, supaya redeploy
     # rutin tidak bisa tidak sengaja menghapus data pelanggan.
+    # Wajib login sebagai admin/kepala sekolah: sebelumnya endpoint ini bisa
+    # dipanggil siapa pun tanpa autentikasi dan langsung men-drop seluruh
+    # tabel madrasah_* -- lihat audit modul, temuan P0.
     try:
         ids = await reset_madrasah(session)
     except RuntimeError as exc:
@@ -94,11 +103,23 @@ async def reset_now(session: AsyncSession = Depends(get_db_madrasah)):
 
 
 @madrasah_router.post("/auth/login")
-async def login(payload: LoginRequest, response: Response, session: AsyncSession = Depends(get_db_madrasah)):
+async def login(
+    payload: LoginRequest,
+    request: Request,
+    response: Response,
+    session: AsyncSession = Depends(get_db_madrasah),
+):
+    # Throttle sebelum menyentuh DB: batasi percobaan login per pasangan
+    # ip+no_hp supaya brute force terhadap satu akun (termasuk password
+    # default hasil seed) tidak bisa dicoba tanpa batas -- lihat audit
+    # modul, temuan P0.
+    check_login_rate_limit(request, payload.no_hp)
     try:
         user = await services.login_by_phone(session, payload)
     except services.MadrasahAuthError as exc:
+        record_failed_login(request, payload.no_hp)
         raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail=str(exc)) from exc
+    reset_login_attempts(request, payload.no_hp)
     token = issue_madrasah_token(user)
     set_madrasah_cookie(response, token)
     return {"user": _user_out(user)}

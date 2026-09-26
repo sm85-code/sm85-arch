@@ -12,6 +12,8 @@ login/logout never touches the BUMDes session cookie, and vice versa.
 """
 from __future__ import annotations
 
+import time
+from collections import defaultdict
 from typing import Callable
 
 from fastapi import Depends, HTTPException, Request, Response, status
@@ -23,6 +25,38 @@ from shared.config import COOKIE_PATH, COOKIE_SAMESITE, COOKIE_SECURE, JWT_EXPIR
 from shared.security import create_access_token, decode_access_token
 
 MADRASAH_COOKIE_NAME = "madrasah_token"
+
+# In-memory login throttle, isolated to this module (single-process deploy,
+# see Procfile). Keyed by "ip:no_hp" so a brute-force run against one account
+# from one source is capped without needing a new dependency (Redis/slowapi).
+MAX_LOGIN_ATTEMPTS = 5
+LOGIN_LOCKOUT_SECONDS = 300
+_login_attempts: dict[str, list[float]] = defaultdict(list)
+
+
+def _login_throttle_key(request: Request, no_hp: str) -> str:
+    return f"{request.client.host if request.client else 'unknown'}:{no_hp.strip()}"
+
+
+def check_login_rate_limit(request: Request, no_hp: str) -> None:
+    key = _login_throttle_key(request, no_hp)
+    now = time.monotonic()
+    attempts = [t for t in _login_attempts[key] if now - t < LOGIN_LOCKOUT_SECONDS]
+    _login_attempts[key] = attempts
+    if len(attempts) >= MAX_LOGIN_ATTEMPTS:
+        raise HTTPException(
+            status_code=status.HTTP_429_TOO_MANY_REQUESTS,
+            detail="Terlalu banyak percobaan login. Coba lagi beberapa menit.",
+        )
+
+
+def record_failed_login(request: Request, no_hp: str) -> None:
+    key = _login_throttle_key(request, no_hp)
+    _login_attempts[key].append(time.monotonic())
+
+
+def reset_login_attempts(request: Request, no_hp: str) -> None:
+    _login_attempts.pop(_login_throttle_key(request, no_hp), None)
 
 
 def issue_madrasah_token(user: UserMadrasah) -> str:
