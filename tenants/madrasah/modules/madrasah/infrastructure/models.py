@@ -133,6 +133,12 @@ class SantriMadrasah(MadrasahBase):
     orang_tua_id: Mapped[Optional[str]] = mapped_column(
         String(64), ForeignKey("madrasah_users.id", ondelete="SET NULL"), nullable=True, index=True
     )
+    # aktif | lulus | keluar | pindah. Santri non-aktif tidak lagi muncul di
+    # listing default (list_santri) supaya tidak tercampur dengan santri
+    # yang masih belajar, tapi barisnya TIDAK dihapus -- riwayat penempatan/
+    # absensi/progres/tagihan lama tetap tersimpan untuk histori/alumni.
+    status: Mapped[str] = mapped_column(String(16), nullable=False, default="aktif", index=True)
+    tanggal_status: Mapped[Optional[date]] = mapped_column(Date, nullable=True)
 
     kelas: Mapped[Optional["KelasMadrasah"]] = relationship(back_populates="santri")
     rombel: Mapped[Optional["RombelMadrasah"]] = relationship(back_populates="santri")
@@ -140,6 +146,34 @@ class SantriMadrasah(MadrasahBase):
     absensi: Mapped[list["AbsensiMadrasah"]] = relationship(back_populates="santri")
     hafalan: Mapped[list["ProgresHafalan"]] = relationship(back_populates="santri")
     tagihan: Mapped[list["TagihanSyahriyah"]] = relationship(back_populates="santri")
+    riwayat_kelas: Mapped[list["RiwayatPenempatanSantri"]] = relationship(back_populates="santri")
+
+
+class RiwayatPenempatanSantri(MadrasahBase):
+    """Histori penempatan santri per rombel. place_santri() menutup baris
+    yang masih terbuka (tanggal_keluar IS NULL) untuk santri ini sebelum
+    membuka baris baru -- jadi selalu ada paling banyak SATU baris terbuka
+    per santri, dan `rombel_id` di SantriMadrasah tetap sekadar cache dari
+    baris ini yang terbuka (dibaca lebih cepat, sudah dipakai di banyak
+    tempat lain di modul ini)."""
+
+    __tablename__ = "madrasah_riwayat_penempatan"
+
+    id: Mapped[str] = mapped_column(String(64), primary_key=True, default=_uuid)
+    santri_id: Mapped[str] = mapped_column(
+        String(64), ForeignKey("madrasah_santri.id", ondelete="CASCADE"), nullable=False, index=True
+    )
+    rombel_id: Mapped[str] = mapped_column(
+        String(64), ForeignKey("madrasah_rombel.id", ondelete="CASCADE"), nullable=False, index=True
+    )
+    semester_id: Mapped[Optional[str]] = mapped_column(
+        String(64), ForeignKey("madrasah_semester.id", ondelete="SET NULL"), nullable=True, index=True
+    )
+    tanggal_masuk: Mapped[date] = mapped_column(Date, nullable=False, default=date.today)
+    tanggal_keluar: Mapped[Optional[date]] = mapped_column(Date, nullable=True, index=True)
+
+    santri: Mapped["SantriMadrasah"] = relationship(back_populates="riwayat_kelas")
+    rombel: Mapped["RombelMadrasah"] = relationship()
 
 
 class MapelMadrasah(MadrasahBase):

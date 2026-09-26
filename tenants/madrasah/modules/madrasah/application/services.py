@@ -30,8 +30,10 @@ from tenants.madrasah.modules.madrasah.application.schemas import (
     RombelPatch,
     SantriIn,
     SantriPatch,
+    KenaikanKelasRequest,
     PengumumanIn,
     PesanIn,
+    SantriStatusIn,
     SemesterIn,
     TahunAjaranIn,
     TingkatIn,
@@ -51,6 +53,7 @@ from tenants.madrasah.modules.madrasah.infrastructure.models import (
     PengumumanMadrasah,
     PesanMadrasah,
     ProgresHafalan,
+    RiwayatPenempatanSantri,
     RombelMadrasah,
     SantriMadrasah,
     SemesterMadrasah,
@@ -241,10 +244,17 @@ async def list_kelas(session: AsyncSession):
     return list((await session.execute(select(KelasMadrasah).order_by(KelasMadrasah.nama_kelas))).scalars())
 
 
-async def list_santri(session: AsyncSession, kelas_id: str | None = None) -> list[SantriMadrasah]:
+async def list_santri(session: AsyncSession, kelas_id: str | None = None, status: str | None = "aktif") -> list[SantriMadrasah]:
+    """status="aktif" (default) menyembunyikan santri lulus/keluar/pindah
+    dari listing biasa (dropdown absensi, dsb) -- barisnya tetap ada di DB,
+    cuma tidak ikut ditampilkan. status=None/"semua" menonaktifkan filter
+    ini untuk layar admin yang memang butuh melihat semuanya (mis. daftar
+    alumni)."""
     stmt = select(SantriMadrasah).order_by(SantriMadrasah.nama)
     if kelas_id:
         stmt = stmt.where((SantriMadrasah.kelas_id == kelas_id) | (SantriMadrasah.rombel_id == kelas_id))
+    if status and status != "semua":
+        stmt = stmt.where(SantriMadrasah.status == status)
     return list((await session.execute(stmt)).scalars())
 
 
@@ -720,6 +730,49 @@ async def create_wali_santri(session: AsyncSession, payload: GuruIn) -> UserMadr
     return row
 
 
+async def _tutup_riwayat_terbuka(session: AsyncSession, santri_id: str, tanggal: date | None = None) -> None:
+    await session.execute(
+        update(RiwayatPenempatanSantri)
+        .where(RiwayatPenempatanSantri.santri_id == santri_id, RiwayatPenempatanSantri.tanggal_keluar.is_(None))
+        .values(tanggal_keluar=tanggal or date.today())
+    )
+
+
+async def _catat_riwayat_penempatan(session: AsyncSession, santri_id: str, rombel_id: str) -> None:
+    """Menutup baris riwayat yang masih terbuka (kalau ada) untuk santri
+    ini, lalu membuka baris baru untuk rombel_id -- dipanggil setiap kali
+    rombel santri berubah (penempatan awal, pindah kelas, kenaikan kelas),
+    supaya RiwayatPenempatanSantri selalu punya jejak lengkap, bukan cuma
+    posisi terakhir seperti SantriMadrasah.rombel_id."""
+    await _tutup_riwayat_terbuka(session, santri_id)
+    session.add(
+        RiwayatPenempatanSantri(
+            santri_id=santri_id, rombel_id=rombel_id, semester_id=await _semester_aktif_id(session)
+        )
+    )
+    await session.flush()
+
+
+async def riwayat_kelas_santri(session: AsyncSession, santri_id: str) -> list[dict]:
+    stmt = (
+        select(RiwayatPenempatanSantri)
+        .options(selectinload(RiwayatPenempatanSantri.rombel))
+        .where(RiwayatPenempatanSantri.santri_id == santri_id)
+        .order_by(RiwayatPenempatanSantri.tanggal_masuk.desc())
+    )
+    rows = list((await session.execute(stmt)).scalars())
+    return [
+        {
+            "id": r.id,
+            "rombel_id": r.rombel_id,
+            "rombel": r.rombel.nama if r.rombel else None,
+            "tanggal_masuk": r.tanggal_masuk.isoformat(),
+            "tanggal_keluar": r.tanggal_keluar.isoformat() if r.tanggal_keluar else None,
+        }
+        for r in rows
+    ]
+
+
 async def place_santri(session: AsyncSession, payload: PlacementIn) -> SantriMadrasah:
     santri = await session.get(SantriMadrasah, payload.santri_id)
     rombel = await session.get(RombelMadrasah, payload.rombel_id)
@@ -727,7 +780,7 @@ async def place_santri(session: AsyncSession, payload: PlacementIn) -> SantriMad
         raise MadrasahNotFoundError("Santri atau rombel tidak ditemukan")
     santri.rombel_id = rombel.id
     santri.kelas_id = rombel.id
-    await session.flush()
+    await _catat_riwayat_penempatan(session, santri.id, rombel.id)
     return santri
 
 
@@ -735,6 +788,8 @@ async def create_santri(session: AsyncSession, payload: SantriIn) -> SantriMadra
     row = SantriMadrasah(nama=payload.nama, rombel_id=payload.rombel_id, kelas_id=payload.kelas_id or payload.rombel_id, orang_tua_id=payload.orang_tua_id)
     session.add(row)
     await session.flush()
+    if payload.rombel_id:
+        await _catat_riwayat_penempatan(session, row.id, payload.rombel_id)
     return row
 
 
@@ -747,10 +802,55 @@ async def patch_santri(session: AsyncSession, santri_id: str, payload: SantriPat
     if payload.rombel_id is not None:
         row.rombel_id = payload.rombel_id
         row.kelas_id = payload.rombel_id
+        await _catat_riwayat_penempatan(session, santri_id, payload.rombel_id)
     if payload.orang_tua_id is not None:
         row.orang_tua_id = payload.orang_tua_id
     await session.flush()
     return row
+
+
+async def set_status_santri(session: AsyncSession, santri_id: str, payload: SantriStatusIn) -> SantriMadrasah:
+    """Menandai santri lulus/keluar/pindah (atau mengaktifkan kembali santri
+    yang sebelumnya keluar). Baris santri TIDAK dihapus -- data historis
+    (absensi, progres, tagihan, riwayat kelas) tetap tersimpan; santri
+    hanya berhenti muncul di listing default (lihat list_santri)."""
+    row = await session.get(SantriMadrasah, santri_id)
+    if not row:
+        raise MadrasahNotFoundError("Santri tidak ditemukan")
+    row.status = payload.status
+    row.tanggal_status = payload.tanggal or date.today()
+    if payload.status != "aktif":
+        await _tutup_riwayat_terbuka(session, santri_id, row.tanggal_status)
+    await session.flush()
+    return row
+
+
+async def kenaikan_kelas_massal(session: AsyncSession, payload: KenaikanKelasRequest) -> dict:
+    """Proses satu batch kenaikan kelas: tiap item pindah rombel (dicatat ke
+    riwayat lewat _catat_riwayat_penempatan) atau, kalau rombel_tujuan_id
+    kosong, ditandai lulus (tanggal hari ini, riwayat ditutup). Santri yang
+    tidak disebutkan dalam payload tidak tersentuh sama sekali."""
+    dipindah: list[str] = []
+    diluluskan: list[str] = []
+    for item in payload.items:
+        santri = await session.get(SantriMadrasah, item.santri_id)
+        if not santri:
+            raise MadrasahNotFoundError(f"Santri {item.santri_id} tidak ditemukan")
+        if item.rombel_tujuan_id:
+            rombel = await session.get(RombelMadrasah, item.rombel_tujuan_id)
+            if not rombel:
+                raise MadrasahNotFoundError(f"Rombel tujuan {item.rombel_tujuan_id} tidak ditemukan")
+            santri.rombel_id = rombel.id
+            santri.kelas_id = rombel.id
+            await _catat_riwayat_penempatan(session, santri.id, rombel.id)
+            dipindah.append(santri.id)
+        else:
+            santri.status = "lulus"
+            santri.tanggal_status = date.today()
+            await _tutup_riwayat_terbuka(session, santri.id, santri.tanggal_status)
+            diluluskan.append(santri.id)
+    await session.flush()
+    return {"dipindah": dipindah, "diluluskan": diluluskan}
 
 
 async def delete_santri(session: AsyncSession, santri_id: str) -> None:

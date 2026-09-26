@@ -166,6 +166,22 @@ class PengaturanPatch(BaseModel):
     alamat: Optional[str] = Field(None, max_length=500)
 
 
+class SantriStatusIn(BaseModel):
+    status: Literal["aktif", "lulus", "keluar", "pindah"]
+    tanggal: Optional[date] = None
+
+
+class KenaikanKelasItem(BaseModel):
+    santri_id: str
+    # rombel_tujuan_id kosong/None berarti santri ini LULUS di kenaikan ini
+    # (tingkat tertinggi), bukan dipindah ke rombel lain.
+    rombel_tujuan_id: Optional[str] = None
+
+
+class KenaikanKelasRequest(BaseModel):
+    items: list[KenaikanKelasItem] = Field(..., min_length=1)
+
+
 class TahunAjaranIn(BaseModel):
     kode: str = Field(..., min_length=4, max_length=16, description='mis. "2025/2026"')
     tanggal_mulai: date
