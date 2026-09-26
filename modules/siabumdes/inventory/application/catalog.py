@@ -10,7 +10,13 @@ from sqlalchemy.orm import selectinload
 from modules.siabumdes.infrastructure.models import UnitUsaha
 from modules.siabumdes.inventory.infrastructure.models import Product, StockAdjustment, StockCard, StockCategory
 
+# Sejarah: modul ini awalnya "inventory UU05" dengan kode unit di-hardcode.
+# UU05_CODE dipertahankan sebagai fallback kompatibilitas (dipakai di tempat
+# yang belum sempat diaudit), tapi resolve_uu05_unit() sekarang mencari unit
+# lewat business_type (perdagangan/manufaktur) supaya unit dagang baru selain
+# UU05 otomatis ikut terhubung tanpa perlu ubah kode.
 UU05_CODE = "UU05"
+INVENTORY_BUSINESS_TYPES = ("perdagangan", "manufaktur")
 
 DEFAULT_CATEGORIES: list[tuple[str, str]] = [
     ("PRT", "Peralatan Rumah Tangga"),
@@ -24,9 +30,17 @@ DEFAULT_CATEGORIES: list[tuple[str, str]] = [
 
 class InventoryCatalogMixin:
     async def resolve_uu05_unit(self) -> UnitUsaha:
-        unit = await self.session.scalar(select(UnitUsaha).where(UnitUsaha.code == UU05_CODE))
+        unit = await self.session.scalar(
+            select(UnitUsaha)
+            .where(UnitUsaha.business_type.in_(INVENTORY_BUSINESS_TYPES))
+            .order_by(UnitUsaha.code.asc())
+        )
         if not unit:
-            raise ValueError("Unit usaha UU05 belum terdaftar")
+            # Fallback kompatibilitas untuk data lama yang belum sempat diberi
+            # business_type (mis. UU05 masih default 'jasa' sebelum di-backfill).
+            unit = await self.session.scalar(select(UnitUsaha).where(UnitUsaha.code == UU05_CODE))
+        if not unit:
+            raise ValueError("Belum ada unit usaha berjenis Perdagangan/Manufaktur yang terdaftar")
         return unit
 
     async def ensure_categories(self, unit_usaha_id: Optional[str] = None) -> list[StockCategory]:
