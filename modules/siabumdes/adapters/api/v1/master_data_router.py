@@ -121,10 +121,23 @@ async def _group_filter(session: AsyncSession, user: User) -> Optional[str]:
 
 
 @router.get("/unit-usaha")
-async def list_units(user: User = Depends(get_current_user), session: AsyncSession = Depends(get_db)):
+async def list_units(
+    include_inactive: bool = False,
+    user: User = Depends(get_current_user),
+    session: AsyncSession = Depends(get_db),
+):
     stmt = select(UnitUsaha).order_by(UnitUsaha.code.asc())
     if is_pengelola(user):
+        # Selalu tampilkan unit sendiri biarpun sudah dinonaktifkan -- kalau
+        # tidak, pengelola yang unitnya dinonaktifkan kehilangan akses ke
+        # halamannya sendiri secara tiba-tiba tanpa penjelasan.
         stmt = stmt.where(UnitUsaha.id == user.unit_usaha_id)
+    elif not include_inactive:
+        # Dropdown pemilih unit di Transaksi/Laporan/COA/dll tidak boleh
+        # menawarkan unit yang sudah dinonaktifkan admin. Halaman Profil Unit
+        # Usaha sendiri butuh lihat semua (termasuk nonaktif) supaya masih
+        # bisa diaktifkan lagi -- itu lewat include_inactive=true eksplisit.
+        stmt = stmt.where(UnitUsaha.active.is_(True))
     rows = (await session.execute(stmt)).scalars()
     return [
         {
