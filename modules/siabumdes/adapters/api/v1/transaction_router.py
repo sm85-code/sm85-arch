@@ -187,10 +187,16 @@ async def update_transaction(
     if not can_access_unit(user, tx.unit_usaha_id):
         raise HTTPException(status_code=403, detail="Hanya bisa mengedit transaksi unit Anda")
     unit_id = await scoped_unit_id(session, user, payload.unit_usaha_id if not is_pengelola(user) else tx.unit_usaha_id)
-    if unit_id != tx.unit_usaha_id:
-        # Hanya cek unit aktif kalau transaksi dipindah ke unit lain --
-        # mengedit transaksi lama yang sudah ada di unit tetap boleh, biar
-        # admin masih bisa membetulkan salah ketik di transaksi historis.
+    if is_pengelola(user):
+        # Pengelola yang unitnya sudah dinonaktifkan bersifat read-only --
+        # tidak boleh mengedit apa pun lagi, termasuk transaksi lama di
+        # unitnya sendiri.
+        await assert_unit_active(session, unit_id)
+    elif unit_id != tx.unit_usaha_id:
+        # Untuk admin/direktur/dst: hanya cek unit aktif kalau transaksi
+        # dipindah ke unit lain -- mengedit transaksi lama yang sudah ada
+        # di unit tetap boleh, biar masih bisa membetulkan salah ketik di
+        # transaksi historis.
         await assert_unit_active(session, unit_id)
     await assert_can_mutate_period(session, user, tx.date, tx.unit_usaha_id)
     await assert_can_mutate_period(session, user, payload.date, unit_id)
@@ -252,6 +258,8 @@ async def upload_proof(
         raise HTTPException(status_code=404, detail="Transaksi tidak ditemukan")
     if not can_access_unit(user, tx.unit_usaha_id):
         raise HTTPException(status_code=403, detail="Bukan transaksi unit Anda")
+    if is_pengelola(user):
+        await assert_unit_active(session, user.unit_usaha_id)
     await assert_can_mutate_period(session, user, tx.date, tx.unit_usaha_id)
     proofs = list(tx.proofs or [])
     if len(proofs) >= MAX_PROOFS:
@@ -306,6 +314,8 @@ async def delete_proof(
         raise HTTPException(status_code=404, detail="Transaksi tidak ditemukan")
     if not can_access_unit(user, tx.unit_usaha_id):
         raise HTTPException(status_code=403, detail="Bukan transaksi unit Anda")
+    if is_pengelola(user):
+        await assert_unit_active(session, user.unit_usaha_id)
     await assert_can_mutate_period(session, user, tx.date, tx.unit_usaha_id)
     proofs = list(tx.proofs or [])
     if not any(p.get("file_id") == file_id for p in proofs):
