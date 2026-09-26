@@ -17,7 +17,7 @@ HQ_ROLES = {"admin", "direktur", "bendahara", "penasihat", "pengawas"}
 WRITE_ROLES = {"admin", "direktur", "bendahara", "pengelola"}
 TX_DELETE_ROLES = {"admin", "direktur", "bendahara"}
 MASTER_WRITE_ROLES = {"admin"}
-UNIT_WRITE_ROLES = {"admin", "direktur"}
+UNIT_WRITE_ROLES = {"admin"}
 
 
 def role_of(user: User) -> str:
