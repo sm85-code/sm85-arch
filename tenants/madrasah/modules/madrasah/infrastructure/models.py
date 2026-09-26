@@ -43,6 +43,43 @@ class UserMadrasah(MadrasahBase):
     rombel_asuh: Mapped[list["RombelMadrasah"]] = relationship(back_populates="wali_kelas")
 
 
+class TahunAjaranMadrasah(MadrasahBase):
+    """Tahun ajaran (mis. "2025/2026"). Induk dari SemesterMadrasah -- semua
+    entity transaksional (absensi, progres, tagihan, jadwal) di-tag lewat
+    semester, bukan langsung ke tahun ajaran, karena madrasah tutup buku per
+    semester (2x setahun), bukan per tahun ajaran penuh."""
+
+    __tablename__ = "madrasah_tahun_ajaran"
+
+    id: Mapped[str] = mapped_column(String(64), primary_key=True, default=_uuid)
+    kode: Mapped[str] = mapped_column(String(16), nullable=False, unique=True)
+    tanggal_mulai: Mapped[date] = mapped_column(Date, nullable=False)
+    tanggal_selesai: Mapped[date] = mapped_column(Date, nullable=False)
+
+    semester: Mapped[list["SemesterMadrasah"]] = relationship(back_populates="tahun_ajaran")
+
+
+class SemesterMadrasah(MadrasahBase):
+    """Satu periode akademik aktif-atau-ditutup. Hanya SATU semester boleh
+    status="aktif" di seluruh database pada satu waktu -- lihat
+    services.aktifkan_semester(), yang menonaktifkan semester lain sebelum
+    mengaktifkan yang dipilih. Semester "ditutup" mengunci input baru untuk
+    ditandai ke periode itu (bukan menghapus data lama)."""
+
+    __tablename__ = "madrasah_semester"
+
+    id: Mapped[str] = mapped_column(String(64), primary_key=True, default=_uuid)
+    tahun_ajaran_id: Mapped[str] = mapped_column(
+        String(64), ForeignKey("madrasah_tahun_ajaran.id", ondelete="CASCADE"), nullable=False, index=True
+    )
+    nama: Mapped[str] = mapped_column(String(16), nullable=False)  # "Ganjil" | "Genap"
+    tanggal_mulai: Mapped[date] = mapped_column(Date, nullable=False)
+    tanggal_selesai: Mapped[date] = mapped_column(Date, nullable=False)
+    status: Mapped[str] = mapped_column(String(16), nullable=False, default="draft", index=True)  # draft|aktif|ditutup
+
+    tahun_ajaran: Mapped["TahunAjaranMadrasah"] = relationship(back_populates="semester")
+
+
 class TingkatMadrasah(MadrasahBase):
     __tablename__ = "madrasah_tingkat"
 
@@ -143,6 +180,9 @@ class JadwalMadrasah(MadrasahBase):
     hari: Mapped[str] = mapped_column(String(16), nullable=False)
     jam_mulai: Mapped[str] = mapped_column(String(8), nullable=False, default="07:00")
     jam_selesai: Mapped[str] = mapped_column(String(8), nullable=False, default="08:00")
+    semester_id: Mapped[Optional[str]] = mapped_column(
+        String(64), ForeignKey("madrasah_semester.id", ondelete="SET NULL"), nullable=True, index=True
+    )
 
     rombel: Mapped["RombelMadrasah"] = relationship(back_populates="jadwal")
     mapel: Mapped["MapelMadrasah"] = relationship(back_populates="jadwal")
@@ -165,6 +205,14 @@ class AbsensiMadrasah(MadrasahBase):
     mapel_id: Mapped[Optional[str]] = mapped_column(
         String(64), ForeignKey("madrasah_mapel.id", ondelete="SET NULL"), nullable=True, index=True
     )
+    # Nullable dan diisi otomatis dari semester aktif saat baris dibuat
+    # (lihat services._semester_aktif_id). Baris lama (sebelum fitur ini
+    # ada) tetap NULL -- tidak perlu backfill manual. Kolom baru di tabel
+    # yang sudah ada -> lihat ALTER TABLE ADD COLUMN IF NOT EXISTS di
+    # seeder.ensure_madrasah_schema().
+    semester_id: Mapped[Optional[str]] = mapped_column(
+        String(64), ForeignKey("madrasah_semester.id", ondelete="SET NULL"), nullable=True, index=True
+    )
 
     santri: Mapped["SantriMadrasah"] = relationship(back_populates="absensi")
     guru: Mapped[Optional["UserMadrasah"]] = relationship(back_populates="absensi_dicatat")
@@ -183,6 +231,9 @@ class ProgresHafalan(MadrasahBase):
     catatan_guru: Mapped[str] = mapped_column(Text, nullable=False, default="")
     mapel_id: Mapped[Optional[str]] = mapped_column(String(64), ForeignKey("madrasah_mapel.id", ondelete="SET NULL"), nullable=True)
     materi_id: Mapped[Optional[str]] = mapped_column(String(64), ForeignKey("madrasah_materi_target.id", ondelete="SET NULL"), nullable=True)
+    semester_id: Mapped[Optional[str]] = mapped_column(
+        String(64), ForeignKey("madrasah_semester.id", ondelete="SET NULL"), nullable=True, index=True
+    )
 
     santri: Mapped["SantriMadrasah"] = relationship(back_populates="hafalan")
 
@@ -204,6 +255,9 @@ class TagihanSyahriyah(MadrasahBase):
     diajukan_pada: Mapped[Optional[datetime]] = mapped_column(DateTime(timezone=True), nullable=True)
     santri_id: Mapped[str] = mapped_column(
         String(64), ForeignKey("madrasah_santri.id", ondelete="CASCADE"), nullable=False, index=True
+    )
+    semester_id: Mapped[Optional[str]] = mapped_column(
+        String(64), ForeignKey("madrasah_semester.id", ondelete="SET NULL"), nullable=True, index=True
     )
 
     santri: Mapped["SantriMadrasah"] = relationship(back_populates="tagihan")

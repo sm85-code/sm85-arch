@@ -30,6 +30,8 @@ from tenants.madrasah.modules.madrasah.application.schemas import (
     RombelPatch,
     SantriIn,
     SantriPatch,
+    SemesterIn,
+    TahunAjaranIn,
     TingkatIn,
     TingkatPatch,
     UserPatch,
@@ -1050,6 +1052,104 @@ async def admin_audit_log(
     _: UserMadrasah = Depends(require_roles_madrasah(*ADMIN_ROLES)),
 ):
     return [services.audit_out(r) for r in await services.list_audit_log(session, limit)]
+
+
+# --- Tahun Ajaran & Semester (fondasi periode akademik) ---
+
+@admin_r.get("/tahun-ajaran")
+async def admin_tahun_ajaran_list(
+    session: AsyncSession = Depends(get_db_madrasah),
+    _: UserMadrasah = Depends(require_roles_madrasah(*ADMIN_ROLES, *KURIKULUM_ROLES)),
+):
+    return [services.tahun_ajaran_out(r) for r in await services.list_tahun_ajaran(session)]
+
+
+@admin_r.post("/tahun-ajaran", status_code=status.HTTP_201_CREATED)
+async def admin_tahun_ajaran_create(
+    payload: TahunAjaranIn,
+    session: AsyncSession = Depends(get_db_madrasah),
+    _: UserMadrasah = Depends(require_roles_madrasah(*ADMIN_ROLES)),
+):
+    return services.tahun_ajaran_out(await services.create_tahun_ajaran(session, payload))
+
+
+@admin_r.get("/semester")
+async def admin_semester_list(
+    session: AsyncSession = Depends(get_db_madrasah),
+    _: UserMadrasah = Depends(require_roles_madrasah(*ADMIN_ROLES, *KURIKULUM_ROLES)),
+):
+    return [services.semester_out(r) for r in await services.list_semester(session)]
+
+
+@admin_r.post("/semester", status_code=status.HTTP_201_CREATED)
+async def admin_semester_create(
+    payload: SemesterIn,
+    session: AsyncSession = Depends(get_db_madrasah),
+    _: UserMadrasah = Depends(require_roles_madrasah(*ADMIN_ROLES)),
+):
+    try:
+        row = await services.create_semester(session, payload)
+    except services.MadrasahNotFoundError as exc:
+        raise HTTPException(status_code=404, detail=str(exc)) from exc
+    return services.semester_out(row)
+
+
+@admin_r.post("/semester/{semester_id}/aktifkan")
+async def admin_semester_aktifkan(
+    semester_id: str,
+    request: Request,
+    session: AsyncSession = Depends(get_db_madrasah),
+    user: UserMadrasah = Depends(require_roles_madrasah(*ADMIN_ROLES)),
+):
+    try:
+        row = await services.aktifkan_semester(session, semester_id)
+    except services.MadrasahNotFoundError as exc:
+        raise HTTPException(status_code=404, detail=str(exc)) from exc
+    await services.record_audit(
+        session,
+        aktor=user,
+        aksi="semester_aktifkan",
+        entitas="madrasah_semester",
+        entitas_id=row.id,
+        keterangan=f"{row.tahun_ajaran.kode if row.tahun_ajaran else '-'} {row.nama}",
+        ip=_client_ip(request),
+    )
+    return services.semester_out(row)
+
+
+@admin_r.post("/semester/{semester_id}/tutup")
+async def admin_semester_tutup(
+    semester_id: str,
+    request: Request,
+    session: AsyncSession = Depends(get_db_madrasah),
+    user: UserMadrasah = Depends(require_roles_madrasah(*ADMIN_ROLES)),
+):
+    try:
+        row = await services.tutup_semester(session, semester_id)
+    except services.MadrasahNotFoundError as exc:
+        raise HTTPException(status_code=404, detail=str(exc)) from exc
+    await services.record_audit(
+        session,
+        aktor=user,
+        aksi="semester_tutup",
+        entitas="madrasah_semester",
+        entitas_id=row.id,
+        keterangan=f"{row.tahun_ajaran.kode if row.tahun_ajaran else '-'} {row.nama}",
+        ip=_client_ip(request),
+    )
+    return services.semester_out(row)
+
+
+@madrasah_router.get("/semester/aktif")
+async def get_semester_aktif(
+    session: AsyncSession = Depends(get_db_madrasah),
+    _: UserMadrasah = Depends(require_roles_madrasah(*ANY_AUTHENTICATED)),
+):
+    # Dibaca setiap portal (bukan cuma admin) supaya frontend bisa
+    # menampilkan periode akademik yang sedang berjalan di header, dan
+    # menonaktifkan form input kalau belum ada semester yang diaktifkan.
+    row = await services.get_semester_aktif(session)
+    return services.semester_out(row) if row else None
 
 
 madrasah_router.include_router(admin_r)
