@@ -21,6 +21,8 @@ from tenants.madrasah.modules.madrasah.application.schemas import (
     MateriPatch,
     PenugasanIn,
     KenaikanKelasRequest,
+    MadrasahUnitIn,
+    MadrasahUnitPatch,
     PengaturanPatch,
     PengumumanIn,
     PesanIn,
@@ -37,6 +39,7 @@ from tenants.madrasah.modules.madrasah.application.schemas import (
     TingkatIn,
     TingkatPatch,
     UserPatch,
+    YayasanPatch,
 )
 from tenants.madrasah.modules.madrasah.infrastructure.auth import (
     check_login_rate_limit,
@@ -73,6 +76,10 @@ WALI_SANTRI_ROLES = ("wali_santri", "kepala_sekolah", "admin")
 # role wali_kelas ikut disertakan di sini, bukan cuma "guru".
 GURU_MAPEL_ROLES = ("guru", "wali_kelas", "kepala_sekolah", "admin")
 ANY_AUTHENTICATED = ADMIN_ROLES + KURIKULUM_ROLES + BENDAHARA_ROLES + WALI_KELAS_ROLES + WALI_SANTRI_ROLES
+# yayasan_admin melihat rekap lintas-unit read-only (Fase 3) -- tidak ikut
+# CRUD operasional harian satu unit, itu tetap wewenang ADMIN_ROLES di unit
+# masing-masing.
+YAYASAN_ROLES = ("yayasan_admin",) + ADMIN_ROLES
 
 
 def _user_out(user) -> dict:
@@ -1187,6 +1194,64 @@ async def admin_audit_log(
     _: UserMadrasah = Depends(require_roles_madrasah(*ADMIN_ROLES)),
 ):
     return [services.audit_out(r) for r in await services.list_audit_log(session, limit)]
+
+
+# --- Yayasan & MadrasahUnit (Fase 3: multi-madrasah dalam satu database) ---
+
+@admin_r.get("/yayasan")
+async def admin_yayasan_get(
+    session: AsyncSession = Depends(get_db_madrasah),
+    _: UserMadrasah = Depends(require_roles_madrasah(*ADMIN_ROLES)),
+):
+    return services.yayasan_out(await services.get_or_create_yayasan(session))
+
+
+@admin_r.patch("/yayasan")
+async def admin_yayasan_patch(
+    payload: YayasanPatch,
+    session: AsyncSession = Depends(get_db_madrasah),
+    _: UserMadrasah = Depends(require_roles_madrasah(*ADMIN_ROLES)),
+):
+    return services.yayasan_out(await services.update_yayasan(session, payload))
+
+
+@admin_r.get("/unit")
+async def admin_unit_list(
+    session: AsyncSession = Depends(get_db_madrasah),
+    _: UserMadrasah = Depends(require_roles_madrasah(*YAYASAN_ROLES)),
+):
+    return [services.unit_out(r) for r in await services.list_unit(session)]
+
+
+@admin_r.post("/unit", status_code=status.HTTP_201_CREATED)
+async def admin_unit_create(
+    payload: MadrasahUnitIn,
+    session: AsyncSession = Depends(get_db_madrasah),
+    _: UserMadrasah = Depends(require_roles_madrasah(*ADMIN_ROLES)),
+):
+    return services.unit_out(await services.create_unit(session, payload))
+
+
+@admin_r.patch("/unit/{unit_id}")
+async def admin_unit_patch(
+    unit_id: str,
+    payload: MadrasahUnitPatch,
+    session: AsyncSession = Depends(get_db_madrasah),
+    _: UserMadrasah = Depends(require_roles_madrasah(*ADMIN_ROLES)),
+):
+    try:
+        row = await services.patch_unit(session, unit_id, payload)
+    except services.MadrasahNotFoundError as exc:
+        raise HTTPException(status_code=404, detail=str(exc)) from exc
+    return services.unit_out(row)
+
+
+@admin_r.get("/yayasan/rekap")
+async def admin_yayasan_rekap(
+    session: AsyncSession = Depends(get_db_madrasah),
+    _: UserMadrasah = Depends(require_roles_madrasah(*YAYASAN_ROLES)),
+):
+    return await services.rekap_yayasan(session)
 
 
 # --- Tahun Ajaran & Semester (fondasi periode akademik) ---

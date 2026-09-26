@@ -65,16 +65,32 @@ async def ensure_madrasah_schema() -> None:
         await conn.execute(
             text("ALTER TABLE IF EXISTS madrasah_guru_mapel_rombel ADD COLUMN IF NOT EXISTS tarif_per_sesi NUMERIC(20,2) NULL")
         )
+        # madrasah_unit/madrasah_yayasan sudah dibuat oleh create_all
+        # (checkfirst) di atas -- baris ALTER di bawah ini menambah
+        # penanda unit ke tabel yang SUDAH ADA sebelumnya (fase 3).
+        for table in (
+            "madrasah_tingkat",
+            "madrasah_rombel",
+            "madrasah_santri",
+            "madrasah_mapel",
+            "madrasah_users",
+        ):
+            await conn.execute(text(f"ALTER TABLE IF EXISTS {table} ADD COLUMN IF NOT EXISTS madrasah_unit_id VARCHAR(64) NULL"))
 
-    # Chart of Accounts (madrasah_akun) diseed lewat ORM session, bukan SQL
-    # mentah lewat `conn` di atas -- lebih sederhana untuk idempotency
-    # check-nya (SELECT kode yang sudah ada) daripada menulis INSERT ...
-    # ON CONFLICT manual yang beda syntax antar dialect.
+    # Chart of Accounts (madrasah_akun) dan unit default (Fase 3) diseed
+    # lewat ORM session, bukan SQL mentah lewat `conn` di atas -- lebih
+    # sederhana untuk idempotency check-nya (SELECT baris yang sudah ada)
+    # daripada menulis INSERT ... ON CONFLICT manual yang beda syntax antar
+    # dialect.
     if SessionLocal is not None:
-        from tenants.madrasah.modules.madrasah.application.services import seed_akun_default
+        from tenants.madrasah.modules.madrasah.application.services import (
+            ensure_default_unit_and_backfill,
+            seed_akun_default,
+        )
 
         async with SessionLocal() as session:
             await seed_akun_default(session)
+            await ensure_default_unit_and_backfill(session)
             await session.commit()
 
 
@@ -111,8 +127,12 @@ async def reset_madrasah(session: AsyncSession) -> dict[str, str]:
     session.add_all([admin, guru])
     await session.flush()
 
-    from tenants.madrasah.modules.madrasah.application.services import seed_akun_default
+    from tenants.madrasah.modules.madrasah.application.services import (
+        ensure_default_unit_and_backfill,
+        seed_akun_default,
+    )
 
     await seed_akun_default(session)
+    await ensure_default_unit_and_backfill(session)
 
     return {"admin_id": admin.id, "guru_id": guru.id}

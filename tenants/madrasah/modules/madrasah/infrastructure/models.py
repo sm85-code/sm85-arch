@@ -20,6 +20,45 @@ def _utcnow() -> datetime:
     return datetime.now(timezone.utc)
 
 
+class Yayasan(MadrasahBase):
+    """Identitas yayasan yang membawahi satu atau lebih MadrasahUnit. Baris
+    tunggal per deployment (produk ini tetap satu Neon DB per pelanggan --
+    lihat docstring seeder.py -- jadi satu database hanya pernah punya satu
+    yayasan), diambil/dibuat otomatis lewat get_or_create_yayasan(),
+    sama seperti pola PengaturanSekolah."""
+
+    __tablename__ = "madrasah_yayasan"
+
+    id: Mapped[str] = mapped_column(String(64), primary_key=True, default=_uuid)
+    nama: Mapped[str] = mapped_column(String(255), nullable=False, default="Yayasan")
+    alamat: Mapped[str] = mapped_column(String(500), nullable=False, default="")
+
+    unit: Mapped[list["MadrasahUnit"]] = relationship(back_populates="yayasan")
+
+
+class MadrasahUnit(MadrasahBase):
+    """Satu madrasah/unit di bawah Yayasan (mis. "Madrasah Diniyah 1",
+    "TPQ Cabang 2"). Pelanggan yang hanya punya satu madrasah otomatis
+    punya SATU baris di sini ("Unit Utama", dibuat lewat
+    services.ensure_default_unit_and_backfill() saat startup) -- semua
+    data existing (Tingkat/Rombel/Santri/Mapel/User) ditandai milik unit
+    ini secara otomatis, tanpa migrasi data manual apa pun."""
+
+    __tablename__ = "madrasah_unit"
+
+    id: Mapped[str] = mapped_column(String(64), primary_key=True, default=_uuid)
+    yayasan_id: Mapped[Optional[str]] = mapped_column(
+        String(64), ForeignKey("madrasah_yayasan.id", ondelete="SET NULL"), nullable=True, index=True
+    )
+    nama: Mapped[str] = mapped_column(String(255), nullable=False)
+    alamat: Mapped[str] = mapped_column(String(500), nullable=False, default="")
+    kepala_unit: Mapped[str] = mapped_column(String(255), nullable=False, default="")
+    aktif: Mapped[bool] = mapped_column(Boolean, nullable=False, default=True)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=_utcnow)
+
+    yayasan: Mapped[Optional["Yayasan"]] = relationship(back_populates="unit")
+
+
 class UserMadrasah(MadrasahBase):
     __tablename__ = "madrasah_users"
 
@@ -36,6 +75,12 @@ class UserMadrasah(MadrasahBase):
     # sudah ada -> perlu ALTER TABLE ADD COLUMN IF NOT EXISTS untuk database
     # produksi lama (lihat self-heal di login_by_phone).
     session_version: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
+    # Nullable & di-backfill otomatis ke "Unit Utama" (lihat MadrasahUnit).
+    # role="yayasan_admin" adalah satu-satunya role yang boleh punya
+    # madrasah_unit_id=NULL secara permanen (dia melihat lintas-unit).
+    madrasah_unit_id: Mapped[Optional[str]] = mapped_column(
+        String(64), ForeignKey("madrasah_unit.id", ondelete="SET NULL"), nullable=True, index=True
+    )
 
     santri_asuh: Mapped[list["SantriMadrasah"]] = relationship(back_populates="orang_tua")
     absensi_dicatat: Mapped[list["AbsensiMadrasah"]] = relationship(back_populates="guru")
@@ -84,8 +129,17 @@ class TingkatMadrasah(MadrasahBase):
     __tablename__ = "madrasah_tingkat"
 
     id: Mapped[str] = mapped_column(String(64), primary_key=True, default=_uuid)
+    # `nama` masih unique GLOBAL (bukan per-unit) -- keterbatasan yang
+    # sengaja dipertahankan untuk fase ini: mengubah jadi unique(nama,
+    # madrasah_unit_id) butuh drop+recreate constraint yang berisiko di
+    # Postgres produksi lewat ALTER mentah. Untuk sekarang, dua unit di
+    # yayasan yang sama harus memberi nama tingkat yang berbeda satu sama
+    # lain (mis. "Jilid 1 - Unit A" vs "Jilid 1 - Unit B").
     nama: Mapped[str] = mapped_column(String(128), nullable=False, unique=True)
     urutan: Mapped[int] = mapped_column(Integer, nullable=False, default=1)
+    madrasah_unit_id: Mapped[Optional[str]] = mapped_column(
+        String(64), ForeignKey("madrasah_unit.id", ondelete="SET NULL"), nullable=True, index=True
+    )
 
     rombel: Mapped[list["RombelMadrasah"]] = relationship(back_populates="tingkat")
 
@@ -100,6 +154,9 @@ class RombelMadrasah(MadrasahBase):
     )
     wali_kelas_id: Mapped[Optional[str]] = mapped_column(
         String(64), ForeignKey("madrasah_users.id", ondelete="SET NULL"), nullable=True, index=True
+    )
+    madrasah_unit_id: Mapped[Optional[str]] = mapped_column(
+        String(64), ForeignKey("madrasah_unit.id", ondelete="SET NULL"), nullable=True, index=True
     )
 
     tingkat: Mapped[Optional["TingkatMadrasah"]] = relationship(back_populates="rombel")
@@ -139,6 +196,9 @@ class SantriMadrasah(MadrasahBase):
     # absensi/progres/tagihan lama tetap tersimpan untuk histori/alumni.
     status: Mapped[str] = mapped_column(String(16), nullable=False, default="aktif", index=True)
     tanggal_status: Mapped[Optional[date]] = mapped_column(Date, nullable=True)
+    madrasah_unit_id: Mapped[Optional[str]] = mapped_column(
+        String(64), ForeignKey("madrasah_unit.id", ondelete="SET NULL"), nullable=True, index=True
+    )
 
     kelas: Mapped[Optional["KelasMadrasah"]] = relationship(back_populates="santri")
     rombel: Mapped[Optional["RombelMadrasah"]] = relationship(back_populates="santri")
@@ -182,6 +242,9 @@ class MapelMadrasah(MadrasahBase):
     id: Mapped[str] = mapped_column(String(64), primary_key=True, default=_uuid)
     kode: Mapped[str] = mapped_column(String(32), nullable=False, unique=True)
     nama: Mapped[str] = mapped_column(String(128), nullable=False)
+    madrasah_unit_id: Mapped[Optional[str]] = mapped_column(
+        String(64), ForeignKey("madrasah_unit.id", ondelete="SET NULL"), nullable=True, index=True
+    )
 
     materi: Mapped[list["MateriTarget"]] = relationship(back_populates="mapel")
     jadwal: Mapped[list["JadwalMadrasah"]] = relationship(back_populates="mapel")
