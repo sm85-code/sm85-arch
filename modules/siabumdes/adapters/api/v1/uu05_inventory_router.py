@@ -11,6 +11,7 @@ from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from modules.siabumdes.adapters.api.deps import require_roles
+from modules.siabumdes.adapters.api.scope import assert_unit_active
 from modules.siabumdes.identity.infrastructure.models import User
 from modules.siabumdes.infrastructure.models import UnitUsaha
 from modules.siabumdes.inventory.application.services import (
@@ -181,15 +182,21 @@ class AdjustBody(BaseModel):
 
 async def resolve_unit_id(session: AsyncSession, body_unit_id: Optional[str], user: User) -> str:
     if public_role(user.role) == "pengelola" and user.unit_usaha_id:
-        return user.unit_usaha_id
-    if body_unit_id:
-        return body_unit_id
-    unit = await session.scalar(
-        select(UnitUsaha).where(UnitUsaha.business_type.in_(INVENTORY_BUSINESS_TYPES)).order_by(UnitUsaha.code.asc())
-    )
-    if not unit:
-        raise HTTPException(status_code=422, detail="Belum ada unit usaha berjenis Perdagangan/Manufaktur")
-    return unit.id
+        uid = user.unit_usaha_id
+    elif body_unit_id:
+        uid = body_unit_id
+    else:
+        unit = await session.scalar(
+            select(UnitUsaha).where(UnitUsaha.business_type.in_(INVENTORY_BUSINESS_TYPES)).order_by(UnitUsaha.code.asc())
+        )
+        if not unit:
+            raise HTTPException(status_code=422, detail="Belum ada unit usaha berjenis Perdagangan/Manufaktur")
+        uid = unit.id
+    # Semua endpoint pencatatan inventory lewat sini -- cek sekali di sini
+    # cukup untuk mencegah stok in/out/penyesuaian baru dicatat ke unit yang
+    # sudah dinonaktifkan admin.
+    await assert_unit_active(session, uid)
+    return uid
 
 
 @router.get("/meta")

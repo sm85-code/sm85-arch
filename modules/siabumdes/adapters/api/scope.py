@@ -69,6 +69,24 @@ def can_access_unit(user: User, unit_usaha_id: Optional[str]) -> bool:
     return False
 
 
+async def assert_unit_active(session: AsyncSession, unit_usaha_id: Optional[str]) -> None:
+    """Block NEW transactions/movements into a unit an admin has deactivated.
+
+    unit_usaha_id=None means BUMDES pusat, which has no active/inactive
+    concept -- always allowed. Existing rows already recorded against a
+    unit that gets deactivated later are left untouched; this only stops
+    new activity from being added.
+    """
+    if not unit_usaha_id:
+        return
+    unit = await session.get(UnitUsaha, unit_usaha_id)
+    if unit and not unit.active:
+        raise HTTPException(
+            status_code=422,
+            detail=f"Unit usaha {unit.code} sudah dinonaktifkan, tidak bisa mencatat transaksi baru",
+        )
+
+
 async def assert_can_mutate_period(
     session: AsyncSession,
     user: User,
