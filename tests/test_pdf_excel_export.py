@@ -1,13 +1,13 @@
 """Regresi untuk export PDF/Excel laporan keuangan.
 
-Latar belakang: weasyprint==62.3 mendeklarasikan dependency "pydyf>=0.10.0",
-tapi Stream.transform() di weasyprint memanggil super().transform(...), API
-yang sudah dihapus di pydyf 0.12. Tanpa pin versi pydyf, pip menginstal
-0.12.x terbaru dan setiap render PDF diam-diam gagal lalu jatuh ke fallback
-ReportLab (lihat generate_pdf_report -> html_pdf.render_pdf_from_html yang
-menelan exception-nya jadi cuma warning log). requirements.txt sekarang
-menambahkan pydyf==0.11.0. Test ini memastikan jalur WeasyPrint benar-benar
-jalan (bukan diam-diam fallback) di lingkungan test/CI.
+Latar belakang (historis): weasyprint==62.3 pernah tidak kompatibel dengan
+pydyf 0.12+ (Stream.transform() memanggil API yang sudah dihapus), sehingga
+render PDF diam-diam gagal lalu jatuh ke fallback ReportLab (lihat
+generate_pdf_report -> html_pdf.render_pdf_from_html yang menelan
+exception-nya jadi cuma warning log). Sejak weasyprint 70.0 + pydyf 0.12.1
+(lihat requirements.txt) masalah ini sudah tidak ada, tapi test ini tetap
+dipertahankan sebagai guard: memastikan jalur WeasyPrint benar-benar jalan
+(bukan diam-diam fallback) kalau ada regresi versi serupa di masa depan.
 """
 from __future__ import annotations
 
