@@ -80,7 +80,7 @@ async def test_create_functions_fall_back_to_default_unit(session):
 
     tingkat = await services.create_tingkat(session, TingkatIn(nama="Jilid 2"))
     rombel = await services.create_rombel(session, RombelIn(nama="Jilid 2 A"))
-    santri = await services.create_santri(session, SantriIn(nama="Santri Baru"))
+    santri, _, _ = await services.create_santri(session, SantriIn(nama="Santri Baru"))
     guru, _ = await services.create_guru(session, GuruIn(nama="Guru Baru", no_hp="081377770001"))
 
     assert tingkat.madrasah_unit_id == default_unit.id
@@ -210,7 +210,7 @@ async def test_staf_cannot_create_into_other_unit(session):
     admin = UserMadrasah(nama="Admin", no_hp="081300000004", password_hash="x", role="admin")
     session.add(admin)
     await session.flush()
-    ok = await services.create_santri(session, SantriIn(nama="Cabang", madrasah_unit_id=unit_b.id), caller=admin)
+    ok, _, _ = await services.create_santri(session, SantriIn(nama="Cabang", madrasah_unit_id=unit_b.id), caller=admin)
     assert ok.madrasah_unit_id == unit_b.id
 
 

@@ -67,6 +67,7 @@ class GuruIn(BaseModel):
 
 class SantriIn(BaseModel):
     nama: str
+    nama_wali: Optional[str] = None
     rombel_id: Optional[str] = None
     kelas_id: Optional[str] = None
     orang_tua_id: Optional[str] = None
