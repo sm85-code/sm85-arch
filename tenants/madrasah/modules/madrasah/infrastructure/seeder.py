@@ -85,6 +85,14 @@ async def ensure_madrasah_schema() -> None:
             "madrasah_users",
         ):
             await conn.execute(text(f"ALTER TABLE IF EXISTS {table} ADD COLUMN IF NOT EXISTS madrasah_unit_id VARCHAR(64) NULL"))
+        # Unique per unit (Postgres). DROP nama unique lama kalau masih ada
+        # dari skema awal. SQLite di tes unit mengabaikan ALTER ini.
+        await conn.execute(text("ALTER TABLE IF EXISTS madrasah_tingkat DROP CONSTRAINT IF EXISTS madrasah_tingkat_nama_key"))
+        await conn.execute(text("ALTER TABLE IF EXISTS madrasah_rombel DROP CONSTRAINT IF EXISTS madrasah_rombel_nama_key"))
+        await conn.execute(text("ALTER TABLE IF EXISTS madrasah_mapel DROP CONSTRAINT IF EXISTS madrasah_mapel_kode_key"))
+        await conn.execute(text("CREATE UNIQUE INDEX IF NOT EXISTS uq_tingkat_unit_nama ON madrasah_tingkat (madrasah_unit_id, nama)"))
+        await conn.execute(text("CREATE UNIQUE INDEX IF NOT EXISTS uq_rombel_unit_nama ON madrasah_rombel (madrasah_unit_id, nama)"))
+        await conn.execute(text("CREATE UNIQUE INDEX IF NOT EXISTS uq_mapel_unit_kode ON madrasah_mapel (madrasah_unit_id, kode)"))
 
     # Chart of Accounts (madrasah_akun) dan unit default (Fase 3) diseed
     # lewat ORM session, bukan SQL mentah lewat `conn` di atas -- lebih

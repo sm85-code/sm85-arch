@@ -212,3 +212,24 @@ async def test_staf_cannot_create_into_other_unit(session):
     await session.flush()
     ok = await services.create_santri(session, SantriIn(nama="Cabang", madrasah_unit_id=unit_b.id), caller=admin)
     assert ok.madrasah_unit_id == unit_b.id
+
+
+@pytest.mark.asyncio
+async def test_two_units_may_share_tingkat_name(session):
+    await services.ensure_default_unit_and_backfill(session)
+    unit_a = (await services.list_unit(session))[0]
+    unit_b = await services.create_unit(session, MadrasahUnitIn(nama="Unit Cabang"))
+    t1 = await services.create_tingkat(session, TingkatIn(nama="Jilid 1", madrasah_unit_id=unit_a.id))
+    t2 = await services.create_tingkat(session, TingkatIn(nama="Jilid 1", madrasah_unit_id=unit_b.id))
+    assert t1.nama == t2.nama == "Jilid 1"
+    assert t1.madrasah_unit_id != t2.madrasah_unit_id
+
+
+@pytest.mark.asyncio
+async def test_unit_with_santri_cannot_be_deleted(session):
+    await services.ensure_default_unit_and_backfill(session)
+    unit = (await services.list_unit(session))[0]
+    session.add(SantriMadrasah(nama="Anak", madrasah_unit_id=unit.id))
+    await session.flush()
+    with pytest.raises(services.MadrasahForbiddenError):
+        await services.assert_unit_boleh_dihapus(session, unit.id)

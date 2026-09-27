@@ -1455,6 +1455,23 @@ async def patch_unit(session: AsyncSession, unit_id: str, payload: MadrasahUnitP
     return row
 
 
+async def assert_unit_boleh_dihapus(session: AsyncSession, unit_id: str) -> None:
+    """Tolak hapus unit yang masih punya santri/guru/rombel/tingkat/mapel."""
+    checks = (
+        (SantriMadrasah, "santri"),
+        (UserMadrasah, "akun"),
+        (RombelMadrasah, "rombel"),
+        (TingkatMadrasah, "tingkat"),
+        (MapelMadrasah, "mapel"),
+    )
+    for model, label in checks:
+        n = (
+            await session.execute(select(func.count()).select_from(model).where(model.madrasah_unit_id == unit_id))
+        ).scalar_one()
+        if n:
+            raise MadrasahForbiddenError(f"Unit masih punya {label}; nonaktifkan saja, jangan hapus")
+
+
 def unit_out(row: MadrasahUnit) -> dict:
     return {
         "id": row.id,
