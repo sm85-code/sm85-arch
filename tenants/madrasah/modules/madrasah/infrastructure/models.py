@@ -109,12 +109,11 @@ class TahunAjaranMadrasah(MadrasahBase):
 
 class SemesterMadrasah(MadrasahBase):
     """Satu periode akademik aktif-atau-ditutup. Hanya SATU semester boleh
-    status="aktif" di seluruh database pada satu waktu -- lihat
-    services.aktifkan_semester(), yang menonaktifkan semester lain sebelum
-    mengaktifkan yang dipilih. Semester "ditutup" mengunci input baru untuk
-    ditandai ke periode itu (bukan menghapus data lama)."""
+    status="aktif" per unit pada satu waktu -- lihat
+    services.aktifkan_semester()."""
 
     __tablename__ = "madrasah_semester"
+    __table_args__ = (UniqueConstraint("tahun_ajaran_id", "nama", name="uq_semester_tahun_nama"),)
 
     id: Mapped[str] = mapped_column(String(64), primary_key=True, default=_uuid)
     tahun_ajaran_id: Mapped[str] = mapped_column(

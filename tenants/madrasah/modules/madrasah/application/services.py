@@ -7,8 +7,8 @@ import secrets
 from datetime import date, datetime, timezone
 from decimal import Decimal
 
-from sqlalchemy import delete, func, select, text, update
-from sqlalchemy.exc import OperationalError, ProgrammingError
+from sqlalchemy import delete, func, inspect as sa_inspect, select, text, update
+from sqlalchemy.exc import IntegrityError, OperationalError, ProgrammingError
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import selectinload
 
@@ -211,10 +211,13 @@ def tahun_ajaran_out(row: TahunAjaranMadrasah) -> dict:
 
 
 def semester_out(row: SemesterMadrasah) -> dict:
+    tahun = None
+    if "tahun_ajaran" not in sa_inspect(row).unloaded:
+        tahun = row.tahun_ajaran.kode if row.tahun_ajaran else None
     return {
         "id": row.id,
         "tahun_ajaran_id": row.tahun_ajaran_id,
-        "tahun_ajaran": row.tahun_ajaran.kode if getattr(row, "tahun_ajaran", None) else None,
+        "tahun_ajaran": tahun,
         "nama": row.nama,
         "tanggal_mulai": row.tanggal_mulai.isoformat(),
         "tanggal_selesai": row.tanggal_selesai.isoformat(),
@@ -242,8 +245,20 @@ async def list_tahun_ajaran(session: AsyncSession, unit_id: str | None = None) -
 
 
 async def create_semester(session: AsyncSession, payload: SemesterIn) -> SemesterMadrasah:
+    if payload.tanggal_selesai < payload.tanggal_mulai:
+        raise MadrasahForbiddenError("Tanggal selesai tidak boleh sebelum tanggal mulai")
     if not await session.get(TahunAjaranMadrasah, payload.tahun_ajaran_id):
         raise MadrasahNotFoundError("Tahun ajaran tidak ditemukan")
+    sudah = (
+        await session.execute(
+            select(SemesterMadrasah.id).where(
+                SemesterMadrasah.tahun_ajaran_id == payload.tahun_ajaran_id,
+                SemesterMadrasah.nama == payload.nama,
+            )
+        )
+    ).scalar_one_or_none()
+    if sudah:
+        raise MadrasahForbiddenError(f"Semester {payload.nama} untuk tahun ajaran ini sudah ada")
     row = SemesterMadrasah(
         tahun_ajaran_id=payload.tahun_ajaran_id,
         nama=payload.nama,
@@ -252,7 +267,11 @@ async def create_semester(session: AsyncSession, payload: SemesterIn) -> Semeste
         status="draft",
     )
     session.add(row)
-    await session.flush()
+    try:
+        await session.flush()
+    except IntegrityError as exc:
+        raise MadrasahForbiddenError(f"Semester {payload.nama} untuk tahun ajaran ini sudah ada") from exc
+    await session.refresh(row, attribute_names=["tahun_ajaran"])
     return row
 
 
