@@ -143,6 +143,12 @@ class PengumumanIn(BaseModel):
     madrasah_unit_id: Optional[str] = None
 
 
+class PengumumanPatch(BaseModel):
+    judul: Optional[str] = None
+    isi: Optional[str] = None
+    publik: Optional[bool] = None
+
+
 class JadwalIn(BaseModel):
     rombel_id: str
     mapel_id: str

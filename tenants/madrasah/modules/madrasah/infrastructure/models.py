@@ -394,6 +394,7 @@ class PengumumanMadrasah(MadrasahBase):
     madrasah_unit_id: Mapped[Optional[str]] = mapped_column(
         String(64), ForeignKey("madrasah_unit.id", ondelete="SET NULL"), nullable=True, index=True
     )
+    publik: Mapped[bool] = mapped_column(Boolean, nullable=False, default=True)
 
     pembuat: Mapped[Optional["UserMadrasah"]] = relationship(back_populates="pengumuman")
 

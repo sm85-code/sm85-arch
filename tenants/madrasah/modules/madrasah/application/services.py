@@ -975,11 +975,27 @@ async def patch_pendaftaran(session: AsyncSession, pendaftaran_id: str, payload:
     return row
 
 
-async def list_pengumuman(session: AsyncSession, limit: int = 50, unit_id: str | None = None) -> list[PengumumanMadrasah]:
+async def list_pengumuman(
+    session: AsyncSession, limit: int = 50, unit_id: str | None = None, hanya_publik: bool = False
+) -> list[PengumumanMadrasah]:
     stmt = select(PengumumanMadrasah).order_by(PengumumanMadrasah.tanggal.desc()).limit(limit)
     if unit_id:
         stmt = stmt.where(PengumumanMadrasah.madrasah_unit_id == unit_id)
+    if hanya_publik:
+        stmt = stmt.where(PengumumanMadrasah.publik.is_(True))
     return list((await session.execute(stmt)).scalars())
+
+
+def pengumuman_out(row: PengumumanMadrasah) -> dict:
+    return {
+        "id": row.id,
+        "judul": row.judul,
+        "isi": row.isi,
+        "tanggal": row.tanggal.isoformat(),
+        "dibuat_by": row.dibuat_by,
+        "madrasah_unit_id": row.madrasah_unit_id,
+        "publik": bool(getattr(row, "publik", True)),
+    }
 
 
 async def generate_spp_massal(session: AsyncSession, unit_id: str | None = None) -> list[TagihanSyahriyah]:
@@ -1800,7 +1816,34 @@ async def create_pengumuman(session: AsyncSession, payload: PengumumanIn, dibuat
     return row
 
 
-# --- Yayasan & MadrasahUnit (Fase 3): satu yayasan bisa membawahi lebih
+def _pastikan_akses_pengumuman(caller: UserMadrasah | None, row: PengumumanMadrasah) -> None:
+    if caller is None:
+        raise MadrasahForbiddenError("Tidak berwenang")
+    if caller.role in CROSS_UNIT_ROLES or "admin" in effective_roles(caller):
+        return
+    allowed = unit_ids_tugas(caller)
+    if not row.madrasah_unit_id or row.madrasah_unit_id not in allowed:
+        raise MadrasahForbiddenError("Pengumuman ini bukan milik unit Anda")
+
+
+async def patch_pengumuman(session: AsyncSession, pengumuman_id: str, payload, caller: UserMadrasah | None = None) -> PengumumanMadrasah:
+    row = await session.get(PengumumanMadrasah, pengumuman_id)
+    if not row:
+        raise MadrasahNotFoundError("Pengumuman tidak ditemukan")
+    _pastikan_akses_pengumuman(caller, row)
+    data = payload.model_dump(exclude_unset=True)
+    for field, value in data.items():
+        setattr(row, field, value)
+    await session.flush()
+    return row
+
+
+async def delete_pengumuman(session: AsyncSession, pengumuman_id: str, caller: UserMadrasah | None = None) -> None:
+    row = await session.get(PengumumanMadrasah, pengumuman_id)
+    if not row:
+        raise MadrasahNotFoundError("Pengumuman tidak ditemukan")
+    _pastikan_akses_pengumuman(caller, row)
+    await session.delete(row)
 # dari satu madrasah/unit dalam SATU database yang sama (beda dari
 # multi-tenancy existing produk ini, yang memisahkan pelanggan lewat
 # DATABASE_URL_MADRASAH terpisah per pelanggan). Pelanggan yang cuma punya

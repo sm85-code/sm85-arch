@@ -92,6 +92,9 @@ async def ensure_madrasah_schema() -> None:
             "madrasah_tahun_ajaran",
         ):
             await conn.execute(text(f"ALTER TABLE IF EXISTS {table} ADD COLUMN IF NOT EXISTS madrasah_unit_id VARCHAR(64) NULL"))
+        await conn.execute(
+            text("ALTER TABLE IF EXISTS madrasah_pengumuman ADD COLUMN IF NOT EXISTS publik BOOLEAN NOT NULL DEFAULT TRUE")
+        )
         # Unique per unit (Postgres). DROP nama unique lama kalau masih ada
         # dari skema awal. SQLite di tes unit mengabaikan ALTER ini.
         await conn.execute(text("ALTER TABLE IF EXISTS madrasah_tingkat DROP CONSTRAINT IF EXISTS madrasah_tingkat_nama_key"))

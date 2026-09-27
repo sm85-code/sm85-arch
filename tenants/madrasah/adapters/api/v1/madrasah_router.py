@@ -29,6 +29,7 @@ from tenants.madrasah.modules.madrasah.application.schemas import (
     MadrasahUnitPatch,
     PengaturanPatch,
     PengumumanIn,
+    PengumumanPatch,
     PesanIn,
     PlacementIn,
     ProgresCreateRequest,
@@ -95,7 +96,7 @@ UNIT_ADMIN_ROLES = ("admin", "kepala_sekolah", "lembaga_admin")
 KEUANGAN_ROLES = ("admin", "kepala_sekolah", "lembaga_admin", "bendahara")
 KEUANGAN_READ_ROLES = KEUANGAN_ROLES + ("yayasan_admin",)
 INFO_AKADEMIK_ROLES = ("kurikulum", "kepala_sekolah", "lembaga_admin", "admin")
-INFO_AKADEMIK_READ_ROLES = INFO_AKADEMIK_ROLES + ("yayasan_admin",)
+PENGUMUMAN_WRITE_ROLES = ("admin", "kepala_sekolah", "lembaga_admin")
 SANTRI_READ_ROLES = ("admin", "kepala_sekolah", "lembaga_admin", "yayasan_admin")
 SANTRI_WRITE_ROLES = ("admin", "kepala_sekolah", "lembaga_admin")
 ROMBEL_READ_ROLES = ("admin", "kepala_sekolah", "lembaga_admin", "kurikulum", "yayasan_admin")
@@ -352,8 +353,8 @@ async def get_pengumuman(session: AsyncSession = Depends(get_db_madrasah)):
     # Intentionally left WITHOUT an auth dependency: Landing.jsx (the public
     # homepage, route "/") calls this before any login. Adding auth here would
     # break the public announcements shown to visitors who haven't logged in.
-    rows = await services.list_pengumuman(session)
-    return [{"id": row.id, "judul": row.judul, "isi": row.isi, "tanggal": row.tanggal.isoformat(), "dibuat_by": row.dibuat_by, "madrasah_unit_id": row.madrasah_unit_id} for row in rows]
+    rows = await services.list_pengumuman(session, hanya_publik=True)
+    return [services.pengumuman_out(row) for row in rows]
 
 
 @madrasah_router.get("/kegiatan")
@@ -713,7 +714,47 @@ async def admin_pengumuman_list(
 ):
     scope = _unit_scope(user, unit_id)
     rows = await services.list_pengumuman(session, unit_id=scope)
-    return [{"id": row.id, "judul": row.judul, "isi": row.isi, "tanggal": row.tanggal.isoformat(), "dibuat_by": row.dibuat_by, "madrasah_unit_id": row.madrasah_unit_id} for row in rows]
+    return [services.pengumuman_out(row) for row in rows]
+
+
+@admin_r.post("/pengumuman", status_code=status.HTTP_201_CREATED)
+async def admin_pengumuman_create(
+    payload: PengumumanIn,
+    session: AsyncSession = Depends(get_db_madrasah),
+    user: UserMadrasah = Depends(require_roles_madrasah(*PENGUMUMAN_WRITE_ROLES)),
+):
+    row = await services.create_pengumuman(session, payload, user.id, caller=user)
+    return services.pengumuman_out(row)
+
+
+@admin_r.patch("/pengumuman/{pengumuman_id}")
+async def admin_pengumuman_patch(
+    pengumuman_id: str,
+    payload: PengumumanPatch,
+    session: AsyncSession = Depends(get_db_madrasah),
+    user: UserMadrasah = Depends(require_roles_madrasah(*PENGUMUMAN_WRITE_ROLES)),
+):
+    try:
+        row = await services.patch_pengumuman(session, pengumuman_id, payload, caller=user)
+    except services.MadrasahNotFoundError as exc:
+        raise HTTPException(status_code=404, detail=str(exc)) from exc
+    except services.MadrasahForbiddenError as exc:
+        raise HTTPException(status_code=403, detail=str(exc)) from exc
+    return services.pengumuman_out(row)
+
+
+@admin_r.delete("/pengumuman/{pengumuman_id}", status_code=status.HTTP_204_NO_CONTENT)
+async def admin_pengumuman_delete(
+    pengumuman_id: str,
+    session: AsyncSession = Depends(get_db_madrasah),
+    user: UserMadrasah = Depends(require_roles_madrasah(*PENGUMUMAN_WRITE_ROLES)),
+):
+    try:
+        await services.delete_pengumuman(session, pengumuman_id, caller=user)
+    except services.MadrasahNotFoundError as exc:
+        raise HTTPException(status_code=404, detail=str(exc)) from exc
+    except services.MadrasahForbiddenError as exc:
+        raise HTTPException(status_code=403, detail=str(exc)) from exc
 
 
 @admin_r.get("/kegiatan")
@@ -725,16 +766,6 @@ async def admin_kegiatan_list(
     scope = _unit_scope(user, unit_id)
     rows = await services.list_kegiatan(session, unit_id=scope)
     return [services.kegiatan_out(row) for row in rows]
-
-
-@admin_r.post("/pengumuman", status_code=status.HTTP_201_CREATED)
-async def admin_pengumuman_create(
-    payload: PengumumanIn,
-    session: AsyncSession = Depends(get_db_madrasah),
-    user: UserMadrasah = Depends(require_roles_madrasah(*INFO_AKADEMIK_ROLES)),
-):
-    row = await services.create_pengumuman(session, payload, user.id, caller=user)
-    return {"id": row.id, "judul": row.judul, "isi": row.isi, "tanggal": row.tanggal.isoformat(), "madrasah_unit_id": row.madrasah_unit_id}
 
 
 @admin_r.post("/kegiatan", status_code=status.HTTP_201_CREATED)
