@@ -639,10 +639,21 @@ async def admin_santri_create(
     user: UserMadrasah = Depends(require_roles_madrasah(*SANTRI_WRITE_ROLES)),
 ):
     try:
-        row = await services.create_santri(session, payload, caller=user)
+        row, wali_username, wali_password = await services.create_santri(session, payload, caller=user)
     except services.MadrasahForbiddenError as exc:
         raise HTTPException(status_code=403, detail=str(exc)) from exc
-    return {"id": row.id, "nama": row.nama, "rombel_id": row.rombel_id, "madrasah_unit_id": row.madrasah_unit_id}
+    out = {
+        "id": row.id,
+        "nama": row.nama,
+        "rombel_id": row.rombel_id,
+        "orang_tua_id": row.orang_tua_id,
+        "madrasah_unit_id": row.madrasah_unit_id,
+    }
+    if wali_username:
+        out["wali_username"] = wali_username
+    if wali_password:
+        out["wali_password_sementara"] = wali_password
+    return out
 
 
 @admin_r.get("/santri")

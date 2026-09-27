@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import os
+import re
 import secrets
 from datetime import date, datetime, timezone
 from decimal import Decimal
@@ -1365,21 +1366,63 @@ async def place_santri(session: AsyncSession, payload: PlacementIn) -> SantriMad
     return santri
 
 
+async def _cari_atau_buat_wali(
+    session: AsyncSession,
+    nama_wali: str,
+    unit_id: str | None,
+    caller: UserMadrasah | None,
+    no_hp_wali: str | None = None,
+) -> tuple[UserMadrasah, str | None]:
+    nama = nama_wali.strip()
+    stmt = select(UserMadrasah).where(
+        UserMadrasah.role == "wali_santri",
+        func.lower(UserMadrasah.nama) == nama.lower(),
+    )
+    if unit_id:
+        stmt = stmt.where(UserMadrasah.madrasah_unit_id == unit_id)
+    existing = (await session.execute(stmt)).scalars().first()
+    if existing:
+        return existing, None
+    generated = _generate_password()
+    slug = re.sub(r"[^a-z0-9]+", "", nama.lower())[:12] or "wali"
+    username = (no_hp_wali or "").strip() or f"{slug}.{secrets.token_hex(2)}"
+    row = UserMadrasah(
+        nama=nama,
+        no_hp=username,
+        password_hash=hash_password(generated),
+        role="wali_santri",
+        madrasah_unit_id=unit_id,
+    )
+    session.add(row)
+    await session.flush()
+    return row, generated
+
+
 async def create_santri(
     session: AsyncSession, payload: SantriIn, caller: UserMadrasah | None = None
-) -> SantriMadrasah:
+) -> tuple[SantriMadrasah, str | None, str | None]:
+    unit_id = await assign_unit_id(session, caller, payload.madrasah_unit_id)
+    wali_password = None
+    wali_username = None
+    orang_tua_id = payload.orang_tua_id
+    if not orang_tua_id and payload.nama_wali:
+        wali, wali_password = await _cari_atau_buat_wali(
+            session, payload.nama_wali, unit_id, caller, payload.no_hp_wali
+        )
+        orang_tua_id = wali.id
+        wali_username = wali.no_hp
     row = SantriMadrasah(
         nama=payload.nama,
         rombel_id=payload.rombel_id,
         kelas_id=payload.kelas_id or payload.rombel_id,
-        orang_tua_id=payload.orang_tua_id,
-        madrasah_unit_id=await assign_unit_id(session, caller, payload.madrasah_unit_id),
+        orang_tua_id=orang_tua_id,
+        madrasah_unit_id=unit_id,
     )
     session.add(row)
     await session.flush()
     if payload.rombel_id:
         await _catat_riwayat_penempatan(session, row.id, payload.rombel_id)
-    return row
+    return row, wali_username, wali_password
 
 
 async def patch_santri(session: AsyncSession, santri_id: str, payload: SantriPatch) -> SantriMadrasah:

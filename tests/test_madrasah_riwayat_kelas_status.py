@@ -47,7 +47,7 @@ async def _buat_rombel(session, nama: str) -> str:
 @pytest.mark.asyncio
 async def test_create_santri_with_rombel_opens_riwayat_row(session):
     rombel_id = await _buat_rombel(session, "Jilid 1 A")
-    santri = await services.create_santri(session, SantriIn(nama="Santri A", rombel_id=rombel_id))
+    santri, _, _ = await services.create_santri(session, SantriIn(nama="Santri A", rombel_id=rombel_id))
 
     riwayat = await services.riwayat_kelas_santri(session, santri.id)
     assert len(riwayat) == 1
@@ -59,7 +59,7 @@ async def test_create_santri_with_rombel_opens_riwayat_row(session):
 async def test_place_santri_closes_previous_open_row_and_opens_new_one(session):
     rombel_a = await _buat_rombel(session, "Jilid 1 A")
     rombel_b = await _buat_rombel(session, "Jilid 1 B")
-    santri = await services.create_santri(session, SantriIn(nama="Santri B", rombel_id=rombel_a))
+    santri, _, _ = await services.create_santri(session, SantriIn(nama="Santri B", rombel_id=rombel_a))
 
     await services.place_santri(session, PlacementIn(santri_id=santri.id, rombel_id=rombel_b))
 
@@ -72,8 +72,8 @@ async def test_place_santri_closes_previous_open_row_and_opens_new_one(session):
 
 @pytest.mark.asyncio
 async def test_list_santri_defaults_to_active_only(session):
-    aktif = await services.create_santri(session, SantriIn(nama="Aktif"))
-    lulus = await services.create_santri(session, SantriIn(nama="Lulus"))
+    aktif, _, _ = await services.create_santri(session, SantriIn(nama="Aktif"))
+    lulus, _, _ = await services.create_santri(session, SantriIn(nama="Lulus"))
     await services.set_status_santri(session, lulus.id, SantriStatusIn(status="lulus"))
 
     rows = await services.list_santri(session)
@@ -88,7 +88,7 @@ async def test_list_santri_defaults_to_active_only(session):
 @pytest.mark.asyncio
 async def test_set_status_lulus_closes_open_riwayat_without_deleting_santri(session):
     rombel_id = await _buat_rombel(session, "Jilid 6")
-    santri = await services.create_santri(session, SantriIn(nama="Calon Lulus", rombel_id=rombel_id))
+    santri, _, _ = await services.create_santri(session, SantriIn(nama="Calon Lulus", rombel_id=rombel_id))
 
     row = await services.set_status_santri(session, santri.id, SantriStatusIn(status="lulus"))
     assert row.status == "lulus"
@@ -106,9 +106,9 @@ async def test_set_status_lulus_closes_open_riwayat_without_deleting_santri(sess
 async def test_kenaikan_kelas_massal_moves_some_and_graduates_others(session):
     rombel_asal = await _buat_rombel(session, "Jilid 1")
     rombel_tujuan = await _buat_rombel(session, "Jilid 2")
-    naik = await services.create_santri(session, SantriIn(nama="Naik Kelas", rombel_id=rombel_asal))
-    lulus = await services.create_santri(session, SantriIn(nama="Lulus Batch", rombel_id=rombel_asal))
-    tidak_disebut = await services.create_santri(session, SantriIn(nama="Tidak Disebut", rombel_id=rombel_asal))
+    naik, _, _ = await services.create_santri(session, SantriIn(nama="Naik Kelas", rombel_id=rombel_asal))
+    lulus, _, _ = await services.create_santri(session, SantriIn(nama="Lulus Batch", rombel_id=rombel_asal))
+    tidak_disebut, _, _ = await services.create_santri(session, SantriIn(nama="Tidak Disebut", rombel_id=rombel_asal))
 
     hasil = await services.kenaikan_kelas_massal(
         session,
@@ -143,7 +143,7 @@ async def test_kenaikan_kelas_massal_rejects_unknown_santri(session):
 
 @pytest.mark.asyncio
 async def test_kenaikan_kelas_massal_rejects_unknown_target_rombel(session):
-    santri = await services.create_santri(session, SantriIn(nama="X"))
+    santri, _, _ = await services.create_santri(session, SantriIn(nama="X"))
     with pytest.raises(services.MadrasahNotFoundError):
         await services.kenaikan_kelas_massal(
             session,
