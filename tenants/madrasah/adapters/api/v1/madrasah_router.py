@@ -699,7 +699,7 @@ async def admin_santri_delete(
     user: UserMadrasah = Depends(require_roles_madrasah(*SANTRI_WRITE_ROLES)),
 ):
     try:
-        await services.delete_santri(session, santri_id)
+        await services.delete_santri(session, santri_id, caller=user)
     except services.MadrasahNotFoundError as exc:
         raise HTTPException(status_code=404, detail=str(exc)) from exc
     await services.record_audit(
@@ -1677,6 +1677,20 @@ async def admin_unit_patch(
     except services.MadrasahNotFoundError as exc:
         raise HTTPException(status_code=404, detail=str(exc)) from exc
     return services.unit_out(row)
+
+
+@admin_r.delete("/unit/{unit_id}", status_code=status.HTTP_204_NO_CONTENT)
+async def admin_unit_delete(
+    unit_id: str,
+    session: AsyncSession = Depends(get_db_madrasah),
+    user: UserMadrasah = Depends(require_roles_madrasah(*APP_ADMIN_ROLES)),
+):
+    try:
+        await services.delete_unit(session, unit_id, caller=user)
+    except services.MadrasahNotFoundError as exc:
+        raise HTTPException(status_code=404, detail=str(exc)) from exc
+    except services.MadrasahForbiddenError as exc:
+        raise HTTPException(status_code=403, detail=str(exc)) from exc
 
 
 @admin_r.get("/yayasan/rekap")

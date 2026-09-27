@@ -1713,7 +1713,7 @@ async def kenaikan_kelas_massal(session: AsyncSession, payload: KenaikanKelasReq
     return {"dipindah": dipindah, "diluluskan": diluluskan}
 
 
-async def delete_santri(session: AsyncSession, santri_id: str) -> None:
+async def delete_santri(session: AsyncSession, santri_id: str, caller: UserMadrasah | None = None) -> None:
     """Hapus permanen data santri beserta riwayat penempatan/absensi/progres
     hafalan/pesan yang menunjuk ke santri ini.
 
@@ -1724,11 +1724,10 @@ async def delete_santri(session: AsyncSession, santri_id: str) -> None:
     bisa gagal dengan IntegrityError (500) kalau santri ini masih dirujuk di
     mana pun. Sama seperti delete_guru().
 
-    Tagihan syahriyah yang belum lunas ikut dihapus (konsisten dengan
-    delete_tagihan()), tapi kalau ada yang SUDAH lunas, penghapusan santri
-    ditolak -- angkanya sudah tercermin di buku kas/jurnal, jadi hard-delete
-    akan membuat laporan keuangan tidak konsisten. Pakai status "Keluarkan"
-    untuk santri yang riwayat keuangannya harus tetap ada."""
+    Tagihan syahriyah yang belum lunas ikut dihapus. Selain Admin Utama,
+    santri yang SUDAH lunas tidak boleh dihapus -- angkanya sudah tercermin
+    di buku kas. Admin Utama boleh paksa hapus beserta tagihannya.
+    """
     row = await session.get(SantriMadrasah, santri_id)
     if not row:
         raise MadrasahNotFoundError("Santri tidak ditemukan")
@@ -1740,7 +1739,8 @@ async def delete_santri(session: AsyncSession, santri_id: str) -> None:
             .where(TagihanSyahriyah.santri_id == santri_id, TagihanSyahriyah.status_bayar.is_(True))
         )
     ).scalar_one()
-    if lunas_count:
+    admin_utama = caller is not None and (caller.role == "admin" or "admin" in effective_roles(caller))
+    if lunas_count and not admin_utama:
         raise MadrasahForbiddenError(
             'Santri ini punya riwayat tagihan yang sudah lunas -- tidak bisa dihapus permanen. '
             'Pakai status "Keluarkan" supaya riwayat keuangannya tetap utuh.'
@@ -1914,6 +1914,64 @@ async def patch_unit(session: AsyncSession, unit_id: str, payload: MadrasahUnitP
     await _ikat_kepala_ke_unit(session, row, kepala_user_id)
     await session.flush()
     return row
+
+
+async def delete_unit(session: AsyncSession, unit_id: str, caller: UserMadrasah | None = None) -> None:
+    if caller is None or (caller.role != "admin" and "admin" not in effective_roles(caller)):
+        raise MadrasahForbiddenError("Hanya Admin Utama yang dapat menghapus unit")
+    unit = await session.get(MadrasahUnit, unit_id)
+    if not unit:
+        raise MadrasahNotFoundError("Unit madrasah tidak ditemukan")
+
+    santri_ids = list(
+        (await session.execute(select(SantriMadrasah.id).where(SantriMadrasah.madrasah_unit_id == unit_id))).scalars()
+    )
+    if santri_ids:
+        await session.execute(delete(TagihanSyahriyah).where(TagihanSyahriyah.santri_id.in_(santri_ids)))
+        await session.execute(delete(RiwayatPenempatanSantri).where(RiwayatPenempatanSantri.santri_id.in_(santri_ids)))
+        await session.execute(delete(AbsensiMadrasah).where(AbsensiMadrasah.santri_id.in_(santri_ids)))
+        await session.execute(delete(ProgresHafalan).where(ProgresHafalan.santri_id.in_(santri_ids)))
+        await session.execute(delete(PesanMadrasah).where(PesanMadrasah.santri_id.in_(santri_ids)))
+        await session.execute(delete(SantriMadrasah).where(SantriMadrasah.id.in_(santri_ids)))
+
+    rombel_ids = list(
+        (await session.execute(select(RombelMadrasah.id).where(RombelMadrasah.madrasah_unit_id == unit_id))).scalars()
+    )
+    mapel_ids = list(
+        (await session.execute(select(MapelMadrasah.id).where(MapelMadrasah.madrasah_unit_id == unit_id))).scalars()
+    )
+    if rombel_ids:
+        await session.execute(delete(JadwalMadrasah).where(JadwalMadrasah.rombel_id.in_(rombel_ids)))
+        await session.execute(delete(GuruMapelRombel).where(GuruMapelRombel.rombel_id.in_(rombel_ids)))
+    if mapel_ids:
+        await session.execute(delete(MateriTarget).where(MateriTarget.mapel_id.in_(mapel_ids)))
+        await session.execute(delete(JadwalMadrasah).where(JadwalMadrasah.mapel_id.in_(mapel_ids)))
+        await session.execute(delete(GuruMapelRombel).where(GuruMapelRombel.mapel_id.in_(mapel_ids)))
+        await session.execute(delete(HonorMengajar).where(HonorMengajar.mapel_id.in_(mapel_ids)))
+
+    await session.execute(delete(PengumumanMadrasah).where(PengumumanMadrasah.madrasah_unit_id == unit_id))
+    await session.execute(delete(KegiatanMadrasah).where(KegiatanMadrasah.madrasah_unit_id == unit_id))
+    await session.execute(delete(PendaftaranSantri).where(PendaftaranSantri.madrasah_unit_id == unit_id))
+    await session.execute(delete(HonorMengajar).where(HonorMengajar.madrasah_unit_id == unit_id))
+    await session.execute(delete(JurnalMadrasah).where(JurnalMadrasah.madrasah_unit_id == unit_id))
+    await session.execute(delete(BukuKasMadrasah).where(BukuKasMadrasah.madrasah_unit_id == unit_id))
+    await session.execute(delete(MapelMadrasah).where(MapelMadrasah.madrasah_unit_id == unit_id))
+    await session.execute(delete(RombelMadrasah).where(RombelMadrasah.madrasah_unit_id == unit_id))
+    await session.execute(delete(TingkatMadrasah).where(TingkatMadrasah.madrasah_unit_id == unit_id))
+
+    tahun_ids = list(
+        (await session.execute(select(TahunAjaranMadrasah.id).where(TahunAjaranMadrasah.madrasah_unit_id == unit_id))).scalars()
+    )
+    if tahun_ids:
+        await session.execute(delete(SemesterMadrasah).where(SemesterMadrasah.tahun_ajaran_id.in_(tahun_ids)))
+        await session.execute(delete(TahunAjaranMadrasah).where(TahunAjaranMadrasah.id.in_(tahun_ids)))
+
+    await session.execute(delete(TugasMadrasah).where(TugasMadrasah.madrasah_unit_id == unit_id))
+    await session.execute(
+        update(UserMadrasah).where(UserMadrasah.madrasah_unit_id == unit_id).values(madrasah_unit_id=None)
+    )
+    await session.delete(unit)
+    await session.flush()
 
 
 async def assert_unit_boleh_dihapus(session: AsyncSession, unit_id: str) -> None:
