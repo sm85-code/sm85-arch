@@ -773,7 +773,7 @@ async def admin_kegiatan_list(
 async def admin_kegiatan_create(
     payload: KegiatanIn,
     session: AsyncSession = Depends(get_db_madrasah),
-    user: UserMadrasah = Depends(require_roles_madrasah(*INFO_AKADEMIK_ROLES)),
+    user: UserMadrasah = Depends(require_roles_madrasah(*PENGUMUMAN_WRITE_ROLES)),
 ):
     row = await services.create_kegiatan(session, payload, caller=user)
     return services.kegiatan_out(row)
@@ -783,7 +783,7 @@ async def admin_kegiatan_create(
 async def admin_kegiatan_delete(
     kegiatan_id: str,
     session: AsyncSession = Depends(get_db_madrasah),
-    _: UserMadrasah = Depends(require_roles_madrasah(*INFO_AKADEMIK_ROLES)),
+    _: UserMadrasah = Depends(require_roles_madrasah(*PENGUMUMAN_WRITE_ROLES)),
 ):
     try:
         await services.delete_kegiatan(session, kegiatan_id)
@@ -1625,7 +1625,7 @@ async def admin_yayasan_get(
 async def admin_yayasan_patch(
     payload: YayasanPatch,
     session: AsyncSession = Depends(get_db_madrasah),
-    _: UserMadrasah = Depends(require_roles_madrasah(*APP_ADMIN_ROLES)),
+    _: UserMadrasah = Depends(require_roles_madrasah(*YAYASAN_ROLES)),
 ):
     return services.yayasan_out(await services.update_yayasan(session, payload))
 
@@ -1633,9 +1633,13 @@ async def admin_yayasan_patch(
 @admin_r.get("/unit")
 async def admin_unit_list(
     session: AsyncSession = Depends(get_db_madrasah),
-    _: UserMadrasah = Depends(require_roles_madrasah(*YAYASAN_ROLES)),
+    user: UserMadrasah = Depends(require_roles_madrasah(*UNIT_ADMIN_ROLES, "yayasan_admin")),
 ):
-    return [services.unit_out(r) for r in await services.list_unit(session)]
+    rows = await services.list_unit(session)
+    if user.role in ("admin", "yayasan_admin") or "admin" in services.effective_roles(user) or "yayasan_admin" in services.effective_roles(user):
+        return [services.unit_out(r) for r in rows]
+    allowed = services.unit_ids_tugas(user)
+    return [services.unit_out(r) for r in rows if r.id in allowed]
 
 
 @admin_r.post("/unit", status_code=status.HTTP_201_CREATED)
@@ -1655,8 +1659,16 @@ async def admin_unit_patch(
     unit_id: str,
     payload: MadrasahUnitPatch,
     session: AsyncSession = Depends(get_db_madrasah),
-    _: UserMadrasah = Depends(require_roles_madrasah(*APP_ADMIN_ROLES)),
+    user: UserMadrasah = Depends(require_roles_madrasah(*UNIT_ADMIN_ROLES, "yayasan_admin")),
 ):
+    if user.role == "yayasan_admin" or (
+        "yayasan_admin" in services.effective_roles(user) and "admin" not in services.effective_roles(user)
+    ):
+        raise HTTPException(status_code=403, detail="Admin Yayasan hanya dapat melihat")
+    if "admin" not in services.effective_roles(user):
+        allowed = services.unit_ids_tugas(user)
+        if unit_id not in allowed:
+            raise HTTPException(status_code=403, detail="Tidak dapat mengubah unit lain")
     try:
         row = await services.patch_unit(session, unit_id, payload)
     except services.MadrasahNotFoundError as exc:
