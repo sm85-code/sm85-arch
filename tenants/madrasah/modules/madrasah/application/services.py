@@ -1188,7 +1188,7 @@ def _pastikan_pengelola_unit(caller: UserMadrasah | None, role: str, unit_id: st
     if role not in AKUN_BOLEH_DIKELOLA[caller.role]:
         raise MadrasahForbiddenError("Peran ini hanya boleh mengelola akun pegawai di unitnya")
     if not caller.madrasah_unit_id or unit_id != caller.madrasah_unit_id:
-        raise MadrasahForbiddenError("Akun hanya boleh di unit ini")
+        raise MadrasahForbiddenError("Akun Kepala/Admin Lembaga belum terikat unit, atau unit tidak sama")
 
 
 async def create_guru(

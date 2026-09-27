@@ -522,7 +522,7 @@ async def admin_akun_delete(
 async def admin_guru(
     unit_id: str | None = Query(default=None),
     session: AsyncSession = Depends(get_db_madrasah),
-    user: UserMadrasah = Depends(require_roles_madrasah(*ADMIN_ROLES, *KURIKULUM_ROLES)),
+    user: UserMadrasah = Depends(require_roles_madrasah(*UNIT_ADMIN_ROLES, "yayasan_admin", "kurikulum")),
 ):
     scope = _unit_scope(user, unit_id)
     return [services.user_out(r) for r in await services.list_guru(session, unit_id=scope)]
