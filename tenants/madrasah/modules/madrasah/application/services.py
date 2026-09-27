@@ -1166,7 +1166,7 @@ async def delete_rombel(session: AsyncSession, rombel_id: str) -> None:
 
 
 async def list_guru(session: AsyncSession, unit_id: str | None = None) -> list[UserMadrasah]:
-    stmt = select(UserMadrasah).where(UserMadrasah.role.in_(["wali_kelas", "guru", "kepala_sekolah", "lembaga_admin", "kurikulum", "bendahara"])).order_by(UserMadrasah.nama)
+    stmt = select(UserMadrasah).where(UserMadrasah.role.in_(STAF_UNIT_ROLES)).order_by(UserMadrasah.nama)
     if unit_id:
         stmt = stmt.where(UserMadrasah.madrasah_unit_id == unit_id)
     return list((await session.execute(stmt)).scalars())
@@ -1192,6 +1192,7 @@ async def list_semua_akun(session: AsyncSession, unit_id: str | None = None) -> 
     return list((await session.execute(stmt)).scalars())
 
 
+STAF_UNIT_ROLES = ("guru", "wali_kelas", "kepala_sekolah", "lembaga_admin", "kurikulum", "bendahara")
 PENGELOLA_UNIT = frozenset({"kepala_sekolah", "lembaga_admin"})
 PEGAWAI_UNIT = frozenset({"kurikulum", "bendahara", "wali_kelas", "guru", "wali_santri"})
 # Kepala boleh menunjuk admin lembaga sebagai cadangan. Admin lembaga
@@ -1760,7 +1761,7 @@ async def rekap_yayasan(session: AsyncSession) -> list[dict]:
                 .select_from(UserMadrasah)
                 .where(
                     UserMadrasah.madrasah_unit_id == unit.id,
-                    UserMadrasah.role.in_(("guru", "wali_kelas", "kepala_sekolah", "lembaga_admin", "kurikulum", "bendahara")),
+                    UserMadrasah.role.in_(STAF_UNIT_ROLES),
                 )
             )
         ).scalar_one()
@@ -1814,7 +1815,7 @@ async def rekap_yayasan(session: AsyncSession) -> list[dict]:
 
 async def rekap_umum(session: AsyncSession, unit_id: str | None = None) -> dict:
     santri_q = select(func.count()).select_from(SantriMadrasah)
-    guru_q = select(func.count()).select_from(UserMadrasah).where(UserMadrasah.role.in_(("guru", "wali_kelas")))
+    guru_q = select(func.count()).select_from(UserMadrasah).where(UserMadrasah.role.in_(STAF_UNIT_ROLES))
     rombel_q = select(func.count()).select_from(RombelMadrasah)
     lunas_q = (
         select(func.count())
