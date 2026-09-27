@@ -6,7 +6,7 @@ from datetime import date, datetime, timezone
 from decimal import Decimal
 from typing import Optional
 
-from sqlalchemy import Boolean, Date, DateTime, ForeignKey, Integer, Numeric, String, Text
+from sqlalchemy import Boolean, Date, DateTime, ForeignKey, Integer, Numeric, String, Text, UniqueConstraint
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 
 from tenants.madrasah.modules.madrasah.infrastructure.database import MadrasahBase
@@ -127,15 +127,10 @@ class SemesterMadrasah(MadrasahBase):
 
 class TingkatMadrasah(MadrasahBase):
     __tablename__ = "madrasah_tingkat"
+    __table_args__ = (UniqueConstraint("madrasah_unit_id", "nama", name="uq_tingkat_unit_nama"),)
 
     id: Mapped[str] = mapped_column(String(64), primary_key=True, default=_uuid)
-    # `nama` masih unique GLOBAL (bukan per-unit) -- keterbatasan yang
-    # sengaja dipertahankan untuk fase ini: mengubah jadi unique(nama,
-    # madrasah_unit_id) butuh drop+recreate constraint yang berisiko di
-    # Postgres produksi lewat ALTER mentah. Untuk sekarang, dua unit di
-    # yayasan yang sama harus memberi nama tingkat yang berbeda satu sama
-    # lain (mis. "Jilid 1 - Unit A" vs "Jilid 1 - Unit B").
-    nama: Mapped[str] = mapped_column(String(128), nullable=False, unique=True)
+    nama: Mapped[str] = mapped_column(String(128), nullable=False)
     urutan: Mapped[int] = mapped_column(Integer, nullable=False, default=1)
     madrasah_unit_id: Mapped[Optional[str]] = mapped_column(
         String(64), ForeignKey("madrasah_unit.id", ondelete="SET NULL"), nullable=True, index=True
@@ -146,9 +141,10 @@ class TingkatMadrasah(MadrasahBase):
 
 class RombelMadrasah(MadrasahBase):
     __tablename__ = "madrasah_rombel"
+    __table_args__ = (UniqueConstraint("madrasah_unit_id", "nama", name="uq_rombel_unit_nama"),)
 
     id: Mapped[str] = mapped_column(String(64), primary_key=True, default=_uuid)
-    nama: Mapped[str] = mapped_column(String(128), nullable=False, unique=True)
+    nama: Mapped[str] = mapped_column(String(128), nullable=False)
     tingkat_id: Mapped[Optional[str]] = mapped_column(
         String(64), ForeignKey("madrasah_tingkat.id", ondelete="SET NULL"), nullable=True, index=True
     )
@@ -238,9 +234,10 @@ class RiwayatPenempatanSantri(MadrasahBase):
 
 class MapelMadrasah(MadrasahBase):
     __tablename__ = "madrasah_mapel"
+    __table_args__ = (UniqueConstraint("madrasah_unit_id", "kode", name="uq_mapel_unit_kode"),)
 
     id: Mapped[str] = mapped_column(String(64), primary_key=True, default=_uuid)
-    kode: Mapped[str] = mapped_column(String(32), nullable=False, unique=True)
+    kode: Mapped[str] = mapped_column(String(32), nullable=False)
     nama: Mapped[str] = mapped_column(String(128), nullable=False)
     madrasah_unit_id: Mapped[Optional[str]] = mapped_column(
         String(64), ForeignKey("madrasah_unit.id", ondelete="SET NULL"), nullable=True, index=True
