@@ -843,6 +843,33 @@ async def ben_menunggu(
     return [services.tagihan_out(r) for r in await services.list_tagihan_menunggu(session)]
 
 
+@bendahara_r.get("/spp")
+async def ben_spp_semua(
+    bulan_tahun: str | None = None,
+    session: AsyncSession = Depends(get_db_madrasah),
+    _: UserMadrasah = Depends(require_roles_madrasah(*BENDAHARA_ROLES)),
+):
+    return [services.tagihan_out(r) for r in await services.list_tagihan_semua(session, bulan_tahun)]
+
+
+@bendahara_r.delete("/spp/{id}", status_code=status.HTTP_204_NO_CONTENT)
+async def ben_delete_spp(
+    id: str,
+    request: Request,
+    session: AsyncSession = Depends(get_db_madrasah),
+    user: UserMadrasah = Depends(require_roles_madrasah(*BENDAHARA_ROLES)),
+):
+    try:
+        await services.delete_tagihan(session, id)
+    except services.MadrasahNotFoundError as exc:
+        raise HTTPException(status_code=404, detail=str(exc)) from exc
+    except services.MadrasahForbiddenError as exc:
+        raise HTTPException(status_code=403, detail=str(exc)) from exc
+    await services.record_audit(
+        session, aktor=user, aksi="hapus_tagihan", entitas="madrasah_tagihan_syahriyah", entitas_id=id, ip=_client_ip(request)
+    )
+
+
 @bendahara_r.post("/spp/pay/{id}")
 async def ben_pay(
     id: str,
