@@ -86,6 +86,28 @@ class UserMadrasah(MadrasahBase):
     absensi_dicatat: Mapped[list["AbsensiMadrasah"]] = relationship(back_populates="guru")
     pengumuman: Mapped[list["PengumumanMadrasah"]] = relationship(back_populates="pembuat")
     rombel_asuh: Mapped[list["RombelMadrasah"]] = relationship(back_populates="wali_kelas")
+    tugas: Mapped[list["TugasMadrasah"]] = relationship(back_populates="user")
+
+
+class TugasMadrasah(MadrasahBase):
+    """Satu orang bisa punya banyak tugas di banyak unit.
+
+    jenis: guru_mapel | kepala_sekolah | lembaga_admin | kurikulum | bendahara | wali_kelas
+    """
+
+    __tablename__ = "madrasah_tugas"
+    __table_args__ = (UniqueConstraint("user_id", "madrasah_unit_id", "jenis", name="uq_tugas_user_unit_jenis"),)
+
+    id: Mapped[str] = mapped_column(String(64), primary_key=True, default=_uuid)
+    user_id: Mapped[str] = mapped_column(
+        String(64), ForeignKey("madrasah_users.id", ondelete="CASCADE"), nullable=False, index=True
+    )
+    madrasah_unit_id: Mapped[str] = mapped_column(
+        String(64), ForeignKey("madrasah_unit.id", ondelete="CASCADE"), nullable=False, index=True
+    )
+    jenis: Mapped[str] = mapped_column(String(32), nullable=False, index=True)
+
+    user: Mapped["UserMadrasah"] = relationship(back_populates="tugas")
 
 
 class TahunAjaranMadrasah(MadrasahBase):

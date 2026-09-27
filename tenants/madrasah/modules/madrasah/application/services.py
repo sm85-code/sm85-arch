@@ -75,6 +75,7 @@ from tenants.madrasah.modules.madrasah.infrastructure.models import (
     TagihanSyahriyah,
     TahunAjaranMadrasah,
     TingkatMadrasah,
+    TugasMadrasah,
     UserMadrasah,
     Yayasan,
 )
@@ -118,6 +119,45 @@ class MadrasahForbiddenError(Exception):
 
 
 CROSS_UNIT_ROLES = frozenset({"admin", "yayasan_admin"})
+JENIS_TUGAS = frozenset({"guru_mapel", "kepala_sekolah", "lembaga_admin", "kurikulum", "bendahara", "wali_kelas"})
+TUGAS_KE_ROLE = {
+    "guru_mapel": "guru",
+    "kepala_sekolah": "kepala_sekolah",
+    "lembaga_admin": "lembaga_admin",
+    "kurikulum": "kurikulum",
+    "bendahara": "bendahara",
+    "wali_kelas": "wali_kelas",
+}
+ROLE_KE_JENIS = {v: k for k, v in TUGAS_KE_ROLE.items()}
+ROLE_KE_JENIS["guru"] = "guru_mapel"
+
+
+def _tugas_rows(user: UserMadrasah | None) -> list:
+    if user is None:
+        return []
+    loaded = getattr(user, "tugas", None)
+    return list(loaded) if loaded is not None else []
+
+
+def effective_roles(user: UserMadrasah | None) -> set[str]:
+    if user is None:
+        return set()
+    roles = {(user.role or "").strip().lower()}
+    for row in _tugas_rows(user):
+        roles.add(TUGAS_KE_ROLE.get(row.jenis, row.jenis))
+    return {r for r in roles if r}
+
+
+def unit_ids_tugas(user: UserMadrasah | None) -> set[str]:
+    ids: set[str] = set()
+    if user is None:
+        return ids
+    if user.madrasah_unit_id:
+        ids.add(user.madrasah_unit_id)
+    for row in _tugas_rows(user):
+        if row.madrasah_unit_id:
+            ids.add(row.madrasah_unit_id)
+    return ids
 
 
 def resolve_unit_scope(caller: UserMadrasah | None, requested_unit_id: str | None = None) -> str | None:
@@ -131,12 +171,17 @@ def resolve_unit_scope(caller: UserMadrasah | None, requested_unit_id: str | Non
         return requested_unit_id
     if caller.role == "wali_santri":
         return None
-    if caller.role in CROSS_UNIT_ROLES:
+    if caller.role in CROSS_UNIT_ROLES or "admin" in effective_roles(caller) or "yayasan_admin" in effective_roles(caller):
         return requested_unit_id or None
+    allowed = unit_ids_tugas(caller)
+    if not allowed and not caller.madrasah_unit_id:
+        raise MadrasahForbiddenError("Akun ini belum terikat unit madrasah")
+    if requested_unit_id:
+        if requested_unit_id not in allowed:
+            raise MadrasahForbiddenError("Tidak dapat mengakses unit lain")
+        return requested_unit_id
     if not caller.madrasah_unit_id:
         raise MadrasahForbiddenError("Akun ini belum terikat unit madrasah")
-    if requested_unit_id and requested_unit_id != caller.madrasah_unit_id:
-        raise MadrasahForbiddenError("Tidak dapat mengakses unit lain")
     return caller.madrasah_unit_id
 
 
@@ -340,11 +385,17 @@ async def tutup_semester(session: AsyncSession, semester_id: str) -> SemesterMad
 
 
 def user_out(user: UserMadrasah, *, password_sementara: str | None = None) -> dict:
+    tugas = [
+        {"id": t.id, "jenis": t.jenis, "madrasah_unit_id": t.madrasah_unit_id}
+        for t in _tugas_rows(user)
+    ]
     out = {
         "id": user.id,
         "nama": user.nama,
         "no_hp": user.no_hp,
         "role": user.role,
+        "roles": sorted(effective_roles(user)),
+        "tugas": tugas,
         "madrasah_unit_id": user.madrasah_unit_id,
     }
     if password_sementara:
@@ -353,6 +404,117 @@ def user_out(user: UserMadrasah, *, password_sementara: str | None = None) -> di
         # disimpan/di-return lagi setelahnya karena cuma hash yang tersimpan.
         out["password_sementara"] = password_sementara
     return out
+
+
+def boleh_menugaskan(caller: UserMadrasah | None, jenis: str, unit_id: str | None) -> None:
+    if caller is None:
+        raise MadrasahForbiddenError("Tidak dapat menugaskan")
+    if jenis not in JENIS_TUGAS:
+        raise MadrasahForbiddenError("Jenis tugas tidak dikenal")
+    roles = effective_roles(caller)
+    if "admin" in roles:
+        return
+    if "yayasan_admin" in roles:
+        return
+    if "kepala_sekolah" in roles or "lembaga_admin" in roles:
+        if jenis == "kepala_sekolah":
+            raise MadrasahForbiddenError("Penugasan Kepala Madrasah hanya oleh Admin Yayasan atau Admin Utama")
+        if jenis not in {"guru_mapel", "bendahara", "kurikulum", "wali_kelas", "lembaga_admin"}:
+            raise MadrasahForbiddenError("Tugas ini tidak dapat diberikan dari unit")
+        if "lembaga_admin" in roles and "kepala_sekolah" not in roles and jenis == "lembaga_admin":
+            raise MadrasahForbiddenError("Admin Lembaga tidak dapat menunjuk Admin Lembaga lain")
+        if not caller.madrasah_unit_id or unit_id != caller.madrasah_unit_id:
+            raise MadrasahForbiddenError("Penugasan lintas unit hanya oleh Admin Yayasan atau Admin Utama")
+        return
+    raise MadrasahForbiddenError("Tidak berwenang menugaskan")
+
+
+async def list_tugas(session: AsyncSession, unit_id: str | None = None, user_id: str | None = None) -> list[TugasMadrasah]:
+    stmt = select(TugasMadrasah).options(selectinload(TugasMadrasah.user)).order_by(TugasMadrasah.jenis)
+    if unit_id:
+        stmt = stmt.where(TugasMadrasah.madrasah_unit_id == unit_id)
+    if user_id:
+        stmt = stmt.where(TugasMadrasah.user_id == user_id)
+    return list((await session.execute(stmt)).scalars())
+
+
+async def load_tugas(session: AsyncSession, user: UserMadrasah) -> UserMadrasah:
+    rows = list((await session.execute(select(TugasMadrasah).where(TugasMadrasah.user_id == user.id))).scalars())
+    user.tugas = rows
+    return user
+
+
+async def backfill_tugas_dari_role(session: AsyncSession, user: UserMadrasah) -> None:
+    if user.role in ("admin", "yayasan_admin", "wali_santri"):
+        return
+    if not user.madrasah_unit_id:
+        return
+    jenis = ROLE_KE_JENIS.get(user.role)
+    if not jenis:
+        return
+    ada = (
+        await session.execute(
+            select(TugasMadrasah.id).where(
+                TugasMadrasah.user_id == user.id,
+                TugasMadrasah.madrasah_unit_id == user.madrasah_unit_id,
+                TugasMadrasah.jenis == jenis,
+            )
+        )
+    ).scalar_one_or_none()
+    if ada:
+        return
+    session.add(TugasMadrasah(user_id=user.id, madrasah_unit_id=user.madrasah_unit_id, jenis=jenis))
+    await session.flush()
+
+
+async def create_tugas(session: AsyncSession, payload, caller: UserMadrasah) -> TugasMadrasah:
+    unit_id = payload.madrasah_unit_id or caller.madrasah_unit_id
+    if not unit_id:
+        raise MadrasahForbiddenError("Unit wajib dipilih")
+    boleh_menugaskan(caller, payload.jenis, unit_id)
+    target = await session.get(UserMadrasah, payload.user_id)
+    if not target:
+        raise MadrasahNotFoundError("Akun tidak ditemukan")
+    if target.role in ("admin", "yayasan_admin"):
+        raise MadrasahForbiddenError("Admin Utama dan Admin Yayasan tidak memakai tugas unit")
+    existing = (
+        await session.execute(
+            select(TugasMadrasah).where(
+                TugasMadrasah.user_id == payload.user_id,
+                TugasMadrasah.madrasah_unit_id == unit_id,
+                TugasMadrasah.jenis == payload.jenis,
+            )
+        )
+    ).scalar_one_or_none()
+    if existing:
+        return existing
+    row = TugasMadrasah(user_id=payload.user_id, madrasah_unit_id=unit_id, jenis=payload.jenis)
+    session.add(row)
+    if payload.jenis == "kepala_sekolah":
+        unit = await session.get(MadrasahUnit, unit_id)
+        if unit:
+            unit.kepala_unit = target.nama
+            target.madrasah_unit_id = target.madrasah_unit_id or unit_id
+    await session.flush()
+    return row
+
+
+async def delete_tugas(session: AsyncSession, tugas_id: str, caller: UserMadrasah) -> None:
+    row = await session.get(TugasMadrasah, tugas_id)
+    if not row:
+        raise MadrasahNotFoundError("Tugas tidak ditemukan")
+    boleh_menugaskan(caller, row.jenis, row.madrasah_unit_id)
+    await session.delete(row)
+
+
+def tugas_out(row: TugasMadrasah) -> dict:
+    return {
+        "id": row.id,
+        "user_id": row.user_id,
+        "user": row.user.nama if getattr(row, "user", None) else None,
+        "jenis": row.jenis,
+        "madrasah_unit_id": row.madrasah_unit_id,
+    }
 
 
 def _generate_password() -> str:
@@ -1990,6 +2152,20 @@ async def assign_guru_mapel(session: AsyncSession, payload: PenugasanIn) -> Guru
         guru_id=payload.guru_id, mapel_id=payload.mapel_id, rombel_id=payload.rombel_id, tarif_per_sesi=payload.tarif_per_sesi
     )
     session.add(row)
+    guru = await session.get(UserMadrasah, payload.guru_id)
+    rombel = await session.get(RombelMadrasah, payload.rombel_id)
+    if guru and rombel and rombel.madrasah_unit_id:
+        existing_tugas = (
+            await session.execute(
+                select(TugasMadrasah.id).where(
+                    TugasMadrasah.user_id == guru.id,
+                    TugasMadrasah.madrasah_unit_id == rombel.madrasah_unit_id,
+                    TugasMadrasah.jenis == "guru_mapel",
+                )
+            )
+        ).scalar_one_or_none()
+        if not existing_tugas:
+            session.add(TugasMadrasah(user_id=guru.id, madrasah_unit_id=rombel.madrasah_unit_id, jenis="guru_mapel"))
     await session.flush()
     return row
 
