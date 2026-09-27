@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import os
+import secrets
 from datetime import date, datetime, timezone
 from decimal import Decimal
 
@@ -232,8 +233,18 @@ async def tutup_semester(session: AsyncSession, semester_id: str) -> SemesterMad
     return row
 
 
-def user_out(user: UserMadrasah) -> dict:
-    return {"id": user.id, "nama": user.nama, "no_hp": user.no_hp, "role": user.role}
+def user_out(user: UserMadrasah, *, password_sementara: str | None = None) -> dict:
+    out = {"id": user.id, "nama": user.nama, "no_hp": user.no_hp, "role": user.role}
+    if password_sementara:
+        # Cuma disertakan sekali, langsung setelah create_guru/create_wali_santri
+        # menghasilkan password acak (payload.password kosong) -- tidak pernah
+        # disimpan/di-return lagi setelahnya karena cuma hash yang tersimpan.
+        out["password_sementara"] = password_sementara
+    return out
+
+
+def _generate_password() -> str:
+    return secrets.token_urlsafe(9)
 
 
 async def update_profil_saya(session: AsyncSession, user: UserMadrasah, payload: ProfilPatch) -> UserMadrasah:
@@ -965,17 +976,28 @@ async def list_semua_akun(session: AsyncSession) -> list[UserMadrasah]:
     return list((await session.execute(select(UserMadrasah).order_by(UserMadrasah.role, UserMadrasah.nama))).scalars())
 
 
-async def create_guru(session: AsyncSession, payload: GuruIn) -> UserMadrasah:
+async def create_guru(session: AsyncSession, payload: GuruIn) -> tuple[UserMadrasah, str | None]:
+    """Return (row, password_sementara) -- password_sementara diisi hanya
+    kalau payload.password kosong (server yang membuatkan password acak),
+    None kalau admin sudah menentukan passwordnya sendiri."""
+    generated = None if payload.password else _generate_password()
     row = UserMadrasah(
         nama=payload.nama,
         no_hp=payload.no_hp.strip(),
-        password_hash=hash_password(payload.password),
+        password_hash=hash_password(payload.password or generated),
         role=payload.role or "wali_kelas",
         madrasah_unit_id=payload.madrasah_unit_id or await _default_unit_id(session),
     )
     session.add(row)
     await session.flush()
-    return row
+    return row, generated
+
+
+async def _count_admin(session: AsyncSession, exclude_id: str | None = None) -> int:
+    stmt = select(func.count()).select_from(UserMadrasah).where(UserMadrasah.role == "admin")
+    if exclude_id:
+        stmt = stmt.where(UserMadrasah.id != exclude_id)
+    return (await session.execute(stmt)).scalar_one()
 
 
 async def _count_admin(session: AsyncSession, exclude_id: str | None = None) -> int:
@@ -1043,17 +1065,18 @@ async def delete_guru(session: AsyncSession, user_id: str) -> None:
     await session.delete(row)
 
 
-async def create_wali_santri(session: AsyncSession, payload: GuruIn) -> UserMadrasah:
+async def create_wali_santri(session: AsyncSession, payload: GuruIn) -> tuple[UserMadrasah, str | None]:
+    generated = None if payload.password else _generate_password()
     row = UserMadrasah(
         nama=payload.nama,
         no_hp=payload.no_hp.strip(),
-        password_hash=hash_password(payload.password),
+        password_hash=hash_password(payload.password or generated),
         role="wali_santri",
         madrasah_unit_id=payload.madrasah_unit_id or await _default_unit_id(session),
     )
     session.add(row)
     await session.flush()
-    return row
+    return row, generated
 
 
 async def _tutup_riwayat_terbuka(session: AsyncSession, santri_id: str, tanggal: date | None = None) -> None:
