@@ -470,6 +470,31 @@ async def list_tagihan_menunggu(session: AsyncSession) -> list[TagihanSyahriyah]
     return list((await session.execute(stmt)).scalars())
 
 
+async def list_tagihan_semua(session: AsyncSession, bulan_tahun: str | None = None) -> list[TagihanSyahriyah]:
+    """Semua tagihan syahriyah (lunas maupun belum), dipakai bendahara untuk
+    meninjau dan membersihkan tagihan yang salah generate -- beda dari
+    list_tagihan_menunggu yang hanya menampilkan pengajuan pembayaran dari
+    wali kelas."""
+    stmt = select(TagihanSyahriyah).options(selectinload(TagihanSyahriyah.santri)).order_by(TagihanSyahriyah.bulan_tahun.desc())
+    if bulan_tahun:
+        stmt = stmt.where(TagihanSyahriyah.bulan_tahun == bulan_tahun)
+    return list((await session.execute(stmt)).scalars())
+
+
+async def delete_tagihan(session: AsyncSession, tagihan_id: str) -> None:
+    """Tagihan yang sudah lunas tidak boleh dihapus lewat sini -- angkanya
+    sudah tercermin di buku kas/jurnal dan laporan laba rugi, jadi
+    menghapusnya diam-diam akan membuat laporan keuangan tidak konsisten
+    dengan riwayat pembayaran. Batalkan tagihan yang salah selagi masih
+    belum dibayar."""
+    row = await session.get(TagihanSyahriyah, tagihan_id)
+    if not row:
+        raise MadrasahNotFoundError("Tagihan tidak ditemukan")
+    if row.status_bayar:
+        raise MadrasahForbiddenError("Tidak bisa menghapus tagihan yang sudah lunas")
+    await session.delete(row)
+
+
 async def ajukan_pembayaran(session: AsyncSession, guru: UserMadrasah, tagihan_id: str) -> TagihanSyahriyah:
     row = await session.get(TagihanSyahriyah, tagihan_id)
     if not row:
