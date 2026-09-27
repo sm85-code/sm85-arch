@@ -1410,7 +1410,7 @@ async def keuangan_honor_pay(
 async def admin_audit_log(
     limit: int = Query(default=200, le=500),
     session: AsyncSession = Depends(get_db_madrasah),
-    _: UserMadrasah = Depends(require_roles_madrasah(*ADMIN_ROLES)),
+    _: UserMadrasah = Depends(require_roles_madrasah(*APP_ADMIN_ROLES)),
 ):
     return [services.audit_out(r) for r in await services.list_audit_log(session, limit)]
 
