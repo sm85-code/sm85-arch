@@ -927,10 +927,12 @@ async def kur_materi_delete(
 @kurikulum_r.get("/jadwal")
 async def kur_jadwal(
     rombel_id: str | None = Query(default=None),
+    unit_id: str | None = Query(default=None),
     session: AsyncSession = Depends(get_db_madrasah),
-    _: UserMadrasah = Depends(require_roles_madrasah(*KURIKULUM_ROLES)),
+    user: UserMadrasah = Depends(require_roles_madrasah(*KURIKULUM_READ_ROLES)),
 ):
-    return [{"id": r.id, "rombel_id": r.rombel_id, "mapel_id": r.mapel_id, "mapel": r.mapel.nama if r.mapel else None, "hari": r.hari, "jam_mulai": r.jam_mulai, "jam_selesai": r.jam_selesai} for r in await services.list_jadwal(session, rombel_id)]
+    scope = _unit_scope(user, unit_id)
+    return [{"id": r.id, "rombel_id": r.rombel_id, "mapel_id": r.mapel_id, "mapel": r.mapel.nama if r.mapel else None, "hari": r.hari, "jam_mulai": r.jam_mulai, "jam_selesai": r.jam_selesai} for r in await services.list_jadwal(session, rombel_id, unit_id=scope)]
 
 
 @kurikulum_r.post("/jadwal", status_code=status.HTTP_201_CREATED)
@@ -1659,12 +1661,10 @@ async def admin_semester_tutup(
 @madrasah_router.get("/semester/aktif")
 async def get_semester_aktif(
     session: AsyncSession = Depends(get_db_madrasah),
-    _: UserMadrasah = Depends(require_roles_madrasah(*ANY_AUTHENTICATED)),
+    user: UserMadrasah = Depends(require_roles_madrasah(*ANY_AUTHENTICATED)),
 ):
-    # Dibaca setiap portal (bukan cuma admin) supaya frontend bisa
-    # menampilkan periode akademik yang sedang berjalan di header, dan
-    # menonaktifkan form input kalau belum ada semester yang diaktifkan.
-    row = await services.get_semester_aktif(session)
+    scope = _unit_scope(user)
+    row = await services.get_semester_aktif(session, unit_id=scope)
     return services.semester_out(row) if row else None
 
 

@@ -267,13 +267,15 @@ async def list_semester(session: AsyncSession, unit_id: str | None = None) -> li
     return list((await session.execute(stmt)).scalars())
 
 
-async def get_semester_aktif(session: AsyncSession) -> SemesterMadrasah | None:
+async def get_semester_aktif(session: AsyncSession, unit_id: str | None = None) -> SemesterMadrasah | None:
     stmt = (
         select(SemesterMadrasah)
         .options(selectinload(SemesterMadrasah.tahun_ajaran))
         .where(SemesterMadrasah.status == "aktif")
-        .limit(1)
     )
+    if unit_id:
+        stmt = stmt.join(TahunAjaranMadrasah).where(TahunAjaranMadrasah.madrasah_unit_id == unit_id)
+    stmt = stmt.limit(1)
     return (await session.execute(stmt)).scalar_one_or_none()
 
 
@@ -1864,10 +1866,14 @@ async def patch_materi(session: AsyncSession, materi_id: str, payload: MateriPat
     return row
 
 
-async def list_jadwal(session: AsyncSession, rombel_id: str | None = None) -> list[JadwalMadrasah]:
+async def list_jadwal(session: AsyncSession, rombel_id: str | None = None, unit_id: str | None = None) -> list[JadwalMadrasah]:
     stmt = select(JadwalMadrasah).options(selectinload(JadwalMadrasah.mapel), selectinload(JadwalMadrasah.rombel))
     if rombel_id:
         stmt = stmt.where(JadwalMadrasah.rombel_id == rombel_id)
+    if unit_id:
+        stmt = stmt.join(RombelMadrasah, JadwalMadrasah.rombel_id == RombelMadrasah.id).where(
+            RombelMadrasah.madrasah_unit_id == unit_id
+        )
     return list((await session.execute(stmt)).scalars())
 
 
