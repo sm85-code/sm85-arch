@@ -959,26 +959,29 @@ async def kur_rombel_patch(
 @bendahara_r.post("/spp/generate", status_code=status.HTTP_201_CREATED)
 async def ben_generate(
     session: AsyncSession = Depends(get_db_madrasah),
-    _: UserMadrasah = Depends(require_roles_madrasah(*BENDAHARA_ROLES)),
+    user: UserMadrasah = Depends(require_roles_madrasah(*KEUANGAN_ROLES)),
 ):
-    return [services.tagihan_out(r) for r in await services.generate_spp_massal(session)]
+    scope = _unit_scope(user)
+    return [services.tagihan_out(r) for r in await services.generate_spp_massal(session, unit_id=scope)]
 
 
 @bendahara_r.get("/spp/menunggu")
 async def ben_menunggu(
     session: AsyncSession = Depends(get_db_madrasah),
-    _: UserMadrasah = Depends(require_roles_madrasah(*BENDAHARA_ROLES)),
+    user: UserMadrasah = Depends(require_roles_madrasah(*KEUANGAN_READ_ROLES)),
 ):
-    return [services.tagihan_out(r) for r in await services.list_tagihan_menunggu(session)]
+    scope = _unit_scope(user)
+    return [services.tagihan_out(r) for r in await services.list_tagihan_menunggu(session, unit_id=scope)]
 
 
 @bendahara_r.get("/spp")
 async def ben_spp_semua(
     bulan_tahun: str | None = None,
     session: AsyncSession = Depends(get_db_madrasah),
-    _: UserMadrasah = Depends(require_roles_madrasah(*BENDAHARA_ROLES)),
+    user: UserMadrasah = Depends(require_roles_madrasah(*KEUANGAN_READ_ROLES)),
 ):
-    return [services.tagihan_out(r) for r in await services.list_tagihan_semua(session, bulan_tahun)]
+    scope = _unit_scope(user)
+    return [services.tagihan_out(r) for r in await services.list_tagihan_semua(session, bulan_tahun, unit_id=scope)]
 
 
 @bendahara_r.delete("/spp/{id}", status_code=status.HTTP_204_NO_CONTENT)
@@ -1219,10 +1222,12 @@ async def ws_tagihan(
 @kurikulum_r.get("/guru-mapel")
 async def kur_guru_mapel_list(
     guru_id: str | None = Query(default=None),
+    unit_id: str | None = Query(default=None),
     session: AsyncSession = Depends(get_db_madrasah),
-    _: UserMadrasah = Depends(require_roles_madrasah(*KURIKULUM_ROLES)),
+    user: UserMadrasah = Depends(require_roles_madrasah(*KURIKULUM_READ_ROLES)),
 ):
-    rows = await services.list_penugasan(session, guru_id)
+    scope = _unit_scope(user, unit_id)
+    rows = await services.list_penugasan(session, guru_id, unit_id=scope)
     return [
         {
             "id": r.id,
@@ -1340,10 +1345,12 @@ async def gm_rapor(
 @keuangan_r.get("/buku-kas")
 async def keuangan_buku_kas_list(
     bulan: str | None = Query(None, description="Filter YYYY-MM"),
+    unit_id: str | None = Query(default=None),
     session: AsyncSession = Depends(get_db_madrasah),
-    _: UserMadrasah = Depends(require_roles_madrasah(*KEUANGAN_READ_ROLES)),
+    user: UserMadrasah = Depends(require_roles_madrasah(*KEUANGAN_READ_ROLES)),
 ):
-    rows = await services.list_buku_kas(session, bulan)
+    scope = _unit_scope(user, unit_id)
+    rows = await services.list_buku_kas(session, bulan, unit_id=scope)
     return [services.buku_kas_out(r) for r in rows]
 
 
@@ -1352,9 +1359,10 @@ async def keuangan_buku_kas_create(
     payload: BukuKasIn,
     request: Request,
     session: AsyncSession = Depends(get_db_madrasah),
-    user: UserMadrasah = Depends(require_roles_madrasah(*SANTRI_WRITE_ROLES)),
+    user: UserMadrasah = Depends(require_roles_madrasah(*KEUANGAN_ROLES)),
 ):
-    row = await services.create_buku_kas_entry(session, payload, dicatat_oleh=user.id)
+    scope = _unit_scope(user)
+    row = await services.create_buku_kas_entry(session, payload, dicatat_oleh=user.id, unit_id=scope)
     await services.record_audit(
         session,
         aktor=user,
@@ -1367,13 +1375,45 @@ async def keuangan_buku_kas_create(
     return services.buku_kas_out(row)
 
 
+@keuangan_r.patch("/buku-kas/{entry_id}")
+async def keuangan_buku_kas_patch(
+    entry_id: str,
+    payload: BukuKasIn,
+    session: AsyncSession = Depends(get_db_madrasah),
+    user: UserMadrasah = Depends(require_roles_madrasah(*KEUANGAN_ROLES)),
+):
+    try:
+        row = await services.patch_buku_kas_entry(session, entry_id, payload, caller=user)
+    except services.MadrasahNotFoundError as exc:
+        raise HTTPException(status_code=404, detail=str(exc)) from exc
+    except services.MadrasahForbiddenError as exc:
+        raise HTTPException(status_code=403, detail=str(exc)) from exc
+    return services.buku_kas_out(row)
+
+
+@keuangan_r.delete("/buku-kas/{entry_id}", status_code=status.HTTP_204_NO_CONTENT)
+async def keuangan_buku_kas_delete(
+    entry_id: str,
+    session: AsyncSession = Depends(get_db_madrasah),
+    user: UserMadrasah = Depends(require_roles_madrasah(*KEUANGAN_ROLES)),
+):
+    try:
+        await services.delete_buku_kas_entry(session, entry_id, caller=user)
+    except services.MadrasahNotFoundError as exc:
+        raise HTTPException(status_code=404, detail=str(exc)) from exc
+    except services.MadrasahForbiddenError as exc:
+        raise HTTPException(status_code=403, detail=str(exc)) from exc
+
+
 @keuangan_r.get("/laporan")
 async def keuangan_laporan(
     bulan: str | None = Query(None, description="Filter YYYY-MM"),
+    unit_id: str | None = Query(default=None),
     session: AsyncSession = Depends(get_db_madrasah),
-    _: UserMadrasah = Depends(require_roles_madrasah(*KEUANGAN_READ_ROLES)),
+    user: UserMadrasah = Depends(require_roles_madrasah(*KEUANGAN_READ_ROLES)),
 ):
-    return await services.laporan_keuangan(session, bulan)
+    scope = _unit_scope(user, unit_id)
+    return await services.laporan_keuangan(session, bulan, unit_id=scope)
 
 
 # --- COA & jurnal double-entry (Fase 2.1) ---
@@ -1389,39 +1429,33 @@ async def keuangan_akun_list(
 @keuangan_r.get("/jurnal")
 async def keuangan_jurnal_list(
     bulan: str | None = Query(None, description="Filter YYYY-MM"),
+    unit_id: str | None = Query(default=None),
     session: AsyncSession = Depends(get_db_madrasah),
-    _: UserMadrasah = Depends(require_roles_madrasah(*KEUANGAN_READ_ROLES)),
+    user: UserMadrasah = Depends(require_roles_madrasah(*KEUANGAN_READ_ROLES)),
 ):
-    return [services.jurnal_out(r) for r in await services.list_jurnal(session, bulan)]
+    scope = _unit_scope(user, unit_id)
+    return [services.jurnal_out(r) for r in await services.list_jurnal(session, bulan, unit_id=scope)]
 
-
-@keuangan_r.get("/laba-rugi")
-async def keuangan_laba_rugi(
-    bulan: str | None = Query(None, description="Filter YYYY-MM"),
-    session: AsyncSession = Depends(get_db_madrasah),
-    _: UserMadrasah = Depends(require_roles_madrasah(*KEUANGAN_READ_ROLES)),
-):
-    return await services.laba_rugi(session, bulan)
-
-
-# --- Honor mengajar / payroll (Fase 2.2) ---
 
 @keuangan_r.get("/honor")
 async def keuangan_honor_list(
     bulan: str | None = Query(None, description="Filter YYYY-MM"),
+    unit_id: str | None = Query(default=None),
     session: AsyncSession = Depends(get_db_madrasah),
-    _: UserMadrasah = Depends(require_roles_madrasah(*KEUANGAN_READ_ROLES)),
+    user: UserMadrasah = Depends(require_roles_madrasah(*KEUANGAN_READ_ROLES)),
 ):
-    return [services.honor_out(r) for r in await services.list_honor(session, bulan)]
+    scope = _unit_scope(user, unit_id)
+    return [services.honor_out(r) for r in await services.list_honor(session, bulan, unit_id=scope)]
 
 
 @keuangan_r.post("/honor/generate", status_code=status.HTTP_201_CREATED)
 async def keuangan_honor_generate(
     bulan: str | None = Query(None, description="Default bulan berjalan (YYYY-MM)"),
     session: AsyncSession = Depends(get_db_madrasah),
-    _: UserMadrasah = Depends(require_roles_madrasah(*KEUANGAN_READ_ROLES)),
+    user: UserMadrasah = Depends(require_roles_madrasah(*KEUANGAN_ROLES)),
 ):
-    return [services.honor_out(r) for r in await services.generate_honor_massal(session, bulan)]
+    scope = _unit_scope(user)
+    return [services.honor_out(r) for r in await services.generate_honor_massal(session, bulan, unit_id=scope)]
 
 
 @keuangan_r.post("/honor/pay/{honor_id}")
@@ -1429,10 +1463,10 @@ async def keuangan_honor_pay(
     honor_id: str,
     request: Request,
     session: AsyncSession = Depends(get_db_madrasah),
-    user: UserMadrasah = Depends(require_roles_madrasah(*SANTRI_WRITE_ROLES)),
+    user: UserMadrasah = Depends(require_roles_madrasah(*KEUANGAN_ROLES)),
 ):
     try:
-        row = await services.pay_honor(session, honor_id)
+        row = await services.pay_honor(session, honor_id, caller=user)
     except services.MadrasahNotFoundError as exc:
         raise HTTPException(status_code=404, detail=str(exc)) from exc
     except services.MadrasahForbiddenError as exc:

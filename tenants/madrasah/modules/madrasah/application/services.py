@@ -904,6 +904,30 @@ async def create_buku_kas_entry(
     return row
 
 
+async def patch_buku_kas_entry(
+    session: AsyncSession, entry_id: str, payload: BukuKasIn, caller: UserMadrasah | None = None
+) -> BukuKasMadrasah:
+    row = await session.get(BukuKasMadrasah, entry_id)
+    if not row:
+        raise MadrasahNotFoundError("Baris buku kas tidak ditemukan")
+    _pastikan_akses_unit_keuangan(caller, row.madrasah_unit_id)
+    row.tanggal = payload.tanggal
+    row.tipe = payload.tipe
+    row.kategori = payload.kategori
+    row.jumlah = payload.jumlah
+    row.keterangan = payload.keterangan
+    await session.flush()
+    return row
+
+
+async def delete_buku_kas_entry(session: AsyncSession, entry_id: str, caller: UserMadrasah | None = None) -> None:
+    row = await session.get(BukuKasMadrasah, entry_id)
+    if not row:
+        raise MadrasahNotFoundError("Baris buku kas tidak ditemukan")
+    _pastikan_akses_unit_keuangan(caller, row.madrasah_unit_id)
+    await session.delete(row)
+
+
 def buku_kas_out(row: BukuKasMadrasah) -> dict:
     return {
         "id": row.id,
@@ -1869,12 +1893,16 @@ async def remove_penugasan(session: AsyncSession, penugasan_id: str) -> None:
     await session.delete(row)
 
 
-async def list_penugasan(session: AsyncSession, guru_id: str | None = None) -> list[GuruMapelRombel]:
+async def list_penugasan(session: AsyncSession, guru_id: str | None = None, unit_id: str | None = None) -> list[GuruMapelRombel]:
     stmt = select(GuruMapelRombel).options(
         selectinload(GuruMapelRombel.guru), selectinload(GuruMapelRombel.mapel), selectinload(GuruMapelRombel.rombel)
     )
     if guru_id:
         stmt = stmt.where(GuruMapelRombel.guru_id == guru_id)
+    if unit_id:
+        stmt = stmt.join(RombelMadrasah, GuruMapelRombel.rombel_id == RombelMadrasah.id).where(
+            RombelMadrasah.madrasah_unit_id == unit_id
+        )
     return list((await session.execute(stmt)).scalars())
 
 
