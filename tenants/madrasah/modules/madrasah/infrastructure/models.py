@@ -97,9 +97,12 @@ class TahunAjaranMadrasah(MadrasahBase):
     __tablename__ = "madrasah_tahun_ajaran"
 
     id: Mapped[str] = mapped_column(String(64), primary_key=True, default=_uuid)
-    kode: Mapped[str] = mapped_column(String(16), nullable=False, unique=True)
+    kode: Mapped[str] = mapped_column(String(16), nullable=False, index=True)
     tanggal_mulai: Mapped[date] = mapped_column(Date, nullable=False)
     tanggal_selesai: Mapped[date] = mapped_column(Date, nullable=False)
+    madrasah_unit_id: Mapped[Optional[str]] = mapped_column(
+        String(64), ForeignKey("madrasah_unit.id", ondelete="SET NULL"), nullable=True, index=True
+    )
 
     semester: Mapped[list["SemesterMadrasah"]] = relationship(back_populates="tahun_ajaran")
 
@@ -367,6 +370,9 @@ class PengumumanMadrasah(MadrasahBase):
     dibuat_by: Mapped[Optional[str]] = mapped_column(
         String(64), ForeignKey("madrasah_users.id", ondelete="SET NULL"), nullable=True, index=True
     )
+    madrasah_unit_id: Mapped[Optional[str]] = mapped_column(
+        String(64), ForeignKey("madrasah_unit.id", ondelete="SET NULL"), nullable=True, index=True
+    )
 
     pembuat: Mapped[Optional["UserMadrasah"]] = relationship(back_populates="pengumuman")
 
@@ -383,6 +389,9 @@ class KegiatanMadrasah(MadrasahBase):
     deskripsi: Mapped[str] = mapped_column(Text, nullable=False, default="")
     urutan: Mapped[int] = mapped_column(Integer, nullable=False, default=1)
     dibuat_pada: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=_utcnow)
+    madrasah_unit_id: Mapped[Optional[str]] = mapped_column(
+        String(64), ForeignKey("madrasah_unit.id", ondelete="SET NULL"), nullable=True, index=True
+    )
 
 
 class PendaftaranSantri(MadrasahBase):
@@ -408,6 +417,9 @@ class PendaftaranSantri(MadrasahBase):
     # sama seperti pola SantriMadrasah.status.
     status: Mapped[str] = mapped_column(String(16), nullable=False, default="baru", index=True)
     dibuat_pada: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=_utcnow, index=True)
+    madrasah_unit_id: Mapped[Optional[str]] = mapped_column(
+        String(64), ForeignKey("madrasah_unit.id", ondelete="SET NULL"), nullable=True, index=True
+    )
 
 
 class GuruMapelRombel(MadrasahBase):
@@ -457,6 +469,9 @@ class BukuKasMadrasah(MadrasahBase):
     dicatat_oleh: Mapped[Optional[str]] = mapped_column(
         String(64), ForeignKey("madrasah_users.id", ondelete="SET NULL"), nullable=True, index=True
     )
+    madrasah_unit_id: Mapped[Optional[str]] = mapped_column(
+        String(64), ForeignKey("madrasah_unit.id", ondelete="SET NULL"), nullable=True, index=True
+    )
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=_utcnow)
 
     pencatat: Mapped[Optional["UserMadrasah"]] = relationship()
@@ -501,6 +516,9 @@ class JurnalMadrasah(MadrasahBase):
     dibuat_oleh: Mapped[Optional[str]] = mapped_column(
         String(64), ForeignKey("madrasah_users.id", ondelete="SET NULL"), nullable=True
     )
+    madrasah_unit_id: Mapped[Optional[str]] = mapped_column(
+        String(64), ForeignKey("madrasah_unit.id", ondelete="SET NULL"), nullable=True, index=True
+    )
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=_utcnow, index=True)
 
 
@@ -528,6 +546,9 @@ class HonorMengajar(MadrasahBase):
     total: Mapped[Decimal] = mapped_column(Numeric(20, 2), nullable=False, default=Decimal("0"))
     status_bayar: Mapped[bool] = mapped_column(Boolean, nullable=False, default=False)
     dibayar_pada: Mapped[Optional[datetime]] = mapped_column(DateTime(timezone=True), nullable=True)
+    madrasah_unit_id: Mapped[Optional[str]] = mapped_column(
+        String(64), ForeignKey("madrasah_unit.id", ondelete="SET NULL"), nullable=True, index=True
+    )
 
     guru: Mapped["UserMadrasah"] = relationship()
     mapel: Mapped[Optional["MapelMadrasah"]] = relationship()

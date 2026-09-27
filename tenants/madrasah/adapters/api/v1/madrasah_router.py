@@ -75,22 +75,30 @@ keuangan_r = APIRouter(prefix="/keuangan", tags=["Madrasah Keuangan"])
 # would be blocked from reaching a page in the frontend is also rejected by the
 # backend, instead of relying only on client-side route guarding.
 ADMIN_ROLES = ("kepala_sekolah", "admin")
-KURIKULUM_ROLES = ("kurikulum", "kepala_sekolah", "admin")
-BENDAHARA_ROLES = ("bendahara", "kepala_sekolah", "admin")
-WALI_KELAS_ROLES = ("wali_kelas", "guru", "kepala_sekolah", "admin")
-WALI_SANTRI_ROLES = ("wali_santri", "kepala_sekolah", "admin")
-# Wali kelas "mewarisi" semua tugas guru mapel (lihat pembagian peran), jadi
-# role wali_kelas ikut disertakan di sini, bukan cuma "guru".
-GURU_MAPEL_ROLES = ("guru", "wali_kelas", "kepala_sekolah", "admin")
-ANY_AUTHENTICATED = ADMIN_ROLES + KURIKULUM_ROLES + BENDAHARA_ROLES + WALI_KELAS_ROLES + WALI_SANTRI_ROLES
+KURIKULUM_ROLES = ("kurikulum", "kepala_sekolah", "lembaga_admin", "admin")
+BENDAHARA_ROLES = ("bendahara", "kepala_sekolah", "lembaga_admin", "admin")
+WALI_KELAS_ROLES = ("wali_kelas", "guru", "kepala_sekolah", "lembaga_admin", "admin")
+WALI_SANTRI_ROLES = ("wali_santri", "wali_kelas", "kepala_sekolah", "lembaga_admin", "admin")
+GURU_MAPEL_ROLES = ("guru", "wali_kelas", "kepala_sekolah", "lembaga_admin", "admin")
+ANY_AUTHENTICATED = ADMIN_ROLES + KURIKULUM_ROLES + BENDAHARA_ROLES + WALI_KELAS_ROLES + WALI_SANTRI_ROLES + ("yayasan_admin", "lembaga_admin")
 # yayasan_admin dan admin utama melihat rekap lintas-unit.
 # Kepala madrasah TIDAK masuk: dia hanya mengurus unit di akunnya.
 YAYASAN_ROLES = ("yayasan_admin", "admin")
 # Kelola Akun lintas-unit (admin, yayasan, kepala madrasah) tetap admin utama.
-# Kepala madrasah berlaku sebagai admin unit: boleh buat/ubah/hapus akun
-# bawahan di unitnya lewat /admin/guru dan /admin/wali-santri.
+# Kepala madrasah dan admin lembaga berlaku sebagai admin unit:
+# boleh buat/ubah/hapus akun bawahan di unitnya lewat /admin/guru dan /admin/wali-santri.
 APP_ADMIN_ROLES = ("admin",)
-UNIT_ADMIN_ROLES = ("admin", "kepala_sekolah")
+UNIT_ADMIN_ROLES = ("admin", "kepala_sekolah", "lembaga_admin")
+# Kas, laba-rugi, honor, dan SPP: admin utama (semua unit), plus kepala,
+# admin lembaga, dan bendahara yang terkunci ke unit akunnya.
+KEUANGAN_ROLES = ("admin", "kepala_sekolah", "lembaga_admin", "bendahara")
+KEUANGAN_READ_ROLES = KEUANGAN_ROLES + ("yayasan_admin",)
+INFO_AKADEMIK_ROLES = ("kurikulum", "kepala_sekolah", "lembaga_admin", "admin")
+SANTRI_READ_ROLES = ("admin", "kepala_sekolah", "lembaga_admin", "yayasan_admin")
+SANTRI_WRITE_ROLES = ("admin", "kepala_sekolah", "lembaga_admin")
+ROMBEL_READ_ROLES = ("admin", "kepala_sekolah", "lembaga_admin", "kurikulum", "yayasan_admin")
+ROMBEL_WRITE_ROLES = ("admin", "kepala_sekolah", "lembaga_admin", "kurikulum")
+KURIKULUM_READ_ROLES = KURIKULUM_ROLES + ("yayasan_admin",)
 
 
 def _user_out(user) -> dict:
@@ -120,7 +128,7 @@ async def seed_now(session: AsyncSession = Depends(get_db_madrasah)):
 @admin_r.get("/seed-demo-data")
 async def seed_demo_data_now(
     session: AsyncSession = Depends(get_db_madrasah),
-    user: UserMadrasah = Depends(require_roles_madrasah(*ADMIN_ROLES)),
+    user: UserMadrasah = Depends(require_roles_madrasah(*APP_ADMIN_ROLES)),
 ):
     # Hanya untuk database trial/demo -- lihat docstring seed_demo_data().
     # Login admin wajib (bukan endpoint publik seperti /seed-now) karena ini
@@ -144,7 +152,7 @@ async def seed_demo_data_now(
 async def reset_now(
     request: Request,
     session: AsyncSession = Depends(get_db_madrasah),
-    user: UserMadrasah = Depends(require_roles_madrasah(*ADMIN_ROLES)),
+    user: UserMadrasah = Depends(require_roles_madrasah(*APP_ADMIN_ROLES)),
 ):
     # DESTRUCTIVE -- lihat docstring reset_madrasah(). Dibuat sebagai
     # endpoint terpisah dari /seed-now yang idempotent, supaya redeploy
@@ -324,10 +332,15 @@ async def get_pengaturan(session: AsyncSession = Depends(get_db_madrasah)):
 async def admin_pengaturan_patch(
     payload: PengaturanPatch,
     session: AsyncSession = Depends(get_db_madrasah),
-    _: UserMadrasah = Depends(require_roles_madrasah(*ADMIN_ROLES)),
+    _: UserMadrasah = Depends(require_roles_madrasah(*UNIT_ADMIN_ROLES)),
 ):
     row = await services.update_pengaturan(session, payload)
     return services.pengaturan_out(row)
+
+
+@madrasah_router.get("/unit")
+async def public_list_unit(session: AsyncSession = Depends(get_db_madrasah)):
+    return [{"id": r.id, "nama": r.nama} for r in await services.list_unit(session) if r.aktif]
 
 
 @madrasah_router.get("/pengumuman")
@@ -336,7 +349,7 @@ async def get_pengumuman(session: AsyncSession = Depends(get_db_madrasah)):
     # homepage, route "/") calls this before any login. Adding auth here would
     # break the public announcements shown to visitors who haven't logged in.
     rows = await services.list_pengumuman(session)
-    return [{"id": row.id, "judul": row.judul, "isi": row.isi, "tanggal": row.tanggal.isoformat(), "dibuat_by": row.dibuat_by} for row in rows]
+    return [{"id": row.id, "judul": row.judul, "isi": row.isi, "tanggal": row.tanggal.isoformat(), "dibuat_by": row.dibuat_by, "madrasah_unit_id": row.madrasah_unit_id} for row in rows]
 
 
 @madrasah_router.get("/kegiatan")
@@ -366,7 +379,7 @@ async def public_pendaftaran_create(
 async def admin_tingkat(
     unit_id: str | None = Query(default=None),
     session: AsyncSession = Depends(get_db_madrasah),
-    user: UserMadrasah = Depends(require_roles_madrasah(*ADMIN_ROLES)),
+    user: UserMadrasah = Depends(require_roles_madrasah(*ROMBEL_READ_ROLES)),
 ):
     scope = _unit_scope(user, unit_id)
     return [{"id": r.id, "nama": r.nama, "urutan": r.urutan, "madrasah_unit_id": r.madrasah_unit_id} for r in await services.list_tingkat(session, unit_id=scope)]
@@ -376,7 +389,7 @@ async def admin_tingkat(
 async def admin_tingkat_create(
     payload: TingkatIn,
     session: AsyncSession = Depends(get_db_madrasah),
-    user: UserMadrasah = Depends(require_roles_madrasah(*ADMIN_ROLES)),
+    user: UserMadrasah = Depends(require_roles_madrasah(*ROMBEL_WRITE_ROLES)),
 ):
     try:
         row = await services.create_tingkat(session, payload, caller=user)
@@ -390,7 +403,7 @@ async def admin_tingkat_patch(
     tingkat_id: str,
     payload: TingkatPatch,
     session: AsyncSession = Depends(get_db_madrasah),
-    _: UserMadrasah = Depends(require_roles_madrasah(*ADMIN_ROLES)),
+    _: UserMadrasah = Depends(require_roles_madrasah(*ROMBEL_WRITE_ROLES)),
 ):
     try:
         row = await services.patch_tingkat(session, tingkat_id, payload)
@@ -403,7 +416,7 @@ async def admin_tingkat_patch(
 async def admin_tingkat_delete(
     tingkat_id: str,
     session: AsyncSession = Depends(get_db_madrasah),
-    _: UserMadrasah = Depends(require_roles_madrasah(*ADMIN_ROLES)),
+    _: UserMadrasah = Depends(require_roles_madrasah(*ROMBEL_WRITE_ROLES)),
 ):
     try:
         await services.delete_tingkat(session, tingkat_id)
@@ -426,7 +439,7 @@ async def admin_rombel(
 async def admin_rombel_create(
     payload: RombelIn,
     session: AsyncSession = Depends(get_db_madrasah),
-    user: UserMadrasah = Depends(require_roles_madrasah(*ADMIN_ROLES)),
+    user: UserMadrasah = Depends(require_roles_madrasah(*ROMBEL_WRITE_ROLES)),
 ):
     try:
         row = await services.create_rombel(session, payload, caller=user)
@@ -439,7 +452,7 @@ async def admin_rombel_create(
 async def admin_rombel_delete(
     rombel_id: str,
     session: AsyncSession = Depends(get_db_madrasah),
-    _: UserMadrasah = Depends(require_roles_madrasah(*ADMIN_ROLES)),
+    _: UserMadrasah = Depends(require_roles_madrasah(*ROMBEL_WRITE_ROLES)),
 ):
     try:
         await services.delete_rombel(session, rombel_id)
@@ -519,7 +532,7 @@ async def admin_guru(
 async def admin_wali_santri(
     unit_id: str | None = Query(default=None),
     session: AsyncSession = Depends(get_db_madrasah),
-    user: UserMadrasah = Depends(require_roles_madrasah(*ADMIN_ROLES)),
+    user: UserMadrasah = Depends(require_roles_madrasah(*SANTRI_WRITE_ROLES)),
 ):
     scope = _unit_scope(user, unit_id)
     return [services.user_out(r) for r in await services.list_wali_santri(session, unit_id=scope)]
@@ -623,7 +636,7 @@ async def admin_wali_santri_delete(
 async def admin_santri_create(
     payload: SantriIn,
     session: AsyncSession = Depends(get_db_madrasah),
-    user: UserMadrasah = Depends(require_roles_madrasah(*ADMIN_ROLES)),
+    user: UserMadrasah = Depends(require_roles_madrasah(*SANTRI_WRITE_ROLES)),
 ):
     try:
         row = await services.create_santri(session, payload, caller=user)
@@ -637,7 +650,7 @@ async def admin_santri_list(
     status: str | None = Query(default="semua"),
     unit_id: str | None = Query(default=None),
     session: AsyncSession = Depends(get_db_madrasah),
-    user: UserMadrasah = Depends(require_roles_madrasah(*ADMIN_ROLES)),
+    user: UserMadrasah = Depends(require_roles_madrasah(*SANTRI_WRITE_ROLES)),
 ):
     scope = _unit_scope(user, unit_id)
     rows = await services.list_santri(session, None, status=status, unit_id=scope)
@@ -652,7 +665,7 @@ async def admin_santri_patch(
     santri_id: str,
     payload: SantriPatch,
     session: AsyncSession = Depends(get_db_madrasah),
-    _: UserMadrasah = Depends(require_roles_madrasah(*ADMIN_ROLES)),
+    _: UserMadrasah = Depends(require_roles_madrasah(*SANTRI_WRITE_ROLES)),
 ):
     try:
         row = await services.patch_santri(session, santri_id, payload)
@@ -666,7 +679,7 @@ async def admin_santri_delete(
     santri_id: str,
     request: Request,
     session: AsyncSession = Depends(get_db_madrasah),
-    user: UserMadrasah = Depends(require_roles_madrasah(*ADMIN_ROLES)),
+    user: UserMadrasah = Depends(require_roles_madrasah(*SANTRI_WRITE_ROLES)),
 ):
     try:
         await services.delete_santri(session, santri_id)
@@ -681,19 +694,19 @@ async def admin_santri_delete(
 async def admin_pengumuman_create(
     payload: PengumumanIn,
     session: AsyncSession = Depends(get_db_madrasah),
-    user: UserMadrasah = Depends(require_roles_madrasah(*ADMIN_ROLES)),
+    user: UserMadrasah = Depends(require_roles_madrasah(*INFO_AKADEMIK_ROLES)),
 ):
-    row = await services.create_pengumuman(session, payload, user.id)
-    return {"id": row.id, "judul": row.judul, "isi": row.isi, "tanggal": row.tanggal.isoformat()}
+    row = await services.create_pengumuman(session, payload, user.id, caller=user)
+    return {"id": row.id, "judul": row.judul, "isi": row.isi, "tanggal": row.tanggal.isoformat(), "madrasah_unit_id": row.madrasah_unit_id}
 
 
 @admin_r.post("/kegiatan", status_code=status.HTTP_201_CREATED)
 async def admin_kegiatan_create(
     payload: KegiatanIn,
     session: AsyncSession = Depends(get_db_madrasah),
-    _: UserMadrasah = Depends(require_roles_madrasah(*ADMIN_ROLES)),
+    user: UserMadrasah = Depends(require_roles_madrasah(*INFO_AKADEMIK_ROLES)),
 ):
-    row = await services.create_kegiatan(session, payload)
+    row = await services.create_kegiatan(session, payload, caller=user)
     return services.kegiatan_out(row)
 
 
@@ -701,7 +714,7 @@ async def admin_kegiatan_create(
 async def admin_kegiatan_delete(
     kegiatan_id: str,
     session: AsyncSession = Depends(get_db_madrasah),
-    _: UserMadrasah = Depends(require_roles_madrasah(*ADMIN_ROLES)),
+    _: UserMadrasah = Depends(require_roles_madrasah(*INFO_AKADEMIK_ROLES)),
 ):
     try:
         await services.delete_kegiatan(session, kegiatan_id)
@@ -711,10 +724,12 @@ async def admin_kegiatan_delete(
 
 @admin_r.get("/pendaftaran")
 async def admin_pendaftaran_list(
+    unit_id: str | None = Query(default=None),
     session: AsyncSession = Depends(get_db_madrasah),
-    _: UserMadrasah = Depends(require_roles_madrasah(*ADMIN_ROLES)),
+    user: UserMadrasah = Depends(require_roles_madrasah(*SANTRI_READ_ROLES)),
 ):
-    rows = await services.list_pendaftaran(session)
+    scope = _unit_scope(user, unit_id)
+    rows = await services.list_pendaftaran(session, unit_id=scope)
     return [services.pendaftaran_out(row) for row in rows]
 
 
@@ -723,7 +738,7 @@ async def admin_pendaftaran_patch(
     pendaftaran_id: str,
     payload: PendaftaranPatch,
     session: AsyncSession = Depends(get_db_madrasah),
-    _: UserMadrasah = Depends(require_roles_madrasah(*ADMIN_ROLES)),
+    _: UserMadrasah = Depends(require_roles_madrasah(*SANTRI_WRITE_ROLES)),
 ):
     try:
         row = await services.patch_pendaftaran(session, pendaftaran_id, payload)
@@ -735,7 +750,7 @@ async def admin_pendaftaran_patch(
 @admin_r.get("/rekap")
 async def admin_rekap(
     session: AsyncSession = Depends(get_db_madrasah),
-    _: UserMadrasah = Depends(require_roles_madrasah(*ADMIN_ROLES)),
+    _: UserMadrasah = Depends(require_roles_madrasah(*UNIT_ADMIN_ROLES)),
 ):
     return await services.rekap_umum(session)
 
@@ -744,7 +759,7 @@ async def admin_rekap(
 async def admin_place(
     payload: PlacementIn,
     session: AsyncSession = Depends(get_db_madrasah),
-    _: UserMadrasah = Depends(require_roles_madrasah(*ADMIN_ROLES)),
+    _: UserMadrasah = Depends(require_roles_madrasah(*SANTRI_WRITE_ROLES)),
 ):
     try:
         row = await services.place_santri(session, payload)
@@ -768,7 +783,7 @@ async def admin_santri_status(
     payload: SantriStatusIn,
     request: Request,
     session: AsyncSession = Depends(get_db_madrasah),
-    user: UserMadrasah = Depends(require_roles_madrasah(*ADMIN_ROLES)),
+    user: UserMadrasah = Depends(require_roles_madrasah(*SANTRI_WRITE_ROLES)),
 ):
     try:
         row = await services.set_status_santri(session, santri_id, payload)
@@ -791,7 +806,7 @@ async def admin_kenaikan_kelas(
     payload: KenaikanKelasRequest,
     request: Request,
     session: AsyncSession = Depends(get_db_madrasah),
-    user: UserMadrasah = Depends(require_roles_madrasah(*ADMIN_ROLES)),
+    user: UserMadrasah = Depends(require_roles_madrasah(*SANTRI_WRITE_ROLES)),
 ):
     try:
         hasil = await services.kenaikan_kelas_massal(session, payload)
@@ -1023,6 +1038,15 @@ async def wk_absen(
     return {"inserted": len(rows)}
 
 
+@wali_kelas_r.get("/rekap-absensi")
+async def wk_rekap_absensi(
+    rombel_id: str = Query(...),
+    session: AsyncSession = Depends(get_db_madrasah),
+    _: UserMadrasah = Depends(require_roles_madrasah(*WALI_KELAS_ROLES, "yayasan_admin")),
+):
+    return await services.rekap_absensi_rombel(session, rombel_id)
+
+
 @wali_kelas_r.post("/progres", status_code=status.HTTP_201_CREATED)
 async def wk_progres(
     payload: ProgresCreateRequest,
@@ -1104,8 +1128,8 @@ async def wk_pengumuman_create(
     session: AsyncSession = Depends(get_db_madrasah),
     user: UserMadrasah = Depends(require_roles_madrasah(*WALI_KELAS_ROLES)),
 ):
-    row = await services.create_pengumuman(session, payload, user.id)
-    return {"id": row.id, "judul": row.judul, "isi": row.isi, "tanggal": row.tanggal.isoformat()}
+    row = await services.create_pengumuman(session, payload, user.id, caller=user)
+    return {"id": row.id, "judul": row.judul, "isi": row.isi, "tanggal": row.tanggal.isoformat(), "madrasah_unit_id": row.madrasah_unit_id}
 
 
 @wali_kelas_r.get("/pesan/{santri_id}")
@@ -1317,7 +1341,7 @@ async def gm_rapor(
 async def keuangan_buku_kas_list(
     bulan: str | None = Query(None, description="Filter YYYY-MM"),
     session: AsyncSession = Depends(get_db_madrasah),
-    _: UserMadrasah = Depends(require_roles_madrasah(*ADMIN_ROLES)),
+    _: UserMadrasah = Depends(require_roles_madrasah(*KEUANGAN_READ_ROLES)),
 ):
     rows = await services.list_buku_kas(session, bulan)
     return [services.buku_kas_out(r) for r in rows]
@@ -1328,7 +1352,7 @@ async def keuangan_buku_kas_create(
     payload: BukuKasIn,
     request: Request,
     session: AsyncSession = Depends(get_db_madrasah),
-    user: UserMadrasah = Depends(require_roles_madrasah(*ADMIN_ROLES)),
+    user: UserMadrasah = Depends(require_roles_madrasah(*SANTRI_WRITE_ROLES)),
 ):
     row = await services.create_buku_kas_entry(session, payload, dicatat_oleh=user.id)
     await services.record_audit(
@@ -1347,7 +1371,7 @@ async def keuangan_buku_kas_create(
 async def keuangan_laporan(
     bulan: str | None = Query(None, description="Filter YYYY-MM"),
     session: AsyncSession = Depends(get_db_madrasah),
-    _: UserMadrasah = Depends(require_roles_madrasah(*ADMIN_ROLES)),
+    _: UserMadrasah = Depends(require_roles_madrasah(*KEUANGAN_READ_ROLES)),
 ):
     return await services.laporan_keuangan(session, bulan)
 
@@ -1357,7 +1381,7 @@ async def keuangan_laporan(
 @keuangan_r.get("/akun")
 async def keuangan_akun_list(
     session: AsyncSession = Depends(get_db_madrasah),
-    _: UserMadrasah = Depends(require_roles_madrasah(*ADMIN_ROLES)),
+    _: UserMadrasah = Depends(require_roles_madrasah(*KEUANGAN_READ_ROLES)),
 ):
     return [services.akun_out(r) for r in await services.list_akun(session)]
 
@@ -1366,7 +1390,7 @@ async def keuangan_akun_list(
 async def keuangan_jurnal_list(
     bulan: str | None = Query(None, description="Filter YYYY-MM"),
     session: AsyncSession = Depends(get_db_madrasah),
-    _: UserMadrasah = Depends(require_roles_madrasah(*ADMIN_ROLES)),
+    _: UserMadrasah = Depends(require_roles_madrasah(*KEUANGAN_READ_ROLES)),
 ):
     return [services.jurnal_out(r) for r in await services.list_jurnal(session, bulan)]
 
@@ -1375,7 +1399,7 @@ async def keuangan_jurnal_list(
 async def keuangan_laba_rugi(
     bulan: str | None = Query(None, description="Filter YYYY-MM"),
     session: AsyncSession = Depends(get_db_madrasah),
-    _: UserMadrasah = Depends(require_roles_madrasah(*ADMIN_ROLES)),
+    _: UserMadrasah = Depends(require_roles_madrasah(*KEUANGAN_READ_ROLES)),
 ):
     return await services.laba_rugi(session, bulan)
 
@@ -1386,7 +1410,7 @@ async def keuangan_laba_rugi(
 async def keuangan_honor_list(
     bulan: str | None = Query(None, description="Filter YYYY-MM"),
     session: AsyncSession = Depends(get_db_madrasah),
-    _: UserMadrasah = Depends(require_roles_madrasah(*ADMIN_ROLES)),
+    _: UserMadrasah = Depends(require_roles_madrasah(*KEUANGAN_READ_ROLES)),
 ):
     return [services.honor_out(r) for r in await services.list_honor(session, bulan)]
 
@@ -1395,7 +1419,7 @@ async def keuangan_honor_list(
 async def keuangan_honor_generate(
     bulan: str | None = Query(None, description="Default bulan berjalan (YYYY-MM)"),
     session: AsyncSession = Depends(get_db_madrasah),
-    _: UserMadrasah = Depends(require_roles_madrasah(*ADMIN_ROLES)),
+    _: UserMadrasah = Depends(require_roles_madrasah(*KEUANGAN_READ_ROLES)),
 ):
     return [services.honor_out(r) for r in await services.generate_honor_massal(session, bulan)]
 
@@ -1405,7 +1429,7 @@ async def keuangan_honor_pay(
     honor_id: str,
     request: Request,
     session: AsyncSession = Depends(get_db_madrasah),
-    user: UserMadrasah = Depends(require_roles_madrasah(*ADMIN_ROLES)),
+    user: UserMadrasah = Depends(require_roles_madrasah(*SANTRI_WRITE_ROLES)),
 ):
     try:
         row = await services.pay_honor(session, honor_id)
@@ -1499,34 +1523,38 @@ async def admin_yayasan_rekap(
 
 @admin_r.get("/tahun-ajaran")
 async def admin_tahun_ajaran_list(
+    unit_id: str | None = Query(default=None),
     session: AsyncSession = Depends(get_db_madrasah),
-    _: UserMadrasah = Depends(require_roles_madrasah(*ADMIN_ROLES, *KURIKULUM_ROLES)),
+    user: UserMadrasah = Depends(require_roles_madrasah(*INFO_AKADEMIK_ROLES)),
 ):
-    return [services.tahun_ajaran_out(r) for r in await services.list_tahun_ajaran(session)]
+    scope = _unit_scope(user, unit_id)
+    return [services.tahun_ajaran_out(r) for r in await services.list_tahun_ajaran(session, unit_id=scope)]
 
 
 @admin_r.post("/tahun-ajaran", status_code=status.HTTP_201_CREATED)
 async def admin_tahun_ajaran_create(
     payload: TahunAjaranIn,
     session: AsyncSession = Depends(get_db_madrasah),
-    _: UserMadrasah = Depends(require_roles_madrasah(*ADMIN_ROLES)),
+    user: UserMadrasah = Depends(require_roles_madrasah(*INFO_AKADEMIK_ROLES)),
 ):
-    return services.tahun_ajaran_out(await services.create_tahun_ajaran(session, payload))
+    return services.tahun_ajaran_out(await services.create_tahun_ajaran(session, payload, caller=user))
 
 
 @admin_r.get("/semester")
 async def admin_semester_list(
+    unit_id: str | None = Query(default=None),
     session: AsyncSession = Depends(get_db_madrasah),
-    _: UserMadrasah = Depends(require_roles_madrasah(*ADMIN_ROLES, *KURIKULUM_ROLES)),
+    user: UserMadrasah = Depends(require_roles_madrasah(*INFO_AKADEMIK_ROLES)),
 ):
-    return [services.semester_out(r) for r in await services.list_semester(session)]
+    scope = _unit_scope(user, unit_id)
+    return [services.semester_out(r) for r in await services.list_semester(session, unit_id=scope)]
 
 
 @admin_r.post("/semester", status_code=status.HTTP_201_CREATED)
 async def admin_semester_create(
     payload: SemesterIn,
     session: AsyncSession = Depends(get_db_madrasah),
-    _: UserMadrasah = Depends(require_roles_madrasah(*ADMIN_ROLES)),
+    _: UserMadrasah = Depends(require_roles_madrasah(*INFO_AKADEMIK_ROLES)),
 ):
     try:
         row = await services.create_semester(session, payload)
@@ -1540,7 +1568,7 @@ async def admin_semester_aktifkan(
     semester_id: str,
     request: Request,
     session: AsyncSession = Depends(get_db_madrasah),
-    user: UserMadrasah = Depends(require_roles_madrasah(*ADMIN_ROLES)),
+    user: UserMadrasah = Depends(require_roles_madrasah(*INFO_AKADEMIK_ROLES)),
 ):
     try:
         row = await services.aktifkan_semester(session, semester_id)
@@ -1563,7 +1591,7 @@ async def admin_semester_tutup(
     semester_id: str,
     request: Request,
     session: AsyncSession = Depends(get_db_madrasah),
-    user: UserMadrasah = Depends(require_roles_madrasah(*ADMIN_ROLES)),
+    user: UserMadrasah = Depends(require_roles_madrasah(*INFO_AKADEMIK_ROLES)),
 ):
     try:
         row = await services.tutup_semester(session, semester_id)
