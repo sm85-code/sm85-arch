@@ -109,16 +109,26 @@ async def _email_taken(session: AsyncSession, email: str, exclude_id: str) -> bo
 async def login(
     payload: LoginRequest,
     response: Response,
+    request: Request,
     session: AsyncSession = Depends(get_db),
 ):
     try:
         user = await authenticate(session, payload.username, payload.password)
-    except ValueError as exc:
-        raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail=str(exc)) from exc
-    except PermissionError as exc:
-        raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail=str(exc)) from exc
+    except (ValueError, PermissionError) as exc:
+        # Commit eksplisit di sini -- get_db() rollback seluruh sesi saat
+        # handler melempar exception, jadi tanpa commit ini catatan
+        # login_failed ikut hilang persis saat paling dibutuhkan (login
+        # gagal/brute force).
+        await record_audit(
+            session, actor=None, action="login_failed", entity="users",
+            detail=f"username={payload.username.strip()}", ip=_client_ip(request),
+        )
+        await session.commit()
+        status_code = status.HTTP_401_UNAUTHORIZED if isinstance(exc, ValueError) else status.HTTP_403_FORBIDDEN
+        raise HTTPException(status_code=status_code, detail=str(exc)) from exc
     set_auth_cookie(response, _token_for(user))
     control = await get_system_control(session)
+    await record_audit(session, actor=user, action="login_success", entity="users", entity_id=user.id, ip=_client_ip(request))
     return {"user": user_to_out(user, recording_locked=control.recording_locked)}
 
 
