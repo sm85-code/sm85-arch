@@ -116,6 +116,22 @@ def _unit_scope(user: UserMadrasah, unit_id: str | None = None) -> str | None:
         raise HTTPException(status_code=403, detail=str(exc)) from exc
 
 
+def _unit_dari_query(payload, unit_id: str | None):
+    if unit_id and not getattr(payload, "madrasah_unit_id", None):
+        return payload.model_copy(update={"madrasah_unit_id": unit_id})
+    return payload
+
+
+async def _pengumuman_list_out(session: AsyncSession, rows: list) -> list[dict]:
+    nama = await services.nama_unit_map(session, [r.madrasah_unit_id for r in rows])
+    return [services.pengumuman_out(r, nama.get(r.madrasah_unit_id)) for r in rows]
+
+
+async def _kegiatan_list_out(session: AsyncSession, rows: list) -> list[dict]:
+    nama = await services.nama_unit_map(session, [r.madrasah_unit_id for r in rows])
+    return [services.kegiatan_out(r, nama.get(r.madrasah_unit_id)) for r in rows]
+
+
 def _client_ip(request: Request) -> str:
     return request.client.host if request.client else "unknown"
 
@@ -355,7 +371,7 @@ async def get_pengumuman(session: AsyncSession = Depends(get_db_madrasah)):
     # homepage, route "/") calls this before any login. Adding auth here would
     # break the public announcements shown to visitors who haven't logged in.
     rows = await services.list_pengumuman(session, hanya_publik=True)
-    return [services.pengumuman_out(row) for row in rows]
+    return await _pengumuman_list_out(session, rows)
 
 
 @madrasah_router.get("/kegiatan")
@@ -363,7 +379,7 @@ async def get_kegiatan(session: AsyncSession = Depends(get_db_madrasah)):
     # Publik juga (landing page, section "Kegiatan & Program"), sama
     # alasannya dengan /pengumuman dan /pengaturan di atas.
     rows = await services.list_kegiatan(session)
-    return [services.kegiatan_out(row) for row in rows]
+    return await _kegiatan_list_out(session, rows)
 
 
 @madrasah_router.post("/pendaftaran", status_code=status.HTTP_201_CREATED)
@@ -715,17 +731,20 @@ async def admin_pengumuman_list(
 ):
     scope = _unit_scope(user, unit_id)
     rows = await services.list_pengumuman(session, unit_id=scope)
-    return [services.pengumuman_out(row) for row in rows]
+    return await _pengumuman_list_out(session, rows)
 
 
 @admin_r.post("/pengumuman", status_code=status.HTTP_201_CREATED)
 async def admin_pengumuman_create(
     payload: PengumumanIn,
+    unit_id: str | None = Query(default=None),
     session: AsyncSession = Depends(get_db_madrasah),
     user: UserMadrasah = Depends(require_roles_madrasah(*PENGUMUMAN_WRITE_ROLES)),
 ):
+    payload = _unit_dari_query(payload, unit_id)
     row = await services.create_pengumuman(session, payload, user.id, caller=user)
-    return services.pengumuman_out(row)
+    nama = await services.nama_unit_map(session, [row.madrasah_unit_id])
+    return services.pengumuman_out(row, nama.get(row.madrasah_unit_id))
 
 
 @admin_r.patch("/pengumuman/{pengumuman_id}")
@@ -766,17 +785,20 @@ async def admin_kegiatan_list(
 ):
     scope = _unit_scope(user, unit_id)
     rows = await services.list_kegiatan(session, unit_id=scope)
-    return [services.kegiatan_out(row) for row in rows]
+    return await _kegiatan_list_out(session, rows)
 
 
 @admin_r.post("/kegiatan", status_code=status.HTTP_201_CREATED)
 async def admin_kegiatan_create(
     payload: KegiatanIn,
+    unit_id: str | None = Query(default=None),
     session: AsyncSession = Depends(get_db_madrasah),
     user: UserMadrasah = Depends(require_roles_madrasah(*PENGUMUMAN_WRITE_ROLES)),
 ):
+    payload = _unit_dari_query(payload, unit_id)
     row = await services.create_kegiatan(session, payload, caller=user)
-    return services.kegiatan_out(row)
+    nama = await services.nama_unit_map(session, [row.madrasah_unit_id])
+    return services.kegiatan_out(row, nama.get(row.madrasah_unit_id))
 
 
 @admin_r.delete("/kegiatan/{kegiatan_id}", status_code=status.HTTP_204_NO_CONTENT)

@@ -908,8 +908,15 @@ def pengaturan_out(row: PengaturanSekolah) -> dict:
     }
 
 
-def kegiatan_out(row: KegiatanMadrasah) -> dict:
-    return {"id": row.id, "judul": row.judul, "deskripsi": row.deskripsi, "urutan": row.urutan, "madrasah_unit_id": row.madrasah_unit_id}
+def kegiatan_out(row: KegiatanMadrasah, unit_nama: str | None = None) -> dict:
+    return {
+        "id": row.id,
+        "judul": row.judul,
+        "deskripsi": row.deskripsi,
+        "urutan": row.urutan,
+        "madrasah_unit_id": row.madrasah_unit_id,
+        "unit_nama": unit_nama,
+    }
 
 
 async def list_kegiatan(session: AsyncSession, unit_id: str | None = None) -> list[KegiatanMadrasah]:
@@ -980,6 +987,14 @@ async def patch_pendaftaran(session: AsyncSession, pendaftaran_id: str, payload:
     return row
 
 
+async def nama_unit_map(session: AsyncSession, ids: list[str | None]) -> dict[str, str]:
+    clean = [i for i in ids if i]
+    if not clean:
+        return {}
+    rows = (await session.execute(select(MadrasahUnit.id, MadrasahUnit.nama).where(MadrasahUnit.id.in_(clean)))).all()
+    return {i: n for i, n in rows}
+
+
 async def list_pengumuman(
     session: AsyncSession, limit: int = 50, unit_id: str | None = None, hanya_publik: bool = False
 ) -> list[PengumumanMadrasah]:
@@ -991,7 +1006,7 @@ async def list_pengumuman(
     return list((await session.execute(stmt)).scalars())
 
 
-def pengumuman_out(row: PengumumanMadrasah) -> dict:
+def pengumuman_out(row: PengumumanMadrasah, unit_nama: str | None = None) -> dict:
     return {
         "id": row.id,
         "judul": row.judul,
@@ -999,6 +1014,7 @@ def pengumuman_out(row: PengumumanMadrasah) -> dict:
         "tanggal": row.tanggal.isoformat(),
         "dibuat_by": row.dibuat_by,
         "madrasah_unit_id": row.madrasah_unit_id,
+        "unit_nama": unit_nama,
         "publik": bool(getattr(row, "publik", True)),
     }
 
