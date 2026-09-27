@@ -83,17 +83,14 @@ WALI_SANTRI_ROLES = ("wali_santri", "kepala_sekolah", "admin")
 # role wali_kelas ikut disertakan di sini, bukan cuma "guru".
 GURU_MAPEL_ROLES = ("guru", "wali_kelas", "kepala_sekolah", "admin")
 ANY_AUTHENTICATED = ADMIN_ROLES + KURIKULUM_ROLES + BENDAHARA_ROLES + WALI_KELAS_ROLES + WALI_SANTRI_ROLES
-# yayasan_admin melihat rekap lintas-unit read-only (Fase 3) -- tidak ikut
-# CRUD operasional harian satu unit, itu tetap wewenang ADMIN_ROLES di unit
-# masing-masing.
-YAYASAN_ROLES = ("yayasan_admin",) + ADMIN_ROLES
-# Pengelolaan akun (buat/edit/hapus akun -- termasuk akun admin, kepala
-# sekolah, dan yayasan_admin sendiri) sengaja dipersempit ke role "admin"
-# SAJA, bukan seluruh ADMIN_ROLES: kepala_sekolah dan yayasan_admin tidak
-# boleh membuat/mengubah akun siapa pun lagi, cuma "admin" (admin aplikasi)
-# yang pegang kendali penuh. Dipakai di /admin/akun (halaman "Kelola Akun")
-# dan endpoint mutasi /admin/guru, /admin/wali-santri.
+# yayasan_admin dan admin utama melihat rekap lintas-unit.
+# Kepala madrasah TIDAK masuk: dia hanya mengurus unit di akunnya.
+YAYASAN_ROLES = ("yayasan_admin", "admin")
+# Kelola Akun lintas-unit (admin, yayasan, kepala madrasah) tetap admin utama.
+# Kepala madrasah berlaku sebagai admin unit: boleh buat/ubah/hapus akun
+# bawahan di unitnya lewat /admin/guru dan /admin/wali-santri.
 APP_ADMIN_ROLES = ("admin",)
+UNIT_ADMIN_ROLES = ("admin", "kepala_sekolah")
 
 
 def _user_out(user) -> dict:
@@ -532,9 +529,12 @@ async def admin_wali_santri(
 async def admin_guru_create(
     payload: GuruIn,
     session: AsyncSession = Depends(get_db_madrasah),
-    user: UserMadrasah = Depends(require_roles_madrasah(*APP_ADMIN_ROLES)),
+    user: UserMadrasah = Depends(require_roles_madrasah(*UNIT_ADMIN_ROLES)),
 ):
-    row, password_sementara = await services.create_guru(session, payload, caller=user)
+    try:
+        row, password_sementara = await services.create_guru(session, payload, caller=user)
+    except services.MadrasahForbiddenError as exc:
+        raise HTTPException(status_code=403, detail=str(exc)) from exc
     return services.user_out(row, password_sementara=password_sementara)
 
 
@@ -543,10 +543,10 @@ async def admin_guru_patch(
     user_id: str,
     payload: UserPatch,
     session: AsyncSession = Depends(get_db_madrasah),
-    _: UserMadrasah = Depends(require_roles_madrasah(*APP_ADMIN_ROLES)),
+    user: UserMadrasah = Depends(require_roles_madrasah(*UNIT_ADMIN_ROLES)),
 ):
     try:
-        row = await services.patch_guru(session, user_id, payload)
+        row = await services.patch_guru(session, user_id, payload, caller=user)
     except services.MadrasahNotFoundError as exc:
         raise HTTPException(status_code=404, detail=str(exc)) from exc
     except services.MadrasahForbiddenError as exc:
@@ -559,10 +559,10 @@ async def admin_guru_delete(
     user_id: str,
     request: Request,
     session: AsyncSession = Depends(get_db_madrasah),
-    user: UserMadrasah = Depends(require_roles_madrasah(*APP_ADMIN_ROLES)),
+    user: UserMadrasah = Depends(require_roles_madrasah(*UNIT_ADMIN_ROLES)),
 ):
     try:
-        await services.delete_guru(session, user_id)
+        await services.delete_guru(session, user_id, caller=user)
     except services.MadrasahNotFoundError as exc:
         raise HTTPException(status_code=404, detail=str(exc)) from exc
     except services.MadrasahForbiddenError as exc:
@@ -576,9 +576,12 @@ async def admin_guru_delete(
 async def admin_wali_santri_create(
     payload: GuruIn,
     session: AsyncSession = Depends(get_db_madrasah),
-    _: UserMadrasah = Depends(require_roles_madrasah(*APP_ADMIN_ROLES)),
+    user: UserMadrasah = Depends(require_roles_madrasah(*UNIT_ADMIN_ROLES)),
 ):
-    row, password_sementara = await services.create_wali_santri(session, payload)
+    try:
+        row, password_sementara = await services.create_wali_santri(session, payload, caller=user)
+    except services.MadrasahForbiddenError as exc:
+        raise HTTPException(status_code=403, detail=str(exc)) from exc
     return services.user_out(row, password_sementara=password_sementara)
 
 
@@ -587,10 +590,10 @@ async def admin_wali_santri_patch(
     user_id: str,
     payload: UserPatch,
     session: AsyncSession = Depends(get_db_madrasah),
-    _: UserMadrasah = Depends(require_roles_madrasah(*APP_ADMIN_ROLES)),
+    user: UserMadrasah = Depends(require_roles_madrasah(*UNIT_ADMIN_ROLES)),
 ):
     try:
-        row = await services.patch_guru(session, user_id, payload)
+        row = await services.patch_guru(session, user_id, payload, caller=user)
     except services.MadrasahNotFoundError as exc:
         raise HTTPException(status_code=404, detail=str(exc)) from exc
     except services.MadrasahForbiddenError as exc:
@@ -603,10 +606,10 @@ async def admin_wali_santri_delete(
     user_id: str,
     request: Request,
     session: AsyncSession = Depends(get_db_madrasah),
-    user: UserMadrasah = Depends(require_roles_madrasah(*APP_ADMIN_ROLES)),
+    user: UserMadrasah = Depends(require_roles_madrasah(*UNIT_ADMIN_ROLES)),
 ):
     try:
-        await services.delete_guru(session, user_id)
+        await services.delete_guru(session, user_id, caller=user)
     except services.MadrasahNotFoundError as exc:
         raise HTTPException(status_code=404, detail=str(exc)) from exc
     except services.MadrasahForbiddenError as exc:
@@ -1436,7 +1439,7 @@ async def admin_audit_log(
 @admin_r.get("/yayasan")
 async def admin_yayasan_get(
     session: AsyncSession = Depends(get_db_madrasah),
-    _: UserMadrasah = Depends(require_roles_madrasah(*ADMIN_ROLES)),
+    _: UserMadrasah = Depends(require_roles_madrasah(*YAYASAN_ROLES)),
 ):
     return services.yayasan_out(await services.get_or_create_yayasan(session))
 
@@ -1445,7 +1448,7 @@ async def admin_yayasan_get(
 async def admin_yayasan_patch(
     payload: YayasanPatch,
     session: AsyncSession = Depends(get_db_madrasah),
-    _: UserMadrasah = Depends(require_roles_madrasah(*ADMIN_ROLES)),
+    _: UserMadrasah = Depends(require_roles_madrasah(*APP_ADMIN_ROLES)),
 ):
     return services.yayasan_out(await services.update_yayasan(session, payload))
 
@@ -1462,9 +1465,12 @@ async def admin_unit_list(
 async def admin_unit_create(
     payload: MadrasahUnitIn,
     session: AsyncSession = Depends(get_db_madrasah),
-    _: UserMadrasah = Depends(require_roles_madrasah(*ADMIN_ROLES)),
+    _: UserMadrasah = Depends(require_roles_madrasah(*APP_ADMIN_ROLES)),
 ):
-    return services.unit_out(await services.create_unit(session, payload))
+    try:
+        return services.unit_out(await services.create_unit(session, payload))
+    except services.MadrasahNotFoundError as exc:
+        raise HTTPException(status_code=404, detail=str(exc)) from exc
 
 
 @admin_r.patch("/unit/{unit_id}")
@@ -1472,7 +1478,7 @@ async def admin_unit_patch(
     unit_id: str,
     payload: MadrasahUnitPatch,
     session: AsyncSession = Depends(get_db_madrasah),
-    _: UserMadrasah = Depends(require_roles_madrasah(*ADMIN_ROLES)),
+    _: UserMadrasah = Depends(require_roles_madrasah(*APP_ADMIN_ROLES)),
 ):
     try:
         row = await services.patch_unit(session, unit_id, payload)

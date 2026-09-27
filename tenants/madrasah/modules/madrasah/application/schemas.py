@@ -123,6 +123,7 @@ class UserPatch(BaseModel):
     no_hp: Optional[str] = None
     role: Optional[str] = None
     password: Optional[str] = Field(default=None, max_length=72)
+    madrasah_unit_id: Optional[str] = None
 
 
 class TingkatPatch(BaseModel):
@@ -231,12 +232,15 @@ class MadrasahUnitIn(BaseModel):
     nama: str = Field(..., min_length=1, max_length=255)
     alamat: str = ""
     kepala_unit: str = ""
+    # Kalau diisi, akun kepala_sekolah itu diikat ke unit ini.
+    kepala_user_id: Optional[str] = None
 
 
 class MadrasahUnitPatch(BaseModel):
     nama: Optional[str] = Field(None, min_length=1, max_length=255)
     alamat: Optional[str] = None
     kepala_unit: Optional[str] = None
+    kepala_user_id: Optional[str] = None
     aktif: Optional[bool] = None
 
 
