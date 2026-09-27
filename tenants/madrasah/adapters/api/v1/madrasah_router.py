@@ -830,21 +830,14 @@ async def admin_tugas_delete(
 async def admin_rekap(
     unit_id: str | None = Query(default=None),
     session: AsyncSession = Depends(get_db_madrasah),
-    user: UserMadrasah = Depends(require_roles_madrasah(*UNIT_ADMIN_ROLES)),
+    user: UserMadrasah = Depends(
+        require_roles_madrasah(*UNIT_ADMIN_ROLES, "guru", "wali_kelas", "kurikulum", "bendahara", "yayasan_admin")
+    ),
 ):
-    if user.role not in ("admin", "yayasan_admin") and not user.madrasah_unit_id:
-        return {
-            "total_santri": 0,
-            "total_guru": 0,
-            "total_rombel": 0,
-            "tagihan_lunas": 0,
-            "tagihan_belum": 0,
-            "per_rombel": [],
-            "unit_id": None,
-            "unit_nama": None,
-        }
-    scope = _unit_scope(user, unit_id)
-    return await services.rekap_umum(session, unit_id=scope)
+    try:
+        return await services.rekap_untuk_caller(session, user, unit_id)
+    except services.MadrasahForbiddenError as exc:
+        raise HTTPException(status_code=403, detail=str(exc)) from exc
 
 
 @admin_r.post("/penempatan")

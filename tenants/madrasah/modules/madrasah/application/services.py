@@ -488,6 +488,29 @@ async def create_tugas(session: AsyncSession, payload, caller: UserMadrasah) -> 
     ).scalar_one_or_none()
     if existing:
         return existing
+    if payload.jenis == "kepala_sekolah":
+        kepala_lain_user = (
+            await session.execute(
+                select(TugasMadrasah.id).where(
+                    TugasMadrasah.user_id == payload.user_id,
+                    TugasMadrasah.jenis == "kepala_sekolah",
+                    TugasMadrasah.madrasah_unit_id != unit_id,
+                )
+            )
+        ).scalar_one_or_none()
+        if kepala_lain_user:
+            raise MadrasahForbiddenError("Satu orang hanya boleh menjadi Kepala Madrasah di satu unit")
+        kepala_unit_lain = (
+            await session.execute(
+                select(TugasMadrasah.id).where(
+                    TugasMadrasah.madrasah_unit_id == unit_id,
+                    TugasMadrasah.jenis == "kepala_sekolah",
+                    TugasMadrasah.user_id != payload.user_id,
+                )
+            )
+        ).scalar_one_or_none()
+        if kepala_unit_lain:
+            raise MadrasahForbiddenError("Unit ini sudah punya Kepala Madrasah")
     row = TugasMadrasah(user_id=payload.user_id, madrasah_unit_id=unit_id, jenis=payload.jenis)
     session.add(row)
     if payload.jenis == "kepala_sekolah":
@@ -2025,6 +2048,43 @@ async def rekap_umum(session: AsyncSession, unit_id: str | None = None) -> dict:
         "per_rombel": [{"rombel": nama, "jumlah_santri": jumlah} for nama, jumlah in per_rombel_rows],
         "unit_id": unit_id,
         "unit_nama": unit_nama,
+        "per_unit": [],
+    }
+
+
+async def rekap_untuk_caller(session: AsyncSession, caller: UserMadrasah, unit_id: str | None = None) -> dict:
+    if caller.role in CROSS_UNIT_ROLES or "admin" in effective_roles(caller) or "yayasan_admin" in effective_roles(caller):
+        return await rekap_umum(session, unit_id)
+    ids = sorted(unit_ids_tugas(caller))
+    if unit_id:
+        if unit_id not in ids:
+            raise MadrasahForbiddenError("Tidak dapat mengakses unit lain")
+        ids = [unit_id]
+    if not ids:
+        return {
+            "total_santri": 0,
+            "total_guru": 0,
+            "total_rombel": 0,
+            "tagihan_lunas": 0,
+            "tagihan_belum": 0,
+            "per_rombel": [],
+            "unit_id": None,
+            "unit_nama": None,
+            "per_unit": [],
+        }
+    if len(ids) == 1:
+        return await rekap_umum(session, ids[0])
+    bagian = [await rekap_umum(session, uid) for uid in ids]
+    return {
+        "total_santri": sum(p["total_santri"] for p in bagian),
+        "total_guru": sum(p["total_guru"] for p in bagian),
+        "total_rombel": sum(p["total_rombel"] for p in bagian),
+        "tagihan_lunas": sum(p["tagihan_lunas"] for p in bagian),
+        "tagihan_belum": sum(p["tagihan_belum"] for p in bagian),
+        "per_rombel": [],
+        "unit_id": None,
+        "unit_nama": "Beberapa unit",
+        "per_unit": bagian,
     }
 
 
