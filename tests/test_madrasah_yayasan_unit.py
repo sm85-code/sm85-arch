@@ -142,3 +142,73 @@ async def test_patch_unit_rejects_unknown_id(session):
 
     with pytest.raises(services.MadrasahNotFoundError):
         await services.patch_unit(session, "tidak-ada", MadrasahUnitPatch(nama="X"))
+
+
+@pytest.mark.asyncio
+async def test_list_santri_filters_by_unit(session):
+    await services.ensure_default_unit_and_backfill(session)
+    unit_a = (await services.list_unit(session))[0]
+    unit_b = await services.create_unit(session, MadrasahUnitIn(nama="Unit Cabang"))
+    session.add_all(
+        [
+            SantriMadrasah(nama="A1", madrasah_unit_id=unit_a.id),
+            SantriMadrasah(nama="B1", madrasah_unit_id=unit_b.id),
+        ]
+    )
+    await session.flush()
+
+    only_b = await services.list_santri(session, status="semua", unit_id=unit_b.id)
+    assert [s.nama for s in only_b] == ["B1"]
+
+    semua = await services.list_santri(session, status="semua")
+    assert {s.nama for s in semua} == {"A1", "B1"}
+
+
+@pytest.mark.asyncio
+async def test_admin_utama_sees_all_kepala_sees_own_unit(session):
+    await services.ensure_default_unit_and_backfill(session)
+    unit_a = (await services.list_unit(session))[0]
+    unit_b = await services.create_unit(session, MadrasahUnitIn(nama="Unit Cabang"))
+    admin = UserMadrasah(nama="Admin Utama", no_hp="081300000001", password_hash="x", role="admin", madrasah_unit_id=unit_a.id)
+    kepala = UserMadrasah(nama="Kepala B", no_hp="081300000002", password_hash="x", role="kepala_sekolah", madrasah_unit_id=unit_b.id)
+    session.add_all(
+        [
+            admin,
+            kepala,
+            SantriMadrasah(nama="A1", madrasah_unit_id=unit_a.id),
+            SantriMadrasah(nama="B1", madrasah_unit_id=unit_b.id),
+        ]
+    )
+    await session.flush()
+
+    assert services.resolve_unit_scope(admin) is None
+    assert services.resolve_unit_scope(admin, unit_b.id) == unit_b.id
+    assert services.resolve_unit_scope(kepala) == unit_b.id
+    with pytest.raises(services.MadrasahForbiddenError):
+        services.resolve_unit_scope(kepala, unit_a.id)
+
+    owned = await services.list_santri(session, status="semua", unit_id=services.resolve_unit_scope(kepala))
+    assert [s.nama for s in owned] == ["B1"]
+    all_rows = await services.list_santri(session, status="semua", unit_id=services.resolve_unit_scope(admin))
+    assert {s.nama for s in all_rows} == {"A1", "B1"}
+
+
+@pytest.mark.asyncio
+async def test_staf_cannot_create_into_other_unit(session):
+    await services.ensure_default_unit_and_backfill(session)
+    unit_a = (await services.list_unit(session))[0]
+    unit_b = await services.create_unit(session, MadrasahUnitIn(nama="Unit Cabang"))
+    kepala = UserMadrasah(
+        nama="Kepala A", no_hp="081300000003", password_hash="x", role="kepala_sekolah", madrasah_unit_id=unit_a.id
+    )
+    session.add(kepala)
+    await session.flush()
+
+    with pytest.raises(services.MadrasahForbiddenError):
+        await services.create_santri(session, SantriIn(nama="Nyasar", madrasah_unit_id=unit_b.id), caller=kepala)
+
+    admin = UserMadrasah(nama="Admin", no_hp="081300000004", password_hash="x", role="admin")
+    session.add(admin)
+    await session.flush()
+    ok = await services.create_santri(session, SantriIn(nama="Cabang", madrasah_unit_id=unit_b.id), caller=admin)
+    assert ok.madrasah_unit_id == unit_b.id
