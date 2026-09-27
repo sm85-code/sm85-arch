@@ -130,6 +130,15 @@ TUGAS_KE_ROLE = {
 }
 ROLE_KE_JENIS = {v: k for k, v in TUGAS_KE_ROLE.items()}
 ROLE_KE_JENIS["guru"] = "guru_mapel"
+PENGELOLA_ROMBEL = frozenset({"admin", "yayasan_admin", "kepala_sekolah", "lembaga_admin"})
+
+
+def pengelola_lintas_rombel(user: UserMadrasah | None) -> bool:
+    return bool(effective_roles(user) & PENGELOLA_ROMBEL)
+
+
+def hanya_wali_kelas(user: UserMadrasah | None) -> bool:
+    return "wali_kelas" in effective_roles(user) and not pengelola_lintas_rombel(user)
 
 
 def _tugas_rows(user: UserMadrasah | None) -> list:
@@ -647,13 +656,12 @@ async def bulk_insert_absensi(session: AsyncSession, payload: AbsenBulkRequest, 
 async def assert_own_rombel_santri(session: AsyncSession, guru: UserMadrasah, santri_ids: list[str]) -> None:
     """Wali kelas cuma boleh input/edit absensi & progres untuk santri di
     rombel yang dia asuh sendiri (RombelMadrasah.wali_kelas_id == guru.id).
-    Admin/kepala sekolah bypass (perlu akses lintas kelas). Role lain (guru
-    mapel biasa) tidak dibatasi lewat fungsi ini -- dia punya jalurnya sendiri
-    (GuruMapelRombel, lihat bulk_insert_absensi_mapel)."""
-    if guru.role in ("admin", "kepala_sekolah"):
+    Admin/kepala/admin lembaga bypass (perlu akses lintas kelas). Wali kelas
+    lewat tugas tambahan juga terkunci ke rombel asuhannya."""
+    if pengelola_lintas_rombel(guru):
         return
-    if guru.role != "wali_kelas":
-        return
+    if "wali_kelas" not in effective_roles(guru):
+        raise MadrasahForbiddenError("Anda hanya dapat mengelola santri di rombel Anda sendiri")
     if not santri_ids:
         return
     rows = list(
@@ -680,10 +688,10 @@ async def assert_own_rombel_santri(session: AsyncSession, guru: UserMadrasah, sa
 async def assert_own_rombel(session: AsyncSession, guru: UserMadrasah, rombel_id: str) -> None:
     """Untuk endpoint yang menerima rombel_id langsung (bukan santri_id):
     pastikan rombel_id itu memang milik wali kelas yang bersangkutan."""
-    if guru.role in ("admin", "kepala_sekolah"):
+    if pengelola_lintas_rombel(guru):
         return
-    if guru.role != "wali_kelas":
-        return
+    if "wali_kelas" not in effective_roles(guru):
+        raise MadrasahForbiddenError("Rombel ini bukan rombel Anda")
     rombel = await session.get(RombelMadrasah, rombel_id)
     if not rombel or rombel.wali_kelas_id != guru.id:
         raise MadrasahForbiddenError("Rombel ini bukan rombel Anda")
@@ -718,7 +726,7 @@ async def list_rombel_for_caller(
 ) -> list[RombelMadrasah]:
     scope = resolve_unit_scope(caller, requested_unit_id)
     rows = await list_rombel(session, unit_id=scope)
-    if caller.role != "wali_kelas":
+    if not hanya_wali_kelas(caller):
         return rows
     return [r for r in rows if r.wali_kelas_id == caller.id]
 
@@ -731,7 +739,7 @@ async def list_santri_for_caller(session: AsyncSession, caller: UserMadrasah, ke
     if caller.role == "wali_santri":
         stmt = select(SantriMadrasah).where(SantriMadrasah.orang_tua_id == caller.id).order_by(SantriMadrasah.nama)
         return list((await session.execute(stmt)).scalars())
-    if caller.role != "wali_kelas":
+    if not hanya_wali_kelas(caller):
         scope = resolve_unit_scope(caller)
         return await list_santri(session, kelas_id, unit_id=scope)
     own_rombel = list(
@@ -1701,11 +1709,13 @@ async def set_status_santri(session: AsyncSession, santri_id: str, payload: Sant
     return row
 
 
-async def kenaikan_kelas_massal(session: AsyncSession, payload: KenaikanKelasRequest) -> dict:
+async def kenaikan_kelas_massal(session: AsyncSession, payload: KenaikanKelasRequest, caller: UserMadrasah | None = None) -> dict:
     """Proses satu batch kenaikan kelas: tiap item pindah rombel (dicatat ke
     riwayat lewat _catat_riwayat_penempatan) atau, kalau rombel_tujuan_id
     kosong, ditandai lulus (tanggal hari ini, riwayat ditutup). Santri yang
     tidak disebutkan dalam payload tidak tersentuh sama sekali."""
+    if caller is not None and hanya_wali_kelas(caller):
+        await assert_own_rombel_santri(session, caller, [item.santri_id for item in payload.items])
     dipindah: list[str] = []
     diluluskan: list[str] = []
     for item in payload.items:

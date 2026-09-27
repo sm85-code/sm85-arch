@@ -79,7 +79,7 @@ keuangan_r = APIRouter(prefix="/keuangan", tags=["Madrasah Keuangan"])
 ADMIN_ROLES = ("kepala_sekolah", "admin")
 KURIKULUM_ROLES = ("kurikulum", "kepala_sekolah", "lembaga_admin", "admin")
 BENDAHARA_ROLES = ("bendahara", "kepala_sekolah", "lembaga_admin", "admin")
-WALI_KELAS_ROLES = ("wali_kelas", "guru", "kepala_sekolah", "lembaga_admin", "admin")
+WALI_KELAS_ROLES = ("wali_kelas", "kepala_sekolah", "lembaga_admin", "admin")
 WALI_SANTRI_ROLES = ("wali_santri", "wali_kelas", "kepala_sekolah", "lembaga_admin", "admin")
 GURU_MAPEL_ROLES = ("guru", "wali_kelas", "kepala_sekolah", "lembaga_admin", "admin")
 ANY_AUTHENTICATED = ADMIN_ROLES + KURIKULUM_ROLES + BENDAHARA_ROLES + WALI_KELAS_ROLES + WALI_SANTRI_ROLES + ("yayasan_admin", "lembaga_admin")
@@ -100,6 +100,8 @@ INFO_AKADEMIK_READ_ROLES = INFO_AKADEMIK_ROLES + ("yayasan_admin",)
 PENGUMUMAN_WRITE_ROLES = ("admin", "kepala_sekolah", "lembaga_admin")
 SANTRI_READ_ROLES = ("admin", "kepala_sekolah", "lembaga_admin", "yayasan_admin")
 SANTRI_WRITE_ROLES = ("admin", "kepala_sekolah", "lembaga_admin")
+KENAIKAN_READ_ROLES = ("admin", "kepala_sekolah", "lembaga_admin", "kurikulum", "wali_kelas", "yayasan_admin")
+KENAIKAN_WRITE_ROLES = ("admin", "kepala_sekolah", "lembaga_admin", "wali_kelas")
 ROMBEL_READ_ROLES = ("admin", "kepala_sekolah", "lembaga_admin", "kurikulum", "yayasan_admin")
 ROMBEL_WRITE_ROLES = ("admin", "kepala_sekolah", "lembaga_admin", "kurikulum")
 KURIKULUM_READ_ROLES = KURIKULUM_ROLES + ("yayasan_admin",)
@@ -683,10 +685,13 @@ async def admin_santri_list(
     status: str | None = Query(default="semua"),
     unit_id: str | None = Query(default=None),
     session: AsyncSession = Depends(get_db_madrasah),
-    user: UserMadrasah = Depends(require_roles_madrasah(*SANTRI_READ_ROLES)),
+    user: UserMadrasah = Depends(require_roles_madrasah(*SANTRI_READ_ROLES, "wali_kelas")),
 ):
-    scope = _unit_scope(user, unit_id)
-    rows = await services.list_santri(session, None, status=status, unit_id=scope)
+    if services.hanya_wali_kelas(user):
+        rows = await services.list_santri_for_caller(session, user, None)
+    else:
+        scope = _unit_scope(user, unit_id)
+        rows = await services.list_santri(session, None, status=status, unit_id=scope)
     return [
         {"id": r.id, "nama": r.nama, "rombel_id": r.rombel_id, "orang_tua_id": r.orang_tua_id, "orang_tua": r.orang_tua.nama if r.orang_tua else None, "status": r.status, "madrasah_unit_id": r.madrasah_unit_id}
         for r in rows
@@ -945,10 +950,10 @@ async def admin_kenaikan_kelas(
     payload: KenaikanKelasRequest,
     request: Request,
     session: AsyncSession = Depends(get_db_madrasah),
-    user: UserMadrasah = Depends(require_roles_madrasah(*SANTRI_WRITE_ROLES)),
+    user: UserMadrasah = Depends(require_roles_madrasah(*KENAIKAN_WRITE_ROLES)),
 ):
     try:
-        hasil = await services.kenaikan_kelas_massal(session, payload)
+        hasil = await services.kenaikan_kelas_massal(session, payload, caller=user)
     except services.MadrasahNotFoundError as exc:
         raise HTTPException(status_code=404, detail=str(exc)) from exc
     await services.record_audit(
@@ -1186,8 +1191,12 @@ async def wk_absen(
 async def wk_rekap_absensi(
     rombel_id: str = Query(...),
     session: AsyncSession = Depends(get_db_madrasah),
-    _: UserMadrasah = Depends(require_roles_madrasah(*WALI_KELAS_ROLES, "yayasan_admin")),
+    user: UserMadrasah = Depends(require_roles_madrasah(*WALI_KELAS_ROLES, "yayasan_admin")),
 ):
+    try:
+        await services.assert_own_rombel(session, user, rombel_id)
+    except services.MadrasahForbiddenError as exc:
+        raise HTTPException(status_code=403, detail=str(exc)) from exc
     return await services.rekap_absensi_rombel(session, rombel_id)
 
 
@@ -1264,16 +1273,6 @@ async def wk_santri_patch(
     except services.MadrasahForbiddenError as exc:
         raise HTTPException(status_code=403, detail=str(exc)) from exc
     return {"id": row.id, "nama": row.nama, "orang_tua_id": row.orang_tua_id}
-
-
-@wali_kelas_r.post("/pengumuman", status_code=status.HTTP_201_CREATED)
-async def wk_pengumuman_create(
-    payload: PengumumanIn,
-    session: AsyncSession = Depends(get_db_madrasah),
-    user: UserMadrasah = Depends(require_roles_madrasah(*WALI_KELAS_ROLES)),
-):
-    row = await services.create_pengumuman(session, payload, user.id, caller=user)
-    return {"id": row.id, "judul": row.judul, "isi": row.isi, "tanggal": row.tanggal.isoformat(), "madrasah_unit_id": row.madrasah_unit_id}
 
 
 @wali_kelas_r.get("/pesan/{santri_id}")
