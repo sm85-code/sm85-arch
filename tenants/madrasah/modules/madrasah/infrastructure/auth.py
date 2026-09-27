@@ -59,6 +59,28 @@ def reset_login_attempts(request: Request, no_hp: str) -> None:
     _login_attempts.pop(_login_throttle_key(request, no_hp), None)
 
 
+# Separate throttle for the public PSB registration form (POST /pendaftaran,
+# no auth): keyed by IP only since there's no account to key on, generous
+# enough for a real family submitting once but capped so the same visitor
+# can't script-spam the table.
+MAX_PUBLIC_SUBMISSIONS = 5
+PUBLIC_SUBMISSION_WINDOW_SECONDS = 3600
+_public_submissions: dict[str, list[float]] = defaultdict(list)
+
+
+def check_public_submission_rate_limit(request: Request, scope: str) -> None:
+    key = f"{scope}:{request.client.host if request.client else 'unknown'}"
+    now = time.monotonic()
+    attempts = [t for t in _public_submissions[key] if now - t < PUBLIC_SUBMISSION_WINDOW_SECONDS]
+    if len(attempts) >= MAX_PUBLIC_SUBMISSIONS:
+        raise HTTPException(
+            status_code=status.HTTP_429_TOO_MANY_REQUESTS,
+            detail="Terlalu banyak pengajuan dari perangkat ini. Coba lagi nanti.",
+        )
+    attempts.append(now)
+    _public_submissions[key] = attempts
+
+
 def issue_madrasah_token(user: UserMadrasah) -> str:
     """Create a JWT for a madrasah user, reusing the shared encode primitive.
 

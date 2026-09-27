@@ -374,6 +374,45 @@ class PengumumanMadrasah(MadrasahBase):
     pembuat: Mapped[Optional["UserMadrasah"]] = relationship(back_populates="pengumuman")
 
 
+class KegiatanMadrasah(MadrasahBase):
+    """Kegiatan/program yang ditampilkan di landing page publik (mis.
+    Tahfidz, Kajian Kitab Kuning, Ekstrakurikuler) -- diisi admin lewat
+    /admin/kegiatan, dipakai marketing/PSB, tidak terkait entitas lain."""
+
+    __tablename__ = "madrasah_kegiatan"
+
+    id: Mapped[str] = mapped_column(String(64), primary_key=True, default=_uuid)
+    judul: Mapped[str] = mapped_column(String(255), nullable=False)
+    deskripsi: Mapped[str] = mapped_column(Text, nullable=False, default="")
+    urutan: Mapped[int] = mapped_column(Integer, nullable=False, default=1)
+    dibuat_pada: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=_utcnow)
+
+
+class PendaftaranSantri(MadrasahBase):
+    """Pengajuan dari calon santri/wali lewat form PSB publik (tanpa login).
+    Ditinjau admin lewat /admin/pendaftaran -- tidak otomatis membuat akun
+    UserMadrasah/SantriMadrasah; itu tetap keputusan manual admin setelah
+    verifikasi (wawancara, berkas fisik, dll), bukan hal yang aman untuk
+    diotomasi dari input publik yang belum diverifikasi."""
+
+    __tablename__ = "madrasah_pendaftaran"
+
+    id: Mapped[str] = mapped_column(String(64), primary_key=True, default=_uuid)
+    nama_calon: Mapped[str] = mapped_column(String(255), nullable=False)
+    tempat_lahir: Mapped[Optional[str]] = mapped_column(String(255), nullable=True)
+    tanggal_lahir: Mapped[Optional[date]] = mapped_column(Date, nullable=True)
+    nama_orang_tua: Mapped[str] = mapped_column(String(255), nullable=False)
+    no_hp: Mapped[str] = mapped_column(String(32), nullable=False)
+    alamat: Mapped[str] = mapped_column(Text, nullable=False, default="")
+    asal_sekolah: Mapped[Optional[str]] = mapped_column(String(255), nullable=True)
+    catatan: Mapped[str] = mapped_column(Text, nullable=False, default="")
+    # "baru" | "dihubungi" | "diterima" | "ditolak" -- plain string (bukan DB
+    # enum) supaya menambah status baru nanti tidak perlu migrasi ALTER TYPE,
+    # sama seperti pola SantriMadrasah.status.
+    status: Mapped[str] = mapped_column(String(16), nullable=False, default="baru", index=True)
+    dibuat_pada: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=_utcnow, index=True)
+
+
 class GuruMapelRombel(MadrasahBase):
     """Penugasan: guru X mengajar mapel Y di rombel Z. Many-to-many, baru,
     tidak menyentuh/mengubah tabel manapun yang sudah ada. Dipakai untuk
@@ -512,6 +551,9 @@ class PengaturanSekolah(MadrasahBase):
     tagline: Mapped[str] = mapped_column(String(255), nullable=False, default="Sistem Informasi Madrasah")
     logo_url: Mapped[Optional[str]] = mapped_column(String(500), nullable=True)
     alamat: Mapped[str] = mapped_column(String(500), nullable=False, default="")
+    # Ditampilkan di section "Penerimaan Santri Baru" landing page publik.
+    info_psb: Mapped[str] = mapped_column(Text, nullable=False, default="")
+    kontak_psb: Mapped[str] = mapped_column(String(64), nullable=False, default="")
     updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=_utcnow, onupdate=_utcnow)
 
 

@@ -14,11 +14,14 @@ from tenants.madrasah.modules.madrasah.application.schemas import (
     BukuKasIn,
     GuruIn,
     JadwalIn,
+    KegiatanIn,
     LoginRequest,
     MapelIn,
     MapelPatch,
     MateriIn,
     MateriPatch,
+    PendaftaranIn,
+    PendaftaranPatch,
     PenugasanIn,
     KenaikanKelasRequest,
     MadrasahUnitIn,
@@ -43,6 +46,7 @@ from tenants.madrasah.modules.madrasah.application.schemas import (
 )
 from tenants.madrasah.modules.madrasah.infrastructure.auth import (
     check_login_rate_limit,
+    check_public_submission_rate_limit,
     clear_madrasah_cookie,
     issue_madrasah_token,
     record_failed_login,
@@ -304,6 +308,29 @@ async def get_pengumuman(session: AsyncSession = Depends(get_db_madrasah)):
     return [{"id": row.id, "judul": row.judul, "isi": row.isi, "tanggal": row.tanggal.isoformat(), "dibuat_by": row.dibuat_by} for row in rows]
 
 
+@madrasah_router.get("/kegiatan")
+async def get_kegiatan(session: AsyncSession = Depends(get_db_madrasah)):
+    # Publik juga (landing page, section "Kegiatan & Program"), sama
+    # alasannya dengan /pengumuman dan /pengaturan di atas.
+    rows = await services.list_kegiatan(session)
+    return [services.kegiatan_out(row) for row in rows]
+
+
+@madrasah_router.post("/pendaftaran", status_code=status.HTTP_201_CREATED)
+async def public_pendaftaran_create(
+    payload: PendaftaranIn,
+    request: Request,
+    session: AsyncSession = Depends(get_db_madrasah),
+):
+    # Form PSB publik -- calon wali santri belum punya akun. Di-rate-limit
+    # per IP (lihat check_public_submission_rate_limit) karena endpoint POST
+    # tanpa auth adalah target spam. Hanya balas id+status, bukan seluruh
+    # data pribadi yang baru saja dikirim, seperlunya untuk konfirmasi UI.
+    check_public_submission_rate_limit(request, "pendaftaran")
+    row = await services.create_pendaftaran(session, payload)
+    return {"id": row.id, "status": row.status}
+
+
 @admin_r.get("/tingkat")
 async def admin_tingkat(
     session: AsyncSession = Depends(get_db_madrasah),
@@ -545,6 +572,51 @@ async def admin_pengumuman_create(
 ):
     row = await services.create_pengumuman(session, payload, user.id)
     return {"id": row.id, "judul": row.judul, "isi": row.isi, "tanggal": row.tanggal.isoformat()}
+
+
+@admin_r.post("/kegiatan", status_code=status.HTTP_201_CREATED)
+async def admin_kegiatan_create(
+    payload: KegiatanIn,
+    session: AsyncSession = Depends(get_db_madrasah),
+    _: UserMadrasah = Depends(require_roles_madrasah(*ADMIN_ROLES)),
+):
+    row = await services.create_kegiatan(session, payload)
+    return services.kegiatan_out(row)
+
+
+@admin_r.delete("/kegiatan/{kegiatan_id}", status_code=status.HTTP_204_NO_CONTENT)
+async def admin_kegiatan_delete(
+    kegiatan_id: str,
+    session: AsyncSession = Depends(get_db_madrasah),
+    _: UserMadrasah = Depends(require_roles_madrasah(*ADMIN_ROLES)),
+):
+    try:
+        await services.delete_kegiatan(session, kegiatan_id)
+    except services.MadrasahNotFoundError as exc:
+        raise HTTPException(status_code=404, detail=str(exc)) from exc
+
+
+@admin_r.get("/pendaftaran")
+async def admin_pendaftaran_list(
+    session: AsyncSession = Depends(get_db_madrasah),
+    _: UserMadrasah = Depends(require_roles_madrasah(*ADMIN_ROLES)),
+):
+    rows = await services.list_pendaftaran(session)
+    return [services.pendaftaran_out(row) for row in rows]
+
+
+@admin_r.patch("/pendaftaran/{pendaftaran_id}")
+async def admin_pendaftaran_patch(
+    pendaftaran_id: str,
+    payload: PendaftaranPatch,
+    session: AsyncSession = Depends(get_db_madrasah),
+    _: UserMadrasah = Depends(require_roles_madrasah(*ADMIN_ROLES)),
+):
+    try:
+        row = await services.patch_pendaftaran(session, pendaftaran_id, payload)
+    except services.MadrasahNotFoundError as exc:
+        raise HTTPException(status_code=404, detail=str(exc)) from exc
+    return services.pendaftaran_out(row)
 
 
 @admin_r.get("/rekap")

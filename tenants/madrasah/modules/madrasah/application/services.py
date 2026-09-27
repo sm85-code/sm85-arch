@@ -16,11 +16,14 @@ from tenants.madrasah.modules.madrasah.application.schemas import (
     BukuKasIn,
     GuruIn,
     JadwalIn,
+    KegiatanIn,
     LoginRequest,
     MapelIn,
     MapelPatch,
     MateriIn,
     MateriPatch,
+    PendaftaranIn,
+    PendaftaranPatch,
     PenugasanIn,
     PengaturanPatch,
     PlacementIn,
@@ -52,10 +55,12 @@ from tenants.madrasah.modules.madrasah.infrastructure.models import (
     HonorMengajar,
     JadwalMadrasah,
     JurnalMadrasah,
+    KegiatanMadrasah,
     KelasMadrasah,
     MadrasahUnit,
     MapelMadrasah,
     MateriTarget,
+    PendaftaranSantri,
     PengaturanSekolah,
     PengumumanMadrasah,
     PesanMadrasah,
@@ -518,7 +523,71 @@ def pengaturan_out(row: PengaturanSekolah) -> dict:
         "tagline": row.tagline,
         "logo_url": row.logo_url,
         "alamat": row.alamat,
+        "info_psb": row.info_psb,
+        "kontak_psb": row.kontak_psb,
     }
+
+
+def kegiatan_out(row: KegiatanMadrasah) -> dict:
+    return {"id": row.id, "judul": row.judul, "deskripsi": row.deskripsi, "urutan": row.urutan}
+
+
+async def list_kegiatan(session: AsyncSession) -> list[KegiatanMadrasah]:
+    rows = (await session.execute(select(KegiatanMadrasah).order_by(KegiatanMadrasah.urutan, KegiatanMadrasah.dibuat_pada))).scalars()
+    return list(rows)
+
+
+async def create_kegiatan(session: AsyncSession, payload: KegiatanIn) -> KegiatanMadrasah:
+    row = KegiatanMadrasah(judul=payload.judul, deskripsi=payload.deskripsi, urutan=payload.urutan)
+    session.add(row)
+    await session.flush()
+    return row
+
+
+async def delete_kegiatan(session: AsyncSession, kegiatan_id: str) -> None:
+    row = await session.get(KegiatanMadrasah, kegiatan_id)
+    if not row:
+        raise MadrasahNotFoundError("Kegiatan tidak ditemukan")
+    await session.delete(row)
+
+
+def pendaftaran_out(row: PendaftaranSantri) -> dict:
+    return {
+        "id": row.id,
+        "nama_calon": row.nama_calon,
+        "tempat_lahir": row.tempat_lahir,
+        "tanggal_lahir": row.tanggal_lahir.isoformat() if row.tanggal_lahir else None,
+        "nama_orang_tua": row.nama_orang_tua,
+        "no_hp": row.no_hp,
+        "alamat": row.alamat,
+        "asal_sekolah": row.asal_sekolah,
+        "catatan": row.catatan,
+        "status": row.status,
+        "dibuat_pada": row.dibuat_pada.isoformat(),
+    }
+
+
+async def create_pendaftaran(session: AsyncSession, payload: PendaftaranIn) -> PendaftaranSantri:
+    row = PendaftaranSantri(**payload.model_dump())
+    session.add(row)
+    await session.flush()
+    return row
+
+
+async def list_pendaftaran(session: AsyncSession) -> list[PendaftaranSantri]:
+    rows = (await session.execute(select(PendaftaranSantri).order_by(PendaftaranSantri.dibuat_pada.desc()))).scalars()
+    return list(rows)
+
+
+async def patch_pendaftaran(session: AsyncSession, pendaftaran_id: str, payload: PendaftaranPatch) -> PendaftaranSantri:
+    row = await session.get(PendaftaranSantri, pendaftaran_id)
+    if not row:
+        raise MadrasahNotFoundError("Pendaftaran tidak ditemukan")
+    data = payload.model_dump(exclude_unset=True)
+    for field, value in data.items():
+        setattr(row, field, value)
+    await session.flush()
+    return row
 
 
 async def list_pengumuman(session: AsyncSession, limit: int = 50) -> list[PengumumanMadrasah]:
