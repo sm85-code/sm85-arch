@@ -23,6 +23,7 @@ from tenants.madrasah.modules.madrasah.application.schemas import (
     PendaftaranIn,
     PendaftaranPatch,
     PenugasanIn,
+    ProfilPatch,
     KenaikanKelasRequest,
     MadrasahUnitIn,
     MadrasahUnitPatch,
@@ -48,6 +49,7 @@ from tenants.madrasah.modules.madrasah.infrastructure.auth import (
     check_login_rate_limit,
     check_public_submission_rate_limit,
     clear_madrasah_cookie,
+    get_current_user_madrasah,
     issue_madrasah_token,
     record_failed_login,
     require_roles_madrasah,
@@ -199,6 +201,24 @@ async def login(
 async def logout(response: Response):
     clear_madrasah_cookie(response)
     return {"status": "ok"}
+
+
+@madrasah_router.patch("/profil")
+async def profil_patch(
+    payload: ProfilPatch,
+    session: AsyncSession = Depends(get_db_madrasah),
+    user: UserMadrasah = Depends(get_current_user_madrasah),
+):
+    # Sengaja pakai get_current_user_madrasah langsung (bukan
+    # require_roles_madrasah): halaman "Profil Saya" harus bisa dipakai
+    # SEMUA role yang login, termasuk yayasan_admin yang tidak masuk
+    # ANY_AUTHENTICATED (role itu memang dikecualikan dari CRUD operasional
+    # harian, tapi tetap berhak mengedit profilnya sendiri).
+    try:
+        row = await services.update_profil_saya(session, user, payload)
+    except services.MadrasahAuthError as exc:
+        raise HTTPException(status_code=401, detail=str(exc)) from exc
+    return services.user_out(row)
 
 
 @madrasah_router.get("/kelas")

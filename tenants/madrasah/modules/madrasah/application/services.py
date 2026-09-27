@@ -25,6 +25,7 @@ from tenants.madrasah.modules.madrasah.application.schemas import (
     PendaftaranIn,
     PendaftaranPatch,
     PenugasanIn,
+    ProfilPatch,
     PengaturanPatch,
     PlacementIn,
     ProgresCreateRequest,
@@ -233,6 +234,22 @@ async def tutup_semester(session: AsyncSession, semester_id: str) -> SemesterMad
 
 def user_out(user: UserMadrasah) -> dict:
     return {"id": user.id, "nama": user.nama, "no_hp": user.no_hp, "role": user.role}
+
+
+async def update_profil_saya(session: AsyncSession, user: UserMadrasah, payload: ProfilPatch) -> UserMadrasah:
+    """Self-service dari halaman "Profil Saya" -- BEDA dari patch_guru (yang
+    dipakai admin mengedit akun orang lain): di sini user cuma boleh
+    mengubah namanya sendiri dan menyertakan current_password yang benar
+    kalau mau ganti password, tidak bisa mengubah role/no_hp/akun lain."""
+    if payload.nama is not None:
+        user.nama = payload.nama.strip()
+    if payload.new_password:
+        if not payload.current_password or not verify_password(payload.current_password, user.password_hash):
+            raise MadrasahAuthError("Password saat ini salah")
+        user.password_hash = hash_password(payload.new_password)
+        user.session_version += 1
+    await session.flush()
+    return user
 
 
 def tagihan_status_label(row: TagihanSyahriyah) -> str:
