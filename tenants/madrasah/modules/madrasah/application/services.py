@@ -154,6 +154,29 @@ async def assign_unit_id(
     return caller.madrasah_unit_id or requested_unit_id or await _default_unit_id(session)
 
 
+async def _unit_untuk_akun_baru(
+    session: AsyncSession,
+    caller: UserMadrasah | None,
+    role: str,
+    requested_unit_id: str | None,
+) -> str | None:
+    """Admin utama dan admin yayasan tidak punya unit. Staf wajib punya unit."""
+    if role in ("admin", "yayasan_admin"):
+        return None
+    return await assign_unit_id(session, caller, requested_unit_id)
+
+
+async def _ikat_kepala_ke_unit(session: AsyncSession, unit: MadrasahUnit, kepala_user_id: str | None) -> None:
+    if not kepala_user_id:
+        return
+    user = await session.get(UserMadrasah, kepala_user_id)
+    if not user or user.role != "kepala_sekolah":
+        raise MadrasahNotFoundError("Akun kepala madrasah tidak ditemukan")
+    user.madrasah_unit_id = unit.id
+    unit.kepala_unit = user.nama
+    await session.flush()
+
+
 def _utcnow() -> datetime:
     return datetime.now(timezone.utc)
 
@@ -1064,7 +1087,7 @@ async def create_guru(
         no_hp=payload.no_hp.strip(),
         password_hash=hash_password(payload.password or generated),
         role=payload.role or "wali_kelas",
-        madrasah_unit_id=await assign_unit_id(session, caller, payload.madrasah_unit_id),
+        madrasah_unit_id=await _unit_untuk_akun_baru(session, caller, payload.role or "wali_kelas", payload.madrasah_unit_id),
     )
     session.add(row)
     await session.flush()
@@ -1103,6 +1126,10 @@ async def patch_guru(session: AsyncSession, user_id: str, payload: UserPatch) ->
         row.role = payload.role
     if payload.password:
         row.password_hash = hash_password(payload.password)
+    target_role = payload.role or row.role
+    if "madrasah_unit_id" in payload.model_fields_set or target_role in ("admin", "yayasan_admin"):
+        # Admin utama dan admin yayasan tidak terikat satu unit.
+        row.madrasah_unit_id = None if target_role in ("admin", "yayasan_admin") else payload.madrasah_unit_id
     if payload.role is not None or payload.password:
         # Password atau role berubah -> setiap JWT yang sudah beredar untuk
         # akun ini (termasuk yang bocor) langsung ditolak di request
@@ -1437,6 +1464,7 @@ async def create_unit(session: AsyncSession, payload: MadrasahUnitIn) -> Madrasa
     )
     session.add(row)
     await session.flush()
+    await _ikat_kepala_ke_unit(session, row, payload.kepala_user_id)
     return row
 
 
@@ -1449,8 +1477,10 @@ async def patch_unit(session: AsyncSession, unit_id: str, payload: MadrasahUnitP
     if not row:
         raise MadrasahNotFoundError("Unit madrasah tidak ditemukan")
     data = payload.model_dump(exclude_unset=True)
+    kepala_user_id = data.pop("kepala_user_id", None)
     for field, value in data.items():
         setattr(row, field, value)
+    await _ikat_kepala_ke_unit(session, row, kepala_user_id)
     await session.flush()
     return row
 
@@ -1497,10 +1527,18 @@ async def ensure_default_unit_and_backfill(session: AsyncSession) -> None:
         await session.flush()
         unit_id = unit.id
 
-    for model in (TingkatMadrasah, RombelMadrasah, SantriMadrasah, MapelMadrasah, UserMadrasah):
+    for model in (TingkatMadrasah, RombelMadrasah, SantriMadrasah, MapelMadrasah):
         await session.execute(
             update(model).where(model.madrasah_unit_id.is_(None)).values(madrasah_unit_id=unit_id)
         )
+    await session.execute(
+        update(UserMadrasah)
+        .where(
+            UserMadrasah.madrasah_unit_id.is_(None),
+            UserMadrasah.role.notin_(("admin", "yayasan_admin")),
+        )
+        .values(madrasah_unit_id=unit_id)
+    )
     await session.flush()
 
 
@@ -1525,7 +1563,10 @@ async def rekap_yayasan(session: AsyncSession) -> list[dict]:
             await session.execute(
                 select(func.count())
                 .select_from(UserMadrasah)
-                .where(UserMadrasah.madrasah_unit_id == unit.id, UserMadrasah.role.in_(("guru", "wali_kelas")))
+                .where(
+                    UserMadrasah.madrasah_unit_id == unit.id,
+                    UserMadrasah.role.in_(("guru", "wali_kelas", "kepala_sekolah", "kurikulum", "bendahara")),
+                )
             )
         ).scalar_one()
         santri_unit_ids = list(
