@@ -955,6 +955,16 @@ async def list_wali_santri(session: AsyncSession) -> list[UserMadrasah]:
     return list((await session.execute(select(UserMadrasah).where(UserMadrasah.role == "wali_santri").order_by(UserMadrasah.nama))).scalars())
 
 
+async def list_semua_akun(session: AsyncSession) -> list[UserMadrasah]:
+    """Untuk halaman "Kelola Akun" (admin aplikasi only): SEMUA akun tanpa
+    filter role -- beda dari list_guru/list_wali_santri yang masing-masing
+    cuma menampilkan sebagian role. Ini satu-satunya tempat admin/
+    kepala_sekolah/yayasan_admin sendiri bisa dilihat & dikelola lewat UI;
+    create_guru/patch_guru/delete_guru dipakai apa adanya (generik, tidak
+    dibatasi role tertentu) untuk operasinya."""
+    return list((await session.execute(select(UserMadrasah).order_by(UserMadrasah.role, UserMadrasah.nama))).scalars())
+
+
 async def create_guru(session: AsyncSession, payload: GuruIn) -> UserMadrasah:
     row = UserMadrasah(
         nama=payload.nama,
@@ -968,6 +978,13 @@ async def create_guru(session: AsyncSession, payload: GuruIn) -> UserMadrasah:
     return row
 
 
+async def _count_admin(session: AsyncSession, exclude_id: str | None = None) -> int:
+    stmt = select(func.count()).select_from(UserMadrasah).where(UserMadrasah.role == "admin")
+    if exclude_id:
+        stmt = stmt.where(UserMadrasah.id != exclude_id)
+    return (await session.execute(stmt)).scalar_one()
+
+
 async def patch_guru(session: AsyncSession, user_id: str, payload: UserPatch) -> UserMadrasah:
     row = await session.get(UserMadrasah, user_id)
     if not row:
@@ -977,6 +994,12 @@ async def patch_guru(session: AsyncSession, user_id: str, payload: UserPatch) ->
     if payload.no_hp is not None:
         row.no_hp = payload.no_hp.strip()
     if payload.role is not None:
+        if row.role == "admin" and payload.role != "admin" and await _count_admin(session, exclude_id=user_id) == 0:
+            # Satu-satunya admin aplikasi yang tersisa -- turunkan rolenya
+            # akan mengunci SEMUA orang keluar dari Kelola Akun (endpoint
+            # itu eksklusif APP_ADMIN_ROLES = role "admin"), tidak ada jalan
+            # baliknya lewat UI sama sekali.
+            raise MadrasahForbiddenError("Tidak bisa mengubah role admin terakhir")
         row.role = payload.role
     if payload.password:
         row.password_hash = hash_password(payload.password)
@@ -1004,6 +1027,8 @@ async def delete_guru(session: AsyncSession, user_id: str) -> None:
     row = await session.get(UserMadrasah, user_id)
     if not row:
         raise MadrasahNotFoundError("Akun tidak ditemukan")
+    if row.role == "admin" and await _count_admin(session, exclude_id=user_id) == 0:
+        raise MadrasahForbiddenError("Tidak bisa menghapus admin terakhir")
 
     await session.execute(update(RombelMadrasah).where(RombelMadrasah.wali_kelas_id == user_id).values(wali_kelas_id=None))
     await session.execute(update(SantriMadrasah).where(SantriMadrasah.orang_tua_id == user_id).values(orang_tua_id=None))
