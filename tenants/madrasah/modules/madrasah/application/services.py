@@ -135,8 +135,10 @@ ROLE_KE_JENIS["guru"] = "guru_mapel"
 def _tugas_rows(user: UserMadrasah | None) -> list:
     if user is None:
         return []
-    loaded = getattr(user, "tugas", None)
-    return list(loaded) if loaded is not None else []
+    cached = getattr(user, "_tugas_list", None)
+    if cached is not None:
+        return list(cached)
+    return []
 
 
 def effective_roles(user: UserMadrasah | None) -> set[str]:
@@ -440,7 +442,7 @@ async def list_tugas(session: AsyncSession, unit_id: str | None = None, user_id:
 
 async def load_tugas(session: AsyncSession, user: UserMadrasah) -> UserMadrasah:
     rows = list((await session.execute(select(TugasMadrasah).where(TugasMadrasah.user_id == user.id))).scalars())
-    user.tugas = rows
+    user._tugas_list = rows
     return user
 
 

@@ -86,7 +86,7 @@ class UserMadrasah(MadrasahBase):
     absensi_dicatat: Mapped[list["AbsensiMadrasah"]] = relationship(back_populates="guru")
     pengumuman: Mapped[list["PengumumanMadrasah"]] = relationship(back_populates="pembuat")
     rombel_asuh: Mapped[list["RombelMadrasah"]] = relationship(back_populates="wali_kelas")
-    tugas: Mapped[list["TugasMadrasah"]] = relationship(back_populates="user")
+    tugas: Mapped[list["TugasMadrasah"]] = relationship(back_populates="user", lazy="noload")
 
 
 class TugasMadrasah(MadrasahBase):
