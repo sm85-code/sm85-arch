@@ -1144,9 +1144,45 @@ async def kenaikan_kelas_massal(session: AsyncSession, payload: KenaikanKelasReq
 
 
 async def delete_santri(session: AsyncSession, santri_id: str) -> None:
+    """Hapus permanen data santri beserta riwayat penempatan/absensi/progres
+    hafalan/pesan yang menunjuk ke santri ini.
+
+    Dilakukan lewat DELETE eksplisit (bukan cuma mengandalkan ON DELETE
+    CASCADE di DB) karena tabel-tabel lama di database produksi bisa saja
+    sudah dibuat sebelum aturan ondelete itu ada di models.py -- constraint
+    FK aslinya di Postgres masih RESTRICT, jadi session.delete(row) langsung
+    bisa gagal dengan IntegrityError (500) kalau santri ini masih dirujuk di
+    mana pun. Sama seperti delete_guru().
+
+    Tagihan syahriyah yang belum lunas ikut dihapus (konsisten dengan
+    delete_tagihan()), tapi kalau ada yang SUDAH lunas, penghapusan santri
+    ditolak -- angkanya sudah tercermin di buku kas/jurnal, jadi hard-delete
+    akan membuat laporan keuangan tidak konsisten. Pakai status "Keluarkan"
+    untuk santri yang riwayat keuangannya harus tetap ada."""
     row = await session.get(SantriMadrasah, santri_id)
     if not row:
         raise MadrasahNotFoundError("Santri tidak ditemukan")
+
+    lunas_count = (
+        await session.execute(
+            select(func.count())
+            .select_from(TagihanSyahriyah)
+            .where(TagihanSyahriyah.santri_id == santri_id, TagihanSyahriyah.status_bayar.is_(True))
+        )
+    ).scalar_one()
+    if lunas_count:
+        raise MadrasahForbiddenError(
+            'Santri ini punya riwayat tagihan yang sudah lunas -- tidak bisa dihapus permanen. '
+            'Pakai status "Keluarkan" supaya riwayat keuangannya tetap utuh.'
+        )
+
+    await session.execute(delete(TagihanSyahriyah).where(TagihanSyahriyah.santri_id == santri_id))
+    await session.execute(delete(RiwayatPenempatanSantri).where(RiwayatPenempatanSantri.santri_id == santri_id))
+    await session.execute(delete(AbsensiMadrasah).where(AbsensiMadrasah.santri_id == santri_id))
+    await session.execute(delete(ProgresHafalan).where(ProgresHafalan.santri_id == santri_id))
+    await session.execute(delete(PesanMadrasah).where(PesanMadrasah.santri_id == santri_id))
+    await session.flush()
+
     await session.delete(row)
 
 
