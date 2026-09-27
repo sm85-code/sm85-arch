@@ -1620,6 +1620,8 @@ async def admin_semester_create(
         row = await services.create_semester(session, payload)
     except services.MadrasahNotFoundError as exc:
         raise HTTPException(status_code=404, detail=str(exc)) from exc
+    except services.MadrasahForbiddenError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
     return services.semester_out(row)
 
 
