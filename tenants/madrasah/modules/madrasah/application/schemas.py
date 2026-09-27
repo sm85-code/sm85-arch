@@ -139,6 +139,7 @@ class PesanIn(BaseModel):
 class PengumumanIn(BaseModel):
     judul: str
     isi: str = ""
+    madrasah_unit_id: Optional[str] = None
 
 
 class JadwalIn(BaseModel):
@@ -192,6 +193,7 @@ class KegiatanIn(BaseModel):
     judul: str = Field(..., min_length=1, max_length=255)
     deskripsi: str = ""
     urutan: int = 1
+    madrasah_unit_id: Optional[str] = None
 
 
 class PendaftaranIn(BaseModel):
@@ -205,6 +207,7 @@ class PendaftaranIn(BaseModel):
     alamat: str = Field("", max_length=2000)
     asal_sekolah: Optional[str] = Field(None, max_length=255)
     catatan: str = Field("", max_length=2000)
+    madrasah_unit_id: Optional[str] = None
 
 
 class ProfilPatch(BaseModel):
@@ -264,6 +267,7 @@ class TahunAjaranIn(BaseModel):
     kode: str = Field(..., min_length=4, max_length=16, description='mis. "2025/2026"')
     tanggal_mulai: date
     tanggal_selesai: date
+    madrasah_unit_id: Optional[str] = None
 
 
 class SemesterIn(BaseModel):

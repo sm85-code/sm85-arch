@@ -83,6 +83,13 @@ async def ensure_madrasah_schema() -> None:
             "madrasah_santri",
             "madrasah_mapel",
             "madrasah_users",
+            "madrasah_buku_kas",
+            "madrasah_jurnal",
+            "madrasah_honor_mengajar",
+            "madrasah_pengumuman",
+            "madrasah_kegiatan",
+            "madrasah_pendaftaran",
+            "madrasah_tahun_ajaran",
         ):
             await conn.execute(text(f"ALTER TABLE IF EXISTS {table} ADD COLUMN IF NOT EXISTS madrasah_unit_id VARCHAR(64) NULL"))
         # Unique per unit (Postgres). DROP nama unique lama kalau masih ada
@@ -90,6 +97,7 @@ async def ensure_madrasah_schema() -> None:
         await conn.execute(text("ALTER TABLE IF EXISTS madrasah_tingkat DROP CONSTRAINT IF EXISTS madrasah_tingkat_nama_key"))
         await conn.execute(text("ALTER TABLE IF EXISTS madrasah_rombel DROP CONSTRAINT IF EXISTS madrasah_rombel_nama_key"))
         await conn.execute(text("ALTER TABLE IF EXISTS madrasah_mapel DROP CONSTRAINT IF EXISTS madrasah_mapel_kode_key"))
+        await conn.execute(text("ALTER TABLE IF EXISTS madrasah_tahun_ajaran DROP CONSTRAINT IF EXISTS madrasah_tahun_ajaran_kode_key"))
         await conn.execute(text("CREATE UNIQUE INDEX IF NOT EXISTS uq_tingkat_unit_nama ON madrasah_tingkat (madrasah_unit_id, nama)"))
         await conn.execute(text("CREATE UNIQUE INDEX IF NOT EXISTS uq_rombel_unit_nama ON madrasah_rombel (madrasah_unit_id, nama)"))
         await conn.execute(text("CREATE UNIQUE INDEX IF NOT EXISTS uq_mapel_unit_kode ON madrasah_mapel (madrasah_unit_id, kode)"))

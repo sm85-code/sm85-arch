@@ -154,6 +154,14 @@ async def assign_unit_id(
     return caller.madrasah_unit_id or requested_unit_id or await _default_unit_id(session)
 
 
+def _pastikan_akses_unit_keuangan(caller: UserMadrasah | None, unit_id: str | None) -> None:
+    """Admin utama dan admin yayasan boleh lintas unit. Yang lain hanya unit sendiri."""
+    if caller is None or caller.role in CROSS_UNIT_ROLES:
+        return
+    if not caller.madrasah_unit_id or unit_id != caller.madrasah_unit_id:
+        raise MadrasahForbiddenError("Tidak dapat mengakses keuangan unit lain")
+
+
 async def _unit_untuk_akun_baru(
     session: AsyncSession,
     caller: UserMadrasah | None,
@@ -197,6 +205,7 @@ def tahun_ajaran_out(row: TahunAjaranMadrasah) -> dict:
         "kode": row.kode,
         "tanggal_mulai": row.tanggal_mulai.isoformat(),
         "tanggal_selesai": row.tanggal_selesai.isoformat(),
+        "madrasah_unit_id": row.madrasah_unit_id,
     }
 
 
@@ -212,17 +221,23 @@ def semester_out(row: SemesterMadrasah) -> dict:
     }
 
 
-async def create_tahun_ajaran(session: AsyncSession, payload: TahunAjaranIn) -> TahunAjaranMadrasah:
+async def create_tahun_ajaran(session: AsyncSession, payload: TahunAjaranIn, caller: UserMadrasah | None = None) -> TahunAjaranMadrasah:
     row = TahunAjaranMadrasah(
-        kode=payload.kode, tanggal_mulai=payload.tanggal_mulai, tanggal_selesai=payload.tanggal_selesai
+        kode=payload.kode,
+        tanggal_mulai=payload.tanggal_mulai,
+        tanggal_selesai=payload.tanggal_selesai,
+        madrasah_unit_id=await assign_unit_id(session, caller, payload.madrasah_unit_id),
     )
     session.add(row)
     await session.flush()
     return row
 
 
-async def list_tahun_ajaran(session: AsyncSession) -> list[TahunAjaranMadrasah]:
-    return list((await session.execute(select(TahunAjaranMadrasah).order_by(TahunAjaranMadrasah.kode.desc()))).scalars())
+async def list_tahun_ajaran(session: AsyncSession, unit_id: str | None = None) -> list[TahunAjaranMadrasah]:
+    stmt = select(TahunAjaranMadrasah).order_by(TahunAjaranMadrasah.kode.desc())
+    if unit_id:
+        stmt = stmt.where(TahunAjaranMadrasah.madrasah_unit_id == unit_id)
+    return list((await session.execute(stmt)).scalars())
 
 
 async def create_semester(session: AsyncSession, payload: SemesterIn) -> SemesterMadrasah:
@@ -240,12 +255,15 @@ async def create_semester(session: AsyncSession, payload: SemesterIn) -> Semeste
     return row
 
 
-async def list_semester(session: AsyncSession) -> list[SemesterMadrasah]:
+async def list_semester(session: AsyncSession, unit_id: str | None = None) -> list[SemesterMadrasah]:
     stmt = (
         select(SemesterMadrasah)
         .options(selectinload(SemesterMadrasah.tahun_ajaran))
+        .join(TahunAjaranMadrasah, SemesterMadrasah.tahun_ajaran_id == TahunAjaranMadrasah.id)
         .order_by(SemesterMadrasah.tanggal_mulai.desc())
     )
+    if unit_id:
+        stmt = stmt.where(TahunAjaranMadrasah.madrasah_unit_id == unit_id)
     return list((await session.execute(stmt)).scalars())
 
 
@@ -271,9 +289,14 @@ async def aktifkan_semester(session: AsyncSession, semester_id: str) -> Semester
     row = await session.get(SemesterMadrasah, semester_id)
     if not row:
         raise MadrasahNotFoundError("Semester tidak ditemukan")
-    await session.execute(
-        update(SemesterMadrasah).where(SemesterMadrasah.status == "aktif").values(status="ditutup")
-    )
+    await session.refresh(row, attribute_names=["tahun_ajaran"])
+    unit_id = row.tahun_ajaran.madrasah_unit_id if row.tahun_ajaran else None
+    aktif_lain = select(SemesterMadrasah.id).join(TahunAjaranMadrasah).where(SemesterMadrasah.status == "aktif")
+    if unit_id:
+        aktif_lain = aktif_lain.where(TahunAjaranMadrasah.madrasah_unit_id == unit_id)
+    else:
+        aktif_lain = aktif_lain.where(TahunAjaranMadrasah.madrasah_unit_id.is_(None))
+    await session.execute(update(SemesterMadrasah).where(SemesterMadrasah.id.in_(aktif_lain)).values(status="ditutup"))
     row.status = "aktif"
     await session.flush()
     await session.refresh(row, attribute_names=["tahun_ajaran"])
@@ -566,28 +589,38 @@ async def list_tagihan_rombel(session: AsyncSession, rombel_id: str) -> list[Tag
     return list((await session.execute(stmt)).scalars())
 
 
-async def list_tagihan_menunggu(session: AsyncSession) -> list[TagihanSyahriyah]:
+async def list_tagihan_menunggu(session: AsyncSession, unit_id: str | None = None) -> list[TagihanSyahriyah]:
     stmt = (
         select(TagihanSyahriyah)
         .options(selectinload(TagihanSyahriyah.santri))
+        .join(SantriMadrasah, TagihanSyahriyah.santri_id == SantriMadrasah.id)
         .where(TagihanSyahriyah.diajukan_oleh.is_not(None), TagihanSyahriyah.status_bayar.is_(False))
         .order_by(TagihanSyahriyah.diajukan_pada.asc())
     )
+    if unit_id:
+        stmt = stmt.where(SantriMadrasah.madrasah_unit_id == unit_id)
     return list((await session.execute(stmt)).scalars())
 
 
-async def list_tagihan_semua(session: AsyncSession, bulan_tahun: str | None = None) -> list[TagihanSyahriyah]:
+async def list_tagihan_semua(session: AsyncSession, bulan_tahun: str | None = None, unit_id: str | None = None) -> list[TagihanSyahriyah]:
     """Semua tagihan syahriyah (lunas maupun belum), dipakai bendahara untuk
     meninjau dan membersihkan tagihan yang salah generate -- beda dari
     list_tagihan_menunggu yang hanya menampilkan pengajuan pembayaran dari
     wali kelas."""
-    stmt = select(TagihanSyahriyah).options(selectinload(TagihanSyahriyah.santri)).order_by(TagihanSyahriyah.bulan_tahun.desc())
+    stmt = (
+        select(TagihanSyahriyah)
+        .options(selectinload(TagihanSyahriyah.santri))
+        .join(SantriMadrasah, TagihanSyahriyah.santri_id == SantriMadrasah.id)
+        .order_by(TagihanSyahriyah.bulan_tahun.desc())
+    )
     if bulan_tahun:
         stmt = stmt.where(TagihanSyahriyah.bulan_tahun == bulan_tahun)
+    if unit_id:
+        stmt = stmt.where(SantriMadrasah.madrasah_unit_id == unit_id)
     return list((await session.execute(stmt)).scalars())
 
 
-async def delete_tagihan(session: AsyncSession, tagihan_id: str) -> None:
+async def delete_tagihan(session: AsyncSession, tagihan_id: str, caller: UserMadrasah | None = None) -> None:
     """Tagihan yang sudah lunas tidak boleh dihapus lewat sini -- angkanya
     sudah tercermin di buku kas/jurnal dan laporan laba rugi, jadi
     menghapusnya diam-diam akan membuat laporan keuangan tidak konsisten
@@ -598,6 +631,8 @@ async def delete_tagihan(session: AsyncSession, tagihan_id: str) -> None:
         raise MadrasahNotFoundError("Tagihan tidak ditemukan")
     if row.status_bayar:
         raise MadrasahForbiddenError("Tidak bisa menghapus tagihan yang sudah lunas")
+    santri = await session.get(SantriMadrasah, row.santri_id)
+    _pastikan_akses_unit_keuangan(caller, santri.madrasah_unit_id if santri else None)
     await session.delete(row)
 
 
@@ -660,16 +695,23 @@ def pengaturan_out(row: PengaturanSekolah) -> dict:
 
 
 def kegiatan_out(row: KegiatanMadrasah) -> dict:
-    return {"id": row.id, "judul": row.judul, "deskripsi": row.deskripsi, "urutan": row.urutan}
+    return {"id": row.id, "judul": row.judul, "deskripsi": row.deskripsi, "urutan": row.urutan, "madrasah_unit_id": row.madrasah_unit_id}
 
 
-async def list_kegiatan(session: AsyncSession) -> list[KegiatanMadrasah]:
-    rows = (await session.execute(select(KegiatanMadrasah).order_by(KegiatanMadrasah.urutan, KegiatanMadrasah.dibuat_pada))).scalars()
-    return list(rows)
+async def list_kegiatan(session: AsyncSession, unit_id: str | None = None) -> list[KegiatanMadrasah]:
+    stmt = select(KegiatanMadrasah).order_by(KegiatanMadrasah.urutan, KegiatanMadrasah.dibuat_pada)
+    if unit_id:
+        stmt = stmt.where(KegiatanMadrasah.madrasah_unit_id == unit_id)
+    return list((await session.execute(stmt)).scalars())
 
 
-async def create_kegiatan(session: AsyncSession, payload: KegiatanIn) -> KegiatanMadrasah:
-    row = KegiatanMadrasah(judul=payload.judul, deskripsi=payload.deskripsi, urutan=payload.urutan)
+async def create_kegiatan(session: AsyncSession, payload: KegiatanIn, caller: UserMadrasah | None = None) -> KegiatanMadrasah:
+    row = KegiatanMadrasah(
+        judul=payload.judul,
+        deskripsi=payload.deskripsi,
+        urutan=payload.urutan,
+        madrasah_unit_id=await assign_unit_id(session, caller, payload.madrasah_unit_id),
+    )
     session.add(row)
     await session.flush()
     return row
@@ -695,6 +737,7 @@ def pendaftaran_out(row: PendaftaranSantri) -> dict:
         "catatan": row.catatan,
         "status": row.status,
         "dibuat_pada": row.dibuat_pada.isoformat(),
+        "madrasah_unit_id": row.madrasah_unit_id,
     }
 
 
@@ -705,9 +748,11 @@ async def create_pendaftaran(session: AsyncSession, payload: PendaftaranIn) -> P
     return row
 
 
-async def list_pendaftaran(session: AsyncSession) -> list[PendaftaranSantri]:
-    rows = (await session.execute(select(PendaftaranSantri).order_by(PendaftaranSantri.dibuat_pada.desc()))).scalars()
-    return list(rows)
+async def list_pendaftaran(session: AsyncSession, unit_id: str | None = None) -> list[PendaftaranSantri]:
+    stmt = select(PendaftaranSantri).order_by(PendaftaranSantri.dibuat_pada.desc())
+    if unit_id:
+        stmt = stmt.where(PendaftaranSantri.madrasah_unit_id == unit_id)
+    return list((await session.execute(stmt)).scalars())
 
 
 async def patch_pendaftaran(session: AsyncSession, pendaftaran_id: str, payload: PendaftaranPatch) -> PendaftaranSantri:
@@ -721,11 +766,14 @@ async def patch_pendaftaran(session: AsyncSession, pendaftaran_id: str, payload:
     return row
 
 
-async def list_pengumuman(session: AsyncSession, limit: int = 50) -> list[PengumumanMadrasah]:
-    return list((await session.execute(select(PengumumanMadrasah).order_by(PengumumanMadrasah.tanggal.desc()).limit(limit))).scalars())
+async def list_pengumuman(session: AsyncSession, limit: int = 50, unit_id: str | None = None) -> list[PengumumanMadrasah]:
+    stmt = select(PengumumanMadrasah).order_by(PengumumanMadrasah.tanggal.desc()).limit(limit)
+    if unit_id:
+        stmt = stmt.where(PengumumanMadrasah.madrasah_unit_id == unit_id)
+    return list((await session.execute(stmt)).scalars())
 
 
-async def generate_spp_massal(session: AsyncSession) -> list[TagihanSyahriyah]:
+async def generate_spp_massal(session: AsyncSession, unit_id: str | None = None) -> list[TagihanSyahriyah]:
     # "ALTER TABLE ... ADD COLUMN IF NOT EXISTS" is Postgres-only syntax
     # (this is production self-heal for Neon) -- SQLite (used by the unit
     # test suite) doesn't understand it, and unlike the other self-heal
@@ -737,7 +785,10 @@ async def generate_spp_massal(session: AsyncSession) -> list[TagihanSyahriyah]:
         await session.execute(text("ALTER TABLE IF EXISTS madrasah_santri ADD COLUMN IF NOT EXISTS rombel_id VARCHAR(64) NULL"))
     period = _bulan_tahun()
     semester_id = await _semester_aktif_id(session)
-    santri_rows = list((await session.execute(select(SantriMadrasah))).scalars())
+    santri_stmt = select(SantriMadrasah)
+    if unit_id:
+        santri_stmt = santri_stmt.where(SantriMadrasah.madrasah_unit_id == unit_id)
+    santri_rows = list((await session.execute(santri_stmt)).scalars())
     existing = {r.santri_id for r in (await session.execute(select(TagihanSyahriyah).where(TagihanSyahriyah.bulan_tahun == period))).scalars()}
     for santri in santri_rows:
         if santri.id in existing:
@@ -748,15 +799,23 @@ async def generate_spp_massal(session: AsyncSession) -> list[TagihanSyahriyah]:
             )
         )
     await session.flush()
-    return list((await session.execute(select(TagihanSyahriyah).options(selectinload(TagihanSyahriyah.santri)).where(TagihanSyahriyah.bulan_tahun == period))).scalars())
+    stmt = select(TagihanSyahriyah).options(selectinload(TagihanSyahriyah.santri)).where(TagihanSyahriyah.bulan_tahun == period)
+    if unit_id:
+        stmt = stmt.join(SantriMadrasah, TagihanSyahriyah.santri_id == SantriMadrasah.id).where(
+            SantriMadrasah.madrasah_unit_id == unit_id
+        )
+    return list((await session.execute(stmt)).scalars())
 
 
-async def pay_spp_manual(session: AsyncSession, target_id: str) -> TagihanSyahriyah:
+async def pay_spp_manual(session: AsyncSession, target_id: str, caller: UserMadrasah | None = None) -> TagihanSyahriyah:
     row = await session.get(TagihanSyahriyah, target_id)
     if row is None:
         row = (await session.execute(select(TagihanSyahriyah).where(TagihanSyahriyah.santri_id == target_id, TagihanSyahriyah.status_bayar.is_(False)).order_by(TagihanSyahriyah.bulan_tahun.desc()))).scalar_one_or_none()
     if row is None:
         raise MadrasahNotFoundError("Tagihan SPP tidak ditemukan")
+    santri = await session.get(SantriMadrasah, row.santri_id)
+    unit_id = santri.madrasah_unit_id if santri else None
+    _pastikan_akses_unit_keuangan(caller, unit_id)
     row.status_bayar = True
     row.dibayar_pada = _utcnow()
     await session.flush()
@@ -767,6 +826,7 @@ async def pay_spp_manual(session: AsyncSession, target_id: str) -> TagihanSyahri
         kategori="SPP",
         jumlah=row.nominal,
         keterangan=f"SPP {row.santri.nama} -- {row.bulan_tahun}",
+        madrasah_unit_id=unit_id,
     ))
     await catat_jurnal(
         session,
@@ -777,16 +837,19 @@ async def pay_spp_manual(session: AsyncSession, target_id: str) -> TagihanSyahri
         keterangan=f"SPP {row.santri.nama} -- {row.bulan_tahun}",
         sumber_tipe="spp",
         sumber_id=row.id,
+        madrasah_unit_id=unit_id,
     )
     await session.flush()
     return row
 
 
-async def list_buku_kas(session: AsyncSession, bulan: str | None = None) -> list[BukuKasMadrasah]:
+async def list_buku_kas(session: AsyncSession, bulan: str | None = None, unit_id: str | None = None) -> list[BukuKasMadrasah]:
     # Filter bulan (format "YYYY-MM") di Python, bukan lewat fungsi tanggal
     # SQL yang beda nama antar dialek (strftime di SQLite vs to_char di
     # Postgres) -- volume baris buku kas per sekolah kecil, jadi ini murah.
     stmt = select(BukuKasMadrasah).order_by(BukuKasMadrasah.tanggal.desc(), BukuKasMadrasah.created_at.desc())
+    if unit_id:
+        stmt = stmt.where(BukuKasMadrasah.madrasah_unit_id == unit_id)
     rows = list((await session.execute(stmt)).scalars())
     if bulan:
         rows = [r for r in rows if r.tanggal.strftime("%Y-%m") == bulan]
@@ -811,7 +874,9 @@ def _akun_lawan_kas(kategori: str, tipe: str) -> str:
     return AKUN_BEBAN_LAIN
 
 
-async def create_buku_kas_entry(session: AsyncSession, payload: BukuKasIn, dicatat_oleh: str) -> BukuKasMadrasah:
+async def create_buku_kas_entry(
+    session: AsyncSession, payload: BukuKasIn, dicatat_oleh: str, unit_id: str | None = None
+) -> BukuKasMadrasah:
     row = BukuKasMadrasah(
         tanggal=payload.tanggal,
         tipe=payload.tipe,
@@ -819,6 +884,7 @@ async def create_buku_kas_entry(session: AsyncSession, payload: BukuKasIn, dicat
         jumlah=payload.jumlah,
         keterangan=payload.keterangan,
         dicatat_oleh=dicatat_oleh,
+        madrasah_unit_id=unit_id,
     )
     session.add(row)
     await session.flush()
@@ -833,6 +899,7 @@ async def create_buku_kas_entry(session: AsyncSession, payload: BukuKasIn, dicat
         sumber_tipe="buku_kas",
         sumber_id=row.id,
         dibuat_oleh=dicatat_oleh,
+        madrasah_unit_id=unit_id,
     )
     return row
 
@@ -848,8 +915,8 @@ def buku_kas_out(row: BukuKasMadrasah) -> dict:
     }
 
 
-async def laporan_keuangan(session: AsyncSession, bulan: str | None = None) -> dict:
-    rows = await list_buku_kas(session, bulan)
+async def laporan_keuangan(session: AsyncSession, bulan: str | None = None, unit_id: str | None = None) -> dict:
+    rows = await list_buku_kas(session, bulan, unit_id=unit_id)
     total_masuk = sum((r.jumlah for r in rows if r.tipe == "masuk"), Decimal("0"))
     total_keluar = sum((r.jumlah for r in rows if r.tipe == "keluar"), Decimal("0"))
     return {
@@ -893,6 +960,7 @@ async def catat_jurnal(
     sumber_tipe: str = "",
     sumber_id: str | None = None,
     dibuat_oleh: str | None = None,
+    madrasah_unit_id: str | None = None,
 ) -> JurnalMadrasah:
     row = JurnalMadrasah(
         tanggal=tanggal,
@@ -903,6 +971,7 @@ async def catat_jurnal(
         sumber_tipe=sumber_tipe,
         sumber_id=sumber_id,
         dibuat_oleh=dibuat_oleh,
+        madrasah_unit_id=madrasah_unit_id,
     )
     session.add(row)
     await session.flush()
@@ -922,19 +991,21 @@ def jurnal_out(row: JurnalMadrasah) -> dict:
     }
 
 
-async def list_jurnal(session: AsyncSession, bulan: str | None = None) -> list[JurnalMadrasah]:
+async def list_jurnal(session: AsyncSession, bulan: str | None = None, unit_id: str | None = None) -> list[JurnalMadrasah]:
     stmt = select(JurnalMadrasah).order_by(JurnalMadrasah.tanggal.desc(), JurnalMadrasah.created_at.desc())
+    if unit_id:
+        stmt = stmt.where(JurnalMadrasah.madrasah_unit_id == unit_id)
     rows = list((await session.execute(stmt)).scalars())
     if bulan:
         rows = [r for r in rows if r.tanggal.strftime("%Y-%m") == bulan]
     return rows
 
 
-async def laba_rugi(session: AsyncSession, bulan: str | None = None) -> dict:
+async def laba_rugi(session: AsyncSession, bulan: str | None = None, unit_id: str | None = None) -> dict:
     """Laba-rugi sederhana: setiap baris jurnal menambah SALDO akun
     kreditnya dan mengurangi saldo akun debitnya (konvensi normal
     akuntansi), lalu akun tipe pendapatan/beban diringkas per akun."""
-    rows = await list_jurnal(session, bulan)
+    rows = await list_jurnal(session, bulan, unit_id=unit_id)
     akun_map = {a.kode: a for a in await list_akun(session)}
     saldo: dict[str, Decimal] = {}
     for r in rows:
@@ -1049,7 +1120,7 @@ async def delete_rombel(session: AsyncSession, rombel_id: str) -> None:
 
 
 async def list_guru(session: AsyncSession, unit_id: str | None = None) -> list[UserMadrasah]:
-    stmt = select(UserMadrasah).where(UserMadrasah.role.in_(["wali_kelas", "guru", "kepala_sekolah", "kurikulum", "bendahara"])).order_by(UserMadrasah.nama)
+    stmt = select(UserMadrasah).where(UserMadrasah.role.in_(["wali_kelas", "guru", "kepala_sekolah", "lembaga_admin", "kurikulum", "bendahara"])).order_by(UserMadrasah.nama)
     if unit_id:
         stmt = stmt.where(UserMadrasah.madrasah_unit_id == unit_id)
     return list((await session.execute(stmt)).scalars())
@@ -1075,17 +1146,23 @@ async def list_semua_akun(session: AsyncSession, unit_id: str | None = None) -> 
     return list((await session.execute(stmt)).scalars())
 
 
-STAFF_BAWAHAN = frozenset({"kurikulum", "bendahara", "wali_kelas", "guru", "wali_santri"})
+PENGELOLA_UNIT = frozenset({"kepala_sekolah", "lembaga_admin"})
+PEGAWAI_UNIT = frozenset({"kurikulum", "bendahara", "wali_kelas", "guru", "wali_santri"})
+# Kepala boleh menunjuk admin lembaga sebagai cadangan. Admin lembaga
+# hanya mengurus pegawai, tidak boleh membuat kepala atau admin lembaga lain.
+AKUN_BOLEH_DIKELOLA = {
+    "kepala_sekolah": PEGAWAI_UNIT | frozenset({"lembaga_admin"}),
+    "lembaga_admin": PEGAWAI_UNIT,
+}
 
 
-def _pastikan_kepala_boleh_akun(caller: UserMadrasah | None, role: str, unit_id: str | None) -> None:
-    """Kepala madrasah hanya boleh mengelola akun bawahan di unitnya sendiri."""
-    if caller is None or caller.role != "kepala_sekolah":
+def _pastikan_pengelola_unit(caller: UserMadrasah | None, role: str, unit_id: str | None) -> None:
+    if caller is None or caller.role not in PENGELOLA_UNIT:
         return
-    if role not in STAFF_BAWAHAN:
-        raise MadrasahForbiddenError("Kepala madrasah hanya boleh mengelola akun staf di unitnya")
+    if role not in AKUN_BOLEH_DIKELOLA[caller.role]:
+        raise MadrasahForbiddenError("Peran ini hanya boleh mengelola akun pegawai di unitnya")
     if not caller.madrasah_unit_id or unit_id != caller.madrasah_unit_id:
-        raise MadrasahForbiddenError("Akun hanya boleh di unit kepala madrasah ini")
+        raise MadrasahForbiddenError("Akun hanya boleh di unit ini")
 
 
 async def create_guru(
@@ -1096,11 +1173,11 @@ async def create_guru(
     None kalau admin sudah menentukan passwordnya sendiri."""
     generated = None if payload.password else _generate_password()
     role = payload.role or "wali_kelas"
-    if caller is not None and caller.role == "kepala_sekolah":
+    if caller is not None and caller.role in PENGELOLA_UNIT:
         unit_id = caller.madrasah_unit_id
     else:
         unit_id = await _unit_untuk_akun_baru(session, caller, role, payload.madrasah_unit_id)
-    _pastikan_kepala_boleh_akun(caller, role, unit_id)
+    _pastikan_pengelola_unit(caller, role, unit_id)
     row = UserMadrasah(
         nama=payload.nama,
         no_hp=payload.no_hp.strip(),
@@ -1124,9 +1201,9 @@ async def patch_guru(session: AsyncSession, user_id: str, payload: UserPatch, ca
     row = await session.get(UserMadrasah, user_id)
     if not row:
         raise MadrasahNotFoundError("Akun tidak ditemukan")
-    _pastikan_kepala_boleh_akun(caller, row.role, row.madrasah_unit_id)
+    _pastikan_pengelola_unit(caller, row.role, row.madrasah_unit_id)
     if payload.role is not None:
-        _pastikan_kepala_boleh_akun(caller, payload.role, caller.madrasah_unit_id if caller and caller.role == "kepala_sekolah" else row.madrasah_unit_id)
+        _pastikan_pengelola_unit(caller, payload.role, caller.madrasah_unit_id if caller and caller.role in PENGELOLA_UNIT else row.madrasah_unit_id)
     if payload.nama is not None:
         row.nama = payload.nama
     if payload.no_hp is not None:
@@ -1142,7 +1219,7 @@ async def patch_guru(session: AsyncSession, user_id: str, payload: UserPatch, ca
     if payload.password:
         row.password_hash = hash_password(payload.password)
     target_role = payload.role or row.role
-    if caller is not None and caller.role == "kepala_sekolah":
+    if caller is not None and caller.role in PENGELOLA_UNIT:
         row.madrasah_unit_id = caller.madrasah_unit_id
     elif "madrasah_unit_id" in payload.model_fields_set or target_role in ("admin", "yayasan_admin"):
         # Admin utama dan admin yayasan tidak terikat satu unit.
@@ -1171,7 +1248,7 @@ async def delete_guru(session: AsyncSession, user_id: str, caller: UserMadrasah 
     row = await session.get(UserMadrasah, user_id)
     if not row:
         raise MadrasahNotFoundError("Akun tidak ditemukan")
-    _pastikan_kepala_boleh_akun(caller, row.role, row.madrasah_unit_id)
+    _pastikan_pengelola_unit(caller, row.role, row.madrasah_unit_id)
     if row.role == "admin" and await _count_admin(session, exclude_id=user_id) == 0:
         raise MadrasahForbiddenError("Tidak bisa menghapus admin terakhir")
 
@@ -1193,9 +1270,9 @@ async def create_wali_santri(
 ) -> tuple[UserMadrasah, str | None]:
     generated = None if payload.password else _generate_password()
     unit_id = payload.madrasah_unit_id or await _default_unit_id(session)
-    if caller is not None and caller.role == "kepala_sekolah":
+    if caller is not None and caller.role in PENGELOLA_UNIT:
         unit_id = caller.madrasah_unit_id
-    _pastikan_kepala_boleh_akun(caller, "wali_santri", unit_id)
+    _pastikan_pengelola_unit(caller, "wali_santri", unit_id)
     row = UserMadrasah(
         nama=payload.nama,
         no_hp=payload.no_hp.strip(),
@@ -1434,8 +1511,14 @@ async def list_pesan(session: AsyncSession, santri_id: str) -> list[dict]:
     ]
 
 
-async def create_pengumuman(session: AsyncSession, payload: PengumumanIn, dibuat_by: str) -> PengumumanMadrasah:
-    row = PengumumanMadrasah(judul=payload.judul, isi=payload.isi, tanggal=date.today(), dibuat_by=dibuat_by)
+async def create_pengumuman(session: AsyncSession, payload: PengumumanIn, dibuat_by: str, caller: UserMadrasah | None = None) -> PengumumanMadrasah:
+    row = PengumumanMadrasah(
+        judul=payload.judul,
+        isi=payload.isi,
+        tanggal=date.today(),
+        dibuat_by=dibuat_by,
+        madrasah_unit_id=await assign_unit_id(session, caller, payload.madrasah_unit_id),
+    )
     session.add(row)
     await session.flush()
     return row
@@ -1551,7 +1634,7 @@ async def ensure_default_unit_and_backfill(session: AsyncSession) -> None:
         await session.flush()
         unit_id = unit.id
 
-    for model in (TingkatMadrasah, RombelMadrasah, SantriMadrasah, MapelMadrasah):
+    for model in (TingkatMadrasah, RombelMadrasah, SantriMadrasah, MapelMadrasah, BukuKasMadrasah, JurnalMadrasah, HonorMengajar, PengumumanMadrasah, KegiatanMadrasah, PendaftaranSantri, TahunAjaranMadrasah):
         await session.execute(
             update(model).where(model.madrasah_unit_id.is_(None)).values(madrasah_unit_id=unit_id)
         )
@@ -1589,7 +1672,7 @@ async def rekap_yayasan(session: AsyncSession) -> list[dict]:
                 .select_from(UserMadrasah)
                 .where(
                     UserMadrasah.madrasah_unit_id == unit.id,
-                    UserMadrasah.role.in_(("guru", "wali_kelas", "kepala_sekolah", "kurikulum", "bendahara")),
+                    UserMadrasah.role.in_(("guru", "wali_kelas", "kepala_sekolah", "lembaga_admin", "kurikulum", "bendahara")),
                 )
             )
         ).scalar_one()
@@ -1839,6 +1922,26 @@ async def rekap_absensi_mapel(session: AsyncSession, rombel_id: str, mapel_id: s
     return [{"id": r.id, "tanggal": r.tanggal.isoformat(), "santri_id": r.santri_id, "status": r.status} for r in rows]
 
 
+async def rekap_absensi_rombel(session: AsyncSession, rombel_id: str) -> list[dict]:
+    stmt = (
+        select(AbsensiMadrasah)
+        .options(selectinload(AbsensiMadrasah.santri))
+        .join(SantriMadrasah, AbsensiMadrasah.santri_id == SantriMadrasah.id)
+        .where(SantriMadrasah.rombel_id == rombel_id, AbsensiMadrasah.mapel_id.is_not(None))
+    )
+    rows = list((await session.execute(stmt)).scalars())
+    ringkas: dict[str, dict] = {}
+    for r in rows:
+        item = ringkas.setdefault(
+            r.santri_id,
+            {"santri_id": r.santri_id, "nama": r.santri.nama if r.santri else "-", "hadir": 0, "sakit": 0, "izin": 0, "alpa": 0, "sesi": 0},
+        )
+        item["sesi"] += 1
+        if r.status in item:
+            item[r.status] += 1
+    return list(ringkas.values())
+
+
 # --- Honor mengajar (Fase 2.2): dihitung dari sesi yang benar-benar
 # tercatat di AbsensiMadrasah, bukan cuma dari penugasan GuruMapelRombel --
 # guru yang ditugaskan tapi tidak pernah mengisi absensi di bulan itu tidak
@@ -1860,15 +1963,17 @@ def honor_out(row: HonorMengajar) -> dict:
     }
 
 
-async def list_honor(session: AsyncSession, bulan: str | None = None) -> list[HonorMengajar]:
+async def list_honor(session: AsyncSession, bulan: str | None = None, unit_id: str | None = None) -> list[HonorMengajar]:
     stmt = select(HonorMengajar).options(selectinload(HonorMengajar.guru), selectinload(HonorMengajar.mapel))
     if bulan:
         stmt = stmt.where(HonorMengajar.bulan_tahun == bulan)
+    if unit_id:
+        stmt = stmt.where(HonorMengajar.madrasah_unit_id == unit_id)
     stmt = stmt.order_by(HonorMengajar.bulan_tahun.desc())
     return list((await session.execute(stmt)).scalars())
 
 
-async def generate_honor_massal(session: AsyncSession, bulan_tahun: str | None = None) -> list[HonorMengajar]:
+async def generate_honor_massal(session: AsyncSession, bulan_tahun: str | None = None, unit_id: str | None = None) -> list[HonorMengajar]:
     """Satu baris per (guru, mapel) yang punya minimal satu sesi absensi di
     bulan itu. Idempoten per periode: guru+mapel yang sudah punya baris
     honor untuk bulan_tahun ini dilewati, tidak dibuat dobel maupun
@@ -1910,9 +2015,20 @@ async def generate_honor_massal(session: AsyncSession, bulan_tahun: str | None =
     }
 
     hasil: list[HonorMengajar] = []
+    guru_unit: dict[str, str | None] = {}
+    if unit_id:
+        guru_unit = {
+            u.id: u.madrasah_unit_id
+            for u in (await session.execute(select(UserMadrasah).where(UserMadrasah.madrasah_unit_id == unit_id))).scalars()
+        }
     for (guru_id, mapel_id), jumlah_sesi in sesi_per_guru_mapel.items():
         if (guru_id, mapel_id) in existing or jumlah_sesi == 0:
             continue
+        if unit_id and guru_id not in guru_unit:
+            continue
+        if guru_id not in guru_unit:
+            guru = await session.get(UserMadrasah, guru_id)
+            guru_unit[guru_id] = guru.madrasah_unit_id if guru else None
         tarif = tarif_map.get((guru_id, mapel_id), DEFAULT_HONOR_PER_SESI)
         row = HonorMengajar(
             guru_id=guru_id,
@@ -1921,6 +2037,7 @@ async def generate_honor_massal(session: AsyncSession, bulan_tahun: str | None =
             jumlah_sesi=jumlah_sesi,
             tarif_per_sesi=tarif,
             total=tarif * jumlah_sesi,
+            madrasah_unit_id=guru_unit.get(guru_id),
         )
         session.add(row)
         hasil.append(row)
@@ -1930,12 +2047,13 @@ async def generate_honor_massal(session: AsyncSession, bulan_tahun: str | None =
     return hasil
 
 
-async def pay_honor(session: AsyncSession, honor_id: str) -> HonorMengajar:
+async def pay_honor(session: AsyncSession, honor_id: str, caller: UserMadrasah | None = None) -> HonorMengajar:
     row = await session.get(HonorMengajar, honor_id)
     if not row:
         raise MadrasahNotFoundError("Honor tidak ditemukan")
     if row.status_bayar:
         raise MadrasahForbiddenError("Honor ini sudah dibayar")
+    _pastikan_akses_unit_keuangan(caller, row.madrasah_unit_id)
     row.status_bayar = True
     row.dibayar_pada = _utcnow()
     await session.flush()
@@ -1943,7 +2061,12 @@ async def pay_honor(session: AsyncSession, honor_id: str) -> HonorMengajar:
     keterangan = f"Honor {row.guru.nama} -- {row.mapel.nama if row.mapel else '-'} ({row.bulan_tahun})"
     session.add(
         BukuKasMadrasah(
-            tanggal=_utcnow().date(), tipe="keluar", kategori="Honor Mengajar", jumlah=row.total, keterangan=keterangan
+            tanggal=_utcnow().date(),
+            tipe="keluar",
+            kategori="Honor Mengajar",
+            jumlah=row.total,
+            keterangan=keterangan,
+            madrasah_unit_id=row.madrasah_unit_id,
         )
     )
     await catat_jurnal(
@@ -1955,6 +2078,7 @@ async def pay_honor(session: AsyncSession, honor_id: str) -> HonorMengajar:
         keterangan=keterangan,
         sumber_tipe="honor",
         sumber_id=row.id,
+        madrasah_unit_id=row.madrasah_unit_id,
     )
     await session.flush()
     return row
