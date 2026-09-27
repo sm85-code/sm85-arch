@@ -3,7 +3,7 @@ from __future__ import annotations
 
 from typing import Optional
 
-from fastapi import APIRouter, Depends, File, HTTPException, Response, UploadFile, status
+from fastapi import APIRouter, Depends, File, HTTPException, Request, Response, UploadFile, status
 from pydantic import BaseModel, Field
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -15,6 +15,7 @@ from modules.siabumdes.identity.application.services import (
     create_user,
     get_system_control,
     list_users,
+    record_audit,
     set_blocked_periods,
     user_to_out,
 )
@@ -30,6 +31,10 @@ from shared.security import (
 )
 
 router = APIRouter(prefix="/api", tags=["auth"])
+
+
+def _client_ip(request: Request) -> str:
+    return request.client.host if request.client else "unknown"
 
 
 class LoginRequest(BaseModel):
@@ -191,7 +196,8 @@ async def update_profile(
 async def admin_update_user(
     user_id: str,
     payload: AdminUserUpdateRequest,
-    _: User = Depends(require_roles("admin")),
+    request: Request,
+    admin: User = Depends(require_roles("admin")),
     session: AsyncSession = Depends(get_db),
 ):
     target = await session.get(User, user_id)
@@ -234,6 +240,10 @@ async def admin_update_user(
         target.unit_usaha_id = payload.unit_usaha_id
     control = await get_system_control(session)
     await session.flush()
+    await record_audit(
+        session, actor=admin, action="update_user", entity="users", entity_id=target.id,
+        detail=f"Ubah akun {target.username}", ip=_client_ip(request),
+    )
     return user_to_out(target, recording_locked=control.recording_locked)
 
 
@@ -259,7 +269,8 @@ async def upload_profile_photo(
 @router.post("/auth/register")
 async def register(
     payload: RegisterRequest,
-    _: User = Depends(require_roles("admin")),
+    request: Request,
+    admin: User = Depends(require_roles("admin")),
     session: AsyncSession = Depends(get_db),
 ):
     try:
@@ -274,6 +285,10 @@ async def register(
         )
     except ValueError as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from exc
+    await record_audit(
+        session, actor=admin, action="create_user", entity="users", entity_id=user.id,
+        detail=f"Buat akun {user.username} ({user.role})", ip=_client_ip(request),
+    )
     return user_to_out(user)
 
 
@@ -290,7 +305,8 @@ async def users(
 @router.delete("/users/{user_id}")
 async def delete_user(
     user_id: str,
-    _: User = Depends(require_roles("admin")),
+    request: Request,
+    admin: User = Depends(require_roles("admin")),
     session: AsyncSession = Depends(get_db),
 ):
     target = await session.get(User, user_id)
@@ -301,6 +317,10 @@ async def delete_user(
         admin_count = sum(1 for u in admin_count if public_role(u.role) == "admin")
         if admin_count <= 1:
             raise HTTPException(status_code=400, detail="Tidak bisa menghapus admin terakhir")
+    await record_audit(
+        session, actor=admin, action="delete_user", entity="users", entity_id=target.id,
+        detail=f"Hapus akun {target.username}", ip=_client_ip(request),
+    )
     await session.delete(target)
     return {"deleted": 1}
 
@@ -309,7 +329,8 @@ async def delete_user(
 async def reset_password(
     user_id: str,
     payload: PasswordResetRequest,
-    _: User = Depends(require_roles("admin")),
+    request: Request,
+    admin: User = Depends(require_roles("admin")),
     session: AsyncSession = Depends(get_db),
 ):
     if len(payload.new_password) < 8:
@@ -320,6 +341,10 @@ async def reset_password(
     target.password_hash = hash_password(payload.new_password)
     target.must_change_password = True
     target.session_version += 1
+    await record_audit(
+        session, actor=admin, action="reset_password", entity="users", entity_id=target.id,
+        detail=f"Reset password {target.username}", ip=_client_ip(request),
+    )
     return {"ok": True}
 
 
@@ -327,7 +352,8 @@ async def reset_password(
 async def update_blocked_periods(
     user_id: str,
     payload: BlockedPeriodsRequest,
-    _: User = Depends(require_roles("admin")),
+    request: Request,
+    admin: User = Depends(require_roles("admin")),
     session: AsyncSession = Depends(get_db),
 ):
     try:
@@ -335,4 +361,8 @@ async def update_blocked_periods(
     except LookupError as exc:
         raise HTTPException(status_code=404, detail=str(exc)) from exc
     control = await get_system_control(session)
+    await record_audit(
+        session, actor=admin, action="update_blocked_periods", entity="users", entity_id=user.id,
+        detail=f"Blokir periode {user.username}: {', '.join(user.blocked_periods) or '-'}", ip=_client_ip(request),
+    )
     return user_to_out(user, recording_locked=control.recording_locked)

@@ -194,11 +194,17 @@ async def _seed_coa(session, units: dict[str, UnitUsaha]) -> None:
 
 
 async def _seed_users(session, units: dict[str, UnitUsaha]) -> None:
+    """Cuma seed akun default kalau tabel users BENAR-BENAR kosong (instalasi
+    baru). Dulu tiap username DEFAULT_USERS dicek satu-satu dan yang belum
+    ada langsung dibuat ulang -- efeknya, akun default (mis. "direktur")
+    yang sengaja dihapus admin lewat Kelola Pengguna (karena sudah diganti
+    akun baru) terus hidup lagi tiap kali aplikasi restart/deploy, walau
+    seed_if_needed() dipanggil di lifespan startup setiap boot."""
     existing = {u.username: u for u in (await session.execute(select(User))).scalars()}
-    created = 0
+    if existing:
+        logger.info("user seed skipped: users table already has %s row(s)", len(existing))
+        return
     for username, password, name, role, unit_code in DEFAULT_USERS:
-        if username in existing:
-            continue
         unit = units.get(unit_code) if unit_code else None
         session.add(
             User(
@@ -212,5 +218,4 @@ async def _seed_users(session, units: dict[str, UnitUsaha]) -> None:
                 active=True,
             )
         )
-        created += 1
-    logger.info("user seed created=%s skipped=%s", created, len(DEFAULT_USERS) - created)
+    logger.info("user seed created=%s (fresh install)", len(DEFAULT_USERS))

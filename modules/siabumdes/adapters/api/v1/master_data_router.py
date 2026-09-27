@@ -3,7 +3,7 @@ from __future__ import annotations
 
 from typing import Optional
 
-from fastapi import APIRouter, Depends, File, HTTPException, Query, UploadFile
+from fastapi import APIRouter, Depends, File, HTTPException, Query, Request, UploadFile
 from fastapi.responses import StreamingResponse
 from pydantic import BaseModel, Field
 from sqlalchemy import select
@@ -19,11 +19,16 @@ from modules.siabumdes.adapters.api.scope import (
 )
 from modules.siabumdes.adapters.external.excel_adapter import generate_excel_report, parse_excel_rows
 from modules.siabumdes.coa_taxonomy import categories_map, valid_pair
+from modules.siabumdes.identity.application.services import record_audit
 from modules.siabumdes.identity.infrastructure.models import User
 from modules.siabumdes.infrastructure.models import Account, Mitra, TransactionType, UnitUsaha
 from shared.database import get_db
 
 router = APIRouter(prefix="/api", tags=["master-data"])
+
+
+def _client_ip(request: Request) -> str:
+    return request.client.host if request.client else "unknown"
 
 
 def _validate_category_pair(category: str, subcategory: str) -> Optional[str]:
@@ -156,7 +161,8 @@ async def list_units(
 @router.post("/unit-usaha")
 async def create_unit(
     payload: UnitIn,
-    _: User = Depends(require_roles(*UNIT_WRITE_ROLES)),
+    request: Request,
+    actor: User = Depends(require_roles(*UNIT_WRITE_ROLES)),
     session: AsyncSession = Depends(get_db),
 ):
     if payload.business_type not in BUSINESS_TYPES:
@@ -173,6 +179,10 @@ async def create_unit(
     )
     session.add(row)
     await session.flush()
+    await record_audit(
+        session, actor=actor, action="create_unit_usaha", entity="unit_usaha", entity_id=row.id,
+        detail=f"Buat unit {row.code} - {row.name}", ip=_client_ip(request),
+    )
     return {
         "id": row.id,
         "code": row.code,
@@ -187,7 +197,8 @@ async def create_unit(
 async def update_unit(
     unit_id: str,
     payload: UnitPatch,
-    _: User = Depends(require_roles(*UNIT_WRITE_ROLES)),
+    request: Request,
+    actor: User = Depends(require_roles(*UNIT_WRITE_ROLES)),
     session: AsyncSession = Depends(get_db),
 ):
     row = await session.get(UnitUsaha, unit_id)
@@ -206,6 +217,10 @@ async def update_unit(
     if payload.active is not None:
         row.active = payload.active
     await session.flush()
+    await record_audit(
+        session, actor=actor, action="update_unit_usaha", entity="unit_usaha", entity_id=row.id,
+        detail=f"Ubah unit {row.code}", ip=_client_ip(request),
+    )
     return {
         "id": row.id,
         "code": row.code,
@@ -230,7 +245,8 @@ async def list_accounts(user: User = Depends(get_current_user), session: AsyncSe
 @router.post("/accounts")
 async def create_account(
     payload: AccountIn,
-    _: User = Depends(require_roles(*MASTER_WRITE_ROLES)),
+    request: Request,
+    actor: User = Depends(require_roles(*MASTER_WRITE_ROLES)),
     session: AsyncSession = Depends(get_db),
 ):
     group = (payload.group or "BUMDES").strip().upper()
@@ -258,6 +274,10 @@ async def create_account(
     )
     session.add(row)
     await session.flush()
+    await record_audit(
+        session, actor=actor, action="create_account", entity="accounts", entity_id=row.id,
+        detail=f"Buat akun {row.code} - {row.name} ({row.group_code})", ip=_client_ip(request),
+    )
     return _acc_out(row)
 
 
@@ -265,8 +285,9 @@ async def create_account(
 async def update_account(
     code: str,
     payload: AccountIn,
+    request: Request,
     group: str = Query("BUMDES"),
-    _: User = Depends(require_roles(*MASTER_WRITE_ROLES)),
+    actor: User = Depends(require_roles(*MASTER_WRITE_ROLES)),
     session: AsyncSession = Depends(get_db),
 ):
     row = (
@@ -289,14 +310,19 @@ async def update_account(
     row.normal_balance = payload.normal_balance
     row.group_code = target_group
     await session.flush()
+    await record_audit(
+        session, actor=actor, action="update_account", entity="accounts", entity_id=row.id,
+        detail=f"Ubah akun {row.code} ({row.group_code})", ip=_client_ip(request),
+    )
     return _acc_out(row)
 
 
 @router.delete("/accounts/{code}")
 async def delete_account(
     code: str,
+    request: Request,
     group: str = Query("BUMDES"),
-    _: User = Depends(require_roles(*MASTER_WRITE_ROLES)),
+    actor: User = Depends(require_roles(*MASTER_WRITE_ROLES)),
     session: AsyncSession = Depends(get_db),
 ):
     row = (
@@ -304,14 +330,19 @@ async def delete_account(
     ).scalar_one_or_none()
     if not row:
         raise HTTPException(status_code=404, detail="Kode akun tidak ditemukan")
+    await record_audit(
+        session, actor=actor, action="delete_account", entity="accounts", entity_id=row.id,
+        detail=f"Hapus akun {row.code} ({row.group_code})", ip=_client_ip(request),
+    )
     await session.delete(row)
     return {"deleted": 1}
 
 
 @router.delete("/accounts/reset-all")
 async def reset_accounts(
+    request: Request,
     confirm: str = "",
-    _: User = Depends(require_roles(*MASTER_WRITE_ROLES)),
+    actor: User = Depends(require_roles(*MASTER_WRITE_ROLES)),
     session: AsyncSession = Depends(get_db),
 ):
     if confirm != "YES":
@@ -319,6 +350,10 @@ async def reset_accounts(
     rows = (await session.execute(select(Account))).scalars().all()
     for row in rows:
         await session.delete(row)
+    await record_audit(
+        session, actor=actor, action="reset_accounts", entity="accounts",
+        detail=f"Hapus SEMUA akun ({len(rows)} akun)", ip=_client_ip(request),
+    )
     return {"deleted": len(rows)}
 
 
@@ -335,7 +370,8 @@ async def list_tx_types(user: User = Depends(get_current_user), session: AsyncSe
 @router.post("/transaction-types")
 async def create_tx_type(
     payload: TxTypeIn,
-    _: User = Depends(require_roles(*MASTER_WRITE_ROLES)),
+    request: Request,
+    actor: User = Depends(require_roles(*MASTER_WRITE_ROLES)),
     session: AsyncSession = Depends(get_db),
 ):
     group = (payload.group or "BUMDES").strip().upper()
@@ -356,6 +392,10 @@ async def create_tx_type(
     )
     session.add(row)
     await session.flush()
+    await record_audit(
+        session, actor=actor, action="create_transaction_type", entity="transaction_types", entity_id=row.id,
+        detail=f"Buat jenis transaksi {row.code} - {row.name} ({row.group_code})", ip=_client_ip(request),
+    )
     return _type_out(row)
 
 
@@ -363,7 +403,8 @@ async def create_tx_type(
 async def update_tx_type(
     code: str,
     payload: TxTypeIn,
-    _: User = Depends(require_roles(*MASTER_WRITE_ROLES)),
+    request: Request,
+    actor: User = Depends(require_roles(*MASTER_WRITE_ROLES)),
     session: AsyncSession = Depends(get_db),
 ):
     group = (payload.group or "BUMDES").strip().upper()
@@ -393,18 +434,27 @@ async def update_tx_type(
     row.group_code = group
     row.unit_codes = payload.unit_codes or []
     await session.flush()
+    await record_audit(
+        session, actor=actor, action="update_transaction_type", entity="transaction_types", entity_id=row.id,
+        detail=f"Ubah jenis transaksi {row.code} ({row.group_code})", ip=_client_ip(request),
+    )
     return _type_out(row)
 
 
 @router.delete("/transaction-types/{code}")
 async def delete_tx_type(
     code: str,
-    _: User = Depends(require_roles(*MASTER_WRITE_ROLES)),
+    request: Request,
+    actor: User = Depends(require_roles(*MASTER_WRITE_ROLES)),
     session: AsyncSession = Depends(get_db),
 ):
     row = (await session.execute(select(TransactionType).where(TransactionType.code == code))).scalar_one_or_none()
     if not row:
         raise HTTPException(status_code=404, detail="Jenis transaksi tidak ditemukan")
+    await record_audit(
+        session, actor=actor, action="delete_transaction_type", entity="transaction_types", entity_id=row.id,
+        detail=f"Hapus jenis transaksi {row.code} ({row.group_code})", ip=_client_ip(request),
+    )
     await session.delete(row)
     return {"deleted": 1}
 
@@ -445,20 +495,26 @@ async def create_mitra(
 @router.delete("/mitra/{mitra_id}")
 async def delete_mitra(
     mitra_id: str,
-    _: User = Depends(require_roles("admin", "direktur", "bendahara")),
+    request: Request,
+    actor: User = Depends(require_roles("admin", "direktur", "bendahara")),
     session: AsyncSession = Depends(get_db),
 ):
     row = await session.get(Mitra, mitra_id)
     if not row:
         return {"deleted": 0}
+    await record_audit(
+        session, actor=actor, action="delete_mitra", entity="mitra", entity_id=row.id,
+        detail=f"Hapus mitra {row.name}", ip=_client_ip(request),
+    )
     await session.delete(row)
     return {"deleted": 1}
 
 
 @router.post("/accounts/import")
 async def import_accounts(
+    request: Request,
     file: UploadFile = File(...),
-    _: User = Depends(require_roles(*MASTER_WRITE_ROLES)),
+    actor: User = Depends(require_roles(*MASTER_WRITE_ROLES)),
     session: AsyncSession = Depends(get_db),
 ):
     content = await file.read()
@@ -514,6 +570,10 @@ async def import_accounts(
                 )
             )
             inserted += 1
+    await record_audit(
+        session, actor=actor, action="import_accounts", entity="accounts",
+        detail=f"Import {inserted} akun, {skipped} dilewati", ip=_client_ip(request),
+    )
     return {"inserted": inserted, "skipped": skipped, "errors": errors[:50]}
 
 
@@ -531,8 +591,9 @@ async def accounts_template(_: User = Depends(require_roles(*MASTER_WRITE_ROLES)
 
 @router.post("/transaction-types/import")
 async def import_tx_types(
+    request: Request,
     file: UploadFile = File(...),
-    _: User = Depends(require_roles(*MASTER_WRITE_ROLES)),
+    actor: User = Depends(require_roles(*MASTER_WRITE_ROLES)),
     session: AsyncSession = Depends(get_db),
 ):
     content = await file.read()
@@ -567,6 +628,10 @@ async def import_tx_types(
             )
         )
         inserted += 1
+    await record_audit(
+        session, actor=actor, action="import_transaction_types", entity="transaction_types",
+        detail=f"Import {inserted} jenis transaksi, {skipped} dilewati", ip=_client_ip(request),
+    )
     return {"inserted": inserted, "skipped": skipped, "errors": []}
 
 

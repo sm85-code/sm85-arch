@@ -14,6 +14,7 @@ from starlette.middleware.base import BaseHTTPMiddleware
 
 from modules.siabumdes.adapters.api.v1 import siabumdes_router, uu05_inventory_router
 from modules.siabumdes.adapters.api.v1.admin_control_router import router as admin_control_router
+from modules.siabumdes.adapters.api.v1.audit_log_router import router as audit_log_router
 from modules.siabumdes.adapters.api.v1.auth_router import router as auth_router
 from modules.siabumdes.adapters.api.v1.io_router import router as io_router
 from modules.siabumdes.adapters.api.v1.master_data_router import router as master_data_router
@@ -73,6 +74,7 @@ app.include_router(public_router)
 app.include_router(auth_router)
 app.include_router(period_close_router)
 app.include_router(admin_control_router)
+app.include_router(audit_log_router)
 app.include_router(master_data_router)
 app.include_router(org_profile_router)
 app.include_router(transaction_router)
