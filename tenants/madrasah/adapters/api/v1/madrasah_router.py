@@ -94,6 +94,7 @@ UNIT_ADMIN_ROLES = ("admin", "kepala_sekolah", "lembaga_admin")
 KEUANGAN_ROLES = ("admin", "kepala_sekolah", "lembaga_admin", "bendahara")
 KEUANGAN_READ_ROLES = KEUANGAN_ROLES + ("yayasan_admin",)
 INFO_AKADEMIK_ROLES = ("kurikulum", "kepala_sekolah", "lembaga_admin", "admin")
+INFO_AKADEMIK_READ_ROLES = INFO_AKADEMIK_ROLES + ("yayasan_admin",)
 SANTRI_READ_ROLES = ("admin", "kepala_sekolah", "lembaga_admin", "yayasan_admin")
 SANTRI_WRITE_ROLES = ("admin", "kepala_sekolah", "lembaga_admin")
 ROMBEL_READ_ROLES = ("admin", "kepala_sekolah", "lembaga_admin", "kurikulum", "yayasan_admin")
@@ -699,6 +700,28 @@ async def admin_santri_delete(
     await services.record_audit(
         session, aktor=user, aksi="hapus_santri", entitas="madrasah_santri", entitas_id=santri_id, ip=_client_ip(request)
     )
+
+
+@admin_r.get("/pengumuman")
+async def admin_pengumuman_list(
+    unit_id: str | None = Query(default=None),
+    session: AsyncSession = Depends(get_db_madrasah),
+    user: UserMadrasah = Depends(require_roles_madrasah(*INFO_AKADEMIK_READ_ROLES)),
+):
+    scope = _unit_scope(user, unit_id)
+    rows = await services.list_pengumuman(session, unit_id=scope)
+    return [{"id": row.id, "judul": row.judul, "isi": row.isi, "tanggal": row.tanggal.isoformat(), "dibuat_by": row.dibuat_by, "madrasah_unit_id": row.madrasah_unit_id} for row in rows]
+
+
+@admin_r.get("/kegiatan")
+async def admin_kegiatan_list(
+    unit_id: str | None = Query(default=None),
+    session: AsyncSession = Depends(get_db_madrasah),
+    user: UserMadrasah = Depends(require_roles_madrasah(*INFO_AKADEMIK_READ_ROLES)),
+):
+    scope = _unit_scope(user, unit_id)
+    rows = await services.list_kegiatan(session, unit_id=scope)
+    return [services.kegiatan_out(row) for row in rows]
 
 
 @admin_r.post("/pengumuman", status_code=status.HTTP_201_CREATED)
@@ -1585,7 +1608,7 @@ async def admin_yayasan_rekap(
 async def admin_tahun_ajaran_list(
     unit_id: str | None = Query(default=None),
     session: AsyncSession = Depends(get_db_madrasah),
-    user: UserMadrasah = Depends(require_roles_madrasah(*INFO_AKADEMIK_ROLES)),
+    user: UserMadrasah = Depends(require_roles_madrasah(*INFO_AKADEMIK_READ_ROLES)),
 ):
     scope = _unit_scope(user, unit_id)
     return [services.tahun_ajaran_out(r) for r in await services.list_tahun_ajaran(session, unit_id=scope)]
@@ -1604,7 +1627,7 @@ async def admin_tahun_ajaran_create(
 async def admin_semester_list(
     unit_id: str | None = Query(default=None),
     session: AsyncSession = Depends(get_db_madrasah),
-    user: UserMadrasah = Depends(require_roles_madrasah(*INFO_AKADEMIK_ROLES)),
+    user: UserMadrasah = Depends(require_roles_madrasah(*INFO_AKADEMIK_READ_ROLES)),
 ):
     scope = _unit_scope(user, unit_id)
     return [services.semester_out(r) for r in await services.list_semester(session, unit_id=scope)]
