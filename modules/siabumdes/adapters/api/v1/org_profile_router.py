@@ -6,7 +6,7 @@ from __future__ import annotations
 from decimal import Decimal
 from typing import Optional
 
-from fastapi import APIRouter, Depends, File, HTTPException, UploadFile, status
+from fastapi import APIRouter, Depends, File, HTTPException, Request, UploadFile, status
 from pydantic import BaseModel, Field
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -17,11 +17,15 @@ from modules.siabumdes.application.bagi_hasil import (
     SHARE_FIELDS_UNIT,
     validate_bagi_hasil_fields,
 )
-from modules.siabumdes.identity.application.services import get_org_profile, update_org_profile
+from modules.siabumdes.identity.application.services import get_org_profile, record_audit, update_org_profile
 from modules.siabumdes.identity.infrastructure.models import OrgProfile
 from shared.database import get_db
 
 router = APIRouter(prefix="/api/org-profile", tags=["org-profile"])
+
+
+def _client_ip(request: Request) -> str:
+    return request.client.host if request.client else "unknown"
 
 
 def _out(row: OrgProfile) -> dict:
@@ -96,7 +100,8 @@ async def read_org_profile(
 @router.put("")
 async def write_org_profile(
     payload: OrgProfilePatch,
-    _admin=Depends(require_roles("admin")),
+    request: Request,
+    admin=Depends(require_roles("admin")),
     session: AsyncSession = Depends(get_db),
 ):
     fields = payload.model_dump(exclude_unset=True)
@@ -113,13 +118,18 @@ async def write_org_profile(
         validate_bagi_hasil_fields(merged)
 
     row = await update_org_profile(session, **fields)
+    await record_audit(
+        session, actor=admin, action="update_org_profile", entity="org_profiles",
+        detail=", ".join(sorted(fields)), ip=_client_ip(request),
+    )
     return _out(row)
 
 
 @router.post("/logo")
 async def upload_logo(
+    request: Request,
     file: UploadFile = File(...),
-    _admin=Depends(require_roles("admin")),
+    admin=Depends(require_roles("admin")),
     session: AsyncSession = Depends(get_db),
 ):
     data = await file.read()
@@ -130,4 +140,5 @@ async def upload_logo(
     except Exception as exc:  # noqa: BLE001
         raise HTTPException(status_code=status.HTTP_502_BAD_GATEWAY, detail=f"Gagal upload logo: {exc}") from exc
     row = await update_org_profile(session, logo_url=logo_url)
+    await record_audit(session, actor=admin, action="update_org_profile", entity="org_profiles", detail="Ganti logo", ip=_client_ip(request))
     return _out(row)

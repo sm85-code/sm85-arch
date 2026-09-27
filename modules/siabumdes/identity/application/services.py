@@ -8,7 +8,7 @@ from typing import Any, Optional
 from sqlalchemy import Select, or_, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from modules.siabumdes.identity.infrastructure.models import ClosedPeriod, OrgProfile, SystemControl, User
+from modules.siabumdes.identity.infrastructure.models import AuditLog, ClosedPeriod, OrgProfile, SystemControl, User
 from shared.config import PUBLIC_ROLES, public_role
 from modules.siabumdes.report_branding import get_report_branding
 from shared.security import hash_password, verify_password
@@ -182,3 +182,47 @@ async def list_closed_periods(session: AsyncSession) -> list[ClosedPeriod]:
         select(ClosedPeriod).order_by(ClosedPeriod.period.desc(), ClosedPeriod.group_code.asc())
     )
     return list(rows.scalars())
+
+
+async def record_audit(
+    session: AsyncSession,
+    *,
+    actor: User | None,
+    action: str,
+    entity: str = "",
+    entity_id: str | None = None,
+    detail: str = "",
+    ip: str = "",
+) -> None:
+    row = AuditLog(
+        actor_id=actor.id if actor else None,
+        actor_name=actor.name if actor else "-",
+        actor_role=public_role(actor.role) if actor else "-",
+        action=action,
+        entity=entity,
+        entity_id=entity_id,
+        detail=detail,
+        ip=ip,
+    )
+    session.add(row)
+    await session.flush()
+
+
+async def list_audit_log(session: AsyncSession, limit: int = 200) -> list[AuditLog]:
+    rows = await session.execute(select(AuditLog).order_by(AuditLog.created_at.desc()).limit(limit))
+    return list(rows.scalars())
+
+
+def audit_out(row: AuditLog) -> dict[str, Any]:
+    return {
+        "id": row.id,
+        "created_at": row.created_at.isoformat(),
+        "actor_id": row.actor_id,
+        "actor_name": row.actor_name,
+        "actor_role": row.actor_role,
+        "action": row.action,
+        "entity": row.entity,
+        "entity_id": row.entity_id,
+        "detail": row.detail,
+        "ip": row.ip,
+    }

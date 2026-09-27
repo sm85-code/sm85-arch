@@ -97,6 +97,26 @@ class OrgProfile(Base):
     updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=_utcnow, onupdate=_utcnow)
 
 
+class AuditLog(Base):
+    """Jejak aksi sensitif (kelola akun, kunci sistem, tutup periode, master
+    data) -- bukan tiap transaksi harian, sejalan dengan kebijakan yang sama
+    di modul madrasah (tenants/madrasah): login, hapus/ubah akun, dan aksi
+    admin-only lain yang berdampak besar/susah dibalikkan."""
+
+    __tablename__ = "audit_logs"
+
+    id: Mapped[str] = mapped_column(String(64), primary_key=True, default=_uuid)
+    actor_id: Mapped[Optional[str]] = mapped_column(String(64), nullable=True, index=True)
+    actor_name: Mapped[str] = mapped_column(String(255), nullable=False, default="-")
+    actor_role: Mapped[str] = mapped_column(String(64), nullable=False, default="-")
+    action: Mapped[str] = mapped_column(String(64), nullable=False, index=True)
+    entity: Mapped[str] = mapped_column(String(64), nullable=False, default="")
+    entity_id: Mapped[Optional[str]] = mapped_column(String(64), nullable=True)
+    detail: Mapped[str] = mapped_column(Text, nullable=False, default="")
+    ip: Mapped[str] = mapped_column(String(64), nullable=False, default="")
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=_utcnow, index=True)
+
+
 class ClosedPeriod(Base):
     __tablename__ = "closed_periods"
     __table_args__ = (UniqueConstraint("period", "group_code", name="uq_closed_periods_period_group"),)
