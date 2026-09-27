@@ -1075,6 +1075,19 @@ async def list_semua_akun(session: AsyncSession, unit_id: str | None = None) -> 
     return list((await session.execute(stmt)).scalars())
 
 
+STAFF_BAWAHAN = frozenset({"kurikulum", "bendahara", "wali_kelas", "guru", "wali_santri"})
+
+
+def _pastikan_kepala_boleh_akun(caller: UserMadrasah | None, role: str, unit_id: str | None) -> None:
+    """Kepala madrasah hanya boleh mengelola akun bawahan di unitnya sendiri."""
+    if caller is None or caller.role != "kepala_sekolah":
+        return
+    if role not in STAFF_BAWAHAN:
+        raise MadrasahForbiddenError("Kepala madrasah hanya boleh mengelola akun staf di unitnya")
+    if not caller.madrasah_unit_id or unit_id != caller.madrasah_unit_id:
+        raise MadrasahForbiddenError("Akun hanya boleh di unit kepala madrasah ini")
+
+
 async def create_guru(
     session: AsyncSession, payload: GuruIn, caller: UserMadrasah | None = None
 ) -> tuple[UserMadrasah, str | None]:
@@ -1082,12 +1095,18 @@ async def create_guru(
     kalau payload.password kosong (server yang membuatkan password acak),
     None kalau admin sudah menentukan passwordnya sendiri."""
     generated = None if payload.password else _generate_password()
+    role = payload.role or "wali_kelas"
+    if caller is not None and caller.role == "kepala_sekolah":
+        unit_id = caller.madrasah_unit_id
+    else:
+        unit_id = await _unit_untuk_akun_baru(session, caller, role, payload.madrasah_unit_id)
+    _pastikan_kepala_boleh_akun(caller, role, unit_id)
     row = UserMadrasah(
         nama=payload.nama,
         no_hp=payload.no_hp.strip(),
         password_hash=hash_password(payload.password or generated),
-        role=payload.role or "wali_kelas",
-        madrasah_unit_id=await _unit_untuk_akun_baru(session, caller, payload.role or "wali_kelas", payload.madrasah_unit_id),
+        role=role,
+        madrasah_unit_id=unit_id,
     )
     session.add(row)
     await session.flush()
@@ -1101,17 +1120,13 @@ async def _count_admin(session: AsyncSession, exclude_id: str | None = None) -> 
     return (await session.execute(stmt)).scalar_one()
 
 
-async def _count_admin(session: AsyncSession, exclude_id: str | None = None) -> int:
-    stmt = select(func.count()).select_from(UserMadrasah).where(UserMadrasah.role == "admin")
-    if exclude_id:
-        stmt = stmt.where(UserMadrasah.id != exclude_id)
-    return (await session.execute(stmt)).scalar_one()
-
-
-async def patch_guru(session: AsyncSession, user_id: str, payload: UserPatch) -> UserMadrasah:
+async def patch_guru(session: AsyncSession, user_id: str, payload: UserPatch, caller: UserMadrasah | None = None) -> UserMadrasah:
     row = await session.get(UserMadrasah, user_id)
     if not row:
         raise MadrasahNotFoundError("Akun tidak ditemukan")
+    _pastikan_kepala_boleh_akun(caller, row.role, row.madrasah_unit_id)
+    if payload.role is not None:
+        _pastikan_kepala_boleh_akun(caller, payload.role, caller.madrasah_unit_id if caller and caller.role == "kepala_sekolah" else row.madrasah_unit_id)
     if payload.nama is not None:
         row.nama = payload.nama
     if payload.no_hp is not None:
@@ -1127,7 +1142,9 @@ async def patch_guru(session: AsyncSession, user_id: str, payload: UserPatch) ->
     if payload.password:
         row.password_hash = hash_password(payload.password)
     target_role = payload.role or row.role
-    if "madrasah_unit_id" in payload.model_fields_set or target_role in ("admin", "yayasan_admin"):
+    if caller is not None and caller.role == "kepala_sekolah":
+        row.madrasah_unit_id = caller.madrasah_unit_id
+    elif "madrasah_unit_id" in payload.model_fields_set or target_role in ("admin", "yayasan_admin"):
         # Admin utama dan admin yayasan tidak terikat satu unit.
         row.madrasah_unit_id = None if target_role in ("admin", "yayasan_admin") else payload.madrasah_unit_id
     if payload.role is not None or payload.password:
@@ -1139,7 +1156,7 @@ async def patch_guru(session: AsyncSession, user_id: str, payload: UserPatch) ->
     return row
 
 
-async def delete_guru(session: AsyncSession, user_id: str) -> None:
+async def delete_guru(session: AsyncSession, user_id: str, caller: UserMadrasah | None = None) -> None:
     """Hapus akun guru/wali_kelas/wali_santri/dst.
 
     Dilakukan lewat UPDATE/DELETE eksplisit (bukan cuma mengandalkan
@@ -1154,6 +1171,7 @@ async def delete_guru(session: AsyncSession, user_id: str) -> None:
     row = await session.get(UserMadrasah, user_id)
     if not row:
         raise MadrasahNotFoundError("Akun tidak ditemukan")
+    _pastikan_kepala_boleh_akun(caller, row.role, row.madrasah_unit_id)
     if row.role == "admin" and await _count_admin(session, exclude_id=user_id) == 0:
         raise MadrasahForbiddenError("Tidak bisa menghapus admin terakhir")
 
@@ -1170,14 +1188,20 @@ async def delete_guru(session: AsyncSession, user_id: str) -> None:
     await session.delete(row)
 
 
-async def create_wali_santri(session: AsyncSession, payload: GuruIn) -> tuple[UserMadrasah, str | None]:
+async def create_wali_santri(
+    session: AsyncSession, payload: GuruIn, caller: UserMadrasah | None = None
+) -> tuple[UserMadrasah, str | None]:
     generated = None if payload.password else _generate_password()
+    unit_id = payload.madrasah_unit_id or await _default_unit_id(session)
+    if caller is not None and caller.role == "kepala_sekolah":
+        unit_id = caller.madrasah_unit_id
+    _pastikan_kepala_boleh_akun(caller, "wali_santri", unit_id)
     row = UserMadrasah(
         nama=payload.nama,
         no_hp=payload.no_hp.strip(),
         password_hash=hash_password(payload.password or generated),
         role="wali_santri",
-        madrasah_unit_id=payload.madrasah_unit_id or await _default_unit_id(session),
+        madrasah_unit_id=unit_id,
     )
     session.add(row)
     await session.flush()

@@ -264,3 +264,25 @@ async def test_akun_admin_tidak_diikat_ke_unit(session):
         session, GuruIn(nama="Admin Yayasan", no_hp="081300000097", role="yayasan_admin"), caller=admin_caller
     )
     assert baru.madrasah_unit_id is None
+
+
+@pytest.mark.asyncio
+async def test_kepala_bertindak_sebagai_admin_unit(session):
+    await services.ensure_default_unit_and_backfill(session)
+    unit_a = (await services.list_unit(session))[0]
+    unit_b = await services.create_unit(session, MadrasahUnitIn(nama="Unit Cabang"))
+    kepala = UserMadrasah(
+        nama="Kepala B", no_hp="081300000201", password_hash="x", role="kepala_sekolah", madrasah_unit_id=unit_b.id
+    )
+    session.add(kepala)
+    await session.flush()
+
+    guru, _ = await services.create_guru(
+        session, GuruIn(nama="Guru B", no_hp="081300000202", role="guru", madrasah_unit_id=unit_a.id), caller=kepala
+    )
+    assert guru.madrasah_unit_id == unit_b.id
+
+    with pytest.raises(services.MadrasahForbiddenError):
+        await services.create_guru(
+            session, GuruIn(nama="Admin Palsu", no_hp="081300000203", role="admin"), caller=kepala
+        )
