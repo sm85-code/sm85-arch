@@ -151,14 +151,18 @@ class JadwalIn(BaseModel):
     jam_selesai: str = "08:00"
 
 
+class TugasIn(BaseModel):
+    user_id: str
+    jenis: Literal["guru_mapel", "kepala_sekolah", "lembaga_admin", "kurikulum", "bendahara", "wali_kelas"]
+    madrasah_unit_id: Optional[str] = None
+
+
 class PenugasanIn(BaseModel):
     """Menugaskan seorang guru mengajar satu mapel di satu rombel."""
 
     guru_id: str
     mapel_id: str
     rombel_id: str
-    # Kosong -> generate_honor_massal() jatuh ke tarif default (env
-    # HONOR_PER_SESI) untuk penugasan ini.
     tarif_per_sesi: Optional[Decimal] = Field(default=None, gt=0)
 
 

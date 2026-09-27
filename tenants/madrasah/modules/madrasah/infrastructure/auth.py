@@ -140,6 +140,10 @@ async def get_current_user_madrasah(
     # pemilik akun mengganti password. Lihat services.patch_guru.
     if int(payload.get("sv", 0)) != user.session_version:
         raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="Sesi tidak valid, silakan login ulang")
+    from tenants.madrasah.modules.madrasah.application import services as madrasah_services
+
+    await madrasah_services.backfill_tugas_dari_role(session, user)
+    await madrasah_services.load_tugas(session, user)
     return user
 
 
@@ -147,7 +151,9 @@ def require_roles_madrasah(*roles: str) -> Callable:
     allowed = {r.strip().lower() for r in roles}
 
     async def _inner(user: UserMadrasah = Depends(get_current_user_madrasah)) -> UserMadrasah:
-        if (user.role or "").strip().lower() not in allowed:
+        from tenants.madrasah.modules.madrasah.application.services import effective_roles
+
+        if allowed.isdisjoint(effective_roles(user)):
             raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="Akses ditolak")
         return user
 

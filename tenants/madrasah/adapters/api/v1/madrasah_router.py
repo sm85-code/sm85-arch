@@ -42,6 +42,7 @@ from tenants.madrasah.modules.madrasah.application.schemas import (
     TahunAjaranIn,
     TingkatIn,
     TingkatPatch,
+    TugasIn,
     UserPatch,
     YayasanPatch,
 )
@@ -214,6 +215,8 @@ async def login(
     )
     token = issue_madrasah_token(user)
     set_madrasah_cookie(response, token)
+    await services.backfill_tugas_dari_role(session, user)
+    await services.load_tugas(session, user)
     return {"user": _user_out(user)}
 
 
@@ -781,25 +784,60 @@ async def admin_pendaftaran_patch(
     return services.pendaftaran_out(row)
 
 
+@admin_r.get("/tugas")
+async def admin_tugas_list(
+    unit_id: str | None = Query(default=None),
+    user_id: str | None = Query(default=None),
+    session: AsyncSession = Depends(get_db_madrasah),
+    user: UserMadrasah = Depends(require_roles_madrasah(*UNIT_ADMIN_ROLES, "yayasan_admin")),
+):
+    scope = _unit_scope(user, unit_id)
+    rows = await services.list_tugas(session, unit_id=scope, user_id=user_id)
+    return [services.tugas_out(r) for r in rows]
+
+
+@admin_r.post("/tugas", status_code=status.HTTP_201_CREATED)
+async def admin_tugas_create(
+    payload: TugasIn,
+    session: AsyncSession = Depends(get_db_madrasah),
+    user: UserMadrasah = Depends(require_roles_madrasah(*UNIT_ADMIN_ROLES, "yayasan_admin")),
+):
+    try:
+        row = await services.create_tugas(session, payload, caller=user)
+    except services.MadrasahForbiddenError as exc:
+        raise HTTPException(status_code=403, detail=str(exc)) from exc
+    except services.MadrasahNotFoundError as exc:
+        raise HTTPException(status_code=404, detail=str(exc)) from exc
+    await session.refresh(row, attribute_names=["user"])
+    return services.tugas_out(row)
+
+
+@admin_r.delete("/tugas/{tugas_id}", status_code=status.HTTP_204_NO_CONTENT)
+async def admin_tugas_delete(
+    tugas_id: str,
+    session: AsyncSession = Depends(get_db_madrasah),
+    user: UserMadrasah = Depends(require_roles_madrasah(*UNIT_ADMIN_ROLES, "yayasan_admin")),
+):
+    try:
+        await services.delete_tugas(session, tugas_id, caller=user)
+    except services.MadrasahForbiddenError as exc:
+        raise HTTPException(status_code=403, detail=str(exc)) from exc
+    except services.MadrasahNotFoundError as exc:
+        raise HTTPException(status_code=404, detail=str(exc)) from exc
+
+
 @admin_r.get("/rekap")
 async def admin_rekap(
     unit_id: str | None = Query(default=None),
     session: AsyncSession = Depends(get_db_madrasah),
-    user: UserMadrasah = Depends(require_roles_madrasah(*UNIT_ADMIN_ROLES)),
+    user: UserMadrasah = Depends(
+        require_roles_madrasah(*UNIT_ADMIN_ROLES, "guru", "wali_kelas", "kurikulum", "bendahara", "yayasan_admin")
+    ),
 ):
-    if user.role not in ("admin", "yayasan_admin") and not user.madrasah_unit_id:
-        return {
-            "total_santri": 0,
-            "total_guru": 0,
-            "total_rombel": 0,
-            "tagihan_lunas": 0,
-            "tagihan_belum": 0,
-            "per_rombel": [],
-            "unit_id": None,
-            "unit_nama": None,
-        }
-    scope = _unit_scope(user, unit_id)
-    return await services.rekap_umum(session, unit_id=scope)
+    try:
+        return await services.rekap_untuk_caller(session, user, unit_id)
+    except services.MadrasahForbiddenError as exc:
+        raise HTTPException(status_code=403, detail=str(exc)) from exc
 
 
 @admin_r.post("/penempatan")
@@ -1295,7 +1333,7 @@ async def kur_guru_mapel_list(
 async def kur_guru_mapel_create(
     payload: PenugasanIn,
     session: AsyncSession = Depends(get_db_madrasah),
-    _: UserMadrasah = Depends(require_roles_madrasah(*KURIKULUM_ROLES)),
+    _: UserMadrasah = Depends(require_roles_madrasah(*KURIKULUM_ROLES, "yayasan_admin")),
 ):
     row = await services.assign_guru_mapel(session, payload)
     return {"id": row.id, "guru_id": row.guru_id, "mapel_id": row.mapel_id, "rombel_id": row.rombel_id}
@@ -1305,7 +1343,7 @@ async def kur_guru_mapel_create(
 async def kur_guru_mapel_delete(
     penugasan_id: str,
     session: AsyncSession = Depends(get_db_madrasah),
-    _: UserMadrasah = Depends(require_roles_madrasah(*KURIKULUM_ROLES)),
+    _: UserMadrasah = Depends(require_roles_madrasah(*KURIKULUM_ROLES, "yayasan_admin")),
 ):
     try:
         await services.remove_penugasan(session, penugasan_id)
