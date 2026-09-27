@@ -655,7 +655,7 @@ async def admin_santri_list(
     scope = _unit_scope(user, unit_id)
     rows = await services.list_santri(session, None, status=status, unit_id=scope)
     return [
-        {"id": r.id, "nama": r.nama, "rombel_id": r.rombel_id, "orang_tua_id": r.orang_tua_id, "status": r.status, "madrasah_unit_id": r.madrasah_unit_id}
+        {"id": r.id, "nama": r.nama, "rombel_id": r.rombel_id, "orang_tua_id": r.orang_tua_id, "orang_tua": r.orang_tua.nama if r.orang_tua else None, "status": r.status, "madrasah_unit_id": r.madrasah_unit_id}
         for r in rows
     ]
 

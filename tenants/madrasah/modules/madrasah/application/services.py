@@ -407,7 +407,7 @@ async def list_santri(
     cuma tidak ikut ditampilkan. status=None/"semua" menonaktifkan filter
     ini untuk layar admin yang memang butuh melihat semuanya (mis. daftar
     alumni). unit_id membatasi ke satu MadrasahUnit; None = semua unit."""
-    stmt = select(SantriMadrasah).order_by(SantriMadrasah.nama)
+    stmt = select(SantriMadrasah).options(selectinload(SantriMadrasah.orang_tua)).order_by(SantriMadrasah.nama)
     if kelas_id:
         stmt = stmt.where((SantriMadrasah.kelas_id == kelas_id) | (SantriMadrasah.rombel_id == kelas_id))
     if status and status != "semua":
@@ -1393,7 +1393,7 @@ async def patch_santri(session: AsyncSession, santri_id: str, payload: SantriPat
         row.kelas_id = payload.rombel_id
         await _catat_riwayat_penempatan(session, santri_id, payload.rombel_id)
     if payload.orang_tua_id is not None:
-        row.orang_tua_id = payload.orang_tua_id
+        row.orang_tua_id = payload.orang_tua_id or None
     await session.flush()
     return row
 
