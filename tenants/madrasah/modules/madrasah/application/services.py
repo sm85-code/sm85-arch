@@ -116,6 +116,44 @@ class MadrasahForbiddenError(Exception):
     pass
 
 
+CROSS_UNIT_ROLES = frozenset({"admin", "yayasan_admin"})
+
+
+def resolve_unit_scope(caller: UserMadrasah | None, requested_unit_id: str | None = None) -> str | None:
+    """None = lihat semua unit. String = filter ke unit itu.
+
+    admin dan yayasan_admin melihat semua, kecuali mereka sendiri meminta
+    unit_id. Role lain terkunci ke madrasah_unit_id di akun. Wali santri
+    tidak di-scope di sini (akses lewat anak asuh).
+    """
+    if caller is None:
+        return requested_unit_id
+    if caller.role == "wali_santri":
+        return None
+    if caller.role in CROSS_UNIT_ROLES:
+        return requested_unit_id or None
+    if not caller.madrasah_unit_id:
+        raise MadrasahForbiddenError("Akun ini belum terikat unit madrasah")
+    if requested_unit_id and requested_unit_id != caller.madrasah_unit_id:
+        raise MadrasahForbiddenError("Tidak dapat mengakses unit lain")
+    return caller.madrasah_unit_id
+
+
+async def assign_unit_id(
+    session: AsyncSession,
+    caller: UserMadrasah | None,
+    requested_unit_id: str | None,
+) -> str | None:
+    """Unit yang ditempel saat create. Staf biasa tidak bisa memilih unit lain."""
+    if caller is None or caller.role in CROSS_UNIT_ROLES:
+        return requested_unit_id or await _default_unit_id(session)
+    if caller.role == "wali_santri":
+        return requested_unit_id or await _default_unit_id(session)
+    if requested_unit_id and caller.madrasah_unit_id and requested_unit_id != caller.madrasah_unit_id:
+        raise MadrasahForbiddenError("Tidak dapat membuat data di unit lain")
+    return caller.madrasah_unit_id or requested_unit_id or await _default_unit_id(session)
+
+
 def _utcnow() -> datetime:
     return datetime.now(timezone.utc)
 
@@ -234,7 +272,13 @@ async def tutup_semester(session: AsyncSession, semester_id: str) -> SemesterMad
 
 
 def user_out(user: UserMadrasah, *, password_sementara: str | None = None) -> dict:
-    out = {"id": user.id, "nama": user.nama, "no_hp": user.no_hp, "role": user.role}
+    out = {
+        "id": user.id,
+        "nama": user.nama,
+        "no_hp": user.no_hp,
+        "role": user.role,
+        "madrasah_unit_id": user.madrasah_unit_id,
+    }
     if password_sementara:
         # Cuma disertakan sekali, langsung setelah create_guru/create_wali_santri
         # menghasilkan password acak (payload.password kosong) -- tidak pernah
@@ -304,17 +348,24 @@ async def list_kelas(session: AsyncSession):
     return list((await session.execute(select(KelasMadrasah).order_by(KelasMadrasah.nama_kelas))).scalars())
 
 
-async def list_santri(session: AsyncSession, kelas_id: str | None = None, status: str | None = "aktif") -> list[SantriMadrasah]:
+async def list_santri(
+    session: AsyncSession,
+    kelas_id: str | None = None,
+    status: str | None = "aktif",
+    unit_id: str | None = None,
+) -> list[SantriMadrasah]:
     """status="aktif" (default) menyembunyikan santri lulus/keluar/pindah
     dari listing biasa (dropdown absensi, dsb) -- barisnya tetap ada di DB,
     cuma tidak ikut ditampilkan. status=None/"semua" menonaktifkan filter
     ini untuk layar admin yang memang butuh melihat semuanya (mis. daftar
-    alumni)."""
+    alumni). unit_id membatasi ke satu MadrasahUnit; None = semua unit."""
     stmt = select(SantriMadrasah).order_by(SantriMadrasah.nama)
     if kelas_id:
         stmt = stmt.where((SantriMadrasah.kelas_id == kelas_id) | (SantriMadrasah.rombel_id == kelas_id))
     if status and status != "semua":
         stmt = stmt.where(SantriMadrasah.status == status)
+    if unit_id:
+        stmt = stmt.where(SantriMadrasah.madrasah_unit_id == unit_id)
     return list((await session.execute(stmt)).scalars())
 
 
@@ -402,8 +453,11 @@ async def assert_guru_mengajar_santri(session: AsyncSession, guru: UserMadrasah,
         raise MadrasahForbiddenError("Anda tidak ditugaskan mengajar mapel ini di rombel santri tersebut")
 
 
-async def list_rombel_for_caller(session: AsyncSession, caller: UserMadrasah) -> list[RombelMadrasah]:
-    rows = await list_rombel(session)
+async def list_rombel_for_caller(
+    session: AsyncSession, caller: UserMadrasah, requested_unit_id: str | None = None
+) -> list[RombelMadrasah]:
+    scope = resolve_unit_scope(caller, requested_unit_id)
+    rows = await list_rombel(session, unit_id=scope)
     if caller.role != "wali_kelas":
         return rows
     return [r for r in rows if r.wali_kelas_id == caller.id]
@@ -418,7 +472,8 @@ async def list_santri_for_caller(session: AsyncSession, caller: UserMadrasah, ke
         stmt = select(SantriMadrasah).where(SantriMadrasah.orang_tua_id == caller.id).order_by(SantriMadrasah.nama)
         return list((await session.execute(stmt)).scalars())
     if caller.role != "wali_kelas":
-        return await list_santri(session, kelas_id)
+        scope = resolve_unit_scope(caller)
+        return await list_santri(session, kelas_id, unit_id=scope)
     own_rombel = list(
         (await session.execute(select(RombelMadrasah.id).where(RombelMadrasah.wali_kelas_id == caller.id))).scalars()
     )
@@ -886,29 +941,41 @@ async def laba_rugi(session: AsyncSession, bulan: str | None = None) -> dict:
     }
 
 
-async def list_tingkat(session: AsyncSession) -> list[TingkatMadrasah]:
-    return list((await session.execute(select(TingkatMadrasah).order_by(TingkatMadrasah.urutan))).scalars())
+async def list_tingkat(session: AsyncSession, unit_id: str | None = None) -> list[TingkatMadrasah]:
+    stmt = select(TingkatMadrasah).order_by(TingkatMadrasah.urutan)
+    if unit_id:
+        stmt = stmt.where(TingkatMadrasah.madrasah_unit_id == unit_id)
+    return list((await session.execute(stmt)).scalars())
 
 
-async def create_tingkat(session: AsyncSession, payload: TingkatIn) -> TingkatMadrasah:
+async def create_tingkat(
+    session: AsyncSession, payload: TingkatIn, caller: UserMadrasah | None = None
+) -> TingkatMadrasah:
     row = TingkatMadrasah(
-        nama=payload.nama, urutan=payload.urutan, madrasah_unit_id=payload.madrasah_unit_id or await _default_unit_id(session)
+        nama=payload.nama,
+        urutan=payload.urutan,
+        madrasah_unit_id=await assign_unit_id(session, caller, payload.madrasah_unit_id),
     )
     session.add(row)
     await session.flush()
     return row
 
 
-async def list_rombel(session: AsyncSession) -> list[RombelMadrasah]:
-    return list((await session.execute(select(RombelMadrasah).options(selectinload(RombelMadrasah.wali_kelas), selectinload(RombelMadrasah.tingkat)).order_by(RombelMadrasah.nama))).scalars())
+async def list_rombel(session: AsyncSession, unit_id: str | None = None) -> list[RombelMadrasah]:
+    stmt = select(RombelMadrasah).options(selectinload(RombelMadrasah.wali_kelas), selectinload(RombelMadrasah.tingkat)).order_by(RombelMadrasah.nama)
+    if unit_id:
+        stmt = stmt.where(RombelMadrasah.madrasah_unit_id == unit_id)
+    return list((await session.execute(stmt)).scalars())
 
 
-async def create_rombel(session: AsyncSession, payload: RombelIn) -> RombelMadrasah:
+async def create_rombel(
+    session: AsyncSession, payload: RombelIn, caller: UserMadrasah | None = None
+) -> RombelMadrasah:
     row = RombelMadrasah(
         nama=payload.nama,
         tingkat_id=payload.tingkat_id,
         wali_kelas_id=payload.wali_kelas_id,
-        madrasah_unit_id=payload.madrasah_unit_id or await _default_unit_id(session),
+        madrasah_unit_id=await assign_unit_id(session, caller, payload.madrasah_unit_id),
     )
     session.add(row)
     await session.flush()
@@ -958,25 +1025,36 @@ async def delete_rombel(session: AsyncSession, rombel_id: str) -> None:
     await session.delete(row)
 
 
-async def list_guru(session: AsyncSession) -> list[UserMadrasah]:
-    return list((await session.execute(select(UserMadrasah).where(UserMadrasah.role.in_(["wali_kelas", "guru", "kepala_sekolah", "kurikulum", "bendahara"])).order_by(UserMadrasah.nama))).scalars())
+async def list_guru(session: AsyncSession, unit_id: str | None = None) -> list[UserMadrasah]:
+    stmt = select(UserMadrasah).where(UserMadrasah.role.in_(["wali_kelas", "guru", "kepala_sekolah", "kurikulum", "bendahara"])).order_by(UserMadrasah.nama)
+    if unit_id:
+        stmt = stmt.where(UserMadrasah.madrasah_unit_id == unit_id)
+    return list((await session.execute(stmt)).scalars())
 
 
-async def list_wali_santri(session: AsyncSession) -> list[UserMadrasah]:
-    return list((await session.execute(select(UserMadrasah).where(UserMadrasah.role == "wali_santri").order_by(UserMadrasah.nama))).scalars())
+async def list_wali_santri(session: AsyncSession, unit_id: str | None = None) -> list[UserMadrasah]:
+    stmt = select(UserMadrasah).where(UserMadrasah.role == "wali_santri").order_by(UserMadrasah.nama)
+    if unit_id:
+        stmt = stmt.where(UserMadrasah.madrasah_unit_id == unit_id)
+    return list((await session.execute(stmt)).scalars())
 
 
-async def list_semua_akun(session: AsyncSession) -> list[UserMadrasah]:
+async def list_semua_akun(session: AsyncSession, unit_id: str | None = None) -> list[UserMadrasah]:
     """Untuk halaman "Kelola Akun" (admin aplikasi only): SEMUA akun tanpa
     filter role -- beda dari list_guru/list_wali_santri yang masing-masing
     cuma menampilkan sebagian role. Ini satu-satunya tempat admin/
     kepala_sekolah/yayasan_admin sendiri bisa dilihat & dikelola lewat UI;
     create_guru/patch_guru/delete_guru dipakai apa adanya (generik, tidak
     dibatasi role tertentu) untuk operasinya."""
-    return list((await session.execute(select(UserMadrasah).order_by(UserMadrasah.role, UserMadrasah.nama))).scalars())
+    stmt = select(UserMadrasah).order_by(UserMadrasah.role, UserMadrasah.nama)
+    if unit_id:
+        stmt = stmt.where(UserMadrasah.madrasah_unit_id == unit_id)
+    return list((await session.execute(stmt)).scalars())
 
 
-async def create_guru(session: AsyncSession, payload: GuruIn) -> tuple[UserMadrasah, str | None]:
+async def create_guru(
+    session: AsyncSession, payload: GuruIn, caller: UserMadrasah | None = None
+) -> tuple[UserMadrasah, str | None]:
     """Return (row, password_sementara) -- password_sementara diisi hanya
     kalau payload.password kosong (server yang membuatkan password acak),
     None kalau admin sudah menentukan passwordnya sendiri."""
@@ -986,7 +1064,7 @@ async def create_guru(session: AsyncSession, payload: GuruIn) -> tuple[UserMadra
         no_hp=payload.no_hp.strip(),
         password_hash=hash_password(payload.password or generated),
         role=payload.role or "wali_kelas",
-        madrasah_unit_id=payload.madrasah_unit_id or await _default_unit_id(session),
+        madrasah_unit_id=await assign_unit_id(session, caller, payload.madrasah_unit_id),
     )
     session.add(row)
     await session.flush()
@@ -1133,13 +1211,15 @@ async def place_santri(session: AsyncSession, payload: PlacementIn) -> SantriMad
     return santri
 
 
-async def create_santri(session: AsyncSession, payload: SantriIn) -> SantriMadrasah:
+async def create_santri(
+    session: AsyncSession, payload: SantriIn, caller: UserMadrasah | None = None
+) -> SantriMadrasah:
     row = SantriMadrasah(
         nama=payload.nama,
         rombel_id=payload.rombel_id,
         kelas_id=payload.kelas_id or payload.rombel_id,
         orang_tua_id=payload.orang_tua_id,
-        madrasah_unit_id=payload.madrasah_unit_id or await _default_unit_id(session),
+        madrasah_unit_id=await assign_unit_id(session, caller, payload.madrasah_unit_id),
     )
     session.add(row)
     await session.flush()
@@ -1493,13 +1573,20 @@ async def rekap_umum(session: AsyncSession) -> dict:
     }
 
 
-async def list_mapel(session: AsyncSession) -> list[MapelMadrasah]:
-    return list((await session.execute(select(MapelMadrasah).options(selectinload(MapelMadrasah.materi)).order_by(MapelMadrasah.nama))).scalars())
+async def list_mapel(session: AsyncSession, unit_id: str | None = None) -> list[MapelMadrasah]:
+    stmt = select(MapelMadrasah).options(selectinload(MapelMadrasah.materi)).order_by(MapelMadrasah.nama)
+    if unit_id:
+        stmt = stmt.where(MapelMadrasah.madrasah_unit_id == unit_id)
+    return list((await session.execute(stmt)).scalars())
 
 
-async def create_mapel(session: AsyncSession, payload: MapelIn) -> MapelMadrasah:
+async def create_mapel(
+    session: AsyncSession, payload: MapelIn, caller: UserMadrasah | None = None
+) -> MapelMadrasah:
     row = MapelMadrasah(
-        kode=payload.kode, nama=payload.nama, madrasah_unit_id=payload.madrasah_unit_id or await _default_unit_id(session)
+        kode=payload.kode,
+        nama=payload.nama,
+        madrasah_unit_id=await assign_unit_id(session, caller, payload.madrasah_unit_id),
     )
     session.add(row)
     await session.flush()

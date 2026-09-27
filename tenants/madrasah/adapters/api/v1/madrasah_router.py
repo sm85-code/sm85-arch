@@ -100,6 +100,13 @@ def _user_out(user) -> dict:
     return services.user_out(user)
 
 
+def _unit_scope(user: UserMadrasah, unit_id: str | None = None) -> str | None:
+    try:
+        return services.resolve_unit_scope(user, unit_id)
+    except services.MadrasahForbiddenError as exc:
+        raise HTTPException(status_code=403, detail=str(exc)) from exc
+
+
 def _client_ip(request: Request) -> str:
     return request.client.host if request.client else "unknown"
 
@@ -247,7 +254,7 @@ async def get_santri(
     # list_santri_for_caller memaksa hasil ke rombel milik wali kelas itu
     # sendiri, menutup celah client mengganti kelas_id untuk lihat kelas lain.
     rows = await services.list_santri_for_caller(session, user, kelas_id)
-    return [{"id": row.id, "nama": row.nama, "kelas_id": row.kelas_id, "rombel_id": getattr(row, "rombel_id", None), "orang_tua_id": row.orang_tua_id} for row in rows]
+    return [{"id": row.id, "nama": row.nama, "kelas_id": row.kelas_id, "rombel_id": getattr(row, "rombel_id", None), "orang_tua_id": row.orang_tua_id, "madrasah_unit_id": row.madrasah_unit_id} for row in rows]
 
 
 @madrasah_router.post("/absensi/bulk", status_code=status.HTTP_201_CREATED)
@@ -360,20 +367,25 @@ async def public_pendaftaran_create(
 
 @admin_r.get("/tingkat")
 async def admin_tingkat(
+    unit_id: str | None = Query(default=None),
     session: AsyncSession = Depends(get_db_madrasah),
-    _: UserMadrasah = Depends(require_roles_madrasah(*ADMIN_ROLES)),
+    user: UserMadrasah = Depends(require_roles_madrasah(*ADMIN_ROLES)),
 ):
-    return [{"id": r.id, "nama": r.nama, "urutan": r.urutan} for r in await services.list_tingkat(session)]
+    scope = _unit_scope(user, unit_id)
+    return [{"id": r.id, "nama": r.nama, "urutan": r.urutan, "madrasah_unit_id": r.madrasah_unit_id} for r in await services.list_tingkat(session, unit_id=scope)]
 
 
 @admin_r.post("/tingkat", status_code=status.HTTP_201_CREATED)
 async def admin_tingkat_create(
     payload: TingkatIn,
     session: AsyncSession = Depends(get_db_madrasah),
-    _: UserMadrasah = Depends(require_roles_madrasah(*ADMIN_ROLES)),
+    user: UserMadrasah = Depends(require_roles_madrasah(*ADMIN_ROLES)),
 ):
-    row = await services.create_tingkat(session, payload)
-    return {"id": row.id, "nama": row.nama, "urutan": row.urutan}
+    try:
+        row = await services.create_tingkat(session, payload, caller=user)
+    except services.MadrasahForbiddenError as exc:
+        raise HTTPException(status_code=403, detail=str(exc)) from exc
+    return {"id": row.id, "nama": row.nama, "urutan": row.urutan, "madrasah_unit_id": row.madrasah_unit_id}
 
 
 @admin_r.patch("/tingkat/{tingkat_id}")
@@ -404,26 +416,26 @@ async def admin_tingkat_delete(
 
 @admin_r.get("/rombel")
 async def admin_rombel(
+    unit_id: str | None = Query(default=None),
     session: AsyncSession = Depends(get_db_madrasah),
     user: UserMadrasah = Depends(require_roles_madrasah(*ANY_AUTHENTICATED)),
 ):
-    # Kept accessible to any authenticated role (not just ADMIN_ROLES) because
-    # WaliKelasPortal.jsx and KurikulumPortal.jsx also call this endpoint to
-    # populate rombel dropdowns. list_rombel_for_caller now scopes the result
-    # to the caller's own rombel when role == "wali_kelas"; other roles
-    # (admin, kepala_sekolah, kurikulum, guru) still see the full list, which
-    # they legitimately need for their own screens.
-    return [{"id": r.id, "nama": r.nama, "tingkat_id": r.tingkat_id, "wali_kelas_id": r.wali_kelas_id, "wali_kelas": r.wali_kelas.nama if r.wali_kelas else None} for r in await services.list_rombel_for_caller(session, user)]
+    # Wali kelas tetap hanya rombel asuhannya. Admin utama melihat semua
+    # unit kecuali ?unit_id= dipakai. Staf lain terkunci ke unit akun.
+    return [{"id": r.id, "nama": r.nama, "tingkat_id": r.tingkat_id, "wali_kelas_id": r.wali_kelas_id, "wali_kelas": r.wali_kelas.nama if r.wali_kelas else None, "madrasah_unit_id": r.madrasah_unit_id} for r in await services.list_rombel_for_caller(session, user, unit_id)]
 
 
 @admin_r.post("/rombel", status_code=status.HTTP_201_CREATED)
 async def admin_rombel_create(
     payload: RombelIn,
     session: AsyncSession = Depends(get_db_madrasah),
-    _: UserMadrasah = Depends(require_roles_madrasah(*ADMIN_ROLES)),
+    user: UserMadrasah = Depends(require_roles_madrasah(*ADMIN_ROLES)),
 ):
-    row = await services.create_rombel(session, payload)
-    return {"id": row.id, "nama": row.nama, "tingkat_id": row.tingkat_id, "wali_kelas_id": row.wali_kelas_id}
+    try:
+        row = await services.create_rombel(session, payload, caller=user)
+    except services.MadrasahForbiddenError as exc:
+        raise HTTPException(status_code=403, detail=str(exc)) from exc
+    return {"id": row.id, "nama": row.nama, "tingkat_id": row.tingkat_id, "wali_kelas_id": row.wali_kelas_id, "madrasah_unit_id": row.madrasah_unit_id}
 
 
 @admin_r.delete("/rombel/{rombel_id}", status_code=status.HTTP_204_NO_CONTENT)
@@ -440,25 +452,25 @@ async def admin_rombel_delete(
 
 @admin_r.get("/akun")
 async def admin_akun_list(
+    unit_id: str | None = Query(default=None),
     session: AsyncSession = Depends(get_db_madrasah),
-    _: UserMadrasah = Depends(require_roles_madrasah(*APP_ADMIN_ROLES)),
+    user: UserMadrasah = Depends(require_roles_madrasah(*APP_ADMIN_ROLES)),
 ):
-    # Halaman "Kelola Akun": SATU-SATUNYA tempat semua akun (termasuk
-    # admin/kepala_sekolah/yayasan_admin sendiri) bisa dilihat & dikelola
-    # lewat UI -- eksklusif role "admin", lihat APP_ADMIN_ROLES.
-    return [services.user_out(r) for r in await services.list_semua_akun(session)]
+    # Admin utama melihat semua akun; ?unit_id= menyaring satu cabang.
+    scope = _unit_scope(user, unit_id)
+    return [services.user_out(r) for r in await services.list_semua_akun(session, unit_id=scope)]
 
 
 @admin_r.post("/akun", status_code=status.HTTP_201_CREATED)
 async def admin_akun_create(
     payload: GuruIn,
     session: AsyncSession = Depends(get_db_madrasah),
-    _: UserMadrasah = Depends(require_roles_madrasah(*APP_ADMIN_ROLES)),
+    user: UserMadrasah = Depends(require_roles_madrasah(*APP_ADMIN_ROLES)),
 ):
     # create_guru generik (dipakai apa adanya, bukan diagnostik "guru
     # saja") -- payload.role dipakai persis seperti dikirim, jadi bisa
     # membuat akun admin/kepala_sekolah/yayasan_admin/dst dari sini.
-    row, password_sementara = await services.create_guru(session, payload)
+    row, password_sementara = await services.create_guru(session, payload, caller=user)
     return services.user_out(row, password_sementara=password_sementara)
 
 
@@ -498,31 +510,31 @@ async def admin_akun_delete(
 
 @admin_r.get("/guru")
 async def admin_guru(
+    unit_id: str | None = Query(default=None),
     session: AsyncSession = Depends(get_db_madrasah),
-    _: UserMadrasah = Depends(require_roles_madrasah(*ADMIN_ROLES, *KURIKULUM_ROLES)),
+    user: UserMadrasah = Depends(require_roles_madrasah(*ADMIN_ROLES, *KURIKULUM_ROLES)),
 ):
-    # GET dilonggarkan untuk KURIKULUM_ROLES juga: KurikulumPortal.jsx perlu
-    # daftar guru untuk UI penugasan guru<->mapel<->rombel. POST/PATCH/DELETE
-    # di bawah (kelola akun) sekarang eksklusif APP_ADMIN_ROLES ("admin"
-    # saja) -- kepala_sekolah cuma boleh lihat, tidak boleh kelola akun.
-    return [services.user_out(r) for r in await services.list_guru(session)]
+    scope = _unit_scope(user, unit_id)
+    return [services.user_out(r) for r in await services.list_guru(session, unit_id=scope)]
 
 
 @admin_r.get("/wali-santri")
 async def admin_wali_santri(
+    unit_id: str | None = Query(default=None),
     session: AsyncSession = Depends(get_db_madrasah),
-    _: UserMadrasah = Depends(require_roles_madrasah(*ADMIN_ROLES)),
+    user: UserMadrasah = Depends(require_roles_madrasah(*ADMIN_ROLES)),
 ):
-    return [services.user_out(r) for r in await services.list_wali_santri(session)]
+    scope = _unit_scope(user, unit_id)
+    return [services.user_out(r) for r in await services.list_wali_santri(session, unit_id=scope)]
 
 
 @admin_r.post("/guru", status_code=status.HTTP_201_CREATED)
 async def admin_guru_create(
     payload: GuruIn,
     session: AsyncSession = Depends(get_db_madrasah),
-    _: UserMadrasah = Depends(require_roles_madrasah(*APP_ADMIN_ROLES)),
+    user: UserMadrasah = Depends(require_roles_madrasah(*APP_ADMIN_ROLES)),
 ):
-    row, password_sementara = await services.create_guru(session, payload)
+    row, password_sementara = await services.create_guru(session, payload, caller=user)
     return services.user_out(row, password_sementara=password_sementara)
 
 
@@ -608,24 +620,26 @@ async def admin_wali_santri_delete(
 async def admin_santri_create(
     payload: SantriIn,
     session: AsyncSession = Depends(get_db_madrasah),
-    _: UserMadrasah = Depends(require_roles_madrasah(*ADMIN_ROLES)),
+    user: UserMadrasah = Depends(require_roles_madrasah(*ADMIN_ROLES)),
 ):
-    row = await services.create_santri(session, payload)
-    return {"id": row.id, "nama": row.nama, "rombel_id": row.rombel_id}
+    try:
+        row = await services.create_santri(session, payload, caller=user)
+    except services.MadrasahForbiddenError as exc:
+        raise HTTPException(status_code=403, detail=str(exc)) from exc
+    return {"id": row.id, "nama": row.nama, "rombel_id": row.rombel_id, "madrasah_unit_id": row.madrasah_unit_id}
 
 
 @admin_r.get("/santri")
 async def admin_santri_list(
     status: str | None = Query(default="semua"),
+    unit_id: str | None = Query(default=None),
     session: AsyncSession = Depends(get_db_madrasah),
-    _: UserMadrasah = Depends(require_roles_madrasah(*ADMIN_ROLES)),
+    user: UserMadrasah = Depends(require_roles_madrasah(*ADMIN_ROLES)),
 ):
-    # Beda dari GET /santri (root, di-scope per-role): ini khusus admin untuk
-    # keperluan kelola data lengkap -- default "semua" (termasuk lulus/keluar/
-    # pindah), beda dari list_santri() lain yang default cuma santri aktif.
-    rows = await services.list_santri(session, None, status=status)
+    scope = _unit_scope(user, unit_id)
+    rows = await services.list_santri(session, None, status=status, unit_id=scope)
     return [
-        {"id": r.id, "nama": r.nama, "rombel_id": r.rombel_id, "orang_tua_id": r.orang_tua_id, "status": r.status}
+        {"id": r.id, "nama": r.nama, "rombel_id": r.rombel_id, "orang_tua_id": r.orang_tua_id, "status": r.status, "madrasah_unit_id": r.madrasah_unit_id}
         for r in rows
     ]
 
@@ -793,24 +807,25 @@ async def admin_kenaikan_kelas(
 
 @kurikulum_r.get("/mapel")
 async def kur_mapel(
+    unit_id: str | None = Query(default=None),
     session: AsyncSession = Depends(get_db_madrasah),
-    _: UserMadrasah = Depends(require_roles_madrasah(*ANY_AUTHENTICATED)),
+    user: UserMadrasah = Depends(require_roles_madrasah(*ANY_AUTHENTICATED)),
 ):
-    # Accessible to any authenticated role: WaliKelasPortal.jsx also reads
-    # mapel (via services/waliKelas.js -> /wali-kelas/kurikulum, a separate
-    # endpoint below) but KurikulumPortal's own createMateri/createMapel flow
-    # needs this GET too. Mutations below remain restricted to KURIKULUM_ROLES.
-    return [{"id": r.id, "kode": r.kode, "nama": r.nama, "materi": [{"id": m.id, "judul": m.judul, "urutan": m.urutan, "aktif": m.aktif} for m in r.materi]} for r in await services.list_mapel(session)]
+    scope = _unit_scope(user, unit_id)
+    return [{"id": r.id, "kode": r.kode, "nama": r.nama, "madrasah_unit_id": r.madrasah_unit_id, "materi": [{"id": m.id, "judul": m.judul, "urutan": m.urutan, "aktif": m.aktif} for m in r.materi]} for r in await services.list_mapel(session, unit_id=scope)]
 
 
 @kurikulum_r.post("/mapel", status_code=status.HTTP_201_CREATED)
 async def kur_mapel_create(
     payload: MapelIn,
     session: AsyncSession = Depends(get_db_madrasah),
-    _: UserMadrasah = Depends(require_roles_madrasah(*KURIKULUM_ROLES)),
+    user: UserMadrasah = Depends(require_roles_madrasah(*KURIKULUM_ROLES)),
 ):
-    row = await services.create_mapel(session, payload)
-    return {"id": row.id, "kode": row.kode, "nama": row.nama}
+    try:
+        row = await services.create_mapel(session, payload, caller=user)
+    except services.MadrasahForbiddenError as exc:
+        raise HTTPException(status_code=403, detail=str(exc)) from exc
+    return {"id": row.id, "kode": row.kode, "nama": row.nama, "madrasah_unit_id": row.madrasah_unit_id}
 
 
 @kurikulum_r.patch("/mapel/{mapel_id}")
@@ -986,9 +1001,10 @@ async def ben_pay(
 @wali_kelas_r.get("/kurikulum")
 async def wk_kurikulum(
     session: AsyncSession = Depends(get_db_madrasah),
-    _: UserMadrasah = Depends(require_roles_madrasah(*WALI_KELAS_ROLES)),
+    user: UserMadrasah = Depends(require_roles_madrasah(*WALI_KELAS_ROLES)),
 ):
-    return [{"id": r.id, "kode": r.kode, "nama": r.nama, "materi": [{"id": m.id, "judul": m.judul, "urutan": m.urutan} for m in r.materi if m.aktif]} for r in await services.list_mapel(session)]
+    scope = _unit_scope(user)
+    return [{"id": r.id, "kode": r.kode, "nama": r.nama, "materi": [{"id": m.id, "judul": m.judul, "urutan": m.urutan} for m in r.materi if m.aktif]} for r in await services.list_mapel(session, unit_id=scope)]
 
 
 @wali_kelas_r.post("/absensi", status_code=status.HTTP_201_CREATED)
