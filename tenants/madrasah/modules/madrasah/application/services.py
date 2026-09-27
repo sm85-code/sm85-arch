@@ -1784,6 +1784,18 @@ async def rekap_yayasan(session: AsyncSession) -> list[dict]:
                     .where(TagihanSyahriyah.santri_id.in_(santri_unit_ids), TagihanSyahriyah.status_bayar.is_(False))
                 )
             ).scalar_one()
+        per_rombel_rows = list(
+            (
+                await session.execute(
+                    select(RombelMadrasah.nama, func.count(SantriMadrasah.id))
+                    .select_from(RombelMadrasah)
+                    .outerjoin(SantriMadrasah, SantriMadrasah.rombel_id == RombelMadrasah.id)
+                    .where(RombelMadrasah.madrasah_unit_id == unit.id)
+                    .group_by(RombelMadrasah.id, RombelMadrasah.nama)
+                    .order_by(RombelMadrasah.nama)
+                )
+            ).all()
+        )
         hasil.append(
             {
                 "unit_id": unit.id,
@@ -1794,6 +1806,7 @@ async def rekap_yayasan(session: AsyncSession) -> list[dict]:
                 "total_guru": total_guru,
                 "tagihan_lunas": tagihan_lunas,
                 "tagihan_belum": tagihan_belum,
+                "per_rombel": [{"rombel": nama, "jumlah_santri": jumlah} for nama, jumlah in per_rombel_rows],
             }
         )
     return hasil
