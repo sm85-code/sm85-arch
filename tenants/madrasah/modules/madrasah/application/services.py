@@ -443,6 +443,11 @@ async def list_tugas(session: AsyncSession, unit_id: str | None = None, user_id:
 async def load_tugas(session: AsyncSession, user: UserMadrasah) -> UserMadrasah:
     rows = list((await session.execute(select(TugasMadrasah).where(TugasMadrasah.user_id == user.id))).scalars())
     user._tugas_list = rows
+    if not user.madrasah_unit_id:
+        for row in rows:
+            if row.madrasah_unit_id:
+                user.madrasah_unit_id = row.madrasah_unit_id
+                break
     return user
 
 
@@ -515,11 +520,11 @@ async def create_tugas(session: AsyncSession, payload, caller: UserMadrasah) -> 
             raise MadrasahForbiddenError("Unit ini sudah punya Kepala Madrasah")
     row = TugasMadrasah(user_id=payload.user_id, madrasah_unit_id=unit_id, jenis=payload.jenis)
     session.add(row)
-    if payload.jenis == "kepala_sekolah":
+    if payload.jenis in ("kepala_sekolah", "lembaga_admin"):
         unit = await session.get(MadrasahUnit, unit_id)
-        if unit:
+        if unit and payload.jenis == "kepala_sekolah":
             unit.kepala_unit = target.nama
-            target.madrasah_unit_id = target.madrasah_unit_id or unit_id
+        target.madrasah_unit_id = target.madrasah_unit_id or unit_id
     await session.flush()
     return row
 

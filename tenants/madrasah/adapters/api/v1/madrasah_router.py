@@ -1639,6 +1639,9 @@ async def admin_unit_list(
     if user.role in ("admin", "yayasan_admin") or "admin" in services.effective_roles(user) or "yayasan_admin" in services.effective_roles(user):
         return [services.unit_out(r) for r in rows]
     allowed = services.unit_ids_tugas(user)
+    if not allowed:
+        await services.load_tugas(session, user)
+        allowed = services.unit_ids_tugas(user)
     return [services.unit_out(r) for r in rows if r.id in allowed]
 
 
