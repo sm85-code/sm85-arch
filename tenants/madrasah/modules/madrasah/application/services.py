@@ -1000,6 +1000,13 @@ async def _count_admin(session: AsyncSession, exclude_id: str | None = None) -> 
     return (await session.execute(stmt)).scalar_one()
 
 
+async def _count_admin(session: AsyncSession, exclude_id: str | None = None) -> int:
+    stmt = select(func.count()).select_from(UserMadrasah).where(UserMadrasah.role == "admin")
+    if exclude_id:
+        stmt = stmt.where(UserMadrasah.id != exclude_id)
+    return (await session.execute(stmt)).scalar_one()
+
+
 async def patch_guru(session: AsyncSession, user_id: str, payload: UserPatch) -> UserMadrasah:
     row = await session.get(UserMadrasah, user_id)
     if not row:
