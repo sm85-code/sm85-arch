@@ -538,7 +538,7 @@ async def admin_guru(
 async def admin_wali_santri(
     unit_id: str | None = Query(default=None),
     session: AsyncSession = Depends(get_db_madrasah),
-    user: UserMadrasah = Depends(require_roles_madrasah(*SANTRI_WRITE_ROLES)),
+    user: UserMadrasah = Depends(require_roles_madrasah(*SANTRI_READ_ROLES)),
 ):
     scope = _unit_scope(user, unit_id)
     return [services.user_out(r) for r in await services.list_wali_santri(session, unit_id=scope)]
@@ -667,7 +667,7 @@ async def admin_santri_list(
     status: str | None = Query(default="semua"),
     unit_id: str | None = Query(default=None),
     session: AsyncSession = Depends(get_db_madrasah),
-    user: UserMadrasah = Depends(require_roles_madrasah(*SANTRI_WRITE_ROLES)),
+    user: UserMadrasah = Depends(require_roles_madrasah(*SANTRI_READ_ROLES)),
 ):
     scope = _unit_scope(user, unit_id)
     rows = await services.list_santri(session, None, status=status, unit_id=scope)
