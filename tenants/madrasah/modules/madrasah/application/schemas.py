@@ -202,6 +202,17 @@ class PendaftaranIn(BaseModel):
     catatan: str = Field("", max_length=2000)
 
 
+class ProfilPatch(BaseModel):
+    """Self-service: pengguna mengubah profilnya sendiri lewat halaman
+    "Profil Saya" -- beda dari UserPatch (admin mengedit akun ORANG LAIN
+    tanpa perlu tahu password lama mereka). Ganti password di sini wajib
+    menyertakan current_password yang benar."""
+
+    nama: Optional[str] = Field(None, min_length=1, max_length=255)
+    current_password: Optional[str] = Field(None, max_length=72)
+    new_password: Optional[str] = Field(None, min_length=4, max_length=72)
+
+
 class PendaftaranPatch(BaseModel):
     status: Optional[Literal["baru", "dihubungi", "diterima", "ditolak"]] = None
     catatan: Optional[str] = Field(None, max_length=2000)
