@@ -1735,23 +1735,47 @@ async def rekap_yayasan(session: AsyncSession) -> list[dict]:
     return hasil
 
 
-async def rekap_umum(session: AsyncSession) -> dict:
-    total_santri = (await session.execute(select(func.count()).select_from(SantriMadrasah))).scalar_one()
-    total_guru = (await session.execute(select(func.count()).select_from(UserMadrasah).where(UserMadrasah.role.in_(("guru", "wali_kelas"))))).scalar_one()
-    total_rombel = (await session.execute(select(func.count()).select_from(RombelMadrasah))).scalar_one()
-    tagihan_lunas = (await session.execute(select(func.count()).select_from(TagihanSyahriyah).where(TagihanSyahriyah.status_bayar.is_(True)))).scalar_one()
-    tagihan_belum = (await session.execute(select(func.count()).select_from(TagihanSyahriyah).where(TagihanSyahriyah.status_bayar.is_(False)))).scalar_one()
-    per_rombel_rows = list(
-        (
-            await session.execute(
-                select(RombelMadrasah.nama, func.count(SantriMadrasah.id))
-                .select_from(RombelMadrasah)
-                .outerjoin(SantriMadrasah, SantriMadrasah.rombel_id == RombelMadrasah.id)
-                .group_by(RombelMadrasah.id, RombelMadrasah.nama)
-                .order_by(RombelMadrasah.nama)
-            )
-        ).all()
+async def rekap_umum(session: AsyncSession, unit_id: str | None = None) -> dict:
+    santri_q = select(func.count()).select_from(SantriMadrasah)
+    guru_q = select(func.count()).select_from(UserMadrasah).where(UserMadrasah.role.in_(("guru", "wali_kelas")))
+    rombel_q = select(func.count()).select_from(RombelMadrasah)
+    lunas_q = (
+        select(func.count())
+        .select_from(TagihanSyahriyah)
+        .join(SantriMadrasah, TagihanSyahriyah.santri_id == SantriMadrasah.id)
+        .where(TagihanSyahriyah.status_bayar.is_(True))
     )
+    belum_q = (
+        select(func.count())
+        .select_from(TagihanSyahriyah)
+        .join(SantriMadrasah, TagihanSyahriyah.santri_id == SantriMadrasah.id)
+        .where(TagihanSyahriyah.status_bayar.is_(False))
+    )
+    if unit_id:
+        santri_q = santri_q.where(SantriMadrasah.madrasah_unit_id == unit_id)
+        guru_q = guru_q.where(UserMadrasah.madrasah_unit_id == unit_id)
+        rombel_q = rombel_q.where(RombelMadrasah.madrasah_unit_id == unit_id)
+        lunas_q = lunas_q.where(SantriMadrasah.madrasah_unit_id == unit_id)
+        belum_q = belum_q.where(SantriMadrasah.madrasah_unit_id == unit_id)
+    total_santri = (await session.execute(santri_q)).scalar_one()
+    total_guru = (await session.execute(guru_q)).scalar_one()
+    total_rombel = (await session.execute(rombel_q)).scalar_one()
+    tagihan_lunas = (await session.execute(lunas_q)).scalar_one()
+    tagihan_belum = (await session.execute(belum_q)).scalar_one()
+    per_rombel_stmt = (
+        select(RombelMadrasah.nama, func.count(SantriMadrasah.id))
+        .select_from(RombelMadrasah)
+        .outerjoin(SantriMadrasah, SantriMadrasah.rombel_id == RombelMadrasah.id)
+        .group_by(RombelMadrasah.id, RombelMadrasah.nama)
+        .order_by(RombelMadrasah.nama)
+    )
+    if unit_id:
+        per_rombel_stmt = per_rombel_stmt.where(RombelMadrasah.madrasah_unit_id == unit_id)
+    per_rombel_rows = list((await session.execute(per_rombel_stmt)).all())
+    unit_nama = None
+    if unit_id:
+        unit = await session.get(MadrasahUnit, unit_id)
+        unit_nama = unit.nama if unit else None
     return {
         "total_santri": total_santri,
         "total_guru": total_guru,
@@ -1759,6 +1783,8 @@ async def rekap_umum(session: AsyncSession) -> dict:
         "tagihan_lunas": tagihan_lunas,
         "tagihan_belum": tagihan_belum,
         "per_rombel": [{"rombel": nama, "jumlah_santri": jumlah} for nama, jumlah in per_rombel_rows],
+        "unit_id": unit_id,
+        "unit_nama": unit_nama,
     }
 
 

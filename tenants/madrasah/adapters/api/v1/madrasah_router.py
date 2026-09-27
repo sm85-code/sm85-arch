@@ -749,10 +749,23 @@ async def admin_pendaftaran_patch(
 
 @admin_r.get("/rekap")
 async def admin_rekap(
+    unit_id: str | None = Query(default=None),
     session: AsyncSession = Depends(get_db_madrasah),
-    _: UserMadrasah = Depends(require_roles_madrasah(*UNIT_ADMIN_ROLES)),
+    user: UserMadrasah = Depends(require_roles_madrasah(*UNIT_ADMIN_ROLES)),
 ):
-    return await services.rekap_umum(session)
+    if user.role not in ("admin", "yayasan_admin") and not user.madrasah_unit_id:
+        return {
+            "total_santri": 0,
+            "total_guru": 0,
+            "total_rombel": 0,
+            "tagihan_lunas": 0,
+            "tagihan_belum": 0,
+            "per_rombel": [],
+            "unit_id": None,
+            "unit_nama": None,
+        }
+    scope = _unit_scope(user, unit_id)
+    return await services.rekap_umum(session, unit_id=scope)
 
 
 @admin_r.post("/penempatan")
