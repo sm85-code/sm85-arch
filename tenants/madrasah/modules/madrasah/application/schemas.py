@@ -178,6 +178,33 @@ class PengaturanPatch(BaseModel):
     tagline: Optional[str] = Field(None, max_length=255)
     logo_url: Optional[str] = Field(None, max_length=500)
     alamat: Optional[str] = Field(None, max_length=500)
+    # Ditampilkan di section "Penerimaan Santri Baru" landing page publik.
+    info_psb: Optional[str] = Field(None, max_length=5000)
+    kontak_psb: Optional[str] = Field(None, max_length=64)
+
+
+class KegiatanIn(BaseModel):
+    judul: str = Field(..., min_length=1, max_length=255)
+    deskripsi: str = ""
+    urutan: int = 1
+
+
+class PendaftaranIn(BaseModel):
+    """Form PSB publik -- tanpa auth, diisi calon wali santri."""
+
+    nama_calon: str = Field(..., min_length=1, max_length=255)
+    tempat_lahir: Optional[str] = Field(None, max_length=255)
+    tanggal_lahir: Optional[date] = None
+    nama_orang_tua: str = Field(..., min_length=1, max_length=255)
+    no_hp: str = Field(..., min_length=5, max_length=32)
+    alamat: str = Field("", max_length=2000)
+    asal_sekolah: Optional[str] = Field(None, max_length=255)
+    catatan: str = Field("", max_length=2000)
+
+
+class PendaftaranPatch(BaseModel):
+    status: Optional[Literal["baru", "dihubungi", "diterima", "ditolak"]] = None
+    catatan: Optional[str] = Field(None, max_length=2000)
 
 
 class YayasanPatch(BaseModel):

@@ -83,4 +83,6 @@ async def test_update_pengaturan_patches_only_given_fields(session):
         "tagline": "Sistem Informasi Madrasah",
         "logo_url": "https://example.com/logo.png",
         "alamat": "",
+        "info_psb": "",
+        "kontak_psb": "",
     }

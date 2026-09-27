@@ -65,6 +65,15 @@ async def ensure_madrasah_schema() -> None:
         await conn.execute(
             text("ALTER TABLE IF EXISTS madrasah_guru_mapel_rombel ADD COLUMN IF NOT EXISTS tarif_per_sesi NUMERIC(20,2) NULL")
         )
+        # PengaturanSekolah sudah ada di banyak deployment sebelum kolom PSB
+        # ini ditambahkan -- create_all (checkfirst) di atas tidak menyentuh
+        # tabel yang sudah ada, jadi ALTER manual di sini seperti kolom lain.
+        await conn.execute(
+            text("ALTER TABLE IF EXISTS madrasah_pengaturan ADD COLUMN IF NOT EXISTS info_psb TEXT NOT NULL DEFAULT ''")
+        )
+        await conn.execute(
+            text("ALTER TABLE IF EXISTS madrasah_pengaturan ADD COLUMN IF NOT EXISTS kontak_psb VARCHAR(64) NOT NULL DEFAULT ''")
+        )
         # madrasah_unit/madrasah_yayasan sudah dibuat oleh create_all
         # (checkfirst) di atas -- baris ALTER di bawah ini menambah
         # penanda unit ke tabel yang SUDAH ADA sebelumnya (fase 3).
