@@ -6,10 +6,10 @@ import pytest_asyncio
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker, create_async_engine
 
 from tenants.madrasah.modules.madrasah.application import services
-from tenants.madrasah.modules.madrasah.application.schemas import UserPatch
+from tenants.madrasah.modules.madrasah.application.schemas import GuruIn, UserPatch
 from tenants.madrasah.modules.madrasah.infrastructure.database import MadrasahBase
 from tenants.madrasah.modules.madrasah.infrastructure.models import UserMadrasah
-from shared.security import hash_password
+from shared.security import hash_password, verify_password
 
 
 @pytest_asyncio.fixture
@@ -82,3 +82,22 @@ async def test_can_edit_own_no_hp_without_touching_role(session):
     updated = await services.patch_guru(session, admin.id, UserPatch(no_hp="081299999999"))
     assert updated.no_hp == "081299999999"
     assert updated.role == "admin"
+
+
+@pytest.mark.asyncio
+async def test_create_guru_without_password_generates_random_one(session):
+    row, generated = await services.create_guru(session, GuruIn(nama="Guru Tanpa Password", no_hp="081377770099"))
+
+    assert generated is not None
+    assert generated != "password123"
+    assert verify_password(generated, row.password_hash)
+
+
+@pytest.mark.asyncio
+async def test_create_guru_with_password_does_not_generate_one(session):
+    row, generated = await services.create_guru(
+        session, GuruIn(nama="Guru Dengan Password", no_hp="081377770098", password="rahasia123")
+    )
+
+    assert generated is None
+    assert verify_password("rahasia123", row.password_hash)

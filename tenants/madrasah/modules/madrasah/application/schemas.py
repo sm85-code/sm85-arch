@@ -56,7 +56,11 @@ class RombelIn(BaseModel):
 class GuruIn(BaseModel):
     nama: str
     no_hp: str
-    password: str = Field(default="password123", max_length=72)
+    # Kosongkan untuk minta password acak dibuatkan otomatis (lihat
+    # services.create_guru/create_wali_santri) -- JANGAN diberi default
+    # tetap di sini, supaya tidak ada akun (termasuk akun admin lewat
+    # Kelola Akun) yang lahir dengan password seragam yang mudah ditebak.
+    password: Optional[str] = Field(default=None, max_length=72)
     role: str = "wali_kelas"
     madrasah_unit_id: Optional[str] = None
 

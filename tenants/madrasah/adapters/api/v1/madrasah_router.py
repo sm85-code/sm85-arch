@@ -458,7 +458,8 @@ async def admin_akun_create(
     # create_guru generik (dipakai apa adanya, bukan diagnostik "guru
     # saja") -- payload.role dipakai persis seperti dikirim, jadi bisa
     # membuat akun admin/kepala_sekolah/yayasan_admin/dst dari sini.
-    return services.user_out(await services.create_guru(session, payload))
+    row, password_sementara = await services.create_guru(session, payload)
+    return services.user_out(row, password_sementara=password_sementara)
 
 
 @admin_r.patch("/akun/{user_id}")
@@ -521,7 +522,8 @@ async def admin_guru_create(
     session: AsyncSession = Depends(get_db_madrasah),
     _: UserMadrasah = Depends(require_roles_madrasah(*APP_ADMIN_ROLES)),
 ):
-    return services.user_out(await services.create_guru(session, payload))
+    row, password_sementara = await services.create_guru(session, payload)
+    return services.user_out(row, password_sementara=password_sementara)
 
 
 @admin_r.patch("/guru/{user_id}")
@@ -564,7 +566,8 @@ async def admin_wali_santri_create(
     session: AsyncSession = Depends(get_db_madrasah),
     _: UserMadrasah = Depends(require_roles_madrasah(*APP_ADMIN_ROLES)),
 ):
-    return services.user_out(await services.create_wali_santri(session, payload))
+    row, password_sementara = await services.create_wali_santri(session, payload)
+    return services.user_out(row, password_sementara=password_sementara)
 
 
 @admin_r.patch("/wali-santri/{user_id}")
