@@ -3,6 +3,10 @@ fastapi==0.141.1
 uvicorn[standard]==0.54.0
 sqlalchemy[asyncio]==2.1.1
 asyncpg==0.31.0
+# SQLAlchemy 2.1 create_async_engine("postgresql://…") defaults to the
+# psycopg (v3) dialect; keep binary wheels so CI/Linux hosts don't need libpq headers.
+# App runtime still prefers asyncpg via shared.database._database_url rewrite.
+psycopg[binary]==3.2.13
 alembic==1.20.0
 pydantic[email]==2.13.5
 python-dotenv==1.2.3

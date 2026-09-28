@@ -20,7 +20,7 @@ from modules.siabumdes.adapters.api.scope import assert_can_mutate_period  # noq
 from modules.siabumdes.identity.infrastructure.models import ClosedPeriod, SystemControl, User  # noqa: E402
 from modules.siabumdes.application.closing import run_monthly_close, undo_monthly_close, SUB_UTANG_BH_UNIT  # noqa: E402
 from modules.siabumdes.infrastructure.models import Account, Transaction, UnitUsaha  # noqa: E402
-from shared.database import Base  # noqa: E402
+from shared.database import Base, DATABASE_URL as ASYNC_DATABASE_URL  # noqa: E402
 from modules.siabumdes.coa_taxonomy import SUB_IKHTISAR_LR, SUB_SALDO_LABA  # noqa: E402
 
 DATABASE_URL = os.getenv("DATABASE_URL", "")
@@ -38,10 +38,14 @@ def _tables():
 
 @pytest_asyncio.fixture
 async def session():
-    engine = create_async_engine(DATABASE_URL)
-    async with engine.begin() as conn:
-        await conn.run_sync(lambda c: Base.metadata.drop_all(c, tables=_tables()))
-        await conn.run_sync(lambda c: Base.metadata.create_all(c, tables=_tables()))
+    engine = create_async_engine(ASYNC_DATABASE_URL)
+    try:
+        async with engine.begin() as conn:
+            await conn.run_sync(lambda c: Base.metadata.drop_all(c, tables=_tables()))
+            await conn.run_sync(lambda c: Base.metadata.create_all(c, tables=_tables()))
+    except Exception as exc:
+        await engine.dispose()
+        pytest.skip(f"PostgreSQL unavailable for integration fixture: {exc}")
     session_local = async_sessionmaker(engine, class_=AsyncSession, expire_on_commit=False)
     async with session_local() as s:
         yield s

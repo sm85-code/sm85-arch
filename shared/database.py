@@ -25,7 +25,10 @@ def _database_url() -> str:
 
     parts = urlsplit(url)
     scheme = parts.scheme
-    if scheme in {"postgresql", "postgres"}:
+    # Canonical async driver for this app is asyncpg. Accept common URL spellings
+    # (bare postgresql://, +asyncpg, +psycopg) and always rewrite to +asyncpg so
+    # App Platform / CI secrets that use either driver name keep working.
+    if scheme in {"postgresql", "postgres", "postgresql+psycopg", "postgresql+psycopg_async"}:
         scheme = "postgresql+asyncpg"
     elif scheme == "postgresql+asyncpg":
         pass
