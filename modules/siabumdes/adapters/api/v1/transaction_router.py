@@ -8,10 +8,10 @@ from datetime import date, datetime, timezone
 from decimal import Decimal
 from typing import Optional
 
-from fastapi import APIRouter, Depends, File, HTTPException, Request, UploadFile
+from fastapi import APIRouter, Depends, File, HTTPException, Query, Request, Response, UploadFile
 from jose import JWTError, jwt
 from pydantic import BaseModel, Field
-from sqlalchemy import select
+from sqlalchemy import func, select
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import selectinload
 
@@ -75,6 +75,29 @@ def _verify_gdrive_oauth_state(state: str) -> None:
         raise HTTPException(status_code=403, detail="State OAuth tidak valid atau kedaluwarsa") from exc
     if payload.get("purpose") != _GDRIVE_OAUTH_STATE_PURPOSE:
         raise HTTPException(status_code=403, detail="State OAuth tidak valid atau kedaluwarsa")
+
+
+# Pagination for GET /transactions (B3). Default body stays a bare JSON array so
+# live FE (`setTxs(t.data)`) keeps working; pass meta=true for the envelope.
+# Response headers always carry total/limit/offset/has_more for honest clients.
+DEFAULT_TX_LIMIT = 500
+MAX_TX_LIMIT = 2000
+
+
+def _tx_page_meta(*, total: int, limit: int, offset: int, item_count: int) -> dict:
+    return {
+        "total": int(total),
+        "limit": int(limit),
+        "offset": int(offset),
+        "has_more": int(offset) + int(item_count) < int(total),
+    }
+
+
+def _apply_tx_list_headers(response: Response, page: dict) -> None:
+    response.headers["X-Total-Count"] = str(page["total"])
+    response.headers["X-Limit"] = str(page["limit"])
+    response.headers["X-Offset"] = str(page["offset"])
+    response.headers["X-Has-More"] = "true" if page["has_more"] else "false"
 
 
 class TransactionIn(BaseModel):
@@ -143,34 +166,73 @@ async def _sync_journal(session: AsyncSession, tx: Transaction, group: str) -> N
 
 @router.get("/transactions")
 async def list_transactions(
+    response: Response,
     start_date: Optional[str] = None,
     end_date: Optional[str] = None,
     unit_usaha_id: Optional[str] = None,
     reference: Optional[str] = None,
-    limit: int = 500,
+    limit: int = Query(DEFAULT_TX_LIMIT, ge=1, le=MAX_TX_LIMIT),
+    offset: int = Query(0, ge=0),
+    meta: bool = Query(
+        False,
+        description=(
+            "If true, return {items, total, limit, offset, has_more}. "
+            "Default false keeps a bare JSON array for live FE compatibility."
+        ),
+    ),
     user: User = Depends(get_current_user),
     session: AsyncSession = Depends(get_db),
 ):
-    stmt = select(Transaction).order_by(Transaction.date.desc(), Transaction.created_at.desc()).limit(min(limit, 2000))
+    """List transactions with limit/offset pagination.
+
+    Body (default): JSON array of transaction objects (backward compatible).
+    Body (meta=true): {"items": [...], "total": N, "limit": L, "offset": O, "has_more": bool}.
+
+    Always sets response headers X-Total-Count, X-Limit, X-Offset, X-Has-More so
+    clients can detect silent truncation even when using the legacy array body.
+
+    Filter by start_date/end_date/unit_usaha_id/reference server-side — preferred
+    over loading a large page and filtering in the browser.
+    """
+    filters = []
     start = parse_date(start_date)
     end = parse_date(end_date)
     if start:
-        stmt = stmt.where(Transaction.date >= start)
+        filters.append(Transaction.date >= start)
     if end:
-        stmt = stmt.where(Transaction.date <= end)
+        filters.append(Transaction.date <= end)
     if is_pengelola(user):
-        stmt = stmt.where(Transaction.unit_usaha_id == user.unit_usaha_id)
+        filters.append(Transaction.unit_usaha_id == user.unit_usaha_id)
     elif unit_usaha_id:
-        stmt = stmt.where(Transaction.unit_usaha_id == unit_usaha_id)
+        filters.append(Transaction.unit_usaha_id == unit_usaha_id)
     if reference:
         # Substring match, not exact: a single inventory movement can post more
         # than one transaction (e.g. stock-out posts both "stock-out:<id>" for
         # COGS and "stock-out-rev:<id>" for revenue). Filtering by the shared
         # <id> fragment surfaces every transaction tied to that movement/
         # adjustment in one request, from Inventory's "Lihat transaksi" link.
-        stmt = stmt.where(Transaction.reference.contains(reference))
+        filters.append(Transaction.reference.contains(reference))
+
+    count_stmt = select(func.count()).select_from(Transaction)
+    if filters:
+        count_stmt = count_stmt.where(*filters)
+    total = int(await session.scalar(count_stmt) or 0)
+
+    stmt = (
+        select(Transaction)
+        .order_by(Transaction.date.desc(), Transaction.created_at.desc())
+        .offset(offset)
+        .limit(limit)
+    )
+    if filters:
+        stmt = stmt.where(*filters)
     rows = (await session.execute(stmt)).scalars().all()
-    return [_tx_out(row) for row in rows]
+    items = [_tx_out(row) for row in rows]
+    page = _tx_page_meta(total=total, limit=limit, offset=offset, item_count=len(items))
+    _apply_tx_list_headers(response, page)
+    if meta:
+        return {"items": items, **page}
+    return items
 
 
 @router.post("/transactions")
