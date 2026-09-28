@@ -36,8 +36,11 @@ SQLAlchemy models under `modules/siabumdes/**/infrastructure/models.py` feed
 - Unit tests that only compile SQLAlchemy dialect SQL or mock sessions still
   run (see `tests/test_b1_stock_atomicity.py`, `tests/test_ensure_schema_lists.py`).
 - Adding a `services: postgres` job needs a token/App with **`workflow` scope**
-  to edit `.github/workflows/ci.yml`. Until then, do not edit Actions YAML from
-  the default `repo`-only OAuth token.
+  to edit `.github/workflows/ci.yml`. Current OAuth scopes (`gist, read:org, repo`)
+  cannot; Contents API returns 404 on workflow paths; `doctl` not available here.
+- Local stand-in: root `docker-compose.pg-ci.yml` (Postgres 16 on port 55432).
+  Until a human/PAT with `workflow` lands the Actions job, use that compose file
+  + `DATABASE_URL` for integration smokes.
 
 ## Checklist for a new SIABUMDES column
 

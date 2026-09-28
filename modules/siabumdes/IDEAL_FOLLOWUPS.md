@@ -28,15 +28,18 @@ Short tracking notes for residual ideal work after B0–B4. Not a migration guid
 
 - `alembic/README.md` documents dual path: boot `ensure_schema()` vs manual Alembic.
 - `tests/test_ensure_schema_lists.py` hardens `_WIDEN` / `_ADD_COLUMNS` uniqueness +
-  boot-critical column coverage (no live Postgres required).
+  full share_* / identity coverage, identifier + SQL-template shape, `_safe_exec` contract
+  (no live Postgres required).
 
-### Postgres in CI
+### Postgres in CI — **BLOCKED** (oauth lacks `workflow` scope)
 
 - Free CI keeps `DATABASE_URL` unset; PG integration tests **skip** (see `tests/test_postgresql_integration.py`).
 - `psycopg` is installed and URL rewrite → `asyncpg` works when a URL is present (#152).
 - Free CI intentionally leaves `DATABASE_URL` unset (see comment on the Unit tests step in `.github/workflows/ci.yml`).
-- Adding a real `services: postgres` job is feasible but out of scope for a drive-by: needs stable secrets, seed/`ensure_schema` time budget, and clarity that alembic drift is pre-existing (app relies on `ensure_schema()` in prod).
-- Next dedicated PR: optional job `integration-pg` (manual/`workflow_dispatch` or path filter) running smoke + B1 concurrent stock test — not on every push. (Requires a token/App with `workflow` scope to edit the Actions YAML.)
+- **Blocker (2026-09-29):** authenticated `gh` / OAuth App scopes are `gist, read:org, repo` — **no `workflow`**. Contents API PUT on `.github/workflows/ci.yml` returns 404; a push that touches Actions YAML is refused. `doctl` is not available in this environment. Cannot land a `services: postgres` job until a PAT/App with `workflow` scope edits the YAML (or a human adds it in the GitHub UI).
+- **Local alternative (this PR):** `docker-compose.pg-ci.yml` — Postgres 16 on `127.0.0.1:55432` for manual `DATABASE_URL=… pytest` of integration + B1 concurrent stock.
+- **Max non-Actions hardening (this PR):** expanded `tests/test_ensure_schema_lists.py` (all share_* columns, identifier safety, SQL template shape, `_safe_exec` savepoint contract) — no live Postgres required.
+- When unblocked: optional job `integration-pg` (manual/`workflow_dispatch` or path filter) running smoke + B1 concurrent stock — not on every push.
 
 ### Other
 
