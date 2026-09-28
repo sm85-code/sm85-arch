@@ -24,6 +24,12 @@ Short tracking notes for residual ideal work after B0–B4. Not a migration guid
 - Prerequisite: `frontend-siabumdes-ts` `parseMoney` / `fmtRp` accept `number | string` (FE PR money dual-accept).
 - No SIABUMDES mobile client found; old JS FE not serving production.
 
+### Schema / Alembic clarity — DONE (this PR)
+
+- `alembic/README.md` documents dual path: boot `ensure_schema()` vs manual Alembic.
+- `tests/test_ensure_schema_lists.py` hardens `_WIDEN` / `_ADD_COLUMNS` uniqueness +
+  boot-critical column coverage (no live Postgres required).
+
 ### Postgres in CI
 
 - Free CI keeps `DATABASE_URL` unset; PG integration tests **skip** (see `tests/test_postgresql_integration.py`).
