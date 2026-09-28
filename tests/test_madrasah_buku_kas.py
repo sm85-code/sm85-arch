@@ -47,7 +47,7 @@ async def test_pay_spp_manual_creates_masuk_entry_in_buku_kas(session):
     santri = SantriMadrasah(nama="Ahmad")
     session.add(santri)
     await session.flush()
-    tagihan = TagihanSyahriyah(bulan_tahun="2026-01", nominal="50000", status_bayar=False, santri_id=santri.id)
+    tagihan = TagihanSyahriyah(bulan_tahun="2026-01", nominal="50000", status_bayar=False, santri_id=santri.id, diajukan_oleh="guru-1")
     session.add(tagihan)
     await session.flush()
 

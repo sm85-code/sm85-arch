@@ -72,6 +72,8 @@ async def test_pay_spp_manual_writes_matching_journal_entry(session):
     tagihan = (await services.generate_spp_massal(session))
     assert tagihan, "seed harus menghasilkan minimal satu tagihan"
     target = tagihan[0]
+    target.diajukan_oleh = "guru-1"
+    await session.flush()
 
     await services.pay_spp_manual(session, target.id)
 
