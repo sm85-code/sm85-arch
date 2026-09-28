@@ -73,11 +73,11 @@ def test_apply_tx_list_headers():
     assert response.headers["X-Has-More"] == "true"
 
 
-def test_tx_out_amount_remains_float_for_live_fe():
-    """B3 deliberately keeps amount as float; string/Decimal JSON deferred to FE TS port."""
+def test_tx_out_amount_is_decimal_string():
+    """Money JSON: amount is Decimal→str (TS FE parseMoney accepts number|string)."""
     out = _tx_out(_tx_row())
-    assert isinstance(out["amount"], float)
-    assert out["amount"] == 1500.5
+    assert isinstance(out["amount"], str)
+    assert out["amount"] == "1500.50"
 
 
 def test_default_and_max_limits():

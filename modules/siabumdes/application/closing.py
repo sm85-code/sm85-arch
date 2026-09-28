@@ -10,6 +10,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from modules.siabumdes.identity.infrastructure.models import ClosedPeriod
 from modules.siabumdes.application.bagi_hasil import get_bagi_hasil_config
+from modules.siabumdes.money_json import money_str
 from modules.siabumdes.application.reporting import ReportingService
 from modules.siabumdes.application.services import FinanceService
 from modules.siabumdes.infrastructure.models import (
@@ -270,7 +271,7 @@ async def run_monthly_close(
         "period": period,
         "group": group_code,
         "entries": created,
-        "laba_bersih": float(laba),
+        "laba_bersih": money_str(laba),
         "outcome": outcome,
     }
 

@@ -1,6 +1,7 @@
 """Monthly closing journals — POST /api/reports/close-period."""
 from __future__ import annotations
 
+from modules.siabumdes.money_json import money_str
 from fastapi import APIRouter, Depends, HTTPException, Query, Request
 from pydantic import BaseModel, Field
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -57,7 +58,7 @@ async def list_closed(
         {
             "period": row.period,
             "group": row.group_code,
-            "laba_bersih": float(row.laba_bersih),
+            "laba_bersih": money_str(row.laba_bersih),
             "entries": row.entries,
             "closed_at": row.closed_at.isoformat(),
             "closed_by": row.closed_by,
