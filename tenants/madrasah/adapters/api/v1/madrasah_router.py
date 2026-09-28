@@ -1378,6 +1378,41 @@ async def gm_penugasan_saya(
     ]
 
 
+@guru_mapel_r.get("/jadwal")
+async def gm_jadwal(
+    rombel_id: str | None = Query(default=None),
+    session: AsyncSession = Depends(get_db_madrasah),
+    user: UserMadrasah = Depends(require_roles_madrasah(*GURU_MAPEL_ROLES)),
+):
+    """Jadwal read-only untuk rombel yang ditugaskan ke guru (lintas unit OK)."""
+    penugasan = await services.list_penugasan(session, user.id)
+    allowed = {r.rombel_id for r in penugasan}
+    if not allowed:
+        return []
+    if rombel_id:
+        if rombel_id not in allowed:
+            raise HTTPException(status_code=403, detail="Anda tidak ditugaskan di rombel ini")
+        target_ids = [rombel_id]
+    else:
+        target_ids = sorted(allowed)
+    out = []
+    for rid in target_ids:
+        # Tanpa unit_scope: penugasan bisa lintas unit; rombel_id sudah di-whitelist.
+        for r in await services.list_jadwal(session, rid):
+            out.append(
+                {
+                    "id": r.id,
+                    "rombel_id": r.rombel_id,
+                    "mapel_id": r.mapel_id,
+                    "mapel": r.mapel.nama if r.mapel else None,
+                    "hari": r.hari,
+                    "jam_mulai": r.jam_mulai,
+                    "jam_selesai": r.jam_selesai,
+                }
+            )
+    return out
+
+
 @guru_mapel_r.get("/santri")
 async def gm_santri(
     rombel_id: str = Query(...),
