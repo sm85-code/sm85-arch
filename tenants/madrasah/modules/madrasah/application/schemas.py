@@ -182,6 +182,14 @@ class AbsenMapelItem(BaseModel):
     status: Literal["hadir", "sakit", "izin", "alpa"]
 
 
+class SppGenerateRequest(BaseModel):
+    """nominal opsional: bendahara unit boleh menentukan tarif SPP sendiri
+    untuk generate bulan ini, karena tarif tiap unit bisa berbeda. Kosong
+    -> jatuh ke default global (env SPP_NOMINAL)."""
+
+    nominal: Optional[Decimal] = Field(default=None, gt=0)
+
+
 class BukuKasIn(BaseModel):
     tanggal: date
     tipe: Literal["masuk", "keluar"]

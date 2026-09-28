@@ -40,6 +40,7 @@ from tenants.madrasah.modules.madrasah.application.schemas import (
     SantriPatch,
     SantriStatusIn,
     SemesterIn,
+    SppGenerateRequest,
     TahunAjaranIn,
     TingkatIn,
     TingkatPatch,
@@ -1057,11 +1058,13 @@ async def kur_rombel_patch(
 
 @bendahara_r.post("/spp/generate", status_code=status.HTTP_201_CREATED)
 async def ben_generate(
+    payload: SppGenerateRequest | None = None,
     session: AsyncSession = Depends(get_db_madrasah),
     user: UserMadrasah = Depends(require_roles_madrasah(*KEUANGAN_ROLES)),
 ):
     scope = _unit_scope(user)
-    return [services.tagihan_out(r) for r in await services.generate_spp_massal(session, unit_id=scope)]
+    nominal = payload.nominal if payload else None
+    return [services.tagihan_out(r) for r in await services.generate_spp_massal(session, unit_id=scope, nominal=nominal)]
 
 
 @bendahara_r.get("/spp/menunggu")

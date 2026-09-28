@@ -1027,7 +1027,7 @@ def pengumuman_out(row: PengumumanMadrasah, unit_nama: str | None = None) -> dic
     }
 
 
-async def generate_spp_massal(session: AsyncSession, unit_id: str | None = None) -> list[TagihanSyahriyah]:
+async def generate_spp_massal(session: AsyncSession, unit_id: str | None = None, nominal: Decimal | None = None) -> list[TagihanSyahriyah]:
     # "ALTER TABLE ... ADD COLUMN IF NOT EXISTS" is Postgres-only syntax
     # (this is production self-heal for Neon) -- SQLite (used by the unit
     # test suite) doesn't understand it, and unlike the other self-heal
@@ -1039,6 +1039,10 @@ async def generate_spp_massal(session: AsyncSession, unit_id: str | None = None)
         await session.execute(text("ALTER TABLE IF EXISTS madrasah_santri ADD COLUMN IF NOT EXISTS rombel_id VARCHAR(64) NULL"))
     period = _bulan_tahun()
     semester_id = await _semester_aktif_id(session)
+    # Nominal per generate boleh diisi bendahara unit (tiap unit bisa beda
+    # tarif SPP-nya) -- kalau tidak diisi, jatuh ke default global
+    # (env SPP_NOMINAL) supaya perilaku lama tetap sama.
+    nominal_final = nominal if nominal is not None else DEFAULT_SPP_NOMINAL
     santri_stmt = select(SantriMadrasah)
     if unit_id:
         santri_stmt = santri_stmt.where(SantriMadrasah.madrasah_unit_id == unit_id)
@@ -1049,7 +1053,7 @@ async def generate_spp_massal(session: AsyncSession, unit_id: str | None = None)
             continue
         session.add(
             TagihanSyahriyah(
-                bulan_tahun=period, nominal=DEFAULT_SPP_NOMINAL, status_bayar=False, santri_id=santri.id, semester_id=semester_id
+                bulan_tahun=period, nominal=nominal_final, status_bayar=False, santri_id=santri.id, semester_id=semester_id
             )
         )
     await session.flush()
