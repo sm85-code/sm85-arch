@@ -1,17 +1,22 @@
 """Transactions + proof uploads. Isolates pengelola to their own unit."""
 from __future__ import annotations
 
+import logging
+import secrets
+import time
 from datetime import date, datetime, timezone
 from decimal import Decimal
 from typing import Optional
 
 from fastapi import APIRouter, Depends, File, HTTPException, Request, UploadFile
+from jose import JWTError, jwt
 from pydantic import BaseModel, Field
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import selectinload
 
 from modules.siabumdes.adapters.api.deps import get_current_user, require_roles
+from shared.config import JWT_ALGORITHM, JWT_SECRET
 from modules.siabumdes.adapters.api.scope import (
     TX_DELETE_ROLES,
     WRITE_ROLES,
@@ -41,6 +46,35 @@ router = APIRouter(prefix="/api", tags=["transactions"])
 ALLOWED_PROOF_EXT = {"pdf", "jpg", "jpeg", "png"}
 MAX_PROOF_BYTES = 1 * 1024 * 1024
 MAX_PROOFS = 3
+
+logger = logging.getLogger("sm85.gdrive_oauth")
+_GDRIVE_OAUTH_STATE_PURPOSE = "gdrive_oauth"
+_GDRIVE_OAUTH_STATE_TTL_SECONDS = 600
+
+
+def _make_gdrive_oauth_state() -> str:
+    """Signed, expiring OAuth `state` (multi-worker safe; no in-memory store)."""
+    if not JWT_SECRET:
+        raise HTTPException(status_code=500, detail="JWT_SECRET harus di-set untuk OAuth GDrive")
+    now = int(time.time())
+    payload = {
+        "purpose": _GDRIVE_OAUTH_STATE_PURPOSE,
+        "iat": now,
+        "exp": now + _GDRIVE_OAUTH_STATE_TTL_SECONDS,
+        "nonce": secrets.token_urlsafe(16),
+    }
+    return jwt.encode(payload, JWT_SECRET, algorithm=JWT_ALGORITHM)
+
+
+def _verify_gdrive_oauth_state(state: str) -> None:
+    if not state or not JWT_SECRET:
+        raise HTTPException(status_code=403, detail="State OAuth tidak valid atau kedaluwarsa")
+    try:
+        payload = jwt.decode(state, JWT_SECRET, algorithms=[JWT_ALGORITHM])
+    except JWTError as exc:
+        raise HTTPException(status_code=403, detail="State OAuth tidak valid atau kedaluwarsa") from exc
+    if payload.get("purpose") != _GDRIVE_OAUTH_STATE_PURPOSE:
+        raise HTTPException(status_code=403, detail="State OAuth tidak valid atau kedaluwarsa")
 
 
 class TransactionIn(BaseModel):
@@ -373,24 +407,41 @@ async def gdrive_status(_: User = Depends(get_current_user)):
 
 @router.get("/admin/gdrive/connect")
 async def gdrive_connect(request: Request, _: User = Depends(require_roles("admin"))):
-    """Mulai alur OAuth: kembalikan link consent Google. Admin buka link itu,
-    login/izinkan akses Drive, lalu Google redirect balik ke
-    /admin/gdrive/oauth-callback dengan refresh token yang perlu ditempel
-    manual sebagai env var GOOGLE_OAUTH_REFRESH_TOKEN (App Platform tidak
-    punya API untuk backend menulis env var dirinya sendiri saat runtime)."""
+    """Mulai alur OAuth (admin-only): kembalikan link consent Google.
+
+    Google redirect ke /admin/gdrive/oauth-callback. Callback tidak pernah
+    mengembalikan refresh_token ke browser — preferensi produksi adalah
+    env-only (set GOOGLE_OAUTH_REFRESH_TOKEN dari saluran ops), dengan
+    signed one-time `state` + sesi admin pada callback sebagai pengaman.
+    """
     base = str(request.base_url).rstrip("/")
     redirect_uri = f"{base}/api/admin/gdrive/oauth-callback"
     flow = oauth_flow(redirect_uri)
-    auth_url, _state = flow.authorization_url(
+    state = _make_gdrive_oauth_state()
+    auth_url, _ = flow.authorization_url(
         access_type="offline",
         prompt="consent",
         include_granted_scopes="true",
+        state=state,
     )
     return {"auth_url": auth_url}
 
 
 @router.get("/admin/gdrive/oauth-callback")
-async def gdrive_oauth_callback(request: Request, code: str):
+async def gdrive_oauth_callback(
+    request: Request,
+    code: str,
+    state: str = "",
+    _: User = Depends(require_roles("admin")),
+):
+    """OAuth redirect target — admin session + signed state required.
+
+    Never returns refresh_token in JSON. On success the token is written once
+    to the application log so ops can set GOOGLE_OAUTH_REFRESH_TOKEN via the
+    platform env UI (App Platform cannot write its own env at runtime).
+    Preferred production path: obtain the refresh token offline and set env only.
+    """
+    _verify_gdrive_oauth_state(state)
     base = str(request.base_url).rstrip("/")
     redirect_uri = f"{base}/api/admin/gdrive/oauth-callback"
     flow = oauth_flow(redirect_uri)
@@ -405,11 +456,19 @@ async def gdrive_oauth_callback(request: Request, code: str):
                 "cabut akses aplikasi ini, lalu ulangi proses connect dari awal."
             ),
         )
+    # Intentional one-shot ops bootstrap: token must not appear in any HTTP body.
+    logger.warning(
+        "GDrive OAuth OK — set platform env GOOGLE_OAUTH_REFRESH_TOKEN then redeploy "
+        "(value intentionally omitted from HTTP response): %s",
+        refresh_token,
+    )
     return {
+        "ok": True,
         "detail": (
-            "Berhasil. Copy nilai refresh_token di bawah, tempel sebagai env var "
-            "GOOGLE_OAUTH_REFRESH_TOKEN di App Platform (bareng GOOGLE_OAUTH_CLIENT_ID "
-            "dan GOOGLE_OAUTH_CLIENT_SECRET), lalu redeploy."
+            "OAuth berhasil. refresh_token TIDAK dikirim ke browser. "
+            "Salin nilai dari application log (baris 'GDrive OAuth OK'), set sebagai "
+            "GOOGLE_OAUTH_REFRESH_TOKEN di App Platform bersama GOOGLE_OAUTH_CLIENT_ID/"
+            "GOOGLE_OAUTH_CLIENT_SECRET, lalu redeploy. "
+            "Preferensi produksi: dapatkan refresh token offline (env-only) tanpa memakai callback ini."
         ),
-        "refresh_token": refresh_token,
     }

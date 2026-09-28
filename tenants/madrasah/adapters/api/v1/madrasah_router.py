@@ -6,6 +6,9 @@ from __future__ import annotations
 
 from decimal import Decimal
 
+import os
+import secrets as pysecrets
+
 from fastapi import APIRouter, Depends, HTTPException, Query, Request, Response, status
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -141,8 +144,67 @@ def _client_ip(request: Request) -> str:
     return request.client.host if request.client else "unknown"
 
 
+def _is_production_env() -> bool:
+    return os.getenv("APP_ENV", os.getenv("ENVIRONMENT", "")).strip().lower() in {"production", "prod"}
+
+
+def _madrasah_seed_secret_ok(request: Request) -> bool:
+    expected = (os.getenv("MADRASAH_SEED_SECRET") or "").strip()
+    if not expected:
+        return False
+    provided = (
+        request.headers.get("X-Madrasah-Seed-Secret")
+        or request.headers.get("X-Seed-Secret")
+        or ""
+    ).strip()
+    if not provided:
+        return False
+    return pysecrets.compare_digest(provided, expected)
+
+
+async def authorize_madrasah_seed(
+    request: Request,
+    session: AsyncSession = Depends(get_db_madrasah),
+) -> UserMadrasah | None:
+    """Gate /seed-now: never create default passwords unauthenticated.
+
+    Allowed when either:
+    - Header X-Madrasah-Seed-Secret (or X-Seed-Secret) matches env MADRASAH_SEED_SECRET
+      (bootstrap when no admin exists yet), or
+    - Caller is an authenticated app admin.
+
+    In production, if neither path works, seed stays closed (live-safe default).
+    """
+    if _madrasah_seed_secret_ok(request):
+        return None
+    # No valid shared secret — require authenticated admin (raises 401 if anonymous).
+    try:
+        user = await get_current_user_madrasah(request, session)
+    except HTTPException:
+        if _is_production_env():
+            raise HTTPException(
+                status_code=status.HTTP_403_FORBIDDEN,
+                detail=(
+                    "seed-now dinonaktifkan untuk publik di production. "
+                    "Login sebagai admin, atau set header X-Madrasah-Seed-Secret "
+                    "yang cocok dengan env MADRASAH_SEED_SECRET."
+                ),
+            )
+        raise
+    from tenants.madrasah.modules.madrasah.application.services import effective_roles
+
+    if set(APP_ADMIN_ROLES).isdisjoint(effective_roles(user)):
+        raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="Akses ditolak")
+    return user
+
+
 @madrasah_router.get("/seed-now")
-async def seed_now(session: AsyncSession = Depends(get_db_madrasah)):
+async def seed_now(
+    session: AsyncSession = Depends(get_db_madrasah),
+    _: UserMadrasah | None = Depends(authorize_madrasah_seed),
+):
+    # Default passwords (seeder.DEFAULT_PASSWORD) must not be creatable by an
+    # unauthenticated caller — see authorize_madrasah_seed. Shared-host P0.
     try:
         ids = await seed_madrasah(session)
     except RuntimeError as exc:
@@ -156,8 +218,8 @@ async def seed_demo_data_now(
     user: UserMadrasah = Depends(require_roles_madrasah(*APP_ADMIN_ROLES)),
 ):
     # Hanya untuk database trial/demo -- lihat docstring seed_demo_data().
-    # Login admin wajib (bukan endpoint publik seperti /seed-now) karena ini
-    # menulis puluhan baris data contoh, bukan sekadar 2 akun default.
+    # Login admin wajib (sama ketatnya dengan /seed-now yang sekarang juga
+    # ter-gate) karena ini menulis puluhan baris data contoh.
     # Idempotent: no-op kalau sudah pernah dipanggil sebelumnya (lihat
     # TingkatMadrasah guard di seed_demo_data()).
     try:
