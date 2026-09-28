@@ -117,7 +117,7 @@ async def test_stale_token_rejected_after_password_change(session, monkeypatch):
     assert user.session_version == old_sv + 1
 
     monkeypatch.setattr(auth_module, "_token_from_request", lambda request: "fake-token")
-    monkeypatch.setattr(auth_module, "decode_access_token", lambda token: {"sub": user.id, "sv": old_sv})
+    monkeypatch.setattr(auth_module, "decode_access_token", lambda token, **kwargs: {"sub": user.id, "sv": old_sv})
 
     with pytest.raises(HTTPException) as exc:
         await auth_module.get_current_user_madrasah(SimpleNamespace(), session)
@@ -131,7 +131,7 @@ async def test_current_token_accepted_when_session_version_matches(session, monk
     await session.flush()
 
     monkeypatch.setattr(auth_module, "_token_from_request", lambda request: "fake-token")
-    monkeypatch.setattr(auth_module, "decode_access_token", lambda token: {"sub": user.id, "sv": user.session_version})
+    monkeypatch.setattr(auth_module, "decode_access_token", lambda token, **kwargs: {"sub": user.id, "sv": user.session_version})
 
     result = await auth_module.get_current_user_madrasah(SimpleNamespace(), session)
     assert result.id == user.id
