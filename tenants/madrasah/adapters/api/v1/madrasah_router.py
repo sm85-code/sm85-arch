@@ -286,61 +286,14 @@ async def get_santri(
     return [{"id": row.id, "nama": row.nama, "kelas_id": row.kelas_id, "rombel_id": getattr(row, "rombel_id", None), "orang_tua_id": row.orang_tua_id, "madrasah_unit_id": row.madrasah_unit_id} for row in rows]
 
 
-@madrasah_router.post("/absensi/bulk", status_code=status.HTTP_201_CREATED)
-async def absensi_bulk(
-    payload: AbsenBulkRequest,
-    session: AsyncSession = Depends(get_db_madrasah),
-    _: UserMadrasah = Depends(require_roles_madrasah(*WALI_KELAS_ROLES)),
-):
-    rows = await services.bulk_insert_absensi(session, payload)
-    return {"inserted": len(rows), "ids": [getattr(row, "id", None) for row in rows]}
-
-
-@madrasah_router.post("/progres", status_code=status.HTTP_201_CREATED)
-async def create_progres(
-    payload: ProgresCreateRequest,
-    session: AsyncSession = Depends(get_db_madrasah),
-    _: UserMadrasah = Depends(require_roles_madrasah(*WALI_KELAS_ROLES)),
-):
-    try:
-        row = await services.create_progres(session, payload)
-    except services.MadrasahNotFoundError as exc:
-        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=str(exc)) from exc
-    return {"id": row.id, "tanggal": row.tanggal.isoformat(), "santri_id": row.santri_id, "tipe": row.tipe, "capaian": row.capaian, "catatan_guru": row.catatan_guru, "mapel_id": row.mapel_id, "materi_id": row.materi_id}
-
-
-@madrasah_router.get("/tagihan/{santri_id}")
-async def get_tagihan(
-    santri_id: str,
-    session: AsyncSession = Depends(get_db_madrasah),
-    _: UserMadrasah = Depends(require_roles_madrasah(*ANY_AUTHENTICATED)),
-):
-    return [services.tagihan_out(row) for row in await services.list_tagihan(session, santri_id)]
-
-
-@madrasah_router.post("/spp/generate", status_code=status.HTTP_201_CREATED)
-async def spp_generate(
-    session: AsyncSession = Depends(get_db_madrasah),
-    _: UserMadrasah = Depends(require_roles_madrasah(*BENDAHARA_ROLES)),
-):
-    return [services.tagihan_out(row) for row in await services.generate_spp_massal(session)]
-
-
-@madrasah_router.post("/spp/pay/{id}")
-async def spp_pay(
-    id: str,
-    request: Request,
-    session: AsyncSession = Depends(get_db_madrasah),
-    user: UserMadrasah = Depends(require_roles_madrasah(*BENDAHARA_ROLES)),
-):
-    try:
-        row = await services.pay_spp_manual(session, id)
-    except services.MadrasahNotFoundError as exc:
-        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=str(exc)) from exc
-    await services.record_audit(
-        session, aktor=user, aksi="spp_lunas", entitas="madrasah_tagihan_syahriyah", entitas_id=row.id, ip=_client_ip(request)
-    )
-    return services.tagihan_out(row)
+# NOTE: endpoint generik /absensi/bulk, /progres, /tagihan/{santri_id},
+# /spp/generate dan /spp/pay/{id} yang dulu ada di level root router ini
+# sudah DIHAPUS -- semuanya duplikat dari versi domain-scoped di bawah
+# (/wali-kelas/absensi, /wali-kelas/progres, /wali-santri/tagihan/{id},
+# /bendahara/spp/generate, /bendahara/spp/pay/{id}) tapi tidak meneruskan
+# guru=user/unit_id/caller ke service layer, sehingga ownership & unit
+# scoping-nya bocor sepenuhnya (lihat audit keamanan). Frontend tidak pernah
+# memanggil versi root ini, jadi menghapusnya aman.
 
 
 @madrasah_router.get("/pengaturan")
@@ -1156,9 +1109,11 @@ async def ben_pay(
     user: UserMadrasah = Depends(require_roles_madrasah(*BENDAHARA_ROLES)),
 ):
     try:
-        row = await services.pay_spp_manual(session, id)
+        row = await services.pay_spp_manual(session, id, caller=user)
     except services.MadrasahNotFoundError as exc:
         raise HTTPException(status_code=404, detail=str(exc)) from exc
+    except services.MadrasahForbiddenError as exc:
+        raise HTTPException(status_code=403, detail=str(exc)) from exc
     await services.record_audit(
         session, aktor=user, aksi="spp_lunas", entitas="madrasah_tagihan_syahriyah", entitas_id=row.id, ip=_client_ip(request)
     )
@@ -1446,9 +1401,12 @@ async def gm_rekap_absensi(
     rombel_id: str = Query(...),
     mapel_id: str = Query(...),
     session: AsyncSession = Depends(get_db_madrasah),
-    _: UserMadrasah = Depends(require_roles_madrasah(*GURU_MAPEL_ROLES)),
+    user: UserMadrasah = Depends(require_roles_madrasah(*GURU_MAPEL_ROLES)),
 ):
-    return await services.rekap_absensi_mapel(session, rombel_id, mapel_id)
+    try:
+        return await services.rekap_absensi_mapel(session, rombel_id, mapel_id, user)
+    except services.MadrasahForbiddenError as exc:
+        raise HTTPException(status_code=403, detail=str(exc)) from exc
 
 
 @guru_mapel_r.post("/progres", status_code=status.HTTP_201_CREATED)

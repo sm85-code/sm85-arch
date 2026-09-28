@@ -1067,6 +1067,8 @@ async def pay_spp_manual(session: AsyncSession, target_id: str, caller: UserMadr
         row = (await session.execute(select(TagihanSyahriyah).where(TagihanSyahriyah.santri_id == target_id, TagihanSyahriyah.status_bayar.is_(False)).order_by(TagihanSyahriyah.bulan_tahun.desc()))).scalar_one_or_none()
     if row is None:
         raise MadrasahNotFoundError("Tagihan SPP tidak ditemukan")
+    if row.diajukan_oleh is None:
+        raise MadrasahForbiddenError("Tagihan ini belum diajukan wali kelas -- tidak bisa langsung ditandai lunas")
     santri = await session.get(SantriMadrasah, row.santri_id)
     unit_id = santri.madrasah_unit_id if santri else None
     _pastikan_akses_unit_keuangan(caller, unit_id)
@@ -2417,7 +2419,26 @@ async def bulk_insert_absensi_mapel(session: AsyncSession, guru_id: str, payload
     return rows
 
 
-async def rekap_absensi_mapel(session: AsyncSession, rombel_id: str, mapel_id: str) -> list[dict]:
+async def rekap_absensi_mapel(session: AsyncSession, rombel_id: str, mapel_id: str, guru: UserMadrasah) -> list[dict]:
+    # Sama seperti bulk_insert_absensi_mapel/assert_guru_mengajar_santri: guru
+    # mapel hanya boleh melihat rekap mapel yang benar-benar ditugaskan padanya
+    # di rombel ini, supaya guru mapel A1 tidak bisa mengganti mapel_id di
+    # query string untuk mengintip rekap mapel lain (A2) di rombel yang sama.
+    # wali_kelas rombel ini boleh lihat rekap semua mapel lewat endpoint
+    # /wali-kelas/rekap-absensi tersendiri, bukan dari sini.
+    if guru.role not in ("admin", "kepala_sekolah"):
+        penugasan = (
+            await session.execute(
+                select(GuruMapelRombel).where(
+                    GuruMapelRombel.guru_id == guru.id,
+                    GuruMapelRombel.mapel_id == mapel_id,
+                    GuruMapelRombel.rombel_id == rombel_id,
+                )
+            )
+        ).scalar_one_or_none()
+        if not penugasan:
+            raise MadrasahForbiddenError("Anda tidak ditugaskan untuk mapel/rombel ini")
+
     stmt = (
         select(AbsensiMadrasah)
         .join(SantriMadrasah, AbsensiMadrasah.santri_id == SantriMadrasah.id)
