@@ -18,6 +18,11 @@ from modules.siabumdes.adapters.api.scope import (
     scoped_unit_id,
 )
 from modules.siabumdes.adapters.external.excel_adapter import generate_excel_report, parse_excel_rows
+from modules.siabumdes.application.coa_template import (
+    clone_coa_and_tx_types,
+    coa_group_codes,
+    find_coa_template_unit,
+)
 from modules.siabumdes.coa_taxonomy import categories_map, valid_pair
 from modules.siabumdes.identity.application.services import record_audit
 from modules.siabumdes.identity.infrastructure.models import User
@@ -66,6 +71,10 @@ class UnitIn(BaseModel):
     business_type: str = "jasa"
     description: str = ""
     revenue_scheme: str = ""
+    # Optional COA/tx-type seed from an existing same-type unit (BE default on).
+    # FE may omit; no contract break. Set false to create an empty unit.
+    clone_coa: bool = True
+    clone_from: Optional[str] = None
 
 
 class UnitPatch(BaseModel):
@@ -170,6 +179,14 @@ async def create_unit(
     exists = (await session.execute(select(UnitUsaha).where(UnitUsaha.code == payload.code.strip()))).scalar_one_or_none()
     if exists:
         raise HTTPException(status_code=400, detail="Kode unit sudah ada")
+    if payload.clone_from and payload.clone_coa:
+        src = (
+            await session.execute(
+                select(UnitUsaha).where(UnitUsaha.code == payload.clone_from.strip().upper())
+            )
+        ).scalar_one_or_none()
+        if not src:
+            raise HTTPException(status_code=400, detail=f"Unit template {payload.clone_from} tidak ditemukan")
     row = UnitUsaha(
         code=payload.code.strip().upper(),
         name=payload.name.strip(),
@@ -179,9 +196,34 @@ async def create_unit(
     )
     session.add(row)
     await session.flush()
+
+    clone_info: dict = {"cloned": False}
+    if payload.clone_coa:
+        template = await find_coa_template_unit(
+            session,
+            payload.business_type,
+            exclude_unit_id=row.id,
+            clone_from_code=payload.clone_from,
+        )
+        if template:
+            stats = await clone_coa_and_tx_types(session, source=template, target=row)
+            clone_info = {"cloned": True, **stats}
+        elif payload.clone_from:
+            raise HTTPException(
+                status_code=400,
+                detail=f"Unit template {payload.clone_from} tidak ditemukan",
+            )
+
+    detail = f"Buat unit {row.code} - {row.name}"
+    if clone_info.get("cloned"):
+        detail += (
+            f" (clone COA dari {clone_info.get('source_unit')}: "
+            f"{clone_info.get('accounts_cloned')} akun, "
+            f"{clone_info.get('transaction_types_cloned')} jenis)"
+        )
     await record_audit(
         session, actor=actor, action="create_unit_usaha", entity="unit_usaha", entity_id=row.id,
-        detail=f"Buat unit {row.code} - {row.name}", ip=_client_ip(request),
+        detail=detail, ip=_client_ip(request),
     )
     return {
         "id": row.id,
@@ -190,6 +232,8 @@ async def create_unit(
         "business_type": row.business_type,
         "description": row.description,
         "revenue_scheme": row.revenue_scheme,
+        "active": row.active,
+        "coa_template": clone_info,
     }
 
 
@@ -528,7 +572,8 @@ async def import_accounts(
 
     inserted = skipped = 0
     errors: list[str] = []
-    valid_groups = {"BUMDES", "UU01", "UU02", "UU03", "UU04", "UU05", "UU06"}
+    # Accept BUMDES + any unit code present in DB (not hardcoded UU01–UU06).
+    valid_groups = await coa_group_codes(session)
     for sheet_name in wb.sheetnames:
         if sheet_name not in valid_groups:
             continue
