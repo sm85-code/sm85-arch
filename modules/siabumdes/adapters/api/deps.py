@@ -17,7 +17,7 @@ async def get_current_user(
     request: Request,
     session: AsyncSession = Depends(get_db),
 ) -> User:
-    payload = decode_access_token(token_from_request(request))
+    payload = decode_access_token(token_from_request(request), expected_tenant="bumdes")
     user_id = payload.get("sub")
     if not user_id:
         raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="Sesi tidak valid")

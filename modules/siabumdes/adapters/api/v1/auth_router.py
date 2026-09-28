@@ -84,6 +84,7 @@ def _token_for(user: User) -> str:
         user.role,
         user.session_version,
         {"name": user.name, "unit": user.unit_usaha_id},
+        tenant="bumdes",
     )
 
 

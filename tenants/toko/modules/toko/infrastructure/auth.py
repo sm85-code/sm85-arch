@@ -32,7 +32,7 @@ STAFF_ROLES_TOKO = (ROLE_ADMIN_TOKO_WEB, ROLE_ADMIN_MARKETPLACE)
 
 
 def issue_toko_token(user: UserToko) -> str:
-    return create_access_token(subject=user.id, role=user.role, session_version=0)
+    return create_access_token(subject=user.id, role=user.role, session_version=0, tenant="toko")
 
 
 def set_toko_cookie(response: Response, token: str) -> None:
@@ -70,7 +70,7 @@ async def get_current_user_toko(
     request: Request,
     session: AsyncSession = Depends(get_db_toko),
 ) -> UserToko:
-    payload = decode_access_token(_token_from_request(request))
+    payload = decode_access_token(_token_from_request(request), expected_tenant="toko")
     user_id = payload.get("sub")
     if not user_id:
         raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="Sesi tidak valid")

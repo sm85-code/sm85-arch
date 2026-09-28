@@ -49,9 +49,27 @@ CORS_ORIGINS = list(dict.fromkeys(_csv("CORS_ORIGINS", "http://localhost:3000") 
 CORS_ORIGIN_REGEX = os.getenv("CORS_ORIGIN_REGEX", "").strip() or None
 
 JWT_SECRET = os.getenv("JWT_SECRET", "")
+# Optional per-tenant secrets (B1). When unset, jwt_secret_for() falls back to
+# JWT_SECRET so existing App Platform env keeps working after deploy.
+# Rotate by setting JWT_SECRET_BUMDES / _MADRASAH / _TOKO / _MARKETPLACE_ERP
+# (can start equal to JWT_SECRET, then change after re-login window).
+JWT_SECRET_BUMDES = os.getenv("JWT_SECRET_BUMDES", "").strip()
+JWT_SECRET_MADRASAH = os.getenv("JWT_SECRET_MADRASAH", "").strip()
+JWT_SECRET_TOKO = os.getenv("JWT_SECRET_TOKO", "").strip()
+JWT_SECRET_MARKETPLACE_ERP = os.getenv("JWT_SECRET_MARKETPLACE_ERP", "").strip()
 JWT_ALGORITHM = os.getenv("JWT_ALGORITHM", "HS256")
 JWT_EXPIRE_HOURS = int(os.getenv("JWT_EXPIRE_HOURS", str(24 * 7)))
 JWT_COOKIE_NAME = os.getenv("JWT_COOKIE_NAME", "bumdes_token")
+
+# Stable tenant ids used as JWT aud (and in iss = "sm85:<tenant>").
+JWT_TENANT_BUMDES = "bumdes"
+JWT_TENANT_MADRASAH = "madrasah"
+JWT_TENANT_TOKO = "toko"
+JWT_TENANT_MARKETPLACE_ERP = "marketplace_erp"
+
+
+def jwt_issuer_for(tenant: str) -> str:
+    return f"sm85:{tenant}"
 
 COOKIE_SECURE = os.getenv("COOKIE_SECURE", "true").strip().lower() in {"1", "true", "yes"}
 COOKIE_SAMESITE = os.getenv("COOKIE_SAMESITE", "none").strip().lower() or "none"
