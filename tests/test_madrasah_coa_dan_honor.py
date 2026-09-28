@@ -183,6 +183,35 @@ async def test_generate_honor_massal_falls_back_to_default_tarif(session):
 
 
 @pytest.mark.asyncio
+async def test_generate_honor_massal_pakai_tarif_default_kustom(session):
+    """Bendahara unit boleh mengisi tarif per sesi sendiri saat generate --
+    dipakai untuk penugasan yang belum punya tarif_per_sesi spesifik,
+    menggantikan DEFAULT_HONOR_PER_SESI global."""
+    guru = UserMadrasah(nama="Ustadz C", no_hp="081399999905", password_hash=hash_password("x"), role="guru")
+    rombel = RombelMadrasah(nama="Jilid 3")
+    mapel = MapelMadrasah(kode="TAJWID", nama="Tajwid")
+    session.add_all([guru, rombel, mapel])
+    await session.flush()
+    santri = SantriMadrasah(nama="Santri C", rombel_id=rombel.id)
+    session.add(santri)
+    await session.flush()
+
+    await services.assign_guru_mapel(session, PenugasanIn(guru_id=guru.id, mapel_id=mapel.id, rombel_id=rombel.id))
+    await services.bulk_insert_absensi_mapel(
+        session,
+        guru.id,
+        AbsenMapelBulkRequest(
+            tanggal=dt.date(2025, 9, 2), rombel_id=rombel.id, mapel_id=mapel.id, items=[AbsenMapelItem(santri_id=santri.id, status="hadir")]
+        ),
+    )
+
+    honor = await services.generate_honor_massal(session, "2025-09", tarif_default=Decimal("20000"))
+    assert len(honor) == 1
+    assert honor[0].tarif_per_sesi == Decimal("20000")
+    assert honor[0].total == Decimal("20000")
+
+
+@pytest.mark.asyncio
 async def test_generate_honor_massal_is_idempotent_per_period(session):
     guru = UserMadrasah(nama="Ustadz C", no_hp="081399999905", password_hash=hash_password("x"), role="guru")
     rombel = RombelMadrasah(nama="Jilid 3")

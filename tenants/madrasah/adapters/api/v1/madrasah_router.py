@@ -4,6 +4,8 @@ Mounted in main.py as prefix=/api/madrasah only. Does not touch BUMDes routers.
 """
 from __future__ import annotations
 
+from decimal import Decimal
+
 from fastapi import APIRouter, Depends, HTTPException, Query, Request, Response, status
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -1552,11 +1554,12 @@ async def keuangan_honor_list(
 @keuangan_r.post("/honor/generate", status_code=status.HTTP_201_CREATED)
 async def keuangan_honor_generate(
     bulan: str | None = Query(None, description="Default bulan berjalan (YYYY-MM)"),
+    tarif: Decimal | None = Query(None, gt=0, description="Tarif per sesi default untuk unit ini (opsional)"),
     session: AsyncSession = Depends(get_db_madrasah),
     user: UserMadrasah = Depends(require_roles_madrasah(*KEUANGAN_ROLES)),
 ):
     scope = _unit_scope(user)
-    return [services.honor_out(r) for r in await services.generate_honor_massal(session, bulan, unit_id=scope)]
+    return [services.honor_out(r) for r in await services.generate_honor_massal(session, bulan, unit_id=scope, tarif_default=tarif)]
 
 
 @keuangan_r.post("/honor/pay/{honor_id}")

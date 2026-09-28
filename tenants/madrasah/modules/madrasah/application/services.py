@@ -2504,7 +2504,9 @@ async def list_honor(session: AsyncSession, bulan: str | None = None, unit_id: s
     return list((await session.execute(stmt)).scalars())
 
 
-async def generate_honor_massal(session: AsyncSession, bulan_tahun: str | None = None, unit_id: str | None = None) -> list[HonorMengajar]:
+async def generate_honor_massal(
+    session: AsyncSession, bulan_tahun: str | None = None, unit_id: str | None = None, tarif_default: Decimal | None = None
+) -> list[HonorMengajar]:
     """Satu baris per (guru, mapel) yang punya minimal satu sesi absensi di
     bulan itu. Idempoten per periode: guru+mapel yang sudah punya baris
     honor untuk bulan_tahun ini dilewati, tidak dibuat dobel maupun
@@ -2560,7 +2562,11 @@ async def generate_honor_massal(session: AsyncSession, bulan_tahun: str | None =
         if guru_id not in guru_unit:
             guru = await session.get(UserMadrasah, guru_id)
             guru_unit[guru_id] = guru.madrasah_unit_id if guru else None
-        tarif = tarif_map.get((guru_id, mapel_id), DEFAULT_HONOR_PER_SESI)
+        # Tarif per penugasan (guru+mapel) tetap prioritas kalau sudah diisi
+        # admin di GuruMapelRombel -- tarif_default (dari bendahara unit) cuma
+        # dipakai untuk penugasan yang belum punya tarif spesifik, sebagai
+        # pengganti DEFAULT_HONOR_PER_SESI global.
+        tarif = tarif_map.get((guru_id, mapel_id)) or tarif_default or DEFAULT_HONOR_PER_SESI
         row = HonorMengajar(
             guru_id=guru_id,
             mapel_id=mapel_id,
