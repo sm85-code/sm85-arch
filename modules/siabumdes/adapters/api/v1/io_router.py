@@ -18,6 +18,7 @@ from modules.siabumdes.adapters.api.scope import (
     WRITE_ROLES,
     assert_can_mutate_period,
     assert_not_readonly,
+    assert_unit_active,
     is_pengelola,
     unit_code_for,
 )
@@ -135,6 +136,7 @@ async def import_transactions(
                 own = await session.get(UnitUsaha, user.unit_usaha_id)
                 if unit_code and own and unit_code != own.code:
                     raise ValueError("Pengelola hanya boleh import data unit sendiri")
+            await assert_unit_active(session, unit_id)
             await assert_can_mutate_period(session, user, tx_date, unit_id)
             group = await unit_code_for(session, unit_id)
             debit = str(row[idx_deb] or "").strip() if idx_deb is not None else tt.debit
