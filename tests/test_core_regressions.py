@@ -21,8 +21,10 @@ def test_jwt_round_trip(monkeypatch):
     importlib.reload(security_module)
 
     token = security_module.create_access_token("user-1", "admin", session_version=1)
-    payload = security_module.decode_access_token(token)
+    payload = security_module.decode_access_token(token, expected_tenant="bumdes")
 
     assert payload["sub"] == "user-1"
     assert payload["role"] == "admin"
     assert payload["sv"] == 1
+    assert payload["aud"] == "bumdes"
+    assert payload["iss"] == "sm85:bumdes"

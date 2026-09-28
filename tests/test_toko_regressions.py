@@ -20,10 +20,12 @@ def test_toko_token_round_trip(monkeypatch):
         role = "admin_toko"
 
     token = toko_auth_module.issue_toko_token(FakeUser())
-    payload = security_module.decode_access_token(token)
+    payload = security_module.decode_access_token(token, expected_tenant="toko")
 
     assert payload["sub"] == "user-1"
     assert payload["role"] == "admin_toko"
+    assert payload["aud"] == "toko"
+    assert payload["iss"] == "sm85:toko"
 
 
 def test_produk_out_serializes_decimal_as_string():

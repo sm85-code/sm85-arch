@@ -5,7 +5,7 @@ from datetime import date
 from decimal import Decimal
 from typing import Any, Optional
 
-from sqlalchemy import select
+from sqlalchemy import select, update
 from sqlalchemy.orm import selectinload
 
 from modules.siabumdes.inventory.application.coa import validate_coa_codes
@@ -23,6 +23,41 @@ _SALE_METHODS = {"cash", "piutang"}
 
 
 class InventoryStockMixin:
+
+    async def _get_product_for_update(self, product_id: str) -> Product:
+        """Load Product row locked for the remainder of this transaction.
+
+        Prevents check-then-act races on qty_on_hand under concurrent
+        stock_in / stock_out / stock_out_internal / cancel_movement.
+        """
+        product = await self.session.scalar(
+            select(Product).where(Product.id == product_id).with_for_update()
+        )
+        if not product:
+            raise ValueError("product not found")
+        return product
+
+    async def _decrement_qty_atomic(self, product_id: str, quantity: int) -> Product:
+        """Atomically decrement qty_on_hand when sufficient stock remains.
+
+        ``UPDATE ... WHERE qty_on_hand >= :q`` is the belt alongside
+        SELECT FOR UPDATE: even if a caller skipped the lock, concurrent
+        decrements cannot drive qty negative.
+        """
+        stmt = (
+            update(Product)
+            .where(Product.id == product_id, Product.qty_on_hand >= quantity)
+            .values(qty_on_hand=Product.qty_on_hand - quantity)
+            .returning(Product)
+        )
+        product = (await self.session.scalars(stmt)).first()
+        if product is not None:
+            return product
+        exists = await self.session.get(Product, product_id)
+        if not exists:
+            raise ValueError("product not found")
+        raise ValueError("insufficient stock")
+
     async def stock_in(
         self,
         *,
@@ -45,9 +80,7 @@ class InventoryStockMixin:
             raise ValueError("metode pembayaran pembelian tidak valid")
         if payment_method == "credit" and not due_date:
             raise ValueError("tanggal jatuh tempo wajib diisi untuk pembelian kredit")
-        product = await self.session.get(Product, product_id)
-        if not product:
-            raise ValueError("product not found")
+        product = await self._get_product_for_update(product_id)
         vendor = await self.session.get(Vendor, vendor_id)
         if not vendor:
             raise ValueError("vendor tidak ditemukan")
@@ -119,15 +152,14 @@ class InventoryStockMixin:
             raise ValueError("metode pembayaran penjualan tidak valid")
         if payment_method == "piutang" and not due_date:
             raise ValueError("tanggal jatuh tempo wajib diisi untuk penjualan piutang")
-        product = await self.session.get(Product, product_id)
-        if not product:
-            raise ValueError("product not found")
-        if product.qty_on_hand < quantity:
-            raise ValueError("insufficient stock")
+        # Lock first so cost_price / existence are stable, then atomic
+        # decrement so two concurrent outs cannot both pass a stale check.
+        product = await self._get_product_for_update(product_id)
         customer = await self.session.get(Customer, customer_id)
         if not customer:
             raise ValueError("customer tidak ditemukan")
         unit_cost = product.cost_price
+        product = await self._decrement_qty_atomic(product_id, quantity)
         total = (unit_cost * quantity).quantize(Decimal("0.01"))
         card = StockCard(
             product_id=product_id,
@@ -139,7 +171,6 @@ class InventoryStockMixin:
             reference="",
             finance_status="pending",
         )
-        product.qty_on_hand -= quantity
         self.session.add(card)
         await self.session.flush()
         card.reference = f"stock-out:{card.id}"
@@ -211,12 +242,9 @@ class InventoryStockMixin:
         """
         if quantity <= 0:
             raise ValueError("quantity must be > 0")
-        product = await self.session.get(Product, product_id)
-        if not product:
-            raise ValueError("product not found")
-        if product.qty_on_hand < quantity:
-            raise ValueError("insufficient stock")
+        product = await self._get_product_for_update(product_id)
         unit_cost = product.cost_price
+        product = await self._decrement_qty_atomic(product_id, quantity)
         total = (unit_cost * quantity).quantize(Decimal("0.01"))
         card = StockCard(
             product_id=product_id,
@@ -229,7 +257,6 @@ class InventoryStockMixin:
             reference="",
             finance_status="pending",
         )
-        product.qty_on_hand -= quantity
         self.session.add(card)
         await self.session.flush()
         card.reference = f"stock-out-internal:{card.id}"
@@ -266,7 +293,9 @@ class InventoryStockMixin:
             await self.session.delete(card)
             await self.session.flush()
             return
-        product = await self.session.get(Product, card.product_id)
+        product = await self.session.scalar(
+            select(Product).where(Product.id == card.product_id).with_for_update()
+        )
         if product:
             if card.direction == "in":
                 product.qty_on_hand = max(0, product.qty_on_hand - card.quantity)

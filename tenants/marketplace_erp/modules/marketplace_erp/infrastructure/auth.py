@@ -29,7 +29,9 @@ FULL_ACCESS_ROLES = ("owner",)
 
 
 def issue_marketplace_erp_token(user: UserMarketplaceErp) -> str:
-    return create_access_token(subject=user.id, role=user.role, session_version=0)
+    return create_access_token(
+        subject=user.id, role=user.role, session_version=0, tenant="marketplace_erp"
+    )
 
 
 def set_marketplace_erp_cookie(response: Response, token: str) -> None:
@@ -67,7 +69,9 @@ async def get_current_user_marketplace_erp(
     request: Request,
     session: AsyncSession = Depends(get_db_marketplace_erp),
 ) -> UserMarketplaceErp:
-    payload = decode_access_token(_token_from_request(request))
+    payload = decode_access_token(
+        _token_from_request(request), expected_tenant="marketplace_erp"
+    )
     user_id = payload.get("sub")
     if not user_id:
         raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="Sesi tidak valid")

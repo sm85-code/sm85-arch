@@ -90,7 +90,9 @@ def issue_madrasah_token(user: UserMadrasah) -> str:
     every JWT issued before the bump on its next request, without needing a
     token blacklist table.
     """
-    return create_access_token(subject=user.id, role=user.role, session_version=user.session_version)
+    return create_access_token(
+        subject=user.id, role=user.role, session_version=user.session_version, tenant="madrasah"
+    )
 
 
 def set_madrasah_cookie(response: Response, token: str) -> None:
@@ -128,7 +130,7 @@ async def get_current_user_madrasah(
     request: Request,
     session: AsyncSession = Depends(get_db_madrasah),
 ) -> UserMadrasah:
-    payload = decode_access_token(_token_from_request(request))
+    payload = decode_access_token(_token_from_request(request), expected_tenant="madrasah")
     user_id = payload.get("sub")
     if not user_id:
         raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="Sesi tidak valid")
