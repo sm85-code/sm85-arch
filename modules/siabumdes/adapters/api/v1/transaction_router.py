@@ -193,6 +193,11 @@ async def list_transactions(
 
     Filter by start_date/end_date/unit_usaha_id/reference server-side — preferred
     over loading a large page and filtering in the browser.
+
+    unit_usaha_id filter (non-pengelola; omit keeps all units — live FE safe):
+      - omitted / None → no unit filter (all units)
+      - "" or "__null__" → BUMDES pusat only (unit_usaha_id IS NULL), same as export
+      - real id → that unit only
     """
     filters = []
     start = parse_date(start_date)
@@ -203,6 +208,9 @@ async def list_transactions(
         filters.append(Transaction.date <= end)
     if is_pengelola(user):
         filters.append(Transaction.unit_usaha_id == user.unit_usaha_id)
+    elif unit_usaha_id == "" or unit_usaha_id == "__null__":
+        # BUMDES pusat sentinel — matches GET /transactions/export empty-string filter.
+        filters.append(Transaction.unit_usaha_id.is_(None))
     elif unit_usaha_id:
         filters.append(Transaction.unit_usaha_id == unit_usaha_id)
     if reference:
