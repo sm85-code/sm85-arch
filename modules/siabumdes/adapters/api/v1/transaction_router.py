@@ -113,6 +113,8 @@ class TransactionIn(BaseModel):
 
 
 def _tx_out(row: Transaction) -> dict:
+    # Money JSON: amount stays float for live JS FE + TS fmtRp/Math.round.
+    # Prefer Decimal-as-string later (cutover with FE parsers); do not flip here alone.
     proofs = list(row.proofs or [])
     return {
         "id": row.id,
