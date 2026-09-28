@@ -16,6 +16,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import selectinload
 
 from modules.siabumdes.adapters.api.deps import get_current_user, require_roles
+from modules.siabumdes.money_json import money_str
 from shared.config import JWT_ALGORITHM, JWT_SECRET
 from modules.siabumdes.adapters.api.scope import (
     TX_DELETE_ROLES,
@@ -113,8 +114,7 @@ class TransactionIn(BaseModel):
 
 
 def _tx_out(row: Transaction) -> dict:
-    # Money JSON: amount stays float for live JS FE + TS fmtRp/Math.round.
-    # Prefer Decimal-as-string later (cutover with FE parsers); do not flip here alone.
+    # Money JSON: Decimal → string (TS FE parseMoney accepts number|string; JS FE not serving).
     proofs = list(row.proofs or [])
     return {
         "id": row.id,
@@ -122,7 +122,7 @@ def _tx_out(row: Transaction) -> dict:
         "unit_usaha_id": row.unit_usaha_id,
         "transaction_type": row.transaction_type,
         "description": row.description,
-        "amount": float(row.amount),
+        "amount": money_str(row.amount),
         "debit_account_code": row.debit_account_code,
         "credit_account_code": row.credit_account_code,
         "reference": row.reference,

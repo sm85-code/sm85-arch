@@ -11,16 +11,18 @@ Short tracking notes for residual ideal work after B0–B4. Not a migration guid
 | B2 | Dynamic COA import groups + clone-on-create |
 | B3 | `GET /transactions` limit/offset + `meta=true` envelope |
 | B4 | Pusat sentinel: `unit_usaha_id=` / `__null__` → `IS NULL` |
+| Money JSON | Tx/report JSON money fields as Decimal→str; export/internal float untouched |
 
 ## Deferred / next
 
-### Money JSON (`amount` as string)
+### Money JSON (`amount` as string) — DONE (this PR)
 
-- Today `_tx_out` (and similar) emit `"amount": float(row.amount)`.
-- Preferred end state: Decimal serialized as **string** (exact IDR, no binary float).
-- **Blocked while live `frontend-siabumdes` (JS) is still in production** — it uses `fmtRp` / numeric sort assuming numbers.
-- TS FE (`frontend-siabumdes-ts`) also assumes `number` in `fmtRp` (`Math.round`).
-- Cutover plan: ship FE parsers that accept `number | string` first, then flip BE in a coordinated PR; keep dual accept on write if needed.
+- `_tx_out` emits `"amount": money_str(...)` (Decimal→`"1500.50"`).
+- Report/dashboard/public/ledger/period-close JSON responses run through `stringify_money_fields` (allowlisted rupiah keys).
+- Internal `ReportingService` math + PDF/Excel/Word export still use float/Decimal (unchanged).
+- Write path: Pydantic `Decimal` still accepts JSON number or string; FE continues to POST numbers.
+- Prerequisite: `frontend-siabumdes-ts` `parseMoney` / `fmtRp` accept `number | string` (FE PR money dual-accept).
+- No SIABUMDES mobile client found; old JS FE not serving production.
 
 ### Postgres in CI
 

@@ -17,6 +17,7 @@ from modules.siabumdes.adapters.external.word_generator import generate_word_rep
 from modules.siabumdes.identity.application.services import get_org_profile, list_closed_periods
 from modules.siabumdes.identity.infrastructure.models import User
 from modules.siabumdes.application.reporting import ReportingService
+from modules.siabumdes.money_json import money_str, stringify_money_fields
 from shared.config import REPORT_READ_LEVEL
 from shared.database import get_db
 from modules.siabumdes.report_branding import ReportBranding, branding_from_org_profile
@@ -140,13 +141,14 @@ async def dashboard(
 ):
     unit_id = await _scope(session, user, None) if is_pengelola(user) else None
     svc = ReportingService(session)
-    return await svc.dashboard(
+    data = await svc.dashboard(
         parse_date(start_date),
         parse_date(end_date),
         granularity,
         unit_id,
         pusat_kpis=not is_pengelola(user),
     )
+    return stringify_money_fields(data)
 
 
 @router.get("/reports/laba-rugi")
@@ -158,7 +160,8 @@ async def laba_rugi(
     session: AsyncSession = Depends(get_db),
 ):
     start, end = _need_dates(start_date, end_date)
-    return await ReportingService(session).laba_rugi(start, end, await _scope(session, user, unit_usaha_id))
+    data = await ReportingService(session).laba_rugi(start, end, await _scope(session, user, unit_usaha_id))
+    return stringify_money_fields(data)
 
 
 @router.get("/reports/neraca")
@@ -171,7 +174,8 @@ async def neraca(
     as_of = parse_date(as_of_date)
     if not as_of:
         raise HTTPException(status_code=400, detail="as_of_date wajib")
-    return await ReportingService(session).neraca(as_of, await _scope(session, user, unit_usaha_id))
+    data = await ReportingService(session).neraca(as_of, await _scope(session, user, unit_usaha_id))
+    return stringify_money_fields(data)
 
 
 @router.get("/reports/arus-kas")
@@ -183,7 +187,8 @@ async def arus_kas(
     session: AsyncSession = Depends(get_db),
 ):
     start, end = _need_dates(start_date, end_date)
-    return await ReportingService(session).arus_kas(start, end, await _scope(session, user, unit_usaha_id))
+    data = await ReportingService(session).arus_kas(start, end, await _scope(session, user, unit_usaha_id))
+    return stringify_money_fields(data)
 
 
 @router.get("/reports/perubahan-ekuitas")
@@ -195,7 +200,8 @@ async def perubahan_ekuitas(
     session: AsyncSession = Depends(get_db),
 ):
     start, end = _need_dates(start_date, end_date)
-    return await ReportingService(session).perubahan_ekuitas(start, end, await _scope(session, user, unit_usaha_id))
+    data = await ReportingService(session).perubahan_ekuitas(start, end, await _scope(session, user, unit_usaha_id))
+    return stringify_money_fields(data)
 
 
 @router.get("/reports/calk")
@@ -207,7 +213,8 @@ async def calk(
     session: AsyncSession = Depends(get_db),
 ):
     start, end = _need_dates(start_date, end_date)
-    return await ReportingService(session).calk(start, end, await _scope(session, user, unit_usaha_id))
+    data = await ReportingService(session).calk(start, end, await _scope(session, user, unit_usaha_id))
+    return stringify_money_fields(data)
 
 
 @router.get("/reports/ledger")
@@ -222,11 +229,12 @@ async def ledger(
 ):
     start, end = _need_dates(start_date, end_date)
     try:
-        return await ReportingService(session).ledger(
+        data = await ReportingService(session).ledger(
             account_code, start, end, await _scope(session, user, unit_usaha_id)
         )
     except LookupError as exc:
         raise HTTPException(status_code=404, detail=str(exc)) from exc
+    return stringify_money_fields(data)
 
 
 @router.get("/reports/per-unit")
@@ -241,7 +249,7 @@ async def per_unit(
     if is_pengelola(user):
         data["units"] = [u for u in data["units"] if u["id"] == user.unit_usaha_id]
         data["bumdes"] = {"pendapatan": 0, "beban": 0, "laba_bersih": 0}
-    return data
+    return stringify_money_fields(data)
 
 
 @router.get("/reports/penutupan-periode")
@@ -251,7 +259,7 @@ async def penutupan_periode(
 ):
     rows = await list_closed_periods(session)
     return [
-        {"period": r.period, "group": r.group_code, "laba_bersih": float(r.laba_bersih), "entries": r.entries}
+        {"period": r.period, "group": r.group_code, "laba_bersih": money_str(r.laba_bersih), "entries": r.entries}
         for r in rows
     ]
 

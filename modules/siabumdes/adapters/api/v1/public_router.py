@@ -8,6 +8,7 @@ from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from modules.siabumdes.application.reporting import ReportingService, _f
+from modules.siabumdes.money_json import stringify_money_fields
 from modules.siabumdes.infrastructure.models import Account, Transaction
 from shared.database import get_db
 
@@ -51,11 +52,11 @@ async def public_summary(session: AsyncSession = Depends(get_db)):
             total_b += amt
 
     laba = total_p - total_b
-    return {
+    return stringify_money_fields({
         "year": year,
         "total_pendapatan": total_p,
         "total_beban": total_b,
         "laba_bersih": laba,
         "pades_estimasi": round(laba * 0.30),
         "trend": [monthly[f"{year}-{m:02d}"] for m in range(1, 13)],
-    }
+    })
