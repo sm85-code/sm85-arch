@@ -1,8 +1,6 @@
 """Idempotent schema creation + starter owner account for the isolated
-marketplace_erp database. Same pattern as
-tenants/toko/modules/toko/infrastructure/seeder.py::seed_toko -- triggered
-by GET /api/marketplace-erp/seed-now (see adapters/api/v1), not on app
-startup, since this tenant's DB may not exist yet on a fresh deploy.
+marketplace_erp database. Triggered by GET /api/marketplace-erp/seed-now
+(gated -- see marketplace_erp_router.authorize_marketplace_erp_seed).
 """
 from __future__ import annotations
 
@@ -11,7 +9,11 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from shared.security import hash_password
 from tenants.marketplace_erp.modules.marketplace_erp.infrastructure.database import MarketplaceErpBase, engine
-from tenants.marketplace_erp.modules.marketplace_erp.infrastructure.models import UserMarketplaceErp
+from tenants.marketplace_erp.modules.marketplace_erp.infrastructure.models import (
+    DEFAULT_GUDANG_KODE,
+    Gudang,
+    UserMarketplaceErp,
+)
 
 # EmailStr (pydantic) rejects RFC 2606 reserved TLDs (.test/.example/...)
 # as "special-use or reserved" -- use a non-reserved placeholder domain so
@@ -37,6 +39,18 @@ async def _ensure_owner(session: AsyncSession) -> UserMarketplaceErp:
     return owner
 
 
+async def _ensure_default_gudang(session: AsyncSession) -> Gudang:
+    gudang = (
+        await session.execute(select(Gudang).where(Gudang.kode == DEFAULT_GUDANG_KODE))
+    ).scalar_one_or_none()
+    if gudang:
+        return gudang
+    gudang = Gudang(kode=DEFAULT_GUDANG_KODE, nama="Gudang Utama")
+    session.add(gudang)
+    await session.flush()
+    return gudang
+
+
 async def seed_marketplace_erp(session: AsyncSession) -> dict[str, str]:
     if engine is None:
         raise RuntimeError("DATABASE_URL_MARKETPLACE_ERP is not configured")
@@ -44,5 +58,11 @@ async def seed_marketplace_erp(session: AsyncSession) -> dict[str, str]:
         await conn.run_sync(MarketplaceErpBase.metadata.create_all)
 
     owner = await _ensure_owner(session)
+    gudang = await _ensure_default_gudang(session)
     await session.commit()
-    return {"owner_id": owner.id, "owner_email": owner.email}
+    return {
+        "owner_id": owner.id,
+        "owner_email": owner.email,
+        "gudang_default_id": gudang.id,
+        "gudang_default_kode": gudang.kode,
+    }
