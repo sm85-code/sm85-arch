@@ -1,6 +1,6 @@
 """Second async engine for the madrasah Neon database.
 
-Does not use shared.database / DATABASE_URL (BUMDes).
+Reads only DATABASE_URL_MADRASAH (never the old SIABUMDES DATABASE_URL).
 """
 from __future__ import annotations
 

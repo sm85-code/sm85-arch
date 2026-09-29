@@ -1,16 +1,11 @@
 """Marketplace ERP seed-now gate (madrasah-style)."""
 from __future__ import annotations
 
-import os
 from types import SimpleNamespace
 from unittest.mock import MagicMock, patch
 
 import pytest
 from fastapi import HTTPException
-
-# shared.database / JWT imports may need a placeholder DATABASE_URL in CI.
-if not (os.getenv("DATABASE_URL") or os.getenv("POSTGRES_URL")):
-    os.environ["DATABASE_URL"] = "postgresql://placeholder@localhost/placeholder"
 
 from tenants.marketplace_erp.adapters.api.v1.marketplace_erp_router import (
     _marketplace_erp_seed_secret_ok,

@@ -20,11 +20,22 @@ def test_jwt_round_trip(monkeypatch):
 
     importlib.reload(security_module)
 
-    token = security_module.create_access_token("user-1", "admin", session_version=1)
-    payload = security_module.decode_access_token(token, expected_tenant="bumdes")
+    token = security_module.create_access_token("user-1", "admin", session_version=1, tenant="madrasah")
+    payload = security_module.decode_access_token(token, expected_tenant="madrasah")
 
     assert payload["sub"] == "user-1"
     assert payload["role"] == "admin"
     assert payload["sv"] == 1
-    assert payload["aud"] == "bumdes"
-    assert payload["iss"] == "sm85:bumdes"
+    assert payload["aud"] == "madrasah"
+    assert payload["iss"] == "sm85:madrasah"
+
+
+def test_create_access_token_requires_explicit_tenant(monkeypatch):
+    """No implicit default tenant (the old default was SIABUMDES' ``bumdes``)."""
+    import pytest
+
+    monkeypatch.setenv("JWT_SECRET", "test-secret-key-for-unit-tests")
+    import shared.security as security_module
+
+    with pytest.raises(TypeError):
+        security_module.create_access_token("user-1", "admin", session_version=1)

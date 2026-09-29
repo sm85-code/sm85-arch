@@ -3,16 +3,12 @@ from __future__ import annotations
 
 import hashlib
 import hmac
-import os
 import re
 from types import SimpleNamespace
 from urllib.parse import parse_qs, urlparse
 
 import pytest
 from fastapi import HTTPException
-
-if not (os.getenv("DATABASE_URL") or os.getenv("POSTGRES_URL")):
-    os.environ["DATABASE_URL"] = "postgresql://placeholder@localhost/placeholder"
 
 from tenants.marketplace_erp.modules.marketplace_erp.infrastructure.adapters import erp_shopee
 

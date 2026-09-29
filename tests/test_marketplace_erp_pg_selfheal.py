@@ -1,8 +1,9 @@
 """Postgres-only: marketplace_erp self-heal adds mpe_users.must_change_password
 to a database created before the column existed (create_all never ALTERs).
 
-Skips when DATABASE_URL is unset (unit job). Runs inside a throwaway schema so
-it never touches real tables.
+Skips when TEST_DATABASE_URL is unset (unit job); CI's integration-pg job sets
+it to a throwaway Postgres service. Runs inside a throwaway schema so it never
+touches real tables.
 """
 from __future__ import annotations
 
@@ -14,13 +15,13 @@ from sqlalchemy import text
 from sqlalchemy.exc import DBAPIError, InterfaceError, OperationalError
 
 pytestmark = pytest.mark.skipif(
-    not (os.getenv("DATABASE_URL") or os.getenv("POSTGRES_URL")),
-    reason="DATABASE_URL tidak tersedia",
+    not os.getenv("TEST_DATABASE_URL"),
+    reason="TEST_DATABASE_URL tidak tersedia",
 )
 
 
 def _asyncpg_url() -> str:
-    url = os.getenv("DATABASE_URL") or os.getenv("POSTGRES_URL") or ""
+    url = os.getenv("TEST_DATABASE_URL") or ""
     for prefix in ("postgresql+asyncpg://", "postgresql://", "postgres://"):
         if url.startswith(prefix):
             return "postgresql+asyncpg://" + url[len(prefix):].split("?", 1)[0]

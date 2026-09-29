@@ -1,7 +1,7 @@
 """Isolated async engine for the toko (online shop) database.
 
-Does not use shared.database / DATABASE_URL (BUMDes) or the madrasah
-engine — toko is its own tenant with its own Postgres instance, same
+Reads only DATABASE_URL_TOKO (never the old SIABUMDES DATABASE_URL) and does
+not share the madrasah engine — toko is its own tenant with its own Postgres instance, same
 pattern as tenants/madrasah/modules/madrasah/infrastructure/database.py.
 """
 from __future__ import annotations

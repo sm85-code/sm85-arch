@@ -14,7 +14,6 @@ and dependencies are called directly -- httpx is not a project dependency.
 """
 from __future__ import annotations
 
-import os
 from types import SimpleNamespace
 
 import pytest
@@ -22,9 +21,6 @@ import pytest_asyncio
 from fastapi import HTTPException, Response
 from pydantic import ValidationError
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker, create_async_engine
-
-if not (os.getenv("DATABASE_URL") or os.getenv("POSTGRES_URL")):
-    os.environ["DATABASE_URL"] = "postgresql://placeholder@localhost/placeholder"
 
 from shared.security import hash_password, verify_password  # noqa: E402
 from tenants.marketplace_erp.adapters.api.v1 import marketplace_erp_router as router_module  # noqa: E402

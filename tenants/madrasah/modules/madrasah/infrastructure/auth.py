@@ -1,14 +1,9 @@
 """Authentication dependencies isolated to the madrasah module.
 
-This file is new and does not modify anything under shared/, modules/siabumdes/adapters/api/deps.py,
-or modules/siabumdes/adapters/api/scope.py (the BUMDes auth stack). It reuses only the generic
-JWT encode/decode primitives from shared.security, but never the BUMDes-specific
-cookie name (JWT_COOKIE_NAME/bumdes_token) or set_auth_cookie/clear_auth_cookie/
-token_from_request helpers, since those are hardcoded to that cookie name and
-would collide with the already-live BUMDes frontend session in the same browser.
-
+Reuses only the generic JWT encode/decode primitives from shared.security.
 Uses its own cookie name (MADRASAH_COOKIE_NAME = "madrasah_token") so a madrasah
-login/logout never touches the BUMDes session cookie, and vice versa.
+login/logout never touches another tenant's session cookie (e.g. the SIABUMDES
+``bumdes_token`` cookie, now served by sm85-code/backend-siabumdes), and vice versa.
 """
 from __future__ import annotations
 
