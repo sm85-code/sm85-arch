@@ -11,6 +11,7 @@ from shared.security import hash_password, verify_password
 from tenants.marketplace_erp.modules.marketplace_erp.application.schemas import (
     AkunMarketplaceIn,
     AkunMarketplacePatch,
+    ChangePasswordIn,
     ItemPesananIn,
     LoginIn,
     PesananIn,
@@ -20,6 +21,7 @@ from tenants.marketplace_erp.modules.marketplace_erp.application.schemas import 
     ProdukPatch,
     RegisterIn,
     StokAdjustIn,
+    UserCreateIn,
 )
 from tenants.marketplace_erp.modules.marketplace_erp.infrastructure.models import (
     DEFAULT_GUDANG_KODE,
@@ -36,6 +38,7 @@ from tenants.marketplace_erp.modules.marketplace_erp.infrastructure.models impor
     StokReservasi,
     UserMarketplaceErp,
 )
+from tenants.marketplace_erp.modules.marketplace_erp.infrastructure.seeder import DEFAULT_PASSWORD
 
 # Linear OMS pipeline (confirm → process → ship stubs). No return path in T2.
 _TRANSISI_STATUS = {
@@ -57,19 +60,73 @@ def _validate_platform(platform: str) -> str:
 # --- Auth --------------------------------------------------------------------
 
 
-async def register_user(session: AsyncSession, payload: RegisterIn) -> UserMarketplaceErp:
+async def _cek_email_belum_terdaftar(session: AsyncSession, email: str) -> None:
     existing = (
-        await session.execute(select(UserMarketplaceErp).where(UserMarketplaceErp.email == payload.email))
+        await session.execute(select(UserMarketplaceErp).where(UserMarketplaceErp.email == email))
     ).scalar_one_or_none()
     if existing:
         raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail="Email sudah terdaftar")
+
+
+async def register_user(session: AsyncSession, payload: RegisterIn) -> UserMarketplaceErp:
+    """Legacy self-registration (always role=owner).
+
+    Only reachable through POST /auth/register when the operator explicitly
+    sets MARKETPLACE_ERP_ALLOW_REGISTER=true -- see the router gate.
+    """
+    await _cek_email_belum_terdaftar(session, payload.email)
     user = UserMarketplaceErp(
         nama=payload.nama,
         email=payload.email,
         password_hash=hash_password(payload.password),
         role="owner",
+        must_change_password=False,
     )
     session.add(user)
+    await session.flush()
+    return user
+
+
+async def create_user(session: AsyncSession, payload: UserCreateIn) -> UserMarketplaceErp:
+    """Owner-only account creation. The owner picks a temporary password, so
+    the new account must change it on first login."""
+    await _cek_email_belum_terdaftar(session, payload.email)
+    user = UserMarketplaceErp(
+        nama=payload.nama.strip(),
+        email=payload.email,
+        password_hash=hash_password(payload.password),
+        role=payload.role,
+        must_change_password=True,
+    )
+    session.add(user)
+    await session.flush()
+    return user
+
+
+async def list_users(session: AsyncSession) -> list[UserMarketplaceErp]:
+    rows = await session.execute(select(UserMarketplaceErp).order_by(UserMarketplaceErp.created_at))
+    return list(rows.scalars())
+
+
+async def change_password(
+    session: AsyncSession, user: UserMarketplaceErp, payload: ChangePasswordIn
+) -> UserMarketplaceErp:
+    # 400 (not 401) on a wrong current password: the caller IS logged in,
+    # and a 401 would make the FE treat it as an expired session.
+    if not verify_password(payload.current_password, user.password_hash):
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Password saat ini salah")
+    if payload.new_password == payload.current_password:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="Password baru harus berbeda dari password saat ini",
+        )
+    if payload.new_password == DEFAULT_PASSWORD:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="Password baru tidak boleh sama dengan password bawaan",
+        )
+    user.password_hash = hash_password(payload.new_password)
+    user.must_change_password = False
     await session.flush()
     return user
 
