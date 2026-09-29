@@ -31,15 +31,13 @@ Short tracking notes for residual ideal work after B0–B4. Not a migration guid
   full share_* / identity coverage, identifier + SQL-template shape, `_safe_exec` contract
   (no live Postgres required).
 
-### Postgres in CI — **BLOCKED** (oauth lacks `workflow` scope)
+### Postgres in CI — unblocked when this PR merges
 
-- Free CI keeps `DATABASE_URL` unset; PG integration tests **skip** (see `tests/test_postgresql_integration.py`).
-- `psycopg` is installed and URL rewrite → `asyncpg` works when a URL is present (#152).
-- Free CI intentionally leaves `DATABASE_URL` unset (see comment on the Unit tests step in `.github/workflows/ci.yml`).
-- **Blocker (2026-09-29):** authenticated `gh` / OAuth App scopes are `gist, read:org, repo` — **no `workflow`**. Contents API PUT on `.github/workflows/ci.yml` returns 404; a push that touches Actions YAML is refused. `doctl` is not available in this environment. Cannot land a `services: postgres` job until a PAT/App with `workflow` scope edits the YAML (or a human adds it in the GitHub UI).
-- **Local alternative (this PR):** `docker-compose.pg-ci.yml` — Postgres 16 on `127.0.0.1:55432` for manual `DATABASE_URL=… pytest` of integration + B1 concurrent stock.
-- **Max non-Actions hardening (this PR):** expanded `tests/test_ensure_schema_lists.py` (all share_* columns, identifier safety, SQL template shape, `_safe_exec` savepoint contract) — no live Postgres required.
-- When unblocked: optional job `integration-pg` (manual/`workflow_dispatch` or path filter) running smoke + B1 concurrent stock — not on every push.
+- Sibling job `integration-pg` in `.github/workflows/ci.yml`: `postgres:16-alpine` service (user/password/db `siabumdes`/`siabumdes`/`siabumdes_test`), healthcheck, Python 3.11, then `DATABASE_URL=postgresql://siabumdes:siabumdes@localhost:5432/siabumdes_test` + `python -m pytest tests/test_postgresql_integration.py tests/test_b1_stock_atomicity.py -n 0`.
+- Existing `lint-and-test` job unchanged (`DATABASE_URL` unset so PG tests skip there).
+- `psycopg` + URL rewrite → `asyncpg` already landed (#152).
+- Local alternative still available: `docker-compose.pg-ci.yml` (Postgres 16 on `127.0.0.1:55432`).
+- Once this PR merges, Postgres CI runs on every push/PR alongside `lint-and-test`.
 
 ### Other
 
