@@ -1,9 +1,12 @@
-"""Password hashing, JWT cookies, and request principal.
+"""Password hashing and tenant-scoped JWT encode/decode primitives.
+
+Cookie handling lives in each tenant's own ``infrastructure/auth.py``
+(madrasah, toko, marketplace_erp each use their own cookie name).
 
 Tenant isolation (B1):
 - Each module passes ``tenant`` on encode and ``expected_tenant`` on decode.
 - Tokens carry ``aud`` (tenant id) and ``iss`` (``sm85:<tenant>``).
-- Signing secret prefers ``JWT_SECRET_<TENANT>`` (e.g. ``JWT_SECRET_BUMDES``),
+- Signing secret prefers ``JWT_SECRET_<TENANT>`` (e.g. ``JWT_SECRET_TOKO``),
   falling back to shared ``JWT_SECRET`` when the tenant-specific env is unset
   so live deploys do not break before ops set the new vars.
 - Legacy tokens minted before this change (no aud/iss) are still accepted
@@ -16,19 +19,14 @@ import os
 from datetime import datetime, timedelta, timezone
 from typing import Any, Optional
 
-from fastapi import HTTPException, Request, Response, status
+from fastapi import HTTPException, status
 from jose import JWTError, jwt
 from passlib.context import CryptContext
 
 from shared.config import (
-    COOKIE_PATH,
-    COOKIE_SAMESITE,
-    COOKIE_SECURE,
     JWT_ALGORITHM,
-    JWT_COOKIE_NAME,
     JWT_EXPIRE_HOURS,
     JWT_SECRET,
-    JWT_TENANT_BUMDES,
     jwt_issuer_for,
     public_role,
 )
@@ -53,7 +51,7 @@ def jwt_secret_for(tenant: str) -> str:
     """Resolve signing/verify secret for a tenant with live-safe fallback.
 
     Order: ``JWT_SECRET_<TENANT_UPPER>`` if set and non-empty, else ``JWT_SECRET``.
-    Example: tenant ``bumdes`` → ``JWT_SECRET_BUMDES`` → ``JWT_SECRET``.
+    Example: tenant ``toko`` → ``JWT_SECRET_TOKO`` → ``JWT_SECRET``.
     """
     key = f"JWT_SECRET_{tenant.strip().upper()}"
     specific = os.getenv(key, "").strip()
@@ -68,7 +66,7 @@ def create_access_token(
     session_version: int,
     extra: Optional[dict[str, Any]] = None,
     *,
-    tenant: str = JWT_TENANT_BUMDES,
+    tenant: str,
 ) -> str:
     secret = jwt_secret_for(tenant)
     if not secret:
@@ -126,34 +124,3 @@ def decode_access_token(
                 )
         # else: legacy token without aud/iss — accepted for migration window
     return payload
-
-
-def set_auth_cookie(response: Response, token: str) -> None:
-    response.set_cookie(
-        key=JWT_COOKIE_NAME,
-        value=token,
-        httponly=True,
-        secure=COOKIE_SECURE,
-        samesite=COOKIE_SAMESITE,
-        max_age=JWT_EXPIRE_HOURS * 3600,
-        path=COOKIE_PATH,
-    )
-
-
-def clear_auth_cookie(response: Response) -> None:
-    response.delete_cookie(
-        key=JWT_COOKIE_NAME,
-        path=COOKIE_PATH,
-        secure=COOKIE_SECURE,
-        samesite=COOKIE_SAMESITE,
-    )
-
-
-def token_from_request(request: Request) -> str:
-    cookie = request.cookies.get(JWT_COOKIE_NAME)
-    if cookie:
-        return cookie
-    header = request.headers.get("authorization") or ""
-    if header.lower().startswith("bearer "):
-        return header.split(" ", 1)[1].strip()
-    raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="Tidak terautentikasi")

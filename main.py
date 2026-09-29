@@ -1,6 +1,11 @@
-"""FastAPI application entrypoint (modular monolith)."""
+"""FastAPI application entrypoint (modular monolith).
+
+Serves the madrasah, toko (incl. toko ERP) and marketplace_erp tenants.
+SIABUMDES moved to its own service: sm85-code/backend-siabumdes.
+"""
 from __future__ import annotations
 
+import asyncio
 import logging
 from collections import defaultdict, deque
 from contextlib import asynccontextmanager
@@ -12,27 +17,16 @@ from fastapi.responses import JSONResponse
 from sqlalchemy import text
 from starlette.middleware.base import BaseHTTPMiddleware
 
-from modules.siabumdes.adapters.api.v1 import siabumdes_router, uu05_inventory_router
-from modules.siabumdes.adapters.api.v1.admin_control_router import router as admin_control_router
-from modules.siabumdes.adapters.api.v1.audit_log_router import router as audit_log_router
-from modules.siabumdes.adapters.api.v1.auth_router import router as auth_router
-from modules.siabumdes.adapters.api.v1.io_router import router as io_router
-from modules.siabumdes.adapters.api.v1.master_data_router import router as master_data_router
-from modules.siabumdes.adapters.api.v1.org_profile_router import router as org_profile_router
-from modules.siabumdes.adapters.api.v1.period_close_router import router as period_close_router
-from modules.siabumdes.adapters.api.v1.public_router import router as public_router
-from modules.siabumdes.adapters.api.v1.reports_router import router as reports_router
-from modules.siabumdes.adapters.api.v1.transaction_router import router as transaction_router
 from tenants.madrasah.adapters.api.v1.madrasah_router import madrasah_router
+from tenants.madrasah.modules.madrasah.infrastructure import database as madrasah_database
 from tenants.madrasah.modules.madrasah.infrastructure.seeder import ensure_madrasah_schema
 from tenants.marketplace_erp.adapters.api.v1.marketplace_erp_router import marketplace_erp_router
+from tenants.marketplace_erp.modules.marketplace_erp.infrastructure import database as marketplace_erp_database
 from tenants.marketplace_erp.modules.marketplace_erp.infrastructure.seeder import ensure_marketplace_erp_schema
 from tenants.toko.adapters.api.v1.erp_router import erp_router
 from tenants.toko.adapters.api.v1.toko_router import toko_router
+from tenants.toko.modules.toko.infrastructure import database as toko_database
 from shared.config import APP_TITLE, CORS_ORIGIN_REGEX, CORS_ORIGINS, origin_allowed
-from shared.database import engine
-from modules.siabumdes.schema import ensure_schema
-from modules.siabumdes.seed import seed_if_needed
 
 logging.basicConfig(
     level=logging.INFO,
@@ -44,14 +38,9 @@ logger = logging.getLogger("sm85.audit")
 @asynccontextmanager
 async def lifespan(_: FastAPI):
     try:
-        await ensure_schema()
-        await seed_if_needed()
-    except Exception:
-        logger.exception("startup schema/seed failed — app continues")
-    try:
-        # Isolated from the BUMDes schema/seed above: a failure repairing the
+        # Each tenant's startup step is isolated: a failure repairing the
         # madrasah schema (e.g. DATABASE_URL_MADRASAH unset) must not affect,
-        # and is not affected by, BUMDes/Toko startup.
+        # and is not affected by, the other tenants' startup.
         await ensure_madrasah_schema()
     except Exception:
         logger.exception("madrasah schema repair failed — app continues")
@@ -79,18 +68,6 @@ app.add_middleware(
     expose_headers=["Content-Disposition"],
 )
 
-app.include_router(public_router)
-app.include_router(auth_router)
-app.include_router(period_close_router)
-app.include_router(admin_control_router)
-app.include_router(audit_log_router)
-app.include_router(master_data_router)
-app.include_router(org_profile_router)
-app.include_router(transaction_router)
-app.include_router(reports_router)
-app.include_router(io_router)
-app.include_router(siabumdes_router.router)
-app.include_router(uu05_inventory_router.router)
 app.include_router(madrasah_router, prefix="/api/madrasah", tags=["Madrasah"])
 app.include_router(toko_router, prefix="/api/toko", tags=["Toko"])
 app.include_router(erp_router, prefix="/api/toko/marketplace", tags=["Toko ERP"])
@@ -109,8 +86,8 @@ class CsrfOriginMiddleware(BaseHTTPMiddleware):
 
     Class-based (BaseHTTPMiddleware) instead of the @app.middleware("http")
     decorator: that decorator is deprecated and removed in Starlette 1.0, and
-    this middleware guards the cookie-based auth every frontend (siabumdes,
-    diniyah, toko) depends on -- it must keep working across a starlette bump.
+    this middleware guards the cookie-based auth every frontend (diniyah/
+    madrasah, toko, marketplace_erp) depends on -- it must keep working across a starlette bump.
     """
 
     async def dispatch(self, request: Request, call_next):
@@ -168,22 +145,48 @@ class CsrfOriginMiddleware(BaseHTTPMiddleware):
 app.add_middleware(CsrfOriginMiddleware)
 
 
-@app.get("/health")
-async def health():
-    try:
+_TENANT_DB_MODULES = {
+    "madrasah": madrasah_database,
+    "toko": toko_database,
+    "marketplace_erp": marketplace_erp_database,
+}
+_HEALTH_DB_TIMEOUT_SECONDS = 3.0
+
+
+async def _ping_tenant(name: str, module) -> str:
+    """Ping one tenant engine. "not_configured" when its DATABASE_URL_* is unset."""
+    engine = getattr(module, "engine", None)
+    if engine is None:
+        return "not_configured"
+
+    async def _select_one() -> None:
         async with engine.connect() as conn:
             await conn.execute(text("SELECT 1"))
-        return {"status": "ok", "database": "connected"}
+
+    try:
+        await asyncio.wait_for(_select_one(), timeout=_HEALTH_DB_TIMEOUT_SECONDS)
+        return "connected"
     except Exception as exc:
-        logger.exception("database health check failed")
-        return JSONResponse(
-            status_code=503,
-            content={
-                "status": "degraded",
-                "database": "unavailable",
-                "error_type": type(exc).__name__,
-            },
-        )
+        logger.warning("health: %s database unavailable (%s)", name, type(exc).__name__)
+        return "unavailable"
+
+
+@app.get("/health")
+async def health(db: bool = False):
+    """Liveness for DO App Platform: always 200 while the process is up.
+
+    Does not depend on any DATABASE_URL (the old SIABUMDES one is gone). By
+    default it touches no database so platform health checks stay fast; pass
+    ``?db=true`` to also ping every configured tenant database (reported as
+    connected / unavailable / not_configured). Tenant database state never
+    turns this into a non-200: one tenant being down or unset must not take
+    the whole app out of rotation.
+    """
+    if not db:
+        return {"status": "ok"}
+    names = list(_TENANT_DB_MODULES)
+    results = await asyncio.gather(*(_ping_tenant(n, _TENANT_DB_MODULES[n]) for n in names))
+    return {"status": "ok", "databases": dict(zip(names, results))}
 
 
 @app.get("/")

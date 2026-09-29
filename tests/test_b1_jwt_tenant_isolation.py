@@ -1,4 +1,4 @@
-"""SIABUMDES B1 — JWT tenant isolation (aud/iss + optional per-tenant secrets)."""
+"""B1 — JWT tenant isolation (aud/iss + optional per-tenant secrets)."""
 from __future__ import annotations
 
 import importlib
@@ -25,19 +25,19 @@ def _reload_security(monkeypatch, **env):
     return security_module
 
 
-def test_bumdes_token_rejected_by_madrasah_decode(monkeypatch):
+def test_toko_token_rejected_by_madrasah_decode(monkeypatch):
     sec = _reload_security(monkeypatch, JWT_SECRET="shared-secret-for-tests")
-    token = sec.create_access_token("u1", "admin", 1, tenant="bumdes")
+    token = sec.create_access_token("u1", "admin", 1, tenant="toko")
     with pytest.raises(HTTPException) as exc:
         sec.decode_access_token(token, expected_tenant="madrasah")
     assert exc.value.status_code == 401
 
 
-def test_madrasah_token_rejected_by_bumdes_decode(monkeypatch):
+def test_madrasah_token_rejected_by_marketplace_erp_decode(monkeypatch):
     sec = _reload_security(monkeypatch, JWT_SECRET="shared-secret-for-tests")
     token = sec.create_access_token("u1", "admin", 1, tenant="madrasah")
     with pytest.raises(HTTPException) as exc:
-        sec.decode_access_token(token, expected_tenant="bumdes")
+        sec.decode_access_token(token, expected_tenant="marketplace_erp")
     assert exc.value.status_code == 401
 
 
@@ -54,35 +54,37 @@ def test_tenant_specific_secret_preferred(monkeypatch):
     sec = _reload_security(
         monkeypatch,
         JWT_SECRET="shared-secret-for-tests",
-        JWT_SECRET_BUMDES="bumdes-only-secret",
+        JWT_SECRET_TOKO="toko-only-secret",
         JWT_SECRET_MADRASAH="madrasah-only-secret",
     )
-    bumdes_token = sec.create_access_token("u1", "admin", 1, tenant="bumdes")
+    toko_token = sec.create_access_token("u1", "admin", 1, tenant="toko")
     madrasah_token = sec.create_access_token("u2", "admin", 1, tenant="madrasah")
 
-    assert sec.decode_access_token(bumdes_token, expected_tenant="bumdes")["sub"] == "u1"
+    assert sec.decode_access_token(toko_token, expected_tenant="toko")["sub"] == "u1"
     assert sec.decode_access_token(madrasah_token, expected_tenant="madrasah")["sub"] == "u2"
 
     # Cross-tenant fails even before aud check (wrong secret), and aud check
     # would also reject if secrets were shared.
     with pytest.raises(HTTPException):
-        sec.decode_access_token(bumdes_token, expected_tenant="madrasah")
+        sec.decode_access_token(toko_token, expected_tenant="madrasah")
     with pytest.raises(HTTPException):
-        sec.decode_access_token(madrasah_token, expected_tenant="bumdes")
+        sec.decode_access_token(madrasah_token, expected_tenant="toko")
 
 
 def test_fallback_to_shared_secret_when_tenant_unset(monkeypatch):
     sec = _reload_security(
         monkeypatch,
         JWT_SECRET="shared-secret-for-tests",
-        JWT_SECRET_BUMDES=None,
         JWT_SECRET_MADRASAH=None,
+        JWT_SECRET_TOKO=None,
+        JWT_SECRET_MARKETPLACE_ERP=None,
     )
-    assert sec.jwt_secret_for("bumdes") == "shared-secret-for-tests"
-    assert sec.jwt_secret_for("madrasah") == "shared-secret-for-tests"
-    token = sec.create_access_token("u1", "admin", 1, tenant="bumdes")
-    payload = sec.decode_access_token(token, expected_tenant="bumdes")
-    assert payload["aud"] == "bumdes"
+    for tenant in ("madrasah", "toko", "marketplace_erp"):
+        assert sec.jwt_secret_for(tenant) == "shared-secret-for-tests"
+        token = sec.create_access_token("u1", "admin", 1, tenant=tenant)
+        payload = sec.decode_access_token(token, expected_tenant=tenant)
+        assert payload["aud"] == tenant
+        assert payload["iss"] == f"sm85:{tenant}"
 
 
 def test_legacy_token_without_aud_iss_still_accepted(monkeypatch):
@@ -104,6 +106,6 @@ def test_legacy_token_without_aud_iss_still_accepted(monkeypatch):
         "shared-secret-for-tests",
         algorithm="HS256",
     )
-    payload = sec.decode_access_token(legacy, expected_tenant="bumdes")
+    payload = sec.decode_access_token(legacy, expected_tenant="madrasah")
     assert payload["sub"] == "legacy-user"
     assert "aud" not in payload

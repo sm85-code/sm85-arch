@@ -1,6 +1,5 @@
 [tool.ruff]
 line-length = 120
-exclude = ["alembic/versions"]
 
 [tool.ruff.lint]
 # Keep this lenient on purpose: only catch real errors (undefined names, unused

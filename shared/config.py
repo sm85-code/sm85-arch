@@ -10,23 +10,11 @@ from dotenv import load_dotenv
 ROOT_DIR = Path(__file__).resolve().parent.parent
 load_dotenv(ROOT_DIR / ".env")
 
-READ_LEVEL = ("admin", "direktur", "bendahara", "pengawas", "penasihat")
-REPORT_READ_LEVEL = READ_LEVEL + ("pengelola",)
-WRITE_LEVEL = ("admin", "direktur", "bendahara", "pengelola")
-ADMIN_LEVEL = ("admin",)
-READONLY_ROLES = ("pengawas", "penasihat")
-
-API_PREFIX = "/api"
 APP_TITLE = os.getenv("APP_TITLE", "SM85 Arch API")
 
-PUBLIC_ROLES = (
-    "admin",
-    "direktur",
-    "bendahara",
-    "pengelola",
-    "pengawas",
-    "penasihat",
-)
+# Role aliases normalised by public_role() when a JWT is minted
+# (shared.security.create_access_token). Kept verbatim so tokens issued for
+# the remaining tenants stay byte-identical.
 ROLE_ALIASES_TO_PUBLIC = {
     "unit_manager": "pengelola",
     "unit-manager": "pengelola",
@@ -51,18 +39,15 @@ CORS_ORIGIN_REGEX = os.getenv("CORS_ORIGIN_REGEX", "").strip() or None
 JWT_SECRET = os.getenv("JWT_SECRET", "")
 # Optional per-tenant secrets (B1). When unset, jwt_secret_for() falls back to
 # JWT_SECRET so existing App Platform env keeps working after deploy.
-# Rotate by setting JWT_SECRET_BUMDES / _MADRASAH / _TOKO / _MARKETPLACE_ERP
+# Rotate by setting JWT_SECRET_MADRASAH / _TOKO / _MARKETPLACE_ERP
 # (can start equal to JWT_SECRET, then change after re-login window).
-JWT_SECRET_BUMDES = os.getenv("JWT_SECRET_BUMDES", "").strip()
 JWT_SECRET_MADRASAH = os.getenv("JWT_SECRET_MADRASAH", "").strip()
 JWT_SECRET_TOKO = os.getenv("JWT_SECRET_TOKO", "").strip()
 JWT_SECRET_MARKETPLACE_ERP = os.getenv("JWT_SECRET_MARKETPLACE_ERP", "").strip()
 JWT_ALGORITHM = os.getenv("JWT_ALGORITHM", "HS256")
 JWT_EXPIRE_HOURS = int(os.getenv("JWT_EXPIRE_HOURS", str(24 * 7)))
-JWT_COOKIE_NAME = os.getenv("JWT_COOKIE_NAME", "bumdes_token")
 
 # Stable tenant ids used as JWT aud (and in iss = "sm85:<tenant>").
-JWT_TENANT_BUMDES = "bumdes"
 JWT_TENANT_MADRASAH = "madrasah"
 JWT_TENANT_TOKO = "toko"
 JWT_TENANT_MARKETPLACE_ERP = "marketplace_erp"
@@ -74,8 +59,6 @@ def jwt_issuer_for(tenant: str) -> str:
 COOKIE_SECURE = os.getenv("COOKIE_SECURE", "true").strip().lower() in {"1", "true", "yes"}
 COOKIE_SAMESITE = os.getenv("COOKIE_SAMESITE", "none").strip().lower() or "none"
 COOKIE_PATH = os.getenv("COOKIE_PATH", "/")
-
-POSTGRES_SSL = os.getenv("POSTGRES_SSL", "true").strip().lower() in {"1", "true", "yes"}
 
 
 def public_role(raw: str | None) -> str:
