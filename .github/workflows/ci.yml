@@ -23,9 +23,11 @@ jobs:
         run: ruff check .
 
       - name: Unit tests
-        # DATABASE_URL is intentionally unset: tests that need a real Postgres
-        # instance skip themselves (see tests/test_postgresql_integration.py)
-        # instead of failing, so this job stays fast and needs no DB service.
+        # No database env is set: tests that need a real Postgres instance
+        # skip themselves (see tests/test_marketplace_erp_pg_selfheal.py,
+        # gated on TEST_DATABASE_URL) instead of failing, so this job stays
+        # fast and needs no DB service. The app itself must import and pass
+        # tests without any DATABASE_URL* set.
         # `python -m pytest` (not the bare `pytest` script) so the repo root
         # is added to sys.path -- otherwise `from tenants...` imports fail
         # with ModuleNotFoundError since tests/ has no package __init__.py.
@@ -37,13 +39,13 @@ jobs:
       postgres:
         image: postgres:16-alpine
         env:
-          POSTGRES_USER: siabumdes
-          POSTGRES_PASSWORD: siabumdes
-          POSTGRES_DB: siabumdes_test
+          POSTGRES_USER: sm85
+          POSTGRES_PASSWORD: sm85
+          POSTGRES_DB: sm85_test
         ports:
           - 5432:5432
         options: >-
-          --health-cmd "pg_isready -U siabumdes -d siabumdes_test"
+          --health-cmd "pg_isready -U sm85 -d sm85_test"
           --health-interval 3s
           --health-timeout 3s
           --health-retries 10
@@ -59,6 +61,9 @@ jobs:
         run: pip install -r requirements.txt
 
       - name: Postgres integration tests
+        # SIABUMDES Postgres tests moved to sm85-code/backend-siabumdes. What
+        # remains here is the marketplace_erp schema self-heal against a real
+        # (throwaway) Postgres. -rs prints the reason if it ever skips.
         env:
-          DATABASE_URL: postgresql://siabumdes:siabumdes@localhost:5432/siabumdes_test
-        run: python -m pytest tests/test_postgresql_integration.py tests/test_b1_stock_atomicity.py -n 0
+          TEST_DATABASE_URL: postgresql://sm85:sm85@localhost:5432/sm85_test
+        run: python -m pytest tests/test_marketplace_erp_pg_selfheal.py -n 0 -rs
