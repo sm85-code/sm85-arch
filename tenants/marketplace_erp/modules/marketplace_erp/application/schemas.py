@@ -274,6 +274,9 @@ class PesananOut(BaseModel):
     total: Decimal
     tersinkron_marketplace: bool
     catatan_sinkron: Optional[str]
+    kurir: Optional[str] = None
+    nomor_resi: Optional[str] = None
+    tanggal_kirim: Optional[datetime] = None
     items: list[ItemPesananOut] = Field(default_factory=list)
     created_at: datetime
     updated_at: datetime
@@ -288,3 +291,103 @@ class OAuthStartOut(BaseModel):
     platform: str
     akun_id: str
     authorize_url: str
+
+
+# --- Tahap 3: multi-gudang, staff scoping, pengiriman, settlement, laporan --
+
+
+class GudangIn(BaseModel):
+    kode: str = Field(min_length=1, max_length=64)
+    nama: str = Field(min_length=1, max_length=255)
+
+
+class StokTransferIn(BaseModel):
+    produk_id: str
+    dari_gudang_id: str
+    ke_gudang_id: str
+    qty: int = Field(gt=0)
+    catatan: Optional[str] = None
+
+
+class StaffAkunIn(BaseModel):
+    user_id: str
+    akun_id: str
+
+
+class StaffAkunOut(BaseModel):
+    id: str
+    user_id: str
+    akun_id: str
+
+    model_config = ConfigDict(from_attributes=True)
+
+
+class PengirimanIn(BaseModel):
+    kurir: str = Field(min_length=1, max_length=64)
+    nomor_resi: str = Field(min_length=1, max_length=128)
+    tanggal_kirim: Optional[datetime] = None
+
+
+class SettlementIn(BaseModel):
+    akun_id: str
+    periode_mulai: datetime
+    periode_selesai: datetime
+    gross_sales: Decimal = Decimal("0")
+    fee_platform: Decimal = Decimal("0")
+    fee_payment: Decimal = Decimal("0")
+    ongkir_subsidi: Decimal = Decimal("0")
+    penalti: Decimal = Decimal("0")
+    net: Decimal = Decimal("0")
+    catatan: Optional[str] = None
+
+
+class SettlementPatch(BaseModel):
+    gross_sales: Optional[Decimal] = None
+    fee_platform: Optional[Decimal] = None
+    fee_payment: Optional[Decimal] = None
+    ongkir_subsidi: Optional[Decimal] = None
+    penalti: Optional[Decimal] = None
+    net: Optional[Decimal] = None
+    status: Optional[str] = None
+    catatan: Optional[str] = None
+
+
+class SettlementOut(BaseModel):
+    id: str
+    akun_id: str
+    platform: str
+    periode_mulai: datetime
+    periode_selesai: datetime
+    gross_sales: Decimal
+    fee_platform: Decimal
+    fee_payment: Decimal
+    ongkir_subsidi: Decimal
+    penalti: Decimal
+    net: Decimal
+    status: str
+    catatan: Optional[str]
+
+    model_config = ConfigDict(from_attributes=True)
+
+
+class ProdukTerlarisOut(BaseModel):
+    produk_id: Optional[str]
+    nama_produk: str
+    qty_terjual: int
+    omzet: Decimal
+
+
+class StokKritisOut(BaseModel):
+    produk_id: str
+    sku_induk: str
+    nama: str
+    stok: int
+
+
+class LaporanRingkasOut(BaseModel):
+    dari: datetime
+    sampai: datetime
+    total_omzet: Decimal
+    jumlah_pesanan_per_status: dict[str, int]
+    produk_terlaris: list[ProdukTerlarisOut]
+    stok_kritis: list[StokKritisOut]

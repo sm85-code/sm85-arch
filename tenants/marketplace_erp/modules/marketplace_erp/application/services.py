@@ -1,9 +1,10 @@
 from __future__ import annotations
 
+from datetime import datetime, timezone
 from decimal import Decimal
 
 from fastapi import HTTPException, status
-from sqlalchemy import select
+from sqlalchemy import func, select
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import selectinload
 
@@ -12,15 +13,21 @@ from tenants.marketplace_erp.modules.marketplace_erp.application.schemas import 
     AkunMarketplaceIn,
     AkunMarketplacePatch,
     ChangePasswordIn,
+    GudangIn,
     ItemPesananIn,
     LoginIn,
+    PengirimanIn,
     PesananIn,
     ProdukIn,
     ProdukListingIn,
     ProdukListingPatch,
     ProdukPatch,
     RegisterIn,
+    SettlementIn,
+    SettlementPatch,
+    StaffAkunIn,
     StokAdjustIn,
+    StokTransferIn,
     UserCreateIn,
 )
 from tenants.marketplace_erp.modules.marketplace_erp.infrastructure.models import (
@@ -34,11 +41,21 @@ from tenants.marketplace_erp.modules.marketplace_erp.infrastructure.models impor
     Pesanan,
     Produk,
     ProdukListing,
+    Settlement,
+    StaffAkunMarketplace,
     StokLedger,
     StokReservasi,
     UserMarketplaceErp,
 )
 from tenants.marketplace_erp.modules.marketplace_erp.infrastructure.seeder import DEFAULT_PASSWORD
+
+# Orders counted as real sales for reporting -- "unpaid" isn't money yet and
+# "cancelled" clearly isn't a sale, same convention as tenants/toko/modules/erp.
+_STATUS_TERHITUNG_PENJUALAN = ("to_ship", "shipped", "completed")
+
+# Default "low stock" threshold for the ringkas report when the caller
+# doesn't pass batas_stok explicitly.
+_DEFAULT_BATAS_STOK_KRITIS = 5
 
 # Linear OMS pipeline (confirm → process → ship stubs). No return path in T2.
 _TRANSISI_STATUS = {
@@ -358,6 +375,79 @@ async def ensure_default_gudang(session: AsyncSession) -> Gudang:
 async def list_gudang(session: AsyncSession) -> list[Gudang]:
     await ensure_default_gudang(session)
     return list((await session.execute(select(Gudang).order_by(Gudang.kode))).scalars().all())
+
+
+async def create_gudang(session: AsyncSession, payload: GudangIn) -> Gudang:
+    existing = (await session.execute(select(Gudang).where(Gudang.kode == payload.kode))).scalar_one_or_none()
+    if existing:
+        raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail="Kode gudang sudah dipakai")
+    gudang = Gudang(kode=payload.kode, nama=payload.nama)
+    session.add(gudang)
+    await session.flush()
+    return gudang
+
+
+async def transfer_stok(session: AsyncSession, payload: StokTransferIn) -> Produk:
+    """Move qty of one Produk from one Gudang to another as a paired ledger
+    entry (transfer_out at the source, transfer_in at the destination).
+    Produk.stok (the available-everywhere cache) is unchanged -- a transfer
+    doesn't add or remove available stock, it only moves which warehouse
+    holds it."""
+    if payload.dari_gudang_id == payload.ke_gudang_id:
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Gudang asal dan tujuan tidak boleh sama")
+
+    produk_stmt = select(Produk).where(Produk.id == payload.produk_id).with_for_update()
+    produk = (await session.execute(produk_stmt)).scalar_one_or_none()
+    if not produk:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Produk tidak ditemukan")
+
+    dari = await session.get(Gudang, payload.dari_gudang_id)
+    if not dari:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Gudang asal tidak ditemukan")
+    ke = await session.get(Gudang, payload.ke_gudang_id)
+    if not ke:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Gudang tujuan tidak ditemukan")
+
+    # Per-warehouse on-hand isn't tracked as a running balance column (Tahap
+    # 2/3 keeps Produk.stok as the single available-everywhere cache) -- the
+    # ledger itself is the source of truth for "how much of this SKU is
+    # physically in this warehouse", so validate against a ledger sum here.
+    saldo_row = await session.execute(
+        select(func.coalesce(func.sum(StokLedger.qty_delta), 0)).where(
+            StokLedger.produk_id == payload.produk_id, StokLedger.gudang_id == payload.dari_gudang_id
+        )
+    )
+    saldo_asal = int(saldo_row.scalar_one())
+    if saldo_asal < payload.qty:
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail=f"Saldo gudang asal tidak cukup (tersedia {saldo_asal}, butuh {payload.qty})",
+        )
+
+    session.add(
+        StokLedger(
+            produk_id=produk.id,
+            gudang_id=dari.id,
+            qty_delta=-payload.qty,
+            reason="transfer_out",
+            ref_type="transfer",
+            ref_id=ke.id,
+            catatan=payload.catatan,
+        )
+    )
+    session.add(
+        StokLedger(
+            produk_id=produk.id,
+            gudang_id=ke.id,
+            qty_delta=payload.qty,
+            reason="transfer_in",
+            ref_type="transfer",
+            ref_id=dari.id,
+            catatan=payload.catatan,
+        )
+    )
+    await session.flush()
+    return produk
 
 
 async def list_stok_ledger(
@@ -721,6 +811,191 @@ async def delete_pesanan(session: AsyncSession, pesanan_id: str) -> None:
         )
     await session.delete(pesanan)
     await session.flush()
+
+
+# --- Tahap 3: staff-akun scoping ----------------------------------------------
+
+
+async def assign_staff_akun(session: AsyncSession, payload: StaffAkunIn) -> StaffAkunMarketplace:
+    user = await session.get(UserMarketplaceErp, payload.user_id)
+    if not user:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="User tidak ditemukan")
+    await get_akun_marketplace(session, payload.akun_id)
+    existing = (
+        await session.execute(
+            select(StaffAkunMarketplace).where(
+                StaffAkunMarketplace.user_id == payload.user_id, StaffAkunMarketplace.akun_id == payload.akun_id
+            )
+        )
+    ).scalar_one_or_none()
+    if existing:
+        raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail="Staff sudah ditugaskan ke akun ini")
+    row = StaffAkunMarketplace(user_id=payload.user_id, akun_id=payload.akun_id)
+    session.add(row)
+    await session.flush()
+    return row
+
+
+async def list_staff_akun(session: AsyncSession, *, user_id: str | None = None) -> list[StaffAkunMarketplace]:
+    stmt = select(StaffAkunMarketplace).order_by(StaffAkunMarketplace.created_at.desc())
+    if user_id:
+        stmt = stmt.where(StaffAkunMarketplace.user_id == user_id)
+    return list((await session.execute(stmt)).scalars().all())
+
+
+async def remove_staff_akun(session: AsyncSession, staff_akun_id: str) -> None:
+    row = await session.get(StaffAkunMarketplace, staff_akun_id)
+    if not row:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Penugasan staff-akun tidak ditemukan")
+    await session.delete(row)
+    await session.flush()
+
+
+# --- Tahap 3: Pengiriman -------------------------------------------------------
+
+
+async def set_pengiriman(session: AsyncSession, pesanan_id: str, payload: PengirimanIn) -> Pesanan:
+    """Manual courier/AWB entry -- no courier API wired yet (see
+    IDEAL_FOLLOWUPS). Only meaningful once an order has left "unpaid": it
+    can't be shipped before being confirmed to_ship."""
+    pesanan = await get_pesanan(session, pesanan_id)
+    if pesanan.status not in {"to_ship", "shipped", "completed"}:
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail="Info pengiriman hanya bisa diisi setelah pesanan berstatus to_ship",
+        )
+    pesanan.kurir = payload.kurir
+    pesanan.nomor_resi = payload.nomor_resi
+    pesanan.tanggal_kirim = payload.tanggal_kirim or datetime.now(timezone.utc)
+    await session.flush()
+    return await get_pesanan(session, pesanan.id)
+
+
+# --- Tahap 3: Settlement --------------------------------------------------------
+
+
+_SETTLEMENT_EPSILON = Decimal("1")
+
+
+def _hitung_status_settlement(payload_or_row) -> str:
+    expected_net = (
+        payload_or_row.gross_sales
+        - payload_or_row.fee_platform
+        - payload_or_row.fee_payment
+        - payload_or_row.ongkir_subsidi
+        - payload_or_row.penalti
+    )
+    if abs(expected_net - payload_or_row.net) <= _SETTLEMENT_EPSILON:
+        return "matched"
+    return "discrepancy"
+
+
+async def create_settlement(session: AsyncSession, payload: SettlementIn) -> Settlement:
+    akun = await get_akun_marketplace(session, payload.akun_id)
+    if payload.periode_selesai < payload.periode_mulai:
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="periode_selesai sebelum periode_mulai")
+    settlement = Settlement(
+        akun_id=akun.id,
+        platform=akun.platform,
+        periode_mulai=payload.periode_mulai,
+        periode_selesai=payload.periode_selesai,
+        gross_sales=payload.gross_sales,
+        fee_platform=payload.fee_platform,
+        fee_payment=payload.fee_payment,
+        ongkir_subsidi=payload.ongkir_subsidi,
+        penalti=payload.penalti,
+        net=payload.net,
+        catatan=payload.catatan,
+    )
+    settlement.status = _hitung_status_settlement(settlement)
+    session.add(settlement)
+    await session.flush()
+    return settlement
+
+
+async def list_settlement(
+    session: AsyncSession, *, akun_id: str | None = None, status_filter: str | None = None
+) -> list[Settlement]:
+    stmt = select(Settlement).order_by(Settlement.periode_mulai.desc())
+    if akun_id:
+        stmt = stmt.where(Settlement.akun_id == akun_id)
+    if status_filter:
+        stmt = stmt.where(Settlement.status == status_filter.strip().lower())
+    return list((await session.execute(stmt)).scalars().all())
+
+
+async def get_settlement(session: AsyncSession, settlement_id: str) -> Settlement:
+    settlement = await session.get(Settlement, settlement_id)
+    if not settlement:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Settlement tidak ditemukan")
+    return settlement
+
+
+async def update_settlement(session: AsyncSession, settlement_id: str, payload: SettlementPatch) -> Settlement:
+    settlement = await get_settlement(session, settlement_id)
+    data = payload.model_dump(exclude_unset=True)
+    status_override = data.pop("status", None)
+    for field, value in data.items():
+        setattr(settlement, field, value)
+    # Recompute discrepancy/matched from the numbers unless the caller is
+    # explicitly promoting a reviewed row to "paid" (that's a human decision
+    # the formula can't make).
+    settlement.status = status_override if status_override == "paid" else _hitung_status_settlement(settlement)
+    await session.flush()
+    return settlement
+
+
+# --- Tahap 3: Laporan ringkas ---------------------------------------------------
+
+
+async def laporan_ringkas(
+    session: AsyncSession, *, dari: datetime, sampai: datetime, batas_stok_kritis: int = _DEFAULT_BATAS_STOK_KRITIS
+) -> dict:
+    pesanan_stmt = select(Pesanan).options(selectinload(Pesanan.items)).where(
+        Pesanan.created_at >= dari, Pesanan.created_at <= sampai
+    )
+    pesanan_rows = list((await session.execute(pesanan_stmt)).scalars().all())
+
+    total_omzet = sum(
+        (p.total for p in pesanan_rows if p.status in _STATUS_TERHITUNG_PENJUALAN), Decimal("0")
+    )
+
+    jumlah_per_status: dict[str, int] = {s: 0 for s in STATUS_PESANAN}
+    for p in pesanan_rows:
+        jumlah_per_status[p.status] = jumlah_per_status.get(p.status, 0) + 1
+
+    terlaris: dict[str, dict] = {}
+    for p in pesanan_rows:
+        if p.status not in _STATUS_TERHITUNG_PENJUALAN:
+            continue
+        for item in p.items:
+            key = item.produk_id or item.nama_produk
+            entry = terlaris.setdefault(
+                key, {"produk_id": item.produk_id, "nama_produk": item.nama_produk, "qty_terjual": 0, "omzet": Decimal("0")}
+            )
+            entry["qty_terjual"] += item.qty
+            entry["omzet"] += item.subtotal
+    produk_terlaris = sorted(terlaris.values(), key=lambda e: e["qty_terjual"], reverse=True)[:10]
+
+    stok_kritis_rows = (
+        await session.execute(
+            select(Produk)
+            .where(Produk.aktif.is_(True), Produk.stok <= batas_stok_kritis)
+            .order_by(Produk.stok.asc())
+        )
+    ).scalars().all()
+    stok_kritis = [
+        {"produk_id": p.id, "sku_induk": p.sku_induk, "nama": p.nama, "stok": p.stok} for p in stok_kritis_rows
+    ]
+
+    return {
+        "dari": dari,
+        "sampai": sampai,
+        "total_omzet": total_omzet,
+        "jumlah_pesanan_per_status": jumlah_per_status,
+        "produk_terlaris": produk_terlaris,
+        "stok_kritis": stok_kritis,
+    }
 
 
 # Re-export reason tuple for tests / docs
