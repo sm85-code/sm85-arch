@@ -90,3 +90,32 @@ def require_roles_marketplace_erp(*roles: str) -> Callable:
         return user
 
     return _inner
+
+
+async def akun_ids_diizinkan(user: UserMarketplaceErp, session: AsyncSession) -> list[str] | None:
+    """None for `owner` (unrestricted, see everything). A concrete (possibly
+    empty) list of AkunMarketplace ids for `staff` -- the only shops that
+    role may read/write, per StaffAkunMarketplace. Imported lazily to avoid
+    a module-load-time cycle between auth.py and models.py's own imports."""
+    if (user.role or "").strip().lower() != "staff":
+        return None
+    from sqlalchemy import select
+
+    from tenants.marketplace_erp.modules.marketplace_erp.infrastructure.models import StaffAkunMarketplace
+
+    rows = (
+        await session.execute(select(StaffAkunMarketplace.akun_id).where(StaffAkunMarketplace.user_id == user.id))
+    ).scalars().all()
+    return list(rows)
+
+
+async def pastikan_akses_akun(user: UserMarketplaceErp, session: AsyncSession, akun_id: str | None) -> None:
+    """Raise 403 if `user` (when restricted, i.e. staff) is not allowed to
+    touch `akun_id`. No-op for owner. Used on single-object endpoints where
+    akun_id comes from the fetched row, not a query/body param the caller
+    could spoof."""
+    allowed = await akun_ids_diizinkan(user, session)
+    if allowed is None:
+        return
+    if akun_id is None or akun_id not in allowed:
+        raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="Akses ditolak untuk akun marketplace ini")

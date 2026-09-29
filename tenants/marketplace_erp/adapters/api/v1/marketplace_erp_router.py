@@ -1,8 +1,12 @@
-"""HTTP surface for marketplace_erp -- Tahap 1 + Tahap 2.
+"""HTTP surface for marketplace_erp -- Tahap 1 + 2 + 3.
 
 Tahap 1: auth, akun, produk (SKU induk), listing.
 Tahap 2: seed gate, stock reservation/ledger, OMS pesanan inbox,
          Shopee OAuth start/callback (+ stubs for other platforms).
+Tahap 3: multi-gudang + transfer, staff-akun scoping, pengiriman (manual
+         courier/AWB), settlement (manual payout reconciliation), laporan
+         ringkas. All local-data features -- none of this needs a live
+         marketplace API connection, see IDEAL_FOLLOWUPS.md.
 
 Mounted in main.py as prefix=/api/marketplace-erp.
 """
@@ -10,6 +14,7 @@ from __future__ import annotations
 
 import os
 import secrets as pysecrets
+from datetime import datetime
 
 from fastapi import APIRouter, Depends, HTTPException, Query, Request, Response, status
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -20,9 +25,12 @@ from tenants.marketplace_erp.modules.marketplace_erp.application.schemas import 
     AkunMarketplaceOut,
     AkunMarketplacePatch,
     ChangePasswordIn,
+    GudangIn,
     GudangOut,
+    LaporanRingkasOut,
     LoginIn,
     OAuthStartOut,
+    PengirimanIn,
     PesananIn,
     PesananOut,
     PesananStatusIn,
@@ -33,15 +41,23 @@ from tenants.marketplace_erp.modules.marketplace_erp.application.schemas import 
     ProdukOut,
     ProdukPatch,
     RegisterIn,
+    SettlementIn,
+    SettlementOut,
+    SettlementPatch,
+    StaffAkunIn,
+    StaffAkunOut,
     StokAdjustIn,
     StokLedgerOut,
+    StokTransferIn,
     UserCreateIn,
     UserOut,
 )
 from tenants.marketplace_erp.modules.marketplace_erp.infrastructure.auth import (
+    akun_ids_diizinkan,
     clear_marketplace_erp_cookie,
     get_current_user_marketplace_erp,
     issue_marketplace_erp_token,
+    pastikan_akses_akun,
     require_roles_marketplace_erp,
     set_marketplace_erp_cookie,
 )
@@ -52,6 +68,10 @@ from tenants.marketplace_erp.modules.marketplace_erp.infrastructure.seeder impor
 marketplace_erp_router = APIRouter()
 
 OWNER_ONLY = ("owner",)
+# Endpoints a scoped `staff` account may reach at all -- per-akun filtering
+# still applies inside the handler via akun_ids_diizinkan/pastikan_akses_akun.
+# Owner is always unrestricted.
+OWNER_OR_STAFF = ("owner", "staff")
 
 
 def _is_production_env() -> bool:
@@ -205,9 +225,13 @@ async def create_user(
 async def list_akun(
     platform: str | None = None,
     session: AsyncSession = Depends(get_db_marketplace_erp),
-    _: UserMarketplaceErp = Depends(require_roles_marketplace_erp(*OWNER_ONLY)),
+    user: UserMarketplaceErp = Depends(require_roles_marketplace_erp(*OWNER_OR_STAFF)),
 ):
-    return await services.list_akun_marketplace(session, platform=platform)
+    rows = await services.list_akun_marketplace(session, platform=platform)
+    allowed = await akun_ids_diizinkan(user, session)
+    if allowed is None:
+        return rows
+    return [r for r in rows if r.id in allowed]
 
 
 @marketplace_erp_router.post("/akun", response_model=AkunMarketplaceOut)
@@ -223,9 +247,11 @@ async def create_akun(
 async def get_akun(
     akun_id: str,
     session: AsyncSession = Depends(get_db_marketplace_erp),
-    _: UserMarketplaceErp = Depends(require_roles_marketplace_erp(*OWNER_ONLY)),
+    user: UserMarketplaceErp = Depends(require_roles_marketplace_erp(*OWNER_OR_STAFF)),
 ):
-    return await services.get_akun_marketplace(session, akun_id)
+    akun = await services.get_akun_marketplace(session, akun_id)
+    await pastikan_akses_akun(user, session, akun.id)
+    return akun
 
 
 @marketplace_erp_router.patch("/akun/{akun_id}", response_model=AkunMarketplaceOut)
@@ -349,6 +375,15 @@ async def list_gudang(
     return await services.list_gudang(session)
 
 
+@marketplace_erp_router.post("/gudang", response_model=GudangOut, status_code=status.HTTP_201_CREATED)
+async def create_gudang(
+    payload: GudangIn,
+    session: AsyncSession = Depends(get_db_marketplace_erp),
+    _: UserMarketplaceErp = Depends(require_roles_marketplace_erp(*OWNER_ONLY)),
+):
+    return await services.create_gudang(session, payload)
+
+
 @marketplace_erp_router.get("/stok/ledger", response_model=list[StokLedgerOut])
 async def list_stok_ledger(
     produk_id: str | None = None,
@@ -368,6 +403,46 @@ async def adjust_stok(
     return await services.adjust_stok(session, payload)
 
 
+@marketplace_erp_router.post("/stok/transfer", response_model=ProdukOut)
+async def transfer_stok(
+    payload: StokTransferIn,
+    session: AsyncSession = Depends(get_db_marketplace_erp),
+    _: UserMarketplaceErp = Depends(require_roles_marketplace_erp(*OWNER_ONLY)),
+):
+    return await services.transfer_stok(session, payload)
+
+
+# --- Tahap 3: Staff-akun scoping ----------------------------------------------
+
+
+@marketplace_erp_router.get("/staff-akun", response_model=list[StaffAkunOut])
+async def list_staff_akun(
+    user_id: str | None = None,
+    session: AsyncSession = Depends(get_db_marketplace_erp),
+    _: UserMarketplaceErp = Depends(require_roles_marketplace_erp(*OWNER_ONLY)),
+):
+    return await services.list_staff_akun(session, user_id=user_id)
+
+
+@marketplace_erp_router.post("/staff-akun", response_model=StaffAkunOut, status_code=status.HTTP_201_CREATED)
+async def assign_staff_akun(
+    payload: StaffAkunIn,
+    session: AsyncSession = Depends(get_db_marketplace_erp),
+    _: UserMarketplaceErp = Depends(require_roles_marketplace_erp(*OWNER_ONLY)),
+):
+    return await services.assign_staff_akun(session, payload)
+
+
+@marketplace_erp_router.delete("/staff-akun/{staff_akun_id}")
+async def remove_staff_akun(
+    staff_akun_id: str,
+    session: AsyncSession = Depends(get_db_marketplace_erp),
+    _: UserMarketplaceErp = Depends(require_roles_marketplace_erp(*OWNER_ONLY)),
+):
+    await services.remove_staff_akun(session, staff_akun_id)
+    return {"ok": True}
+
+
 # --- Tahap 2: Orders OMS -----------------------------------------------------
 
 
@@ -377,11 +452,15 @@ async def list_pesanan(
     akun_id: str | None = None,
     status_filter: str | None = Query(None, alias="status"),
     session: AsyncSession = Depends(get_db_marketplace_erp),
-    _: UserMarketplaceErp = Depends(require_roles_marketplace_erp(*OWNER_ONLY)),
+    user: UserMarketplaceErp = Depends(require_roles_marketplace_erp(*OWNER_OR_STAFF)),
 ):
-    return await services.list_pesanan(
-        session, platform=platform, akun_id=akun_id, status_filter=status_filter
-    )
+    if akun_id:
+        await pastikan_akses_akun(user, session, akun_id)
+    rows = await services.list_pesanan(session, platform=platform, akun_id=akun_id, status_filter=status_filter)
+    allowed = await akun_ids_diizinkan(user, session)
+    if allowed is None:
+        return rows
+    return [r for r in rows if r.akun_id in allowed]
 
 
 @marketplace_erp_router.post("/pesanan", response_model=PesananOut)
@@ -397,9 +476,11 @@ async def create_pesanan(
 async def get_pesanan(
     pesanan_id: str,
     session: AsyncSession = Depends(get_db_marketplace_erp),
-    _: UserMarketplaceErp = Depends(require_roles_marketplace_erp(*OWNER_ONLY)),
+    user: UserMarketplaceErp = Depends(require_roles_marketplace_erp(*OWNER_OR_STAFF)),
 ):
-    return await services.get_pesanan(session, pesanan_id)
+    pesanan = await services.get_pesanan(session, pesanan_id)
+    await pastikan_akses_akun(user, session, pesanan.akun_id)
+    return pesanan
 
 
 @marketplace_erp_router.post("/pesanan/{pesanan_id}/status", response_model=PesananOut)
@@ -407,9 +488,23 @@ async def ubah_status_pesanan(
     pesanan_id: str,
     payload: PesananStatusIn,
     session: AsyncSession = Depends(get_db_marketplace_erp),
-    _: UserMarketplaceErp = Depends(require_roles_marketplace_erp(*OWNER_ONLY)),
+    user: UserMarketplaceErp = Depends(require_roles_marketplace_erp(*OWNER_OR_STAFF)),
 ):
+    pesanan = await services.get_pesanan(session, pesanan_id)
+    await pastikan_akses_akun(user, session, pesanan.akun_id)
     return await services.ubah_status_pesanan(session, pesanan_id, payload.status)
+
+
+@marketplace_erp_router.post("/pesanan/{pesanan_id}/pengiriman", response_model=PesananOut)
+async def set_pengiriman(
+    pesanan_id: str,
+    payload: PengirimanIn,
+    session: AsyncSession = Depends(get_db_marketplace_erp),
+    user: UserMarketplaceErp = Depends(require_roles_marketplace_erp(*OWNER_OR_STAFF)),
+):
+    pesanan = await services.get_pesanan(session, pesanan_id)
+    await pastikan_akses_akun(user, session, pesanan.akun_id)
+    return await services.set_pengiriman(session, pesanan_id, payload)
 
 
 @marketplace_erp_router.delete("/pesanan/{pesanan_id}")
@@ -545,3 +640,60 @@ async def oauth_other_placeholder(
         status_code=status.HTTP_501_NOT_IMPLEMENTED,
         detail="OAuth platform ini masih placeholder -- Shopee first (Tahap 2)",
     )
+
+
+# --- Tahap 3: Settlement -------------------------------------------------------
+
+
+@marketplace_erp_router.get("/settlement", response_model=list[SettlementOut])
+async def list_settlement(
+    akun_id: str | None = None,
+    status_filter: str | None = Query(None, alias="status"),
+    session: AsyncSession = Depends(get_db_marketplace_erp),
+    _: UserMarketplaceErp = Depends(require_roles_marketplace_erp(*OWNER_ONLY)),
+):
+    return await services.list_settlement(session, akun_id=akun_id, status_filter=status_filter)
+
+
+@marketplace_erp_router.post("/settlement", response_model=SettlementOut, status_code=status.HTTP_201_CREATED)
+async def create_settlement(
+    payload: SettlementIn,
+    session: AsyncSession = Depends(get_db_marketplace_erp),
+    _: UserMarketplaceErp = Depends(require_roles_marketplace_erp(*OWNER_ONLY)),
+):
+    return await services.create_settlement(session, payload)
+
+
+@marketplace_erp_router.get("/settlement/{settlement_id}", response_model=SettlementOut)
+async def get_settlement(
+    settlement_id: str,
+    session: AsyncSession = Depends(get_db_marketplace_erp),
+    _: UserMarketplaceErp = Depends(require_roles_marketplace_erp(*OWNER_ONLY)),
+):
+    return await services.get_settlement(session, settlement_id)
+
+
+@marketplace_erp_router.patch("/settlement/{settlement_id}", response_model=SettlementOut)
+async def update_settlement(
+    settlement_id: str,
+    payload: SettlementPatch,
+    session: AsyncSession = Depends(get_db_marketplace_erp),
+    _: UserMarketplaceErp = Depends(require_roles_marketplace_erp(*OWNER_ONLY)),
+):
+    return await services.update_settlement(session, settlement_id, payload)
+
+
+# --- Tahap 3: Laporan ringkas --------------------------------------------------
+
+
+@marketplace_erp_router.get("/laporan/ringkas", response_model=LaporanRingkasOut)
+async def laporan_ringkas(
+    dari: datetime = Query(...),
+    sampai: datetime = Query(...),
+    batas_stok_kritis: int = Query(5, ge=0, le=100000),
+    session: AsyncSession = Depends(get_db_marketplace_erp),
+    _: UserMarketplaceErp = Depends(require_roles_marketplace_erp(*OWNER_ONLY)),
+):
+    if sampai < dari:
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="sampai sebelum dari")
+    return await services.laporan_ringkas(session, dari=dari, sampai=sampai, batas_stok_kritis=batas_stok_kritis)

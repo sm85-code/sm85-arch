@@ -36,9 +36,11 @@ STATUS_PESANAN = ("unpaid", "to_ship", "shipped", "completed", "cancelled")
 
 STATUS_RESERVASI = ("aktif", "released", "consumed")
 
-REASON_STOK_LEDGER = ("adjust", "reserve", "release", "ship", "return", "sync_in")
+REASON_STOK_LEDGER = ("adjust", "reserve", "release", "ship", "return", "sync_in", "transfer_in", "transfer_out")
 
 DEFAULT_GUDANG_KODE = "DEFAULT"
+
+STATUS_SETTLEMENT = ("draft", "matched", "discrepancy", "paid")
 
 
 class UserMarketplaceErp(MarketplaceErpBase):
@@ -220,6 +222,13 @@ class Pesanan(MarketplaceErpBase):
     total: Mapped[Decimal] = mapped_column(Numeric(20, 2), nullable=False, default=Decimal("0"))
     tersinkron_marketplace: Mapped[bool] = mapped_column(Boolean, nullable=False, default=False)
     catatan_sinkron: Mapped[Optional[str]] = mapped_column(Text, nullable=True)
+    # Pengiriman (Tahap 3) -- manual input for now (no courier API wired
+    # yet); nullable/additive, added to existing Postgres DBs via
+    # seeder.ensure_marketplace_erp_schema() self-heal ALTER TABLE, same
+    # pattern as UserMarketplaceErp.must_change_password.
+    kurir: Mapped[Optional[str]] = mapped_column(String(64), nullable=True)
+    nomor_resi: Mapped[Optional[str]] = mapped_column(String(128), nullable=True)
+    tanggal_kirim: Mapped[Optional[datetime]] = mapped_column(DateTime(timezone=True), nullable=True)
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=_utcnow)
     updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=_utcnow, onupdate=_utcnow)
 
@@ -250,3 +259,61 @@ class ItemPesanan(MarketplaceErpBase):
     subtotal: Mapped[Decimal] = mapped_column(Numeric(20, 2), nullable=False)
 
     pesanan: Mapped["Pesanan"] = relationship(back_populates="items")
+
+
+# --- Tahap 3: staff scoping, settlement -------------------------------------
+
+
+class StaffAkunMarketplace(MarketplaceErpBase):
+    """Many-to-many link: which AkunMarketplace (shop) rows a `staff`-role
+    UserMarketplaceErp is allowed to touch. Owner is never restricted (see
+    infrastructure/auth.py::akun_ids_diizinkan) -- this table only matters
+    for the `staff` role. One row per (user, akun) pair, same pattern as
+    tenants/toko's toko_staff_akun."""
+
+    __tablename__ = "mpe_staff_akun"
+    __table_args__ = (UniqueConstraint("user_id", "akun_id", name="uq_mpe_staff_akun_user_akun"),)
+
+    id: Mapped[str] = mapped_column(String(64), primary_key=True, default=_uuid)
+    user_id: Mapped[str] = mapped_column(
+        String(64), ForeignKey("mpe_users.id", ondelete="CASCADE"), nullable=False, index=True
+    )
+    akun_id: Mapped[str] = mapped_column(
+        String(64), ForeignKey("mpe_akun_marketplace.id", ondelete="CASCADE"), nullable=False, index=True
+    )
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=_utcnow)
+
+
+class Settlement(MarketplaceErpBase):
+    """One payout/statement batch from a marketplace platform for one shop
+    over one period. Entered manually for now (no platform statement API
+    wired yet) -- purpose is reconciling "money that actually landed" vs
+    local order data, which is the #1 thing owners ask an ERP for once
+    orders start flowing from a real platform.
+
+    `status` starts `draft`. `discrepancy` is set automatically by
+    application/services.py when `net` doesn't reconcile against
+    gross_sales - fees within a small epsilon -- callers can still set
+    `matched`/`paid` explicitly once reviewed."""
+
+    __tablename__ = "mpe_settlement"
+
+    id: Mapped[str] = mapped_column(String(64), primary_key=True, default=_uuid)
+    akun_id: Mapped[str] = mapped_column(
+        String(64), ForeignKey("mpe_akun_marketplace.id", ondelete="CASCADE"), nullable=False, index=True
+    )
+    platform: Mapped[str] = mapped_column(String(16), nullable=False, index=True)
+    periode_mulai: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
+    periode_selesai: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
+    gross_sales: Mapped[Decimal] = mapped_column(Numeric(20, 2), nullable=False, default=Decimal("0"))
+    fee_platform: Mapped[Decimal] = mapped_column(Numeric(20, 2), nullable=False, default=Decimal("0"))
+    fee_payment: Mapped[Decimal] = mapped_column(Numeric(20, 2), nullable=False, default=Decimal("0"))
+    ongkir_subsidi: Mapped[Decimal] = mapped_column(Numeric(20, 2), nullable=False, default=Decimal("0"))
+    penalti: Mapped[Decimal] = mapped_column(Numeric(20, 2), nullable=False, default=Decimal("0"))
+    net: Mapped[Decimal] = mapped_column(Numeric(20, 2), nullable=False, default=Decimal("0"))
+    status: Mapped[str] = mapped_column(String(16), nullable=False, default="draft", index=True)
+    catatan: Mapped[Optional[str]] = mapped_column(Text, nullable=True)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=_utcnow)
+    updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=_utcnow, onupdate=_utcnow)
+
+    akun: Mapped["AkunMarketplace"] = relationship()
