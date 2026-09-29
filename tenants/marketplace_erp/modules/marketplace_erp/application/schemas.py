@@ -4,7 +4,7 @@ from datetime import datetime
 from decimal import Decimal
 from typing import Optional
 
-from pydantic import BaseModel, ConfigDict, EmailStr
+from pydantic import BaseModel, ConfigDict, EmailStr, Field
 
 
 # --- Auth -----------------------------------------------------------------
@@ -119,3 +119,111 @@ class ProdukListingOut(BaseModel):
     aktif: bool
 
     model_config = ConfigDict(from_attributes=True)
+
+
+# --- Tahap 2: Stock ---------------------------------------------------------
+
+
+class StokAdjustIn(BaseModel):
+    produk_id: str
+    qty_delta: int
+    catatan: Optional[str] = None
+    gudang_id: Optional[str] = None
+
+
+class StokLedgerOut(BaseModel):
+    id: str
+    produk_id: str
+    gudang_id: Optional[str]
+    qty_delta: int
+    reason: str
+    ref_type: Optional[str]
+    ref_id: Optional[str]
+    catatan: Optional[str]
+    created_at: datetime
+
+    model_config = ConfigDict(from_attributes=True)
+
+
+class GudangOut(BaseModel):
+    id: str
+    kode: str
+    nama: str
+    aktif: bool
+
+    model_config = ConfigDict(from_attributes=True)
+
+
+class StokReservasiOut(BaseModel):
+    id: str
+    produk_id: str
+    gudang_id: Optional[str]
+    pesanan_id: str
+    qty: int
+    status: str
+
+    model_config = ConfigDict(from_attributes=True)
+
+
+# --- Tahap 2: Orders OMS ----------------------------------------------------
+
+
+class ItemPesananIn(BaseModel):
+    nama_produk: str
+    harga_satuan: Decimal
+    qty: int = Field(gt=0)
+    produk_id: Optional[str] = None
+    listing_id: Optional[str] = None
+    subtotal: Optional[Decimal] = None
+
+
+class PesananIn(BaseModel):
+    platform: str
+    id_eksternal: str
+    akun_id: Optional[str] = None
+    status: str = "unpaid"
+    nama_pembeli: str = ""
+    total: Optional[Decimal] = None
+    items: list[ItemPesananIn] = Field(default_factory=list)
+
+
+class PesananStatusIn(BaseModel):
+    status: str
+
+
+class ItemPesananOut(BaseModel):
+    id: str
+    produk_id: Optional[str]
+    listing_id: Optional[str]
+    nama_produk: str
+    harga_satuan: Decimal
+    qty: int
+    subtotal: Decimal
+
+    model_config = ConfigDict(from_attributes=True)
+
+
+class PesananOut(BaseModel):
+    id: str
+    platform: str
+    id_eksternal: str
+    akun_id: Optional[str]
+    status: str
+    nama_pembeli: str
+    total: Decimal
+    tersinkron_marketplace: bool
+    catatan_sinkron: Optional[str]
+    items: list[ItemPesananOut] = Field(default_factory=list)
+    created_at: datetime
+    updated_at: datetime
+
+    model_config = ConfigDict(from_attributes=True)
+
+
+# --- OAuth ------------------------------------------------------------------
+
+
+class OAuthStartOut(BaseModel):
+    platform: str
+    akun_id: str
+    authorize_url: str
