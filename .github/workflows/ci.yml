@@ -30,3 +30,35 @@ jobs:
         # is added to sys.path -- otherwise `from tenants...` imports fail
         # with ModuleNotFoundError since tests/ has no package __init__.py.
         run: python -m pytest tests/ -n 0
+
+  integration-pg:
+    runs-on: ubuntu-latest
+    services:
+      postgres:
+        image: postgres:16-alpine
+        env:
+          POSTGRES_USER: siabumdes
+          POSTGRES_PASSWORD: siabumdes
+          POSTGRES_DB: siabumdes_test
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -U siabumdes -d siabumdes_test"
+          --health-interval 3s
+          --health-timeout 3s
+          --health-retries 10
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+          cache: "pip"
+
+      - name: Install dependencies
+        run: pip install -r requirements.txt
+
+      - name: Postgres integration tests
+        env:
+          DATABASE_URL: postgresql://siabumdes:siabumdes@localhost:5432/siabumdes_test
+        run: python -m pytest tests/test_postgresql_integration.py tests/test_b1_stock_atomicity.py -n 0
