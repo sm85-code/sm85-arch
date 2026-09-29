@@ -26,6 +26,7 @@ from modules.siabumdes.adapters.api.v1.transaction_router import router as trans
 from tenants.madrasah.adapters.api.v1.madrasah_router import madrasah_router
 from tenants.madrasah.modules.madrasah.infrastructure.seeder import ensure_madrasah_schema
 from tenants.marketplace_erp.adapters.api.v1.marketplace_erp_router import marketplace_erp_router
+from tenants.marketplace_erp.modules.marketplace_erp.infrastructure.seeder import ensure_marketplace_erp_schema
 from tenants.toko.adapters.api.v1.erp_router import erp_router
 from tenants.toko.adapters.api.v1.toko_router import toko_router
 from shared.config import APP_TITLE, CORS_ORIGIN_REGEX, CORS_ORIGINS, origin_allowed
@@ -54,6 +55,14 @@ async def lifespan(_: FastAPI):
         await ensure_madrasah_schema()
     except Exception:
         logger.exception("madrasah schema repair failed — app continues")
+    try:
+        # Same isolation for marketplace_erp: adds columns introduced after
+        # first deploy (mpe_users.must_change_password) and flags a seeded
+        # owner still on the default password. No-op when
+        # DATABASE_URL_MARKETPLACE_ERP is unset.
+        await ensure_marketplace_erp_schema()
+    except Exception:
+        logger.exception("marketplace_erp schema repair failed — app continues")
     yield
 
 

@@ -46,7 +46,7 @@ async def test_register_then_login(session):
 async def test_register_rejects_duplicate_email(session):
     await services.register_user(session, RegisterIn(nama="Owner", email="owner@test.com", password="rahasia123"))
     with pytest.raises(HTTPException) as exc_info:
-        await services.register_user(session, RegisterIn(nama="Owner2", email="owner@test.com", password="lainnya"))
+        await services.register_user(session, RegisterIn(nama="Owner2", email="owner@test.com", password="lainnya123"))
     assert exc_info.value.status_code == 409
 
 

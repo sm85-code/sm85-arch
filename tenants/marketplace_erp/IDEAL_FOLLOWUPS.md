@@ -30,6 +30,8 @@ Does **not** expand `tenants/toko`.
 | Encrypt shop tokens at rest | Open decision; DB already isolated |
 | Job runner (refresh tokens, pull orders) | Open decision (cron / ARQ / Celery) |
 | FE private repo (`frontend-marketplace-erp`) | Out of this backend PR |
+| Revoke other sessions on password change | `/auth/change-password` re-issues the caller's cookie, but older JWTs stay valid until expiry (token `session_version` is always 0 for this tenant) -- add a `session_version` column + check in `get_current_user_marketplace_erp` |
+| Server-side enforcement of `must_change_password` | Currently FE-driven (redirect to Ganti Password); backend could 403 non-auth endpoints while the flag is set |
 
 ## Non-goals (unchanged)
 

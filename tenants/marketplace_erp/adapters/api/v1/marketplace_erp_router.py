@@ -19,6 +19,7 @@ from tenants.marketplace_erp.modules.marketplace_erp.application.schemas import 
     AkunMarketplaceIn,
     AkunMarketplaceOut,
     AkunMarketplacePatch,
+    ChangePasswordIn,
     GudangOut,
     LoginIn,
     OAuthStartOut,
@@ -34,6 +35,7 @@ from tenants.marketplace_erp.modules.marketplace_erp.application.schemas import 
     RegisterIn,
     StokAdjustIn,
     StokLedgerOut,
+    UserCreateIn,
     UserOut,
 )
 from tenants.marketplace_erp.modules.marketplace_erp.infrastructure.auth import (
@@ -113,8 +115,26 @@ async def seed_now(
 # --- Auth ----------------------------------------------------------------
 
 
+def _public_register_enabled() -> bool:
+    """Public self-registration is OFF unless the operator opts in.
+
+    It used to be open to anyone and always created role=owner, i.e. a full
+    admin takeover of the tenant. Accounts are now created by an owner via
+    POST /users; the very first owner comes from /seed-now (seed secret).
+    """
+    return (os.getenv("MARKETPLACE_ERP_ALLOW_REGISTER") or "").strip().lower() in {"1", "true", "yes", "on"}
+
+
 @marketplace_erp_router.post("/auth/register", response_model=UserOut)
 async def register(payload: RegisterIn, session: AsyncSession = Depends(get_db_marketplace_erp)):
+    if not _public_register_enabled():
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail=(
+                "Registrasi publik dinonaktifkan. Minta owner membuatkan akun "
+                "(POST /api/marketplace-erp/users)."
+            ),
+        )
     user = await services.register_user(session, payload)
     return user
 
@@ -136,6 +156,46 @@ async def logout(response: Response):
 @marketplace_erp_router.get("/auth/me", response_model=UserOut)
 async def me(user: UserMarketplaceErp = Depends(get_current_user_marketplace_erp)):
     return user
+
+
+@marketplace_erp_router.post("/auth/change-password", response_model=UserOut)
+async def change_password(
+    payload: ChangePasswordIn,
+    response: Response,
+    session: AsyncSession = Depends(get_db_marketplace_erp),
+    user: UserMarketplaceErp = Depends(get_current_user_marketplace_erp),
+):
+    """Change the logged-in user's own password (any role).
+
+    Requires the current password; the new one must be >= 8 chars and differ
+    from the current one. Clears must_change_password and re-issues the
+    session cookie.
+    """
+    user = await services.change_password(session, user, payload)
+    set_marketplace_erp_cookie(response, issue_marketplace_erp_token(user))
+    return user
+
+
+# --- Users (owner-only account management) ----------------------------------
+
+
+@marketplace_erp_router.get("/users", response_model=list[UserOut])
+async def list_users(
+    session: AsyncSession = Depends(get_db_marketplace_erp),
+    _: UserMarketplaceErp = Depends(require_roles_marketplace_erp(*OWNER_ONLY)),
+):
+    return await services.list_users(session)
+
+
+@marketplace_erp_router.post("/users", response_model=UserOut, status_code=status.HTTP_201_CREATED)
+async def create_user(
+    payload: UserCreateIn,
+    session: AsyncSession = Depends(get_db_marketplace_erp),
+    _: UserMarketplaceErp = Depends(require_roles_marketplace_erp(*OWNER_ONLY)),
+):
+    """Owner creates a staff/owner account with a temporary password; the new
+    account gets must_change_password=true."""
+    return await services.create_user(session, payload)
 
 
 # --- Akun Marketplace ------------------------------------------------------

@@ -4,10 +4,28 @@ from datetime import datetime
 from decimal import Decimal
 from typing import Optional
 
-from pydantic import BaseModel, ConfigDict, EmailStr, Field
+from pydantic import BaseModel, ConfigDict, EmailStr, Field, field_validator
 
 
 # --- Auth -----------------------------------------------------------------
+
+
+PASSWORD_MIN_LENGTH = 8
+# bcrypt only looks at the first 72 bytes of the secret (and newer bcrypt
+# releases raise instead of silently truncating) -- cap it explicitly.
+PASSWORD_MAX_BYTES = 72
+
+USER_ROLES = ("owner", "staff")
+
+
+def _validate_new_password(value: str) -> str:
+    if len(value) < PASSWORD_MIN_LENGTH:
+        raise ValueError(f"Password minimal {PASSWORD_MIN_LENGTH} karakter")
+    if len(value.encode("utf-8")) > PASSWORD_MAX_BYTES:
+        raise ValueError(f"Password maksimal {PASSWORD_MAX_BYTES} byte")
+    if not value.strip():
+        raise ValueError("Password tidak boleh kosong")
+    return value
 
 
 class RegisterIn(BaseModel):
@@ -15,10 +33,47 @@ class RegisterIn(BaseModel):
     email: EmailStr
     password: str
 
+    @field_validator("password")
+    @classmethod
+    def _password_ok(cls, value: str) -> str:
+        return _validate_new_password(value)
+
+
+class UserCreateIn(BaseModel):
+    """Owner-only account creation (replaces public self-registration)."""
+
+    nama: str = Field(min_length=1, max_length=255)
+    email: EmailStr
+    password: str
+    role: str = "staff"
+
+    @field_validator("password")
+    @classmethod
+    def _password_ok(cls, value: str) -> str:
+        return _validate_new_password(value)
+
+    @field_validator("role")
+    @classmethod
+    def _role_ok(cls, value: str) -> str:
+        role = (value or "").strip().lower()
+        if role not in USER_ROLES:
+            raise ValueError(f"Role harus salah satu dari: {', '.join(USER_ROLES)}")
+        return role
+
 
 class LoginIn(BaseModel):
     email: EmailStr
     password: str
+
+
+class ChangePasswordIn(BaseModel):
+    current_password: str = Field(min_length=1)
+    new_password: str
+
+    @field_validator("new_password")
+    @classmethod
+    def _new_password_ok(cls, value: str) -> str:
+        return _validate_new_password(value)
 
 
 class UserOut(BaseModel):
@@ -26,6 +81,12 @@ class UserOut(BaseModel):
     nama: str
     email: str
     role: str
+    # True for the seeded default-password owner (and accounts an owner
+    # created with a temporary password) until they call
+    # POST /auth/change-password. FE redirects to "Ganti Password" on it.
+    must_change_password: bool = False
+
+    model_config = ConfigDict(from_attributes=True)
 
 
 # --- Akun Marketplace -------------------------------------------------------
