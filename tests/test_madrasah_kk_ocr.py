@@ -125,6 +125,12 @@ def test_parse_kartu_keluarga_extracts_all_rows():
     result = parse_kartu_keluarga(SAMPLE_KK_TEXT)
     assert result["nomor_kk"] == "3218090905170001"
     assert result["alamat_lengkap"] == "DUSUN WONOHARJO"
+    assert result["rt_rw"] == "001/012"
+    assert result["kode_pos"] == "46396"
+    assert result["desa_kelurahan"] == "WONOHARJO"
+    assert result["kecamatan"] == "PANGANDARAN"
+    assert result["kabupaten_kota"] == "PANGANDARAN"
+    assert result["provinsi"] == "JAWA BARAT"
     assert len(result["anggota"]) == 3
 
     ayah, ibu, anak = result["anggota"]
@@ -265,6 +271,12 @@ def test_parse_kartu_keluarga_column_major_ocr_layout():
     result = parse_kartu_keluarga(SAMPLE_KK_TEXT_COLUMN_MAJOR)
     assert result["nomor_kk"] == "3218090905170001"
     assert result["alamat_lengkap"] == "DUSUN WONOHARJO"
+    assert result["rt_rw"] == "001/012"
+    assert result["kode_pos"] == "46396"
+    assert result["desa_kelurahan"] == "WONOHARJO"
+    assert result["kecamatan"] == "PANGANDARAN"
+    assert result["kabupaten_kota"] == "PANGANDARAN"
+    assert result["provinsi"] == "JAWA BARAT"
     assert len(result["anggota"]) == 3
 
     ayah, ibu, anak = result["anggota"]
@@ -423,6 +435,12 @@ async def test_create_santri_persists_kependudukan_fields(session):
         nomor_kk="3201010101010001",
         nama_ayah="Ahmad Sudrajat",
         nama_ibu="Siti Aminah",
+        rt_rw="001/002",
+        kode_pos="40123",
+        desa_kelurahan="Sukamaju",
+        kecamatan="Coblong",
+        kabupaten_kota="Bandung",
+        provinsi="Jawa Barat",
     )
     row, _wali_username, _wali_password = await services.create_santri(session, payload)
     await session.flush()
@@ -438,6 +456,12 @@ async def test_create_santri_persists_kependudukan_fields(session):
     assert reloaded.nomor_kk == "3201010101010001"
     assert reloaded.nama_ayah == "Ahmad Sudrajat"
     assert reloaded.nama_ibu == "Siti Aminah"
+    assert reloaded.rt_rw == "001/002"
+    assert reloaded.kode_pos == "40123"
+    assert reloaded.desa_kelurahan == "Sukamaju"
+    assert reloaded.kecamatan == "Coblong"
+    assert reloaded.kabupaten_kota == "Bandung"
+    assert reloaded.provinsi == "Jawa Barat"
 
 
 @pytest.mark.asyncio
@@ -446,9 +470,12 @@ async def test_patch_santri_updates_kependudukan_fields(session):
     session.add(santri)
     await session.flush()
 
-    await services.patch_santri(session, santri.id, SantriPatch(nik="1234567890123456", jenis_kelamin="L"))
+    await services.patch_santri(
+        session, santri.id, SantriPatch(nik="1234567890123456", jenis_kelamin="L", kecamatan="Coblong")
+    )
     await session.flush()
 
     reloaded = await session.get(SantriMadrasah, santri.id)
     assert reloaded.nik == "1234567890123456"
     assert reloaded.jenis_kelamin == "L"
+    assert reloaded.kecamatan == "Coblong"

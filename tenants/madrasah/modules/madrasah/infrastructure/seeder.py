@@ -74,6 +74,12 @@ async def ensure_madrasah_schema() -> None:
             ("nomor_kk", "VARCHAR(32)"),
             ("nama_ayah", "VARCHAR(255)"),
             ("nama_ibu", "VARCHAR(255)"),
+            ("rt_rw", "VARCHAR(16)"),
+            ("kode_pos", "VARCHAR(16)"),
+            ("desa_kelurahan", "VARCHAR(128)"),
+            ("kecamatan", "VARCHAR(128)"),
+            ("kabupaten_kota", "VARCHAR(128)"),
+            ("provinsi", "VARCHAR(128)"),
         ):
             await conn.execute(text(f"ALTER TABLE IF EXISTS madrasah_santri ADD COLUMN IF NOT EXISTS {column} {ddl_type} NULL"))
         await conn.execute(

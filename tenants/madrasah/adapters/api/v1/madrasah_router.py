@@ -689,6 +689,12 @@ def _santri_kependudukan_out(row) -> dict:
         "nomor_kk": row.nomor_kk,
         "nama_ayah": row.nama_ayah,
         "nama_ibu": row.nama_ibu,
+        "rt_rw": row.rt_rw,
+        "kode_pos": row.kode_pos,
+        "desa_kelurahan": row.desa_kelurahan,
+        "kecamatan": row.kecamatan,
+        "kabupaten_kota": row.kabupaten_kota,
+        "provinsi": row.provinsi,
     }
 
 

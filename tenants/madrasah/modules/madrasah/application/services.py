@@ -1685,6 +1685,12 @@ async def create_santri(
         nomor_kk=payload.nomor_kk,
         nama_ayah=payload.nama_ayah,
         nama_ibu=payload.nama_ibu,
+        rt_rw=payload.rt_rw,
+        kode_pos=payload.kode_pos,
+        desa_kelurahan=payload.desa_kelurahan,
+        kecamatan=payload.kecamatan,
+        kabupaten_kota=payload.kabupaten_kota,
+        provinsi=payload.provinsi,
     )
     session.add(row)
     await session.flush()
@@ -1725,6 +1731,18 @@ async def patch_santri(session: AsyncSession, santri_id: str, payload: SantriPat
         row.nama_ayah = payload.nama_ayah
     if payload.nama_ibu is not None:
         row.nama_ibu = payload.nama_ibu
+    if payload.rt_rw is not None:
+        row.rt_rw = payload.rt_rw
+    if payload.kode_pos is not None:
+        row.kode_pos = payload.kode_pos
+    if payload.desa_kelurahan is not None:
+        row.desa_kelurahan = payload.desa_kelurahan
+    if payload.kecamatan is not None:
+        row.kecamatan = payload.kecamatan
+    if payload.kabupaten_kota is not None:
+        row.kabupaten_kota = payload.kabupaten_kota
+    if payload.provinsi is not None:
+        row.provinsi = payload.provinsi
     await session.flush()
     return row
 

@@ -43,6 +43,12 @@ from typing import Optional
 
 _NIK_RE = re.compile(r"\b(\d{16})\b")
 _NOMOR_KK_RE = re.compile(r"\bNo\s*\.?\s*(\d{16})\b", re.IGNORECASE)
+# The "K <11 digits>" print-control number in the form's top-right corner,
+# right before the header's second value block (Desa/Kecamatan/Kabupaten/
+# Provinsi) -- see _find_wilayah().
+_K_NUMBER_RE = re.compile(r"^K\s+\d{6,}$", re.IGNORECASE)
+_RT_RW_RE = re.compile(r"\b(\d{2,3}/\d{2,3})\b")
+_KODE_POS_RE = re.compile(r"^\d{5}$")
 # No trailing \b: OCR sometimes runs the year straight into the next word
 # with no space (e.g. "27-03-1992ISLAM"), and \b doesn't fire between two
 # word characters (digit -> letter). (?!\d) only rules out a longer number.
@@ -196,6 +202,54 @@ def _find_alamat(lines: list[str], nomor_kk: Optional[str], nama_kepala_keluarga
         if re.fullmatch(r"[A-Za-z][A-Za-z0-9 ./,'-]{3,79}", candidate):
             return candidate
     return None
+
+
+def _find_rt_rw(full_text: str) -> Optional[str]:
+    match = _RT_RW_RE.search(full_text)
+    return match.group(1) if match else None
+
+
+def _find_kode_pos(lines: list[str], nomor_kk: Optional[str]) -> Optional[str]:
+    """Like Alamat (see _find_alamat's docstring), Kode Pos's own label can
+    land anywhere relative to its value once OCR scrambles the header
+    block, so this searches from the nomor KK line forward instead of from
+    the "Kode Pos" label -- the value itself (a standalone 5-digit line)
+    is distinctive enough not to need the label as an anchor."""
+    if nomor_kk is None:
+        return None
+    start = next((i for i, line in enumerate(lines) if nomor_kk in line), None)
+    if start is None:
+        return None
+    for line in lines[start + 1 : start + 10]:
+        candidate = line.strip().lstrip(": ").strip()
+        if _KODE_POS_RE.fullmatch(candidate):
+            return candidate
+    return None
+
+
+def _find_wilayah(lines: list[str]) -> dict:
+    """Desa/Kelurahan, Kecamatan, Kabupaten/Kota and Provinsi. Like Alamat
+    (see _find_alamat), these 4 labels are listed together up top, then
+    their 4 values appear together later, in the same order -- but here
+    OCR's own scrambling (label N sometimes lands next to value M from a
+    DIFFERENT field entirely, verified against real captures) makes a
+    per-label search unreliable. The one steady anchor across every
+    capture seen so far: the form's "K <print-control number>" line sits
+    immediately before this specific value block, so this looks for that
+    instead of any label."""
+    empty = {"desa_kelurahan": None, "kecamatan": None, "kabupaten_kota": None, "provinsi": None}
+    k_idx = next((i for i, line in enumerate(lines) if _K_NUMBER_RE.match(line.strip())), None)
+    if k_idx is None:
+        return empty
+    values = []
+    for line in lines[k_idx + 1 : k_idx + 9]:
+        candidate = line.strip().lstrip(": ").strip()
+        if candidate and re.fullmatch(r"[A-Za-z][A-Za-z .'-]{1,59}", candidate):
+            values.append(candidate)
+        if len(values) == 4:
+            break
+    keys = ["desa_kelurahan", "kecamatan", "kabupaten_kota", "provinsi"]
+    return {key: (values[i] if i < len(values) else None) for i, key in enumerate(keys)}
 
 
 def _find_nama_before(lines: list[str], nik_idx: int, search_start: int, tempat_lahir: Optional[str]) -> Optional[str]:
@@ -380,9 +434,16 @@ def parse_kartu_keluarga(raw_text: str) -> dict:
         a["nama_ayah"] = ayah
         a["nama_ibu"] = ibu
 
+    wilayah = _find_wilayah(lines)
     return {
         "nomor_kk": nomor_kk,
         "alamat_lengkap": alamat_lengkap,
+        "rt_rw": _find_rt_rw(full_text),
+        "kode_pos": _find_kode_pos(lines, nomor_kk),
+        "desa_kelurahan": wilayah["desa_kelurahan"],
+        "kecamatan": wilayah["kecamatan"],
+        "kabupaten_kota": wilayah["kabupaten_kota"],
+        "provinsi": wilayah["provinsi"],
         "anggota": anggota,
         "raw_text": raw_text,
     }
