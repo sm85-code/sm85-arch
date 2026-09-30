@@ -568,3 +568,11 @@ def test_ocr_space_request_always_uses_table_mode(monkeypatch):
     monkeypatch.setattr(ocr_space_adapter.requests, "post", lambda *a, **kw: sent.update(kw) or R())
     ocr_space_adapter._parse_sync(b"img", "kk.jpg")
     assert sent["data"]["isTable"] is True
+
+
+def test_parse_kartu_keluarga_table_mode_circled_row_number():
+    text = """No . 3218090905170001
+(3) RAYYAN ATTAR HERMAWAN 3218092003180001 LAKI-LAKI PANGANDARAN 20-03-2018 ISLAM TIDAK/BLM SEKOLAH BELUM/TIDAK BEKERJA
+"""
+    a = parse_kartu_keluarga(text)["anggota"][0]
+    assert (a["nama"], a["tempat_lahir"], a["agama"]) == ("RAYYAN ATTAR HERMAWAN", "Pangandaran", "Islam")

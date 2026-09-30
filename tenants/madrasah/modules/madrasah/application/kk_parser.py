@@ -263,7 +263,7 @@ def _nama_on_nik_line(line: str, nik: str) -> Optional[str]:
     row number cell ("1 HERU HERMAWAN 3207..."). Returns None when nothing
     name-like precedes the NIK (the older one-cell-per-line layout)."""
     prefix = line.split(nik, 1)[0]
-    prefix = re.sub(r"^\s*\d{1,2}[.)]?\s+", "", prefix).strip(" :|")
+    prefix = re.sub(r"^\s*[(（]?\d{1,2}[.)）]?\s+", "", prefix).strip(" :|")
     if prefix and re.search(r"[A-Za-z]{2,}", prefix) and len(prefix) <= 60:
         return prefix
     return None
