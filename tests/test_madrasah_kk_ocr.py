@@ -9,7 +9,7 @@ from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker, create_asyn
 
 from adapters.external import ocr_space_adapter
 from tenants.madrasah.modules.madrasah.application import services
-from tenants.madrasah.modules.madrasah.application.kk_parser import parse_kartu_keluarga
+from tenants.madrasah.modules.madrasah.application.kk_parser import _tanggal_lahir_from_nik, parse_kartu_keluarga
 from tenants.madrasah.modules.madrasah.application.schemas import SantriIn, SantriPatch
 from tenants.madrasah.modules.madrasah.infrastructure.database import MadrasahBase
 from tenants.madrasah.modules.madrasah.infrastructure.models import SantriMadrasah
@@ -278,11 +278,12 @@ def test_parse_kartu_keluarga_column_major_ocr_layout():
     assert ibu["status_dalam_keluarga"] == "Istri"
 
     assert anak["nama"] == "RAYYAN ATTAR HERMAWAN"
-    # OCR misread this one date as "220-03-2018" (extra leading digit) --
-    # an unrecoverable corruption, not a parser bug; best-effort just means
-    # it comes back None here instead of a WRONG date, for the admin to
-    # fill in during the mandatory review step.
-    assert anak["tanggal_lahir"] is None
+    # OCR misread the printed date as "220-03-2018" (extra leading digit),
+    # but tanggal_lahir is derived from the NIK itself (see
+    # _tanggal_lahir_from_nik) whenever it parses to a plausible date, and
+    # that 16-digit NIK came through clean -- so the correct date still
+    # comes out despite the corrupted printed text.
+    assert anak["tanggal_lahir"] == date(2018, 3, 20)
     assert anak["status_dalam_keluarga"] == "Anak"
     assert anak["nama_ayah"] == "HERU HERMAWAN, S.IP"
     assert anak["nama_ibu"] == "ENDAH TRESNASARI"
@@ -356,6 +357,28 @@ CIAMIS
     result = parse_kartu_keluarga(text)
     for anggota in result["anggota"]:
         assert anggota["nama"] not in {"LAKI-LAKI", "PEREMPUAN", "ISLAM"}
+
+
+def test_tanggal_lahir_from_nik_male():
+    # HERU HERMAWAN's real NIK: digits 7-12 = 220592 -> 22-05-1992, male (day <= 40).
+    assert _tanggal_lahir_from_nik("3207222205920002") == date(1992, 5, 22)
+
+
+def test_tanggal_lahir_from_nik_female_subtracts_40_from_day():
+    # ENDAH TRESNASARI's real NIK: digits 7-12 = 670392 -> day 67-40=27, 27-03-1992.
+    assert _tanggal_lahir_from_nik("3207226703920002") == date(1992, 3, 27)
+
+
+def test_tanggal_lahir_from_nik_2000s_year():
+    # RAYYAN's real NIK: digits 7-12 = 200318 -> 20-03-2018.
+    assert _tanggal_lahir_from_nik("3218092003180001") == date(2018, 3, 20)
+
+
+def test_tanggal_lahir_from_nik_invalid_returns_none():
+    assert _tanggal_lahir_from_nik("not-a-nik") is None
+    assert _tanggal_lahir_from_nik("1234567899991234") is None  # month 99, day 99-40=59: invalid
+    assert _tanggal_lahir_from_nik("") is None
+    assert _tanggal_lahir_from_nik(None) is None
 
 
 def test_ocr_space_adapter_not_configured_without_api_key(monkeypatch):
