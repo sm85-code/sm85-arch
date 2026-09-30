@@ -27,6 +27,12 @@ from tenants.marketplace_erp.modules.marketplace_erp.application.schemas import 
     ChangePasswordIn,
     GudangIn,
     GudangOut,
+    IklanCampaignIn,
+    IklanCampaignOut,
+    IklanCampaignPatch,
+    IklanLaporanOut,
+    IklanMetrikHarianIn,
+    IklanMetrikHarianOut,
     LaporanRingkasOut,
     LoginIn,
     OAuthStartOut,
@@ -697,3 +703,87 @@ async def laporan_ringkas(
     if sampai < dari:
         raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="sampai sebelum dari")
     return await services.laporan_ringkas(session, dari=dari, sampai=sampai, batas_stok_kritis=batas_stok_kritis)
+
+
+# --- Tahap 4: Iklan (ads) -------------------------------------------------------
+
+
+@marketplace_erp_router.get("/iklan", response_model=list[IklanCampaignOut])
+async def list_campaign(
+    akun_id: str | None = None,
+    platform: str | None = None,
+    status_filter: str | None = Query(None, alias="status"),
+    session: AsyncSession = Depends(get_db_marketplace_erp),
+    _: UserMarketplaceErp = Depends(require_roles_marketplace_erp(*OWNER_ONLY)),
+):
+    return await services.list_campaign(session, akun_id=akun_id, platform=platform, status_filter=status_filter)
+
+
+@marketplace_erp_router.post("/iklan", response_model=IklanCampaignOut, status_code=status.HTTP_201_CREATED)
+async def create_campaign(
+    payload: IklanCampaignIn,
+    session: AsyncSession = Depends(get_db_marketplace_erp),
+    _: UserMarketplaceErp = Depends(require_roles_marketplace_erp(*OWNER_ONLY)),
+):
+    return await services.create_campaign(session, payload)
+
+
+@marketplace_erp_router.get("/iklan/{campaign_id}", response_model=IklanCampaignOut)
+async def get_campaign(
+    campaign_id: str,
+    session: AsyncSession = Depends(get_db_marketplace_erp),
+    _: UserMarketplaceErp = Depends(require_roles_marketplace_erp(*OWNER_ONLY)),
+):
+    return await services.get_campaign(session, campaign_id)
+
+
+@marketplace_erp_router.patch("/iklan/{campaign_id}", response_model=IklanCampaignOut)
+async def update_campaign(
+    campaign_id: str,
+    payload: IklanCampaignPatch,
+    session: AsyncSession = Depends(get_db_marketplace_erp),
+    _: UserMarketplaceErp = Depends(require_roles_marketplace_erp(*OWNER_ONLY)),
+):
+    return await services.update_campaign(session, campaign_id, payload)
+
+
+@marketplace_erp_router.delete("/iklan/{campaign_id}")
+async def delete_campaign(
+    campaign_id: str,
+    session: AsyncSession = Depends(get_db_marketplace_erp),
+    _: UserMarketplaceErp = Depends(require_roles_marketplace_erp(*OWNER_ONLY)),
+):
+    await services.delete_campaign(session, campaign_id)
+    return {"ok": True}
+
+
+@marketplace_erp_router.post("/iklan/{campaign_id}/metrik", response_model=IklanMetrikHarianOut)
+async def record_metrik_harian(
+    campaign_id: str,
+    payload: IklanMetrikHarianIn,
+    session: AsyncSession = Depends(get_db_marketplace_erp),
+    _: UserMarketplaceErp = Depends(require_roles_marketplace_erp(*OWNER_ONLY)),
+):
+    return await services.record_metrik_harian(session, campaign_id, payload)
+
+
+@marketplace_erp_router.get("/iklan/{campaign_id}/metrik", response_model=list[IklanMetrikHarianOut])
+async def list_metrik_harian(
+    campaign_id: str,
+    session: AsyncSession = Depends(get_db_marketplace_erp),
+    _: UserMarketplaceErp = Depends(require_roles_marketplace_erp(*OWNER_ONLY)),
+):
+    return await services.list_metrik_harian(session, campaign_id)
+
+
+@marketplace_erp_router.get("/iklan/{campaign_id}/laporan", response_model=IklanLaporanOut)
+async def laporan_iklan(
+    campaign_id: str,
+    dari: datetime = Query(...),
+    sampai: datetime = Query(...),
+    session: AsyncSession = Depends(get_db_marketplace_erp),
+    _: UserMarketplaceErp = Depends(require_roles_marketplace_erp(*OWNER_ONLY)),
+):
+    if sampai < dari:
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="sampai sebelum dari")
+    return await services.laporan_iklan(session, campaign_id, dari=dari, sampai=sampai)

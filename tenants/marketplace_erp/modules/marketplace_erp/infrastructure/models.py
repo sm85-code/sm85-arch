@@ -317,3 +317,66 @@ class Settlement(MarketplaceErpBase):
     updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=_utcnow, onupdate=_utcnow)
 
     akun: Mapped["AkunMarketplace"] = relationship()
+
+
+# --- Tahap 4: iklan (ads) ----------------------------------------------------
+
+STATUS_IKLAN = ("draft", "aktif", "dijeda", "selesai")
+
+
+class IklanCampaign(MarketplaceErpBase):
+    """One ad campaign on one shop/platform. Spend is entered manually per
+    day (`IklanMetrikHarian`) -- no ads API is wired yet (Shopee Ads/TikTok
+    Ads/Lazada Sponsored Discovery/Blibli Ads all require their own,
+    separate partner approval from the shop OAuth this tenant already has).
+
+    Optional `produk_id` is what turns this from "a spend tracker" into an
+    ERP feature: linking a campaign to the SKU it promotes lets
+    application/services.py compute ROAS from *actual* Pesanan/ItemPesanan
+    data for that produk in the campaign's window, not a number the owner
+    has to enter by hand."""
+
+    __tablename__ = "mpe_iklan_campaign"
+
+    id: Mapped[str] = mapped_column(String(64), primary_key=True, default=_uuid)
+    akun_id: Mapped[str] = mapped_column(
+        String(64), ForeignKey("mpe_akun_marketplace.id", ondelete="CASCADE"), nullable=False, index=True
+    )
+    platform: Mapped[str] = mapped_column(String(16), nullable=False, index=True)
+    produk_id: Mapped[Optional[str]] = mapped_column(
+        String(64), ForeignKey("mpe_produk.id", ondelete="SET NULL"), nullable=True, index=True
+    )
+    nama: Mapped[str] = mapped_column(String(255), nullable=False)
+    status: Mapped[str] = mapped_column(String(16), nullable=False, default="draft", index=True)
+    budget_harian: Mapped[Decimal] = mapped_column(Numeric(20, 2), nullable=False, default=Decimal("0"))
+    tanggal_mulai: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
+    tanggal_selesai: Mapped[Optional[datetime]] = mapped_column(DateTime(timezone=True), nullable=True)
+    catatan: Mapped[Optional[str]] = mapped_column(Text, nullable=True)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=_utcnow)
+    updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=_utcnow, onupdate=_utcnow)
+
+    akun: Mapped["AkunMarketplace"] = relationship()
+    produk: Mapped[Optional["Produk"]] = relationship()
+    metrik: Mapped[list["IklanMetrikHarian"]] = relationship(back_populates="campaign")
+
+
+class IklanMetrikHarian(MarketplaceErpBase):
+    """One row per (campaign, tanggal) -- manual daily entry of impression/
+    klik/biaya from the platform's own ads dashboard. Upsert on that pair so
+    re-entering the same day corrects it instead of duplicating."""
+
+    __tablename__ = "mpe_iklan_metrik_harian"
+    __table_args__ = (UniqueConstraint("campaign_id", "tanggal", name="uq_mpe_iklan_metrik_campaign_tanggal"),)
+
+    id: Mapped[str] = mapped_column(String(64), primary_key=True, default=_uuid)
+    campaign_id: Mapped[str] = mapped_column(
+        String(64), ForeignKey("mpe_iklan_campaign.id", ondelete="CASCADE"), nullable=False, index=True
+    )
+    tanggal: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False, index=True)
+    impression: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
+    klik: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
+    biaya: Mapped[Decimal] = mapped_column(Numeric(20, 2), nullable=False, default=Decimal("0"))
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=_utcnow)
+    updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=_utcnow, onupdate=_utcnow)
+
+    campaign: Mapped["IklanCampaign"] = relationship(back_populates="metrik")
