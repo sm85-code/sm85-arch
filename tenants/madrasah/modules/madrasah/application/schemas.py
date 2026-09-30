@@ -73,6 +73,20 @@ class SantriIn(BaseModel):
     orang_tua_id: Optional[str] = None
     no_hp_wali: Optional[str] = None
     madrasah_unit_id: Optional[str] = None
+    # Data kependudukan -- opsional, diisi manual atau diprefill dari hasil
+    # OCR Kartu Keluarga setelah admin memverifikasi/mengedit (lihat
+    # POST .../kk/ocr dan kk_parser.py). Backend TIDAK PERNAH menyimpan hasil
+    # OCR langsung; ini selalu lewat form yang sudah direview manusia.
+    nik: Optional[str] = None
+    tempat_lahir: Optional[str] = None
+    tanggal_lahir: Optional[date] = None
+    jenis_kelamin: Optional[Literal["L", "P"]] = None
+    agama: Optional[str] = None
+    status_dalam_keluarga: Optional[str] = None
+    alamat_lengkap: Optional[str] = None
+    nomor_kk: Optional[str] = None
+    nama_ayah: Optional[str] = None
+    nama_ibu: Optional[str] = None
 
 
 class PlacementIn(BaseModel):
@@ -103,6 +117,39 @@ class SantriPatch(BaseModel):
     nama: Optional[str] = None
     rombel_id: Optional[str] = None
     orang_tua_id: Optional[str] = None
+    nik: Optional[str] = None
+    tempat_lahir: Optional[str] = None
+    tanggal_lahir: Optional[date] = None
+    jenis_kelamin: Optional[Literal["L", "P"]] = None
+    agama: Optional[str] = None
+    status_dalam_keluarga: Optional[str] = None
+    alamat_lengkap: Optional[str] = None
+    nomor_kk: Optional[str] = None
+    nama_ayah: Optional[str] = None
+    nama_ibu: Optional[str] = None
+
+
+class KkAnggotaKeluarga(BaseModel):
+    """Satu baris anggota keluarga hasil parsing OCR Kartu Keluarga, belum
+    disimpan -- hanya ditampilkan ke admin untuk dipilih & diverifikasi."""
+
+    baris: int
+    nama: Optional[str] = None
+    nik: Optional[str] = None
+    tempat_lahir: Optional[str] = None
+    tanggal_lahir: Optional[date] = None
+    jenis_kelamin: Optional[Literal["L", "P"]] = None
+    agama: Optional[str] = None
+    status_dalam_keluarga: Optional[str] = None
+    nama_ayah: Optional[str] = None
+    nama_ibu: Optional[str] = None
+
+
+class KkOcrResult(BaseModel):
+    nomor_kk: Optional[str] = None
+    alamat_lengkap: Optional[str] = None
+    anggota: list[KkAnggotaKeluarga] = []
+    raw_text: str = ""
 
 
 class RombelPatch(BaseModel):

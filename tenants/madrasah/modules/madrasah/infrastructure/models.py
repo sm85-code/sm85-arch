@@ -220,6 +220,22 @@ class SantriMadrasah(MadrasahBase):
         String(64), ForeignKey("madrasah_unit.id", ondelete="SET NULL"), nullable=True, index=True
     )
 
+    # Data kependudukan, diisi manual atau lewat verifikasi hasil OCR Kartu
+    # Keluarga (lihat kk_parser.py) -- semua opsional karena santri lama
+    # sudah ada tanpa kolom-kolom ini. Kolom ditambahkan lewat ALTER TABLE
+    # ADD COLUMN IF NOT EXISTS di ensure_madrasah_schema(), create_all tidak
+    # menyentuh tabel yang sudah ada.
+    nik: Mapped[Optional[str]] = mapped_column(String(32), nullable=True)
+    tempat_lahir: Mapped[Optional[str]] = mapped_column(String(128), nullable=True)
+    tanggal_lahir: Mapped[Optional[date]] = mapped_column(Date, nullable=True)
+    jenis_kelamin: Mapped[Optional[str]] = mapped_column(String(16), nullable=True)
+    agama: Mapped[Optional[str]] = mapped_column(String(32), nullable=True)
+    status_dalam_keluarga: Mapped[Optional[str]] = mapped_column(String(32), nullable=True)
+    alamat_lengkap: Mapped[Optional[str]] = mapped_column(Text, nullable=True)
+    nomor_kk: Mapped[Optional[str]] = mapped_column(String(32), nullable=True)
+    nama_ayah: Mapped[Optional[str]] = mapped_column(String(255), nullable=True)
+    nama_ibu: Mapped[Optional[str]] = mapped_column(String(255), nullable=True)
+
     kelas: Mapped[Optional["KelasMadrasah"]] = relationship(back_populates="santri")
     rombel: Mapped[Optional["RombelMadrasah"]] = relationship(back_populates="santri")
     orang_tua: Mapped[Optional["UserMadrasah"]] = relationship(back_populates="santri_asuh")

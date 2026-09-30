@@ -62,6 +62,20 @@ async def ensure_madrasah_schema() -> None:
             text("ALTER TABLE IF EXISTS madrasah_santri ADD COLUMN IF NOT EXISTS status VARCHAR(16) NOT NULL DEFAULT 'aktif'")
         )
         await conn.execute(text("ALTER TABLE IF EXISTS madrasah_santri ADD COLUMN IF NOT EXISTS tanggal_status DATE NULL"))
+        # Data kependudukan (KK OCR + verifikasi manual) -- lihat kk_parser.py.
+        for column, ddl_type in (
+            ("nik", "VARCHAR(32)"),
+            ("tempat_lahir", "VARCHAR(128)"),
+            ("tanggal_lahir", "DATE"),
+            ("jenis_kelamin", "VARCHAR(16)"),
+            ("agama", "VARCHAR(32)"),
+            ("status_dalam_keluarga", "VARCHAR(32)"),
+            ("alamat_lengkap", "TEXT"),
+            ("nomor_kk", "VARCHAR(32)"),
+            ("nama_ayah", "VARCHAR(255)"),
+            ("nama_ibu", "VARCHAR(255)"),
+        ):
+            await conn.execute(text(f"ALTER TABLE IF EXISTS madrasah_santri ADD COLUMN IF NOT EXISTS {column} {ddl_type} NULL"))
         await conn.execute(
             text("ALTER TABLE IF EXISTS madrasah_guru_mapel_rombel ADD COLUMN IF NOT EXISTS tarif_per_sesi NUMERIC(20,2) NULL")
         )
