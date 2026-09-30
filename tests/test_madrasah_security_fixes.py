@@ -14,11 +14,13 @@ import pytest_asyncio
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker, create_async_engine
 
 from tenants.madrasah.modules.madrasah.application import services
+from tenants.madrasah.modules.madrasah.application.schemas import MateriPatch
 from tenants.madrasah.modules.madrasah.infrastructure.database import MadrasahBase
 from tenants.madrasah.modules.madrasah.infrastructure.models import (
     AbsensiMadrasah,
     GuruMapelRombel,
     MapelMadrasah,
+    MateriTarget,
     RombelMadrasah,
     SantriMadrasah,
     TagihanSyahriyah,
@@ -65,6 +67,69 @@ async def test_guru_mapel_tidak_bisa_lihat_rekap_mapel_lain(session):
     # TIDAK boleh lihat rekap mapel lain di rombel yang sama
     with pytest.raises(services.MadrasahForbiddenError):
         await services.rekap_absensi_mapel(session, rombel.id, mapel_a2.id, guru_a1)
+
+
+@pytest.mark.asyncio
+async def test_guru_mapel_hanya_melihat_mapel_yang_ditugaskan(session):
+    """Portal Guru Mapel (GET /guru-mapel/mapel-saya) harus hanya
+    menampilkan mapel yang benar-benar diampu guru ini, bukan semua mapel
+    madrasah -- sebelumnya guru tidak punya cara sama sekali untuk melihat
+    mapel/materi ampuannya lewat portal ini."""
+    guru = UserMadrasah(nama="Guru Fikih", no_hp="081200000020", password_hash="x", role="guru")
+    session.add(guru)
+    await session.flush()
+
+    rombel = RombelMadrasah(nama="Kelas A")
+    mapel_diampu = MapelMadrasah(kode="FQH", nama="Fikih")
+    mapel_lain = MapelMadrasah(kode="AQD", nama="Aqidah")
+    session.add_all([rombel, mapel_diampu, mapel_lain])
+    await session.flush()
+    session.add(MateriTarget(mapel_id=mapel_diampu.id, judul="Thaharah", urutan=1))
+    session.add(GuruMapelRombel(guru_id=guru.id, mapel_id=mapel_diampu.id, rombel_id=rombel.id))
+    await session.flush()
+
+    hasil = await services.list_mapel_untuk_guru(session, guru.id)
+    assert [m.id for m in hasil] == [mapel_diampu.id]
+    assert hasil[0].materi[0].judul == "Thaharah"
+
+
+@pytest.mark.asyncio
+async def test_guru_mapel_bisa_edit_materi_mapel_sendiri(session):
+    guru = UserMadrasah(nama="Guru Fikih", no_hp="081200000021", password_hash="x", role="guru")
+    session.add(guru)
+    await session.flush()
+
+    rombel = RombelMadrasah(nama="Kelas A")
+    mapel = MapelMadrasah(kode="FQH", nama="Fikih")
+    session.add_all([rombel, mapel])
+    await session.flush()
+    materi = MateriTarget(mapel_id=mapel.id, judul="Thaharah", urutan=1)
+    session.add(materi)
+    session.add(GuruMapelRombel(guru_id=guru.id, mapel_id=mapel.id, rombel_id=rombel.id))
+    await session.flush()
+
+    updated = await services.patch_materi_untuk_guru(session, guru.id, materi.id, MateriPatch(judul="Thaharah (Bersuci)"))
+    assert updated.judul == "Thaharah (Bersuci)"
+
+
+@pytest.mark.asyncio
+async def test_guru_mapel_tidak_bisa_edit_materi_mapel_lain(session):
+    guru = UserMadrasah(nama="Guru Fikih", no_hp="081200000022", password_hash="x", role="guru")
+    session.add(guru)
+    await session.flush()
+
+    rombel = RombelMadrasah(nama="Kelas A")
+    mapel_diampu = MapelMadrasah(kode="FQH", nama="Fikih")
+    mapel_lain = MapelMadrasah(kode="AQD", nama="Aqidah")
+    session.add_all([rombel, mapel_diampu, mapel_lain])
+    await session.flush()
+    materi_lain = MateriTarget(mapel_id=mapel_lain.id, judul="Tauhid", urutan=1)
+    session.add(materi_lain)
+    session.add(GuruMapelRombel(guru_id=guru.id, mapel_id=mapel_diampu.id, rombel_id=rombel.id))
+    await session.flush()
+
+    with pytest.raises(services.MadrasahForbiddenError):
+        await services.patch_materi_untuk_guru(session, guru.id, materi_lain.id, MateriPatch(judul="Diganti"))
 
 
 @pytest.mark.asyncio

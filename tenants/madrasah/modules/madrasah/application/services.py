@@ -2369,6 +2369,51 @@ async def patch_materi(session: AsyncSession, materi_id: str, payload: MateriPat
     return row
 
 
+async def list_mapel_untuk_guru(session: AsyncSession, guru_id: str) -> list[MapelMadrasah]:
+    """Mapel yang ditugaskan ke guru ini (lewat GuruMapelRombel), lintas
+    rombel/unit -- dipakai portal Guru Mapel supaya guru hanya melihat mapel
+    yang benar-benar dia ajar, bukan semua mapel madrasah."""
+    mapel_ids = (
+        await session.execute(select(GuruMapelRombel.mapel_id).where(GuruMapelRombel.guru_id == guru_id).distinct())
+    ).scalars().all()
+    if not mapel_ids:
+        return []
+    stmt = (
+        select(MapelMadrasah)
+        .options(selectinload(MapelMadrasah.materi))
+        .where(MapelMadrasah.id.in_(mapel_ids))
+        .order_by(MapelMadrasah.nama)
+    )
+    return list((await session.execute(stmt)).scalars())
+
+
+async def patch_materi_untuk_guru(session: AsyncSession, guru_id: str, materi_id: str, payload: MateriPatch) -> MateriTarget:
+    """Versi terbatas patch_materi untuk guru mapel: hanya boleh untuk materi
+    dari mapel yang benar-benar ditugaskan ke guru ini (lihat
+    list_mapel_untuk_guru) -- defense in depth, jangan percaya begitu saja
+    materi_id dari request."""
+    row = await session.get(MateriTarget, materi_id)
+    if not row:
+        raise MadrasahNotFoundError("Materi tidak ditemukan")
+    ditugaskan = (
+        await session.execute(
+            select(GuruMapelRombel.id).where(
+                GuruMapelRombel.guru_id == guru_id, GuruMapelRombel.mapel_id == row.mapel_id
+            )
+        )
+    ).first()
+    if not ditugaskan:
+        raise MadrasahForbiddenError("Anda tidak ditugaskan untuk mapel ini")
+    if payload.judul is not None:
+        row.judul = payload.judul
+    if payload.urutan is not None:
+        row.urutan = payload.urutan
+    if payload.aktif is not None:
+        row.aktif = payload.aktif
+    await session.flush()
+    return row
+
+
 async def list_jadwal(session: AsyncSession, rombel_id: str | None = None, unit_id: str | None = None) -> list[JadwalMadrasah]:
     stmt = select(JadwalMadrasah).options(selectinload(JadwalMadrasah.mapel), selectinload(JadwalMadrasah.rombel))
     if rombel_id:
