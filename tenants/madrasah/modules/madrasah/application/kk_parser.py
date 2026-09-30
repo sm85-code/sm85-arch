@@ -171,12 +171,23 @@ def _find_alamat(lines: list[str], nomor_kk: Optional[str]) -> Optional[str]:
     return None
 
 
-def _find_nama_before(lines: list[str], nik_idx: int, search_start: int) -> Optional[str]:
+def _find_nama_before(lines: list[str], nik_idx: int, search_start: int, tempat_lahir: Optional[str]) -> Optional[str]:
+    """Scans backward from the NIK line for the nearest line that's plausibly
+    a person's name -- skipping header/column labels, paren column markers,
+    and (importantly) lines that are actually OTHER fields: a jenis
+    kelamin/agama keyword, a date, another NIK, or the same value already
+    identified as this person's tempat_lahir (OCR sometimes drops the name
+    line entirely, which would otherwise make "CIAMIS" look like the
+    nearest candidate)."""
+    tempat_upper = tempat_lahir.upper() if tempat_lahir else None
     for i in range(nik_idx - 1, search_start - 1, -1):
         candidate = lines[i].strip()
         if not candidate or _PAREN_MARKER_RE.match(candidate):
             continue
-        if candidate.upper() in _HEADER_STOPWORDS:
+        upper = candidate.upper()
+        if upper in _HEADER_STOPWORDS or upper == tempat_upper:
+            continue
+        if _find_jenis_kelamin(candidate) or _find_agama(candidate) or _DATE_RE.search(candidate) or _NIK_RE.search(candidate):
             continue
         candidate = candidate.lstrip(": ").strip()
         if candidate and re.search(r"[A-Za-z]{2,}", candidate) and len(candidate) <= 60:
@@ -224,17 +235,23 @@ def parse_kartu_keluarga(raw_text: str) -> dict:
 
     anggota = []
     for person_index, (line_idx, nik) in enumerate(nik_positions):
-        window_start = max(0, line_idx - 2)
+        prev_end = nik_positions[person_index - 1][0] + 1 if person_index > 0 else 0
+        # Look back a bit further than one line -- OCR occasionally drops
+        # the name line entirely, and the fallback in _find_nama_before
+        # (skipping known-other-field lines) needs room to reach the real
+        # name instead of stopping at the first thing it sees.
+        window_start = max(prev_end, line_idx - 4)
         window_end = nik_positions[person_index + 1][0] if person_index + 1 < len(nik_positions) else min(len(lines), line_idx + 6)
         lines_from_nik = lines[line_idx:window_end]
         window_text = "\n".join(lines_from_nik)
 
+        tempat_lahir = _find_tempat_lahir(lines_from_nik)
         anggota.append(
             {
                 "baris": person_index + 1,
-                "nama": _find_nama_before(lines, line_idx, window_start),
+                "nama": _find_nama_before(lines, line_idx, window_start, tempat_lahir),
                 "nik": nik,
-                "tempat_lahir": _find_tempat_lahir(lines_from_nik),
+                "tempat_lahir": tempat_lahir,
                 "tanggal_lahir": _parse_tanggal(window_text),
                 "jenis_kelamin": _find_jenis_kelamin(window_text),
                 "agama": _find_agama(window_text),
