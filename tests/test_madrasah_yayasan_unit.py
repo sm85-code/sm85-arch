@@ -22,6 +22,7 @@ from tenants.madrasah.modules.madrasah.application.schemas import (
     SantriIn,
     TingkatIn,
 )
+from tenants.madrasah.adapters.api.v1.madrasah_router import admin_santri_create
 from tenants.madrasah.modules.madrasah.infrastructure.database import MadrasahBase
 from tenants.madrasah.modules.madrasah.infrastructure.models import RombelMadrasah, SantriMadrasah, TingkatMadrasah, UserMadrasah
 
@@ -96,6 +97,33 @@ async def test_create_functions_respect_explicit_unit(session):
 
     rombel = await services.create_rombel(session, RombelIn(nama="Jilid 3 Cabang", madrasah_unit_id=unit_b.id))
     assert rombel.madrasah_unit_id == unit_b.id
+
+
+@pytest.mark.asyncio
+async def test_admin_santri_create_endpoint_uses_selected_unit_from_query(session):
+    """Regresi: admin login lintas-unit (frontend memilih unit lewat dropdown,
+    dikirim sebagai ?unit_id= oleh axios interceptor) mendaftarkan santri di
+    unit yang SEDANG DIPILIH, bukan jatuh ke unit lain. Sebelum perbaikan ini,
+    endpoint POST /admin/santri tidak membaca query unit_id sama sekali
+    (berbeda dari endpoint admin lain seperti kegiatan/pengumuman), sehingga
+    create_santri() jatuh ke default unit caller."""
+    await services.ensure_default_unit_and_backfill(session)
+    unit_a = (await services.list_unit(session))[0]
+    unit_b = await services.create_unit(session, MadrasahUnitIn(nama="Unit Cabang"))
+
+    admin = UserMadrasah(nama="Admin Yayasan", no_hp="081377770099", password_hash="x", role="admin")
+    session.add(admin)
+    await session.flush()
+
+    created = await admin_santri_create(
+        payload=SantriIn(nama="Santri Pilih Unit"),
+        unit_id=unit_b.id,
+        session=session,
+        user=admin,
+    )
+
+    assert created["madrasah_unit_id"] == unit_b.id
+    assert created["madrasah_unit_id"] != unit_a.id
 
 
 @pytest.mark.asyncio

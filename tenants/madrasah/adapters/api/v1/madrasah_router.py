@@ -727,9 +727,11 @@ async def admin_santri_kk_ocr(
 @admin_r.post("/santri", status_code=status.HTTP_201_CREATED)
 async def admin_santri_create(
     payload: SantriIn,
+    unit_id: str | None = Query(default=None),
     session: AsyncSession = Depends(get_db_madrasah),
     user: UserMadrasah = Depends(require_roles_madrasah(*SANTRI_WRITE_ROLES)),
 ):
+    payload = _unit_dari_query(payload, unit_id)
     try:
         row, wali_username, wali_password = await services.create_santri(session, payload, caller=user)
     except services.MadrasahForbiddenError as exc:
