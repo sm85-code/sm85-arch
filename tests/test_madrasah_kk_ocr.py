@@ -513,3 +513,28 @@ async def test_patch_santri_reuses_existing_wali_with_same_name(session):
     assert wali_username == "081200000099"
     # No new password is generated when an existing account is reused.
     assert wali_password is None
+
+
+@pytest.mark.asyncio
+async def test_wali_password_is_santri_birthdate_ddmmyy(session):
+    """Password acak sebelumnya tidak pernah ditampilkan lagi setelah
+    notifikasi awal hilang, jadi admin tidak bisa menjawab saat wali lupa
+    akunnya. Password wali baru sekarang = tanggal lahir santri (ddmmyy),
+    sesuatu yang admin selalu bisa lihat lagi di data santri."""
+    santri = SantriMadrasah(nama="Rayyan", nama_ayah="Heru Hermawan", tanggal_lahir=date(2018, 3, 20))
+    session.add(santri)
+    await session.flush()
+
+    _row, _wali_username, wali_password = await services.patch_santri(session, santri.id, SantriPatch(nama_wali="Heru Hermawan"))
+    assert wali_password == "200318"
+
+
+@pytest.mark.asyncio
+async def test_wali_password_falls_back_to_random_without_birthdate(session):
+    santri = SantriMadrasah(nama="Rayyan", nama_ayah="Heru Hermawan")
+    session.add(santri)
+    await session.flush()
+
+    _row, _wali_username, wali_password = await services.patch_santri(session, santri.id, SantriPatch(nama_wali="Heru Hermawan"))
+    assert wali_password
+    assert wali_password != "200318"

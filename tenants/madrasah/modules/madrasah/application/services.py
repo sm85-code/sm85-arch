@@ -1630,6 +1630,7 @@ async def _cari_atau_buat_wali(
     unit_id: str | None,
     caller: UserMadrasah | None,
     no_hp_wali: str | None = None,
+    tanggal_lahir_santri: date | None = None,
 ) -> tuple[UserMadrasah, str | None]:
     nama = nama_wali.strip()
     stmt = select(UserMadrasah).where(
@@ -1641,7 +1642,10 @@ async def _cari_atau_buat_wali(
     existing = (await session.execute(stmt)).scalars().first()
     if existing:
         return existing, None
-    generated = _generate_password()
+    # Password default = tanggal lahir santri (ddmmyy) supaya admin bisa
+    # menjawab saat wali lupa/menanyakan akunnya -- password acak sebelumnya
+    # tidak pernah tersimpan/ditampilkan lagi setelah notifikasi awal hilang.
+    generated = tanggal_lahir_santri.strftime("%d%m%y") if tanggal_lahir_santri else _generate_password()
     slug = re.sub(r"[^a-z0-9]+", "", nama.lower())[:12] or "wali"
     username = (no_hp_wali or "").strip() or f"{slug}.{secrets.token_hex(2)}"
     row = UserMadrasah(
@@ -1665,7 +1669,7 @@ async def create_santri(
     orang_tua_id = payload.orang_tua_id
     if not orang_tua_id and payload.nama_wali:
         wali, wali_password = await _cari_atau_buat_wali(
-            session, payload.nama_wali, unit_id, caller, payload.no_hp_wali
+            session, payload.nama_wali, unit_id, caller, payload.no_hp_wali, payload.tanggal_lahir
         )
         orang_tua_id = wali.id
         wali_username = wali.no_hp
@@ -1719,7 +1723,9 @@ async def patch_santri(
         # Cari/buat wali di unit yang sama dengan santri ini -- dipakai untuk
         # mengikat wali dari nama ayah/ibu hasil OCR KK setelah santri sudah
         # tersimpan (lihat AdminSantriPage: dropdown Wali Santri).
-        wali, wali_password = await _cari_atau_buat_wali(session, payload.nama_wali, row.madrasah_unit_id, None, payload.no_hp_wali)
+        wali, wali_password = await _cari_atau_buat_wali(
+            session, payload.nama_wali, row.madrasah_unit_id, None, payload.no_hp_wali, row.tanggal_lahir
+        )
         row.orang_tua_id = wali.id
         wali_username = wali.no_hp
     if payload.nik is not None:
