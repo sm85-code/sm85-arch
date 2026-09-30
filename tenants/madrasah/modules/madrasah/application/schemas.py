@@ -123,6 +123,12 @@ class SantriPatch(BaseModel):
     nama: Optional[str] = None
     rombel_id: Optional[str] = None
     orang_tua_id: Optional[str] = None
+    # Membuat/mengikat akun wali dari sekadar nama (mis. nama ayah/ibu hasil
+    # OCR KK) -- sama seperti alur SantriIn.nama_wali saat pendaftaran, tapi
+    # dipakai setelah santri sudah tersimpan tanpa wali. no_hp_wali opsional;
+    # kosong -> username digenerate otomatis (lihat services._cari_atau_buat_wali).
+    nama_wali: Optional[str] = None
+    no_hp_wali: Optional[str] = None
     nik: Optional[str] = None
     tempat_lahir: Optional[str] = None
     tanggal_lahir: Optional[date] = None

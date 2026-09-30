@@ -784,16 +784,21 @@ async def admin_santri_patch(
     _: UserMadrasah = Depends(require_roles_madrasah(*SANTRI_WRITE_ROLES)),
 ):
     try:
-        row = await services.patch_santri(session, santri_id, payload)
+        row, wali_username, wali_password = await services.patch_santri(session, santri_id, payload)
     except services.MadrasahNotFoundError as exc:
         raise HTTPException(status_code=404, detail=str(exc)) from exc
-    return {
+    out = {
         "id": row.id,
         "nama": row.nama,
         "rombel_id": row.rombel_id,
         "orang_tua_id": row.orang_tua_id,
         **_santri_kependudukan_out(row),
     }
+    if wali_username:
+        out["wali_username"] = wali_username
+    if wali_password:
+        out["wali_password_sementara"] = wali_password
+    return out
 
 
 @admin_r.delete("/santri/{santri_id}", status_code=status.HTTP_204_NO_CONTENT)
