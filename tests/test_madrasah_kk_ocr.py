@@ -538,3 +538,167 @@ async def test_wali_password_falls_back_to_random_without_birthdate(session):
     _row, _wali_username, wali_password = await services.patch_santri(session, santri.id, SantriPatch(nama_wali="Heru Hermawan"))
     assert wali_password
     assert wali_password != "200318"
+
+
+def test_parse_kartu_keluarga_table_mode_rows():
+    text = """KARTU KELUARGA
+No . 3218090905170001
+1 HERU HERMAWAN, S.IP 3207222205920002 LAKI-LAKI CIAMIS 22-05-1992 ISLAM SLTA/SEDERAJAT
+2 SITI AMINAH 3207226708940003 PEREMPUAN CIAMIS 27-08-1994ISLAM SLTA/SEDERAJAT
+KEPALA KELUARGA
+ISTRI
+"""
+    result = parse_kartu_keluarga(text)
+    a, b = result["anggota"]
+    assert (a["nama"], a["nik"], a["jenis_kelamin"], a["tempat_lahir"], a["agama"]) == (
+        "HERU HERMAWAN, S.IP", "3207222205920002", "L", "Ciamis", "Islam")
+    assert (b["nama"], b["jenis_kelamin"], b["tempat_lahir"]) == ("SITI AMINAH", "P", "Ciamis")
+    assert b["tanggal_lahir"] == date(1994, 8, 27)
+    assert a["status_dalam_keluarga"] == "Kepala Keluarga" and a["nama_ibu"] == "SITI AMINAH"
+
+
+def test_ocr_space_request_always_uses_table_mode(monkeypatch):
+    monkeypatch.setenv("OCR_SPACE_API_KEY", "k")
+    sent = {}
+
+    class R:
+        def raise_for_status(self): pass
+        def json(self): return {"ParsedResults": [{"ParsedText": "x"}]}
+
+    monkeypatch.setattr(ocr_space_adapter.requests, "post", lambda *a, **kw: sent.update(kw) or R())
+    ocr_space_adapter._parse_sync(b"img", "kk.jpg")
+    assert sent["data"]["isTable"] is True
+
+
+def test_parse_kartu_keluarga_table_mode_circled_row_number():
+    text = """No . 3218090905170001
+(3) RAYYAN ATTAR HERMAWAN 3218092003180001 LAKI-LAKI PANGANDARAN 20-03-2018 ISLAM TIDAK/BLM SEKOLAH BELUM/TIDAK BEKERJA
+"""
+    a = parse_kartu_keluarga(text)["anggota"][0]
+    assert (a["nama"], a["tempat_lahir"], a["agama"]) == ("RAYYAN ATTAR HERMAWAN", "Pangandaran", "Islam")
+
+
+SAMPLE_KK_TEXT_COLUMN_SCRAMBLED = """No
+Nama Kepala Keluarga
+Alamat
+RT/RW
+Kode Pos
+Nama Lengkap
+(1)
+HERU HERMAWAN, S.IP
+ENDAH TRESNASARI
+RAYYAN ATTAR HERMAWAN
+KARTU KELUARGA
+No . 3218090905170001
+HERU HERMAWAN, S.IP
+Desa/Kelurahan
+DUSUN WONOHARJO
+Kecamatan
+001/012
+Kabupaten/Kota
+: 46396
+Provinsi
+K 32180213463
+NIK
+Jenis
+Kelamin
+Tempat Lahir
+(2)
+(3)
+3207222205920002
+LAKI-LAKI
+CIAMIS
+(4)
+3207226703920002 PEREMPUAN CIAMIS
+3218092003180001 LAKI-LAKI
+PANGANDARAN
+: WONOHARJO
+: PANGANDARAN
+: PANGANDARAN
+: JAWA BARAT
+Tanggal
+Lahir
+Agama
+(5)
+(G)
+22-05-1992 ISLAM
+27-03-1992 ISLAM
+20-03-2018 ISLAM
+Pendidikan
+Jenis Pekerjaan
+(7)
+_(8)
+DIPLOMA IV/STRATA I
+WIRASWASTA
+SLTA/SEDERAJAT
+PERANGKAT DESA
+TIDAK/BLM SEKOLAH
+BELUM/TIDAK BEKERJA
+10
+No.
+1
+2
+Status
+Perkawinan
+(9)
+KAWIN
+KAWIN
+BELUM KAWIN
+Status Hubungan
+Dalam Keluarga
+(10)
+KEPALA KELUARGA
+ISTRI
+ANAK
+Kewarganegaraan
+(11)
+WNI
+WNI
+WNI
+5
+101
+Dikeluarkan Tanggal
+LEMBAR
+24-04-2018
+Kepala Keluarga
+RT
+IlI. Desa/Kelurahan
+IV. Kecamatan
+SRAGAM : 125:000
+D. 1a taran : 25.000
+Dokumen Imigrasi
+No. Paspor
+No. KITAP
+(12)
+(13)
+Ayah
+(14)
+RASIDI
+ADPAR
+HERU HERMAWAN, S.IP
+Nama Orang Tua
+YULINAR
+HATOYAH
+ENDAH TRESNASARI
+Ibu
+(15)
+KEPALA KELUARGA
+HERU HERMAWAN, S.IP
+Tanda Tangan/Cap Jempol
+"""
+
+
+def test_parse_kartu_keluarga_wilayah_skips_table_labels_after_k_number():
+    result = parse_kartu_keluarga(SAMPLE_KK_TEXT_COLUMN_SCRAMBLED)
+    assert (result["desa_kelurahan"], result["kecamatan"], result["kabupaten_kota"], result["provinsi"]) == (
+        "WONOHARJO", "PANGANDARAN", "PANGANDARAN", "JAWA BARAT")
+    assert [a["nama"] for a in result["anggota"]] == ["HERU HERMAWAN, S.IP", "ENDAH TRESNASARI", "RAYYAN ATTAR HERMAWAN"]
+
+
+def test_parse_kartu_keluarga_reads_ayah_ibu_columns():
+    anggota = parse_kartu_keluarga(SAMPLE_KK_TEXT_COLUMN_SCRAMBLED)["anggota"]
+    assert [(a["nama_ayah"], a["nama_ibu"]) for a in anggota] == [
+        ("RASIDI", "YULINAR"),
+        ("ADPAR", "HATOYAH"),
+        ("HERU HERMAWAN, S.IP", "ENDAH TRESNASARI"),
+    ]

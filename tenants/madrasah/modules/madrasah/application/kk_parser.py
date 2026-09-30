@@ -5,6 +5,11 @@ The OCR adapter (adapters/external/ocr_space_adapter.py) only returns plain
 text -- it has no notion of "this is a KK" or which line is whose NIK. All
 of the field-to-column mapping below is our own logic.
 
+The adapter now always requests table mode (isTable), which returns one line
+per table row, e.g. "1 NAMA 3207... LAKI-LAKI CIAMIS 27-03-1992 ISLAM"; the
+parser handles that layout (name on the NIK line) and still falls back to
+the older layout below.
+
 The official KK form is a bordered table, and OCR (without table-structure
 detection) reads it as a flat sequence of lines that do NOT start with a
 row number -- the "(1)" "(2)" ... column markers are their own lines, and
@@ -241,15 +246,35 @@ def _find_wilayah(lines: list[str]) -> dict:
     k_idx = next((i for i, line in enumerate(lines) if _K_NUMBER_RE.match(line.strip())), None)
     if k_idx is None:
         return empty
+    # Prefer ":"-prefixed lines -- the form prints every header value that
+    # way, while the table's column labels/values that can follow the K line
+    # in some OCR layouts (NIK, Jenis Kelamin, LAKI-LAKI, CIAMIS...) never
+    # carry the colon. Falls back to the old first-lines scan (minus labels)
+    # when fewer than 4 lines carry one.
+    window = [line.strip() for line in lines[k_idx + 1 : k_idx + 30]]
+    colon_lines = [line for line in window if line.startswith(":")]
+    pool = colon_lines if len(colon_lines) >= 4 else [line for line in window[:8] if line.upper() not in _HEADER_STOPWORDS]
     values = []
-    for line in lines[k_idx + 1 : k_idx + 9]:
-        candidate = line.strip().lstrip(": ").strip()
+    for line in pool:
+        candidate = line.lstrip(": ").strip()
         if candidate and re.fullmatch(r"[A-Za-z][A-Za-z .'-]{1,59}", candidate):
             values.append(candidate)
         if len(values) == 4:
             break
     keys = ["desa_kelurahan", "kecamatan", "kabupaten_kota", "provinsi"]
     return {key: (values[i] if i < len(values) else None) for i, key in enumerate(keys)}
+
+
+def _nama_on_nik_line(line: str, nik: str) -> Optional[str]:
+    """Table mode (isTable) puts a person's whole row on one line, so the
+    name sits before the NIK on that same line, optionally preceded by the
+    row number cell ("1 HERU HERMAWAN 3207..."). Returns None when nothing
+    name-like precedes the NIK (the older one-cell-per-line layout)."""
+    prefix = line.split(nik, 1)[0]
+    prefix = re.sub(r"^\s*[(（]?\d{1,2}[.)）]?\s+", "", prefix).strip(" :|")
+    if prefix and re.search(r"[A-Za-z]{2,}", prefix) and len(prefix) <= 60:
+        return prefix
+    return None
 
 
 def _find_nama_before(lines: list[str], nik_idx: int, search_start: int, tempat_lahir: Optional[str]) -> Optional[str]:
@@ -282,7 +307,11 @@ def _find_tempat_lahir(lines_from_nik: list[str]) -> Optional[str]:
     first_line = lines_from_nik[0]
     gender_match = re.search(r"LAKI-LAKI|PEREMPUAN", first_line.upper())
     if gender_match:
-        remainder = first_line[gender_match.end() :].strip(" :.-")
+        # In table mode the whole row is one line, so the place is followed
+        # by the birth date/agama/etc. -- cut at the first digit.
+        remainder = re.split(r"\d", first_line[gender_match.end() :], maxsplit=1)[0].strip(" :.-")
+        for keyword in _AGAMA_KEYWORDS:
+            remainder = re.sub(rf"\b{keyword}\b.*", "", remainder, flags=re.IGNORECASE).strip(" :.-")
         if remainder and _PLACE_RE.fullmatch(remainder):
             return remainder.title()
     for line in lines_from_nik[1:3]:
@@ -335,6 +364,36 @@ def _nama_value(candidate: str) -> Optional[str]:
     return None
 
 
+_PARENT_LABELS = {"AYAH", "IBU", "NAMA ORANG TUA", "DOKUMEN IMIGRASI", "NO. PASPOR", "NO. KITAP", "WNI", "WNA"}
+
+
+def _parent_value(candidate: str) -> Optional[str]:
+    """A parent name from the Ayah/Ibu columns of the second table: a
+    name-like line that isn't a column label, a status keyword or a
+    marital-status/citizenship cell."""
+    upper = candidate.upper()
+    if upper in _PARENT_LABELS or "KAWIN" in upper or _find_status_hubungan(candidate):
+        return None
+    return _nama_value(candidate)
+
+
+def _find_parents(lines: list[str], count: int) -> tuple[list, list]:
+    """Per-person Ayah and Ibu from the "Nama Orang Tua" columns (14)/(15),
+    in the same row order as the first table. OCR lays the two columns out
+    as blocks: Ayah's block follows its label, but Ibu's block may sit
+    either after its own label or right after the "Nama Orang Tua" header,
+    so both are tried. Each list is only returned when it has a value for
+    every person -- a partial block can't be aligned to rows safely."""
+    def block(*labels):
+        for label in labels:
+            values = _find_value_block(lines, label, _parent_value, count)
+            if len(values) == count:
+                return values
+        return []
+
+    return block("AYAH"), block("IBU", "NAMA ORANG TUA")
+
+
 def parse_kartu_keluarga(raw_text: str) -> dict:
     """Turns the OCR adapter's raw text into a KkOcrResult-shaped dict:
     {nomor_kk, alamat_lengkap, anggota: [...], raw_text}.
@@ -370,7 +429,8 @@ def parse_kartu_keluarga(raw_text: str) -> dict:
         anggota.append(
             {
                 "baris": person_index + 1,
-                "nama": _find_nama_before(lines, line_idx, window_start, tempat_lahir),
+                "nama": _nama_on_nik_line(lines[line_idx], nik)
+                or _find_nama_before(lines, line_idx, window_start, tempat_lahir),
                 "nik": nik,
                 "tempat_lahir": tempat_lahir,
                 "tanggal_lahir": _tanggal_lahir_from_nik(nik) or _parse_tanggal(window_text),
@@ -428,11 +488,15 @@ def parse_kartu_keluarga(raw_text: str) -> dict:
 
     # Ayah/ibu inferred from status_dalam_keluarga so the santri form can be
     # prefilled without the admin retyping parent names by hand.
+    # Preferred source is the table's own Ayah/Ibu columns (see
+    # _find_parents); this inference is only the fallback when those blocks
+    # can't be read.
     ayah = next((a["nama"] for a in anggota if a["status_dalam_keluarga"] == "Kepala Keluarga"), None)
     ibu = next((a["nama"] for a in anggota if a["status_dalam_keluarga"] == "Istri"), None)
-    for a in anggota:
-        a["nama_ayah"] = ayah
-        a["nama_ibu"] = ibu
+    ayah_col, ibu_col = _find_parents(lines, len(anggota)) if anggota else ([], [])
+    for i, a in enumerate(anggota):
+        a["nama_ayah"] = ayah_col[i] if ayah_col else ayah
+        a["nama_ibu"] = ibu_col[i] if ibu_col else ibu
 
     wilayah = _find_wilayah(lines)
     return {

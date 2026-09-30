@@ -14,6 +14,8 @@ structured documents (vs the default engine 1, tuned for short/simple
 text) -- the same reasoning DOCUMENT_TEXT_DETECTION was picked over
 TEXT_DETECTION on the Vision adapter.
 
+Table mode (isTable) is always on -- see _parse_sync.
+
 This module returns raw OCR text only. Turning that text into structured
 Kartu Keluarga fields is NOT done here -- see
 tenants/madrasah/modules/madrasah/application/kk_parser.py, which is
@@ -59,6 +61,12 @@ def _parse_sync(image_bytes: bytes, file_name: str) -> str:
             "language": "auto",
             "OCREngine": 2,
             "isOverlayRequired": False,
+            # Mandatory: a KK is a bordered table. Without isTable OCR.space
+            # flattens it into column/label blocks, which scrambles which
+            # value belongs to which field. isTable=true makes it return
+            # one line per table row, so each family member's NIK, name,
+            # gender, etc. stay together.
+            "isTable": True,
             "scale": True,
         },
         files={"file": (file_name or "document.jpg", image_bytes)},
