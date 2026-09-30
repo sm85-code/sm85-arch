@@ -693,3 +693,12 @@ def test_parse_kartu_keluarga_wilayah_skips_table_labels_after_k_number():
     assert (result["desa_kelurahan"], result["kecamatan"], result["kabupaten_kota"], result["provinsi"]) == (
         "WONOHARJO", "PANGANDARAN", "PANGANDARAN", "JAWA BARAT")
     assert [a["nama"] for a in result["anggota"]] == ["HERU HERMAWAN, S.IP", "ENDAH TRESNASARI", "RAYYAN ATTAR HERMAWAN"]
+
+
+def test_parse_kartu_keluarga_reads_ayah_ibu_columns():
+    anggota = parse_kartu_keluarga(SAMPLE_KK_TEXT_COLUMN_SCRAMBLED)["anggota"]
+    assert [(a["nama_ayah"], a["nama_ibu"]) for a in anggota] == [
+        ("RASIDI", "YULINAR"),
+        ("ADPAR", "HATOYAH"),
+        ("HERU HERMAWAN, S.IP", "ENDAH TRESNASARI"),
+    ]

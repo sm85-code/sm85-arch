@@ -364,6 +364,36 @@ def _nama_value(candidate: str) -> Optional[str]:
     return None
 
 
+_PARENT_LABELS = {"AYAH", "IBU", "NAMA ORANG TUA", "DOKUMEN IMIGRASI", "NO. PASPOR", "NO. KITAP", "WNI", "WNA"}
+
+
+def _parent_value(candidate: str) -> Optional[str]:
+    """A parent name from the Ayah/Ibu columns of the second table: a
+    name-like line that isn't a column label, a status keyword or a
+    marital-status/citizenship cell."""
+    upper = candidate.upper()
+    if upper in _PARENT_LABELS or "KAWIN" in upper or _find_status_hubungan(candidate):
+        return None
+    return _nama_value(candidate)
+
+
+def _find_parents(lines: list[str], count: int) -> tuple[list, list]:
+    """Per-person Ayah and Ibu from the "Nama Orang Tua" columns (14)/(15),
+    in the same row order as the first table. OCR lays the two columns out
+    as blocks: Ayah's block follows its label, but Ibu's block may sit
+    either after its own label or right after the "Nama Orang Tua" header,
+    so both are tried. Each list is only returned when it has a value for
+    every person -- a partial block can't be aligned to rows safely."""
+    def block(*labels):
+        for label in labels:
+            values = _find_value_block(lines, label, _parent_value, count)
+            if len(values) == count:
+                return values
+        return []
+
+    return block("AYAH"), block("IBU", "NAMA ORANG TUA")
+
+
 def parse_kartu_keluarga(raw_text: str) -> dict:
     """Turns the OCR adapter's raw text into a KkOcrResult-shaped dict:
     {nomor_kk, alamat_lengkap, anggota: [...], raw_text}.
@@ -458,11 +488,15 @@ def parse_kartu_keluarga(raw_text: str) -> dict:
 
     # Ayah/ibu inferred from status_dalam_keluarga so the santri form can be
     # prefilled without the admin retyping parent names by hand.
+    # Preferred source is the table's own Ayah/Ibu columns (see
+    # _find_parents); this inference is only the fallback when those blocks
+    # can't be read.
     ayah = next((a["nama"] for a in anggota if a["status_dalam_keluarga"] == "Kepala Keluarga"), None)
     ibu = next((a["nama"] for a in anggota if a["status_dalam_keluarga"] == "Istri"), None)
-    for a in anggota:
-        a["nama_ayah"] = ayah
-        a["nama_ibu"] = ibu
+    ayah_col, ibu_col = _find_parents(lines, len(anggota)) if anggota else ([], [])
+    for i, a in enumerate(anggota):
+        a["nama_ayah"] = ayah_col[i] if ayah_col else ayah
+        a["nama_ibu"] = ibu_col[i] if ibu_col else ibu
 
     wilayah = _find_wilayah(lines)
     return {
