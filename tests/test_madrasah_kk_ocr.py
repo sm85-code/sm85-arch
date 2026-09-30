@@ -702,3 +702,46 @@ def test_parse_kartu_keluarga_reads_ayah_ibu_columns():
         ("ADPAR", "HATOYAH"),
         ("HERU HERMAWAN, S.IP", "ENDAH TRESNASARI"),
     ]
+
+
+# Real OCR.space output with isTable=true: cells of a row are tab-separated,
+# header label/value pairs share a line, and Ayah/Ibu cells are scattered.
+SAMPLE_KK_TEXT_TABLE_MODE = """KARTU KELUARGA
+K 32180213463
+No . 3218090905170001
+Nama Kepala Keluarga	: HERU HERMAWAN, S.IP	Desa/Kelurahan	: WONOHARJO
+Alamat	DUSUN WONOHARJO	Kecamatan	: PANGANDARAN
+RT/RW	: 001/012	Kabupaten/Kota	: PANGANDARAN
+Kode Pos	: 46396	Provinsi	: JAWA BARAT
+Jenis	Tanggal
+No	Nama Lengkap	NIK	Kelamin	Tempat Lahir	Agama	Pendidikan
+Lahir	Jenis Pekerjaan
+(1)	(2)	(3)	(4)	(5)	（6）	(7)	(8)
+HERU HERMAWAN, S.IP	3207222205920002 LAKI-LAKI	CIAMIS	22-05-1992 ISLAM	DIPLOMA IV/STRATA I	WIRASWASTA
+ENDAH TRESNASARI	3207226703920002 PEREMPUAN CIAMIS	27-03-1992 ISLAM	SLTA/SEDERAJAT	PERANGKAT DESA
+& RAYYAN ATTAR HERMAWAN	3218092003180001 LAKI-LAKI	PANGANDARAN	20-03-2018 ISLAM	TIDAK/BLM SEKOLAH	BELUM/TIDAK BEKERJA
+Status	Status Hubungan	Dokumen Imigrasi	Nama Orang Tua
+No.	Perkawinan	Kewarganegaraan	No. KITAP
+Dalam Keluarga	No. Paspor	Ayah	Ibu
+(9)	(10)	(11)	(12)	(13)	RASIDI	(14)	(15)
+KAWIN	KEPALA KELUARGA	WNI	YULINAR
+ADPAR
+KAWIN	ISTRI	WNI	HATOYAH
+BELUM KAWIN	ANAK	WNI	HERU HERMAWAN, S.IP	ENDAH TRESNASARI
+Dikeluarkan Tanggal	24-04-2018	KEPALA KELUARGA
+LEMBAR	Kepala Keluarga	KEPALA DINAS	DUDUKAN DAI"""
+
+
+def test_parse_kartu_keluarga_table_mode_real_output():
+    result = parse_kartu_keluarga(SAMPLE_KK_TEXT_TABLE_MODE)
+    assert (result["alamat_lengkap"], result["rt_rw"], result["kode_pos"]) == ("DUSUN WONOHARJO", "001/012", "46396")
+    assert (result["desa_kelurahan"], result["kecamatan"], result["kabupaten_kota"], result["provinsi"]) == (
+        "WONOHARJO", "PANGANDARAN", "PANGANDARAN", "JAWA BARAT")
+    assert [
+        (a["nama"], a["tempat_lahir"], a["jenis_kelamin"], a["status_dalam_keluarga"], a["nama_ayah"], a["nama_ibu"])
+        for a in result["anggota"]
+    ] == [
+        ("HERU HERMAWAN, S.IP", "Ciamis", "L", "Kepala Keluarga", "RASIDI", "YULINAR"),
+        ("ENDAH TRESNASARI", "Ciamis", "P", "Istri", "ADPAR", "HATOYAH"),
+        ("RAYYAN ATTAR HERMAWAN", "Pangandaran", "L", "Anak", "HERU HERMAWAN, S.IP", "ENDAH TRESNASARI"),
+    ]
