@@ -14,53 +14,144 @@ from tenants.madrasah.modules.madrasah.application.schemas import SantriIn, Sant
 from tenants.madrasah.modules.madrasah.infrastructure.database import MadrasahBase
 from tenants.madrasah.modules.madrasah.infrastructure.models import SantriMadrasah
 
-SAMPLE_KK_TEXT = """KARTU KELUARGA
-No 3201010101010001
-Nama Kepala Keluarga: Ahmad Sudrajat
-Alamat: Jl. Melati No. 5 RT 01 RW 02
-1 Ahmad Sudrajat
-3201011501800001
-LAKI-LAKI
-Bandung, 15-01-1980
-ISLAM
+# Real OCR.space (OCREngine=2) output for an actual Kartu Keluarga photo
+# (captured while debugging a production report that the old, hand-written
+# sample text didn't resemble at all -- the real form is a bordered table,
+# and OCR reads it as label-block-then-value-block up top, then a run of
+# lines per person with NO leading row number, not "1 Nama\nNIK\n...").
+SAMPLE_KK_TEXT = """Nama Kepala Keluarga
+Alamat
+RT/RW
+Kode Pos
+KARTU KELUARGA
+No . 3218090905170001
+: HERU HERMAWAN, S.IP
+DUSUN WONOHARJO
+: 001/012
+: 46396
+Desa/Kelurahan
+Kecamatan
+Kabupaten/Kota
+Provinsi
+K 32180213463
+: WONOHARJO
+PANGANDARAN
+: PANGANDARAN
+: JAWA BARAT
+No
+Nama Lengkap
+NIK
+Jenis
+Kelamin
+Tempat Lahir
+Tanggal
+Lahir
+Agama
+Pendidikan
+Jenis Pekerjaan
+(1)
+(2)
+(3)
+(4)
+(5)
+(6)
+(7)
+HERU HERMAWAN, S.IP
+3207222205920002 LAKI-LAKI
+CIAMIS
+22-05-1992 ISLAM
+DIPLOMA IV/STRATA I
+(8)
+WIRASWASTA
+ENDAH TRESNASARI
+3207226703920002 PEREMPUAN CIAMIS
+27-03-1992ISLAM
+SLTA/SEDERAJAT
+PERANGKAT DESA
+RAYYAN ATTAR HERMAWAN
+3218092003180001 LAKI-LAKI
+PANGANDARAN
+20-03-2018|ISLAM
+TIDAK/BLM SEKOLAH
+BELUM/TIDAK BEKERJA
+Status
+Status Hubungan
+Dokumen Imigrasi
+Nama Orang Tua
+No.
+Perkawinan
+Dalam Keluarga
+Kewarganegaraan
+No. Paspor
+No. KITAP
+Ayah
+Ibu
+(9)
+(10)
+(11)
+(12)
+（13）
+(14)
+(15)
+KAWIN
 KEPALA KELUARGA
-2 Siti Aminah
-3201015803850002
-PEREMPUAN
-Bandung, 18-03-1985
-ISLAM
+WNI
+RASIDI
+YULINAR
+KAWIN
 ISTRI
-3 Budi Sudrajat
-3201010506100003
-LAKI-LAKI
-Bandung, 05-06-2010
-ISLAM
+WNI
+ADPAR
+HATOYAH
+BELUM KAWIN
 ANAK
+WNI
+HERU HERMAWAN, S.IP
+ENDAH TRESNASARI
+Dikeluarkan Tanggal
+LEMBAR
+24-04-2018
+Kepala Keluarga
+RT
+III. Desa/Kelurahan
+IV. Kecamatan
+KEPALA KELUARGA
+HERU HERMAWAN. S.IP
+Tanda Tangan/Cap Jempol
 """
 
 
 def test_parse_kartu_keluarga_extracts_all_rows():
     result = parse_kartu_keluarga(SAMPLE_KK_TEXT)
-    assert result["nomor_kk"] == "3201010101010001"
-    assert result["alamat_lengkap"] == "Jl. Melati No. 5 RT 01 RW 02"
+    assert result["nomor_kk"] == "3218090905170001"
+    assert result["alamat_lengkap"] == "DUSUN WONOHARJO"
     assert len(result["anggota"]) == 3
 
     ayah, ibu, anak = result["anggota"]
-    assert ayah["nama"] == "Ahmad Sudrajat"
-    assert ayah["nik"] == "3201011501800001"
+    assert ayah["nama"] == "HERU HERMAWAN, S.IP"
+    assert ayah["nik"] == "3207222205920002"
     assert ayah["jenis_kelamin"] == "L"
-    assert ayah["tempat_lahir"] == "Bandung"
-    assert ayah["tanggal_lahir"] == date(1980, 1, 15)
+    assert ayah["tempat_lahir"] == "Ciamis"
+    assert ayah["tanggal_lahir"] == date(1992, 5, 22)
     assert ayah["agama"] == "Islam"
     assert ayah["status_dalam_keluarga"] == "Kepala Keluarga"
 
-    assert anak["nama"] == "Budi Sudrajat"
+    assert ibu["nama"] == "ENDAH TRESNASARI"
+    assert ibu["nik"] == "3207226703920002"
+    assert ibu["jenis_kelamin"] == "P"
+    assert ibu["tempat_lahir"] == "Ciamis"
+    assert ibu["tanggal_lahir"] == date(1992, 3, 27)
+    assert ibu["status_dalam_keluarga"] == "Istri"
+
+    assert anak["nama"] == "RAYYAN ATTAR HERMAWAN"
+    assert anak["nik"] == "3218092003180001"
+    assert anak["tempat_lahir"] == "Pangandaran"
+    assert anak["tanggal_lahir"] == date(2018, 3, 20)
     assert anak["status_dalam_keluarga"] == "Anak"
     # Ayah/ibu inferred from the head-of-family / wife rows for every member,
     # so the santri form can be prefilled with parent names.
-    assert anak["nama_ayah"] == "Ahmad Sudrajat"
-    assert anak["nama_ibu"] == "Siti Aminah"
-    assert ibu["nama"] == "Siti Aminah"
+    assert anak["nama_ayah"] == "HERU HERMAWAN, S.IP"
+    assert anak["nama_ibu"] == "ENDAH TRESNASARI"
 
 
 def test_parse_kartu_keluarga_empty_text_returns_no_members():
