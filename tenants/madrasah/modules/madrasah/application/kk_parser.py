@@ -394,6 +394,63 @@ def _find_parents(lines: list[str], count: int) -> tuple[list, list]:
     return block("AYAH"), block("IBU", "NAMA ORANG TUA")
 
 
+_HEADER_LABELS = {
+    "NAMA KEPALA KELUARGA": "nama_kepala_keluarga",
+    "ALAMAT": "alamat_lengkap",
+    "RT/RW": "rt_rw",
+    "KODE POS": "kode_pos",
+    "DESA/KELURAHAN": "desa_kelurahan",
+    "KECAMATAN": "kecamatan",
+    "KABUPATEN/KOTA": "kabupaten_kota",
+    "PROVINSI": "provinsi",
+}
+
+
+def _find_header_pairs(raw_text: str) -> dict:
+    """Table mode (isTable) returns the KK header as tab-separated cells on
+    one line -- "Alamat<TAB>DUSUN WONOHARJO<TAB>Kecamatan<TAB>: PANGANDARAN"
+    -- so each label's value is simply the cell right after it. Returns {}
+    for text without tabs (the older layouts, handled by the _find_* scans)."""
+    found: dict = {}
+    if "\t" not in raw_text:
+        return found
+    for line in raw_text.splitlines():
+        cells = [c.strip() for c in line.split("\t") if c.strip()]
+        for i, cell in enumerate(cells[:-1]):
+            key = _HEADER_LABELS.get(cell.upper())
+            nxt = cells[i + 1]
+            if key and nxt.upper() not in _HEADER_LABELS:
+                value = nxt.lstrip(": ").strip()
+                if value:
+                    found.setdefault(key, value)
+    return found
+
+
+def _clean_nama(nama: Optional[str]) -> Optional[str]:
+    """Drops stray row-number/border glyphs OCR glues onto the front of a
+    name cell (e.g. "& RAYYAN ..." for a circled row number)."""
+    if nama is None:
+        return None
+    cleaned = re.sub(r"^[^A-Za-z]+", "", nama).strip()
+    return cleaned or None
+
+
+def _find_parents_in_order(lines: list[str], count: int) -> tuple[list, list]:
+    """Fallback for table mode, where the Ayah/Ibu cells are scattered over
+    the status rows (one can even land on the column-number line). Reading
+    every parent-name-like cell between the Ayah/Ibu headers and the footer
+    in document order gives Ayah, Ibu, Ayah, Ibu... -- used only when that
+    yields exactly 2 names per person."""
+    start = max((i for i, line in enumerate(lines) if line.upper() in ("AYAH", "IBU")), default=None)
+    if start is None:
+        return [], []
+    end = next((i for i, line in enumerate(lines) if "DIKELUARKAN" in line.upper()), len(lines))
+    names = [v for v in (_parent_value(line) for line in lines[start + 1 : end]) if v]
+    if len(names) != 2 * count:
+        return [], []
+    return names[0::2], names[1::2]
+
+
 def parse_kartu_keluarga(raw_text: str) -> dict:
     """Turns the OCR adapter's raw text into a KkOcrResult-shaped dict:
     {nomor_kk, alamat_lengkap, anggota: [...], raw_text}.
@@ -402,7 +459,10 @@ def parse_kartu_keluarga(raw_text: str) -> dict:
     blurry/cropped/at an angle. The caller (madrasah_router.py) returns this
     straight to the admin for review; nothing here is ever saved directly.
     """
-    lines = [line.strip() for line in raw_text.splitlines() if line.strip()]
+    header = _find_header_pairs(raw_text)
+    # Table mode separates cells with tabs; treating each cell as its own
+    # line lets the per-person logic below work on it unchanged.
+    lines = [cell.strip() for line in raw_text.splitlines() for cell in line.split("\t") if cell.strip()]
     full_text = "\n".join(lines)
     nomor_kk = _find_nomor_kk(full_text)
 
@@ -494,20 +554,26 @@ def parse_kartu_keluarga(raw_text: str) -> dict:
     ayah = next((a["nama"] for a in anggota if a["status_dalam_keluarga"] == "Kepala Keluarga"), None)
     ibu = next((a["nama"] for a in anggota if a["status_dalam_keluarga"] == "Istri"), None)
     ayah_col, ibu_col = _find_parents(lines, len(anggota)) if anggota else ([], [])
+    if anggota and not (ayah_col and ibu_col):
+        ayah_col, ibu_col = _find_parents_in_order(lines, len(anggota))
     for i, a in enumerate(anggota):
         a["nama_ayah"] = ayah_col[i] if ayah_col else ayah
         a["nama_ibu"] = ibu_col[i] if ibu_col else ibu
 
+    for a in anggota:
+        for key in ("nama", "nama_ayah", "nama_ibu"):
+            a[key] = _clean_nama(a[key])
+
     wilayah = _find_wilayah(lines)
     return {
         "nomor_kk": nomor_kk,
-        "alamat_lengkap": alamat_lengkap,
-        "rt_rw": _find_rt_rw(full_text),
-        "kode_pos": _find_kode_pos(lines, nomor_kk),
-        "desa_kelurahan": wilayah["desa_kelurahan"],
-        "kecamatan": wilayah["kecamatan"],
-        "kabupaten_kota": wilayah["kabupaten_kota"],
-        "provinsi": wilayah["provinsi"],
+        "alamat_lengkap": header.get("alamat_lengkap") or alamat_lengkap,
+        "rt_rw": header.get("rt_rw") or _find_rt_rw(full_text),
+        "kode_pos": header.get("kode_pos") or _find_kode_pos(lines, nomor_kk),
+        "desa_kelurahan": header.get("desa_kelurahan") or wilayah["desa_kelurahan"],
+        "kecamatan": header.get("kecamatan") or wilayah["kecamatan"],
+        "kabupaten_kota": header.get("kabupaten_kota") or wilayah["kabupaten_kota"],
+        "provinsi": header.get("provinsi") or wilayah["provinsi"],
         "anggota": anggota,
         "raw_text": raw_text,
     }
