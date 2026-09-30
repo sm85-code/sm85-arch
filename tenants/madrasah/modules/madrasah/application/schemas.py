@@ -87,6 +87,12 @@ class SantriIn(BaseModel):
     nomor_kk: Optional[str] = None
     nama_ayah: Optional[str] = None
     nama_ibu: Optional[str] = None
+    rt_rw: Optional[str] = None
+    kode_pos: Optional[str] = None
+    desa_kelurahan: Optional[str] = None
+    kecamatan: Optional[str] = None
+    kabupaten_kota: Optional[str] = None
+    provinsi: Optional[str] = None
 
 
 class PlacementIn(BaseModel):
@@ -127,6 +133,12 @@ class SantriPatch(BaseModel):
     nomor_kk: Optional[str] = None
     nama_ayah: Optional[str] = None
     nama_ibu: Optional[str] = None
+    rt_rw: Optional[str] = None
+    kode_pos: Optional[str] = None
+    desa_kelurahan: Optional[str] = None
+    kecamatan: Optional[str] = None
+    kabupaten_kota: Optional[str] = None
+    provinsi: Optional[str] = None
 
 
 class KkAnggotaKeluarga(BaseModel):
@@ -148,6 +160,12 @@ class KkAnggotaKeluarga(BaseModel):
 class KkOcrResult(BaseModel):
     nomor_kk: Optional[str] = None
     alamat_lengkap: Optional[str] = None
+    rt_rw: Optional[str] = None
+    kode_pos: Optional[str] = None
+    desa_kelurahan: Optional[str] = None
+    kecamatan: Optional[str] = None
+    kabupaten_kota: Optional[str] = None
+    provinsi: Optional[str] = None
     anggota: list[KkAnggotaKeluarga] = []
     raw_text: str = ""
 

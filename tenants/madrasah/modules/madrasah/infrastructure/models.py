@@ -235,6 +235,12 @@ class SantriMadrasah(MadrasahBase):
     nomor_kk: Mapped[Optional[str]] = mapped_column(String(32), nullable=True)
     nama_ayah: Mapped[Optional[str]] = mapped_column(String(255), nullable=True)
     nama_ibu: Mapped[Optional[str]] = mapped_column(String(255), nullable=True)
+    rt_rw: Mapped[Optional[str]] = mapped_column(String(16), nullable=True)
+    kode_pos: Mapped[Optional[str]] = mapped_column(String(16), nullable=True)
+    desa_kelurahan: Mapped[Optional[str]] = mapped_column(String(128), nullable=True)
+    kecamatan: Mapped[Optional[str]] = mapped_column(String(128), nullable=True)
+    kabupaten_kota: Mapped[Optional[str]] = mapped_column(String(128), nullable=True)
+    provinsi: Mapped[Optional[str]] = mapped_column(String(128), nullable=True)
 
     kelas: Mapped[Optional["KelasMadrasah"]] = relationship(back_populates="santri")
     rombel: Mapped[Optional["RombelMadrasah"]] = relationship(back_populates="santri")
