@@ -1699,7 +1699,9 @@ async def create_santri(
     return row, wali_username, wali_password
 
 
-async def patch_santri(session: AsyncSession, santri_id: str, payload: SantriPatch) -> SantriMadrasah:
+async def patch_santri(
+    session: AsyncSession, santri_id: str, payload: SantriPatch
+) -> tuple[SantriMadrasah, str | None, str | None]:
     row = await session.get(SantriMadrasah, santri_id)
     if not row:
         raise MadrasahNotFoundError("Santri tidak ditemukan")
@@ -1711,6 +1713,15 @@ async def patch_santri(session: AsyncSession, santri_id: str, payload: SantriPat
         await _catat_riwayat_penempatan(session, santri_id, payload.rombel_id)
     if payload.orang_tua_id is not None:
         row.orang_tua_id = payload.orang_tua_id or None
+    wali_username: str | None = None
+    wali_password: str | None = None
+    if payload.nama_wali:
+        # Cari/buat wali di unit yang sama dengan santri ini -- dipakai untuk
+        # mengikat wali dari nama ayah/ibu hasil OCR KK setelah santri sudah
+        # tersimpan (lihat AdminSantriPage: dropdown Wali Santri).
+        wali, wali_password = await _cari_atau_buat_wali(session, payload.nama_wali, row.madrasah_unit_id, None, payload.no_hp_wali)
+        row.orang_tua_id = wali.id
+        wali_username = wali.no_hp
     if payload.nik is not None:
         row.nik = payload.nik
     if payload.tempat_lahir is not None:
@@ -1744,7 +1755,7 @@ async def patch_santri(session: AsyncSession, santri_id: str, payload: SantriPat
     if payload.provinsi is not None:
         row.provinsi = payload.provinsi
     await session.flush()
-    return row
+    return row, wali_username, wali_password
 
 
 async def set_status_santri(session: AsyncSession, santri_id: str, payload: SantriStatusIn) -> SantriMadrasah:

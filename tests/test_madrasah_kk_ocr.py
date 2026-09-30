@@ -12,7 +12,7 @@ from tenants.madrasah.modules.madrasah.application import services
 from tenants.madrasah.modules.madrasah.application.kk_parser import _tanggal_lahir_from_nik, parse_kartu_keluarga
 from tenants.madrasah.modules.madrasah.application.schemas import SantriIn, SantriPatch
 from tenants.madrasah.modules.madrasah.infrastructure.database import MadrasahBase
-from tenants.madrasah.modules.madrasah.infrastructure.models import SantriMadrasah
+from tenants.madrasah.modules.madrasah.infrastructure.models import SantriMadrasah, UserMadrasah
 
 # Real OCR.space (OCREngine=2) output for an actual Kartu Keluarga photo
 # (captured while debugging a production report that the old, hand-written
@@ -479,3 +479,37 @@ async def test_patch_santri_updates_kependudukan_fields(session):
     assert reloaded.nik == "1234567890123456"
     assert reloaded.jenis_kelamin == "L"
     assert reloaded.kecamatan == "Coblong"
+
+
+@pytest.mark.asyncio
+async def test_patch_santri_creates_wali_from_nama_wali(session):
+    """Registrasi lewat OCR KK boleh menyimpan santri tanpa wali dulu --
+    admin mengikat wali belakangan lewat dropdown nama ayah/ibu (lihat
+    AdminSantriPage), yang mengirim SantriPatch.nama_wali seperti ini."""
+    santri = SantriMadrasah(nama="Rayyan", nama_ayah="Heru Hermawan", nama_ibu="Endah Tresnasari")
+    session.add(santri)
+    await session.flush()
+
+    row, wali_username, wali_password = await services.patch_santri(session, santri.id, SantriPatch(nama_wali="Heru Hermawan"))
+    assert row.orang_tua_id is not None
+    assert wali_username
+    assert wali_password
+
+    wali = await session.get(UserMadrasah, row.orang_tua_id)
+    assert wali.nama == "Heru Hermawan"
+    assert wali.role == "wali_santri"
+
+
+@pytest.mark.asyncio
+async def test_patch_santri_reuses_existing_wali_with_same_name(session):
+    existing_wali = UserMadrasah(nama="Endah Tresnasari", no_hp="081200000099", password_hash="x", role="wali_santri")
+    session.add(existing_wali)
+    santri = SantriMadrasah(nama="Rayyan")
+    session.add(santri)
+    await session.flush()
+
+    row, wali_username, wali_password = await services.patch_santri(session, santri.id, SantriPatch(nama_wali="Endah Tresnasari"))
+    assert row.orang_tua_id == existing_wali.id
+    assert wali_username == "081200000099"
+    # No new password is generated when an existing account is reused.
+    assert wali_password is None
