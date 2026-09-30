@@ -249,9 +249,11 @@ def _find_wilayah(lines: list[str]) -> dict:
     # Prefer ":"-prefixed lines -- the form prints every header value that
     # way, while the table's column labels/values that can follow the K line
     # in some OCR layouts (NIK, Jenis Kelamin, LAKI-LAKI, CIAMIS...) never
-    # carry the colon. Falls back to any name-like line when none do.
+    # carry the colon. Falls back to the old first-lines scan (minus labels)
+    # when fewer than 4 lines carry one.
     window = [line.strip() for line in lines[k_idx + 1 : k_idx + 30]]
-    pool = [line for line in window if line.startswith(":")] or window
+    colon_lines = [line for line in window if line.startswith(":")]
+    pool = colon_lines if len(colon_lines) >= 4 else [line for line in window[:8] if line.upper() not in _HEADER_STOPWORDS]
     values = []
     for line in pool:
         candidate = line.lstrip(": ").strip()
