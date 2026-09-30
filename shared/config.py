@@ -12,16 +12,6 @@ load_dotenv(ROOT_DIR / ".env")
 
 APP_TITLE = os.getenv("APP_TITLE", "SM85 Arch API")
 
-# Role aliases normalised by public_role() when a JWT is minted
-# (shared.security.create_access_token). Kept verbatim so tokens issued for
-# the remaining tenants stay byte-identical.
-ROLE_ALIASES_TO_PUBLIC = {
-    "unit_manager": "pengelola",
-    "unit-manager": "pengelola",
-    "manager": "pengelola",
-    "pengelola_unit": "pengelola",
-}
-
 EXTRA_CORS_ORIGINS = [
     "https://banihusen-sgxg4.ondigitalocean.app",
     "https://madrasah-l7kl7.ondigitalocean.app",
@@ -62,8 +52,7 @@ COOKIE_PATH = os.getenv("COOKIE_PATH", "/")
 
 
 def public_role(raw: str | None) -> str:
-    value = (raw or "").strip().lower()
-    return ROLE_ALIASES_TO_PUBLIC.get(value, value)
+    return (raw or "").strip().lower()
 
 
 def origin_allowed(origin: str | None) -> bool:
