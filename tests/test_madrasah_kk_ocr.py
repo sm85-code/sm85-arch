@@ -7,7 +7,7 @@ import pytest
 import pytest_asyncio
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker, create_async_engine
 
-from adapters.external import google_vision_adapter
+from adapters.external import ocr_space_adapter
 from tenants.madrasah.modules.madrasah.application import services
 from tenants.madrasah.modules.madrasah.application.kk_parser import parse_kartu_keluarga
 from tenants.madrasah.modules.madrasah.application.schemas import SantriIn, SantriPatch
@@ -69,21 +69,21 @@ def test_parse_kartu_keluarga_empty_text_returns_no_members():
     assert result["nomor_kk"] is None
 
 
-def test_google_vision_adapter_not_configured_without_api_key(monkeypatch):
-    monkeypatch.delenv("GOOGLE_VISION_API_KEY", raising=False)
-    assert google_vision_adapter.is_configured() is False
+def test_ocr_space_adapter_not_configured_without_api_key(monkeypatch):
+    monkeypatch.delenv("OCR_SPACE_API_KEY", raising=False)
+    assert ocr_space_adapter.is_configured() is False
 
 
-def test_google_vision_adapter_configured_with_api_key(monkeypatch):
-    monkeypatch.setenv("GOOGLE_VISION_API_KEY", "fake-key-for-test")
-    assert google_vision_adapter.is_configured() is True
+def test_ocr_space_adapter_configured_with_api_key(monkeypatch):
+    monkeypatch.setenv("OCR_SPACE_API_KEY", "fake-key-for-test")
+    assert ocr_space_adapter.is_configured() is True
 
 
 @pytest.mark.asyncio
 async def test_detect_document_text_raises_when_not_configured(monkeypatch):
-    monkeypatch.delenv("GOOGLE_VISION_API_KEY", raising=False)
-    with pytest.raises(RuntimeError, match="GOOGLE_VISION_API_KEY"):
-        await google_vision_adapter.detect_document_text(b"fake-image-bytes")
+    monkeypatch.delenv("OCR_SPACE_API_KEY", raising=False)
+    with pytest.raises(RuntimeError, match="OCR_SPACE_API_KEY"):
+        await ocr_space_adapter.detect_document_text(b"fake-image-bytes")
 
 
 @pytest_asyncio.fixture

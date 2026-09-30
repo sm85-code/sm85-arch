@@ -1,10 +1,10 @@
 """Parses raw OCR text of an Indonesian Kartu Keluarga (KK) into structured
 family-member rows.
 
-Google Cloud Vision (adapters/external/google_vision_adapter.py) only
-returns plain text -- it has no notion of "this is a KK" or which line is
-whose NIK. All of the field-to-column mapping below is our own logic, built
-against the standard KK layout:
+The OCR adapter (adapters/external/ocr_space_adapter.py) only returns plain
+text -- it has no notion of "this is a KK" or which line is whose NIK. All
+of the field-to-column mapping below is our own logic, built against the
+standard KK layout:
 
     KARTU KELUARGA
     No. .................... : <nomor kk>
@@ -14,7 +14,7 @@ against the standard KK layout:
     No | Nama Lengkap | NIK | Jenis Kelamin | Tempat Lahir | Tanggal Lahir |
         Agama | ... | Status Hubungan Dalam Keluarga | ...
 
-In practice DOCUMENT_TEXT_DETECTION returns the table as a flat sequence of
+In practice the OCR engine returns the table as a flat sequence of
 lines (not aligned columns), so this parser groups lines by the numbered-row
 markers ("1", "2", ...) that start each family member's block and pulls
 fields out of the lines between them by keyword/pattern -- it does not

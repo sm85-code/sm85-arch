@@ -12,7 +12,7 @@ import secrets as pysecrets
 from fastapi import APIRouter, Depends, File, HTTPException, Query, Request, Response, UploadFile, status
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from adapters.external import google_vision_adapter
+from adapters.external import ocr_space_adapter
 from tenants.madrasah.modules.madrasah.application import services
 from tenants.madrasah.modules.madrasah.application.kk_parser import parse_kartu_keluarga
 from tenants.madrasah.modules.madrasah.application.schemas import (
@@ -701,17 +701,17 @@ async def admin_santri_kk_ocr(
     yang terbaca, TANPA menyimpan apa pun. Admin memilih baris yang sesuai
     santri yang akan didaftarkan lalu mengisi/verifikasi form sebelum
     POST /admin/santri yang sebenarnya menyimpan data."""
-    if not google_vision_adapter.is_configured():
+    if not ocr_space_adapter.is_configured():
         raise HTTPException(
             status_code=503,
-            detail="OCR Kartu Keluarga belum dikonfigurasi (GOOGLE_VISION_API_KEY belum diset)",
+            detail="OCR Kartu Keluarga belum dikonfigurasi (OCR_SPACE_API_KEY belum diset)",
         )
     file_bytes = await file.read()
     if not file_bytes:
         raise HTTPException(status_code=400, detail="File foto kosong")
     try:
-        raw_text = await google_vision_adapter.detect_document_text(file_bytes)
-    except Exception as exc:  # noqa: BLE001 -- surface Vision's own error message
+        raw_text = await ocr_space_adapter.detect_document_text(file_bytes, file.filename or "kk.jpg")
+    except Exception as exc:  # noqa: BLE001 -- surface OCR.space's own error message
         raise HTTPException(status_code=502, detail=f"OCR gagal: {exc}") from exc
     if not raw_text:
         raise HTTPException(status_code=422, detail="Tidak ada teks yang terbaca dari foto ini")
