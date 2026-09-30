@@ -1513,6 +1513,42 @@ async def gm_penugasan_saya(
     ]
 
 
+@guru_mapel_r.get("/mapel-saya")
+async def gm_mapel_saya(
+    session: AsyncSession = Depends(get_db_madrasah),
+    user: UserMadrasah = Depends(require_roles_madrasah(*GURU_MAPEL_ROLES)),
+):
+    rows = await services.list_mapel_untuk_guru(session, user.id)
+    return [
+        {
+            "id": r.id,
+            "kode": r.kode,
+            "nama": r.nama,
+            "materi": [
+                {"id": m.id, "judul": m.judul, "urutan": m.urutan, "aktif": m.aktif}
+                for m in sorted(r.materi, key=lambda m: m.urutan)
+            ],
+        }
+        for r in rows
+    ]
+
+
+@guru_mapel_r.patch("/materi/{materi_id}")
+async def gm_materi_patch(
+    materi_id: str,
+    payload: MateriPatch,
+    session: AsyncSession = Depends(get_db_madrasah),
+    user: UserMadrasah = Depends(require_roles_madrasah(*GURU_MAPEL_ROLES)),
+):
+    try:
+        row = await services.patch_materi_untuk_guru(session, user.id, materi_id, payload)
+    except services.MadrasahNotFoundError as exc:
+        raise HTTPException(status_code=404, detail=str(exc)) from exc
+    except services.MadrasahForbiddenError as exc:
+        raise HTTPException(status_code=403, detail=str(exc)) from exc
+    return {"id": row.id, "judul": row.judul, "urutan": row.urutan, "aktif": row.aktif}
+
+
 @guru_mapel_r.get("/jadwal")
 async def gm_jadwal(
     rombel_id: str | None = Query(default=None),
