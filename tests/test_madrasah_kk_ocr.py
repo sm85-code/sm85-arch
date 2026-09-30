@@ -180,6 +180,35 @@ ENDAH TRESNASARI
     assert second["tempat_lahir"] == "Ciamis"
 
 
+def test_parse_kartu_keluarga_alamat_not_confused_with_kepala_keluarga_name():
+    """Regression: the header block's "Nama Kepala Keluarga" value line
+    inconsistently keeps or drops its leading ": " across OCR runs of the
+    exact same photo -- when it's dropped, it must not be mistaken for the
+    Alamat value that follows it."""
+    text = """Nama Kepala Keluarga
+Alamat
+RT/RW
+Kode Pos
+KARTU KELUARGA
+No . 3218090905170001
+HERU HERMAWAN, S.IP
+DUSUN WONOHARJO
+: 001/012
+: 46396
+No
+Nama Lengkap
+NIK
+(1)
+(2)
+HERU HERMAWAN, S.IP
+3207222205920002 LAKI-LAKI
+CIAMIS
+22-05-1992 ISLAM
+"""
+    result = parse_kartu_keluarga(text)
+    assert result["alamat_lengkap"] == "DUSUN WONOHARJO"
+
+
 def test_parse_kartu_keluarga_nama_never_a_gender_or_agama_value():
     """A line that itself matches jenis kelamin/agama/tanggal lahir/NIK can
     never be returned as someone's nama, even when it's the nearest

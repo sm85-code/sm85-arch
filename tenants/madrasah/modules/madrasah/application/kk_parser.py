@@ -150,21 +150,25 @@ def _find_nomor_kk(full_text: str) -> Optional[str]:
     return match.group(1) if match else None
 
 
-def _find_alamat(lines: list[str], nomor_kk: Optional[str]) -> Optional[str]:
+def _find_alamat(lines: list[str], nomor_kk: Optional[str], nama_kepala_keluarga: Optional[str]) -> Optional[str]:
     """Best-effort: the KK header block lists field LABELS (Nama Kepala
     Keluarga, Alamat, RT/RW, Kode Pos) before it lists their VALUES, so
     "Alamat"'s value doesn't sit next to its own label -- it's simply the
     first plausible value-looking line after the nomor KK line that isn't
-    itself a ": <value>" for a different label (the head-of-family name,
-    which always comes first)."""
+    the head-of-family's own name (which always comes first, and whose
+    OCR line inconsistently keeps or drops the leading ": " -- a line
+    STARTING with ":" isn't a reliable enough signal to skip on its own,
+    so this compares against the actual name instead, found independently
+    via the family table)."""
     if nomor_kk is None:
         return None
     start = next((i for i, line in enumerate(lines) if nomor_kk in line), None)
     if start is None:
         return None
-    for line in lines[start + 1 : start + 6]:
-        candidate = line.strip()
-        if not candidate or candidate.startswith(":"):
+    exclude = nama_kepala_keluarga.upper() if nama_kepala_keluarga else None
+    for line in lines[start + 1 : start + 8]:
+        candidate = line.strip().lstrip(": ").strip()
+        if not candidate or candidate.upper() == exclude:
             continue
         if re.fullmatch(r"[A-Za-z][A-Za-z0-9 ./,'-]{3,79}", candidate):
             return candidate
@@ -224,7 +228,6 @@ def parse_kartu_keluarga(raw_text: str) -> dict:
     lines = [line.strip() for line in raw_text.splitlines() if line.strip()]
     full_text = "\n".join(lines)
     nomor_kk = _find_nomor_kk(full_text)
-    alamat_lengkap = _find_alamat(lines, nomor_kk)
 
     nik_positions: list[tuple[int, str]] = []
     for idx, line in enumerate(lines):
@@ -258,6 +261,11 @@ def parse_kartu_keluarga(raw_text: str) -> dict:
                 "status_dalam_keluarga": None,
             }
         )
+
+    # The KK always lists the head of family first -- used to keep their
+    # name from being mistaken for the Alamat value below (see _find_alamat).
+    nama_kepala_keluarga = anggota[0]["nama"] if anggota else None
+    alamat_lengkap = _find_alamat(lines, nomor_kk, nama_kepala_keluarga)
 
     # Second table ("Status Hubungan Dalam Keluarga") lists the same people
     # in the same order, further down -- matched by position, not by name.
