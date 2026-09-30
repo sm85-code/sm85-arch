@@ -160,6 +160,41 @@ def test_parse_kartu_keluarga_empty_text_returns_no_members():
     assert result["nomor_kk"] is None
 
 
+def test_parse_kartu_keluarga_does_not_pick_own_tempat_lahir_as_nama():
+    """Regression: a lower-resolution re-compress of the same KK photo (the
+    frontend downsizes uploads before OCR) can shift the OCR output so a
+    person's tempat_lahir line ends up as the nearest preceding line to
+    their NIK -- it must not be mistaken for their name."""
+    text = """HERU HERMAWAN, S.IP
+3207222205920002 LAKI-LAKI
+CIAMIS
+22-05-1992 ISLAM
+ENDAH TRESNASARI
+3207226703920002 PEREMPUAN CIAMIS
+27-03-1992 ISLAM
+"""
+    result = parse_kartu_keluarga(text)
+    assert len(result["anggota"]) == 2
+    second = result["anggota"][1]
+    assert second["nama"] == "ENDAH TRESNASARI"
+    assert second["tempat_lahir"] == "Ciamis"
+
+
+def test_parse_kartu_keluarga_nama_never_a_gender_or_agama_value():
+    """A line that itself matches jenis kelamin/agama/tanggal lahir/NIK can
+    never be returned as someone's nama, even when it's the nearest
+    preceding line to a NIK (OCR sometimes drops the real name line)."""
+    text = """3207222205920002 LAKI-LAKI
+CIAMIS
+22-05-1992 ISLAM
+3207226703920002 PEREMPUAN
+27-03-1992 ISLAM
+"""
+    result = parse_kartu_keluarga(text)
+    for anggota in result["anggota"]:
+        assert anggota["nama"] not in {"LAKI-LAKI", "PEREMPUAN", "ISLAM"}
+
+
 def test_ocr_space_adapter_not_configured_without_api_key(monkeypatch):
     monkeypatch.delenv("OCR_SPACE_API_KEY", raising=False)
     assert ocr_space_adapter.is_configured() is False
