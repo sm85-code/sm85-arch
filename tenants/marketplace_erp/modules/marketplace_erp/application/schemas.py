@@ -391,3 +391,69 @@ class LaporanRingkasOut(BaseModel):
     jumlah_pesanan_per_status: dict[str, int]
     produk_terlaris: list[ProdukTerlarisOut]
     stok_kritis: list[StokKritisOut]
+
+
+# --- Tahap 4: Iklan (ads) ----------------------------------------------------
+
+
+class IklanCampaignIn(BaseModel):
+    akun_id: str
+    produk_id: Optional[str] = None
+    nama: str = Field(min_length=1, max_length=255)
+    budget_harian: Decimal = Decimal("0")
+    tanggal_mulai: datetime
+    tanggal_selesai: Optional[datetime] = None
+    catatan: Optional[str] = None
+
+
+class IklanCampaignPatch(BaseModel):
+    nama: Optional[str] = None
+    status: Optional[str] = None
+    budget_harian: Optional[Decimal] = None
+    tanggal_selesai: Optional[datetime] = None
+    catatan: Optional[str] = None
+
+
+class IklanCampaignOut(BaseModel):
+    id: str
+    akun_id: str
+    platform: str
+    produk_id: Optional[str]
+    nama: str
+    status: str
+    budget_harian: Decimal
+    tanggal_mulai: datetime
+    tanggal_selesai: Optional[datetime]
+    catatan: Optional[str]
+
+    model_config = ConfigDict(from_attributes=True)
+
+
+class IklanMetrikHarianIn(BaseModel):
+    tanggal: datetime
+    impression: int = Field(ge=0, default=0)
+    klik: int = Field(ge=0, default=0)
+    biaya: Decimal = Decimal("0")
+
+
+class IklanMetrikHarianOut(BaseModel):
+    id: str
+    campaign_id: str
+    tanggal: datetime
+    impression: int
+    klik: int
+    biaya: Decimal
+
+    model_config = ConfigDict(from_attributes=True)
+
+
+class IklanLaporanOut(BaseModel):
+    campaign_id: str
+    dari: datetime
+    sampai: datetime
+    total_impression: int
+    total_klik: int
+    ctr: Decimal
+    total_biaya: Decimal
+    omzet_atribusi: Decimal
+    roas: Optional[Decimal]

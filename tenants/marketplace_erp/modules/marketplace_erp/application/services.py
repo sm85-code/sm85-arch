@@ -14,6 +14,9 @@ from tenants.marketplace_erp.modules.marketplace_erp.application.schemas import 
     AkunMarketplacePatch,
     ChangePasswordIn,
     GudangIn,
+    IklanCampaignIn,
+    IklanCampaignPatch,
+    IklanMetrikHarianIn,
     ItemPesananIn,
     LoginIn,
     PengirimanIn,
@@ -34,9 +37,12 @@ from tenants.marketplace_erp.modules.marketplace_erp.infrastructure.models impor
     DEFAULT_GUDANG_KODE,
     PLATFORM_MARKETPLACE,
     REASON_STOK_LEDGER,
+    STATUS_IKLAN,
     STATUS_PESANAN,
     AkunMarketplace,
     Gudang,
+    IklanCampaign,
+    IklanMetrikHarian,
     ItemPesanan,
     Pesanan,
     Produk,
@@ -995,6 +1001,182 @@ async def laporan_ringkas(
         "jumlah_pesanan_per_status": jumlah_per_status,
         "produk_terlaris": produk_terlaris,
         "stok_kritis": stok_kritis,
+    }
+
+
+# --- Tahap 4: Iklan (ads) -------------------------------------------------------
+
+# Linear campaign lifecycle: draft -> aktif <-> dijeda -> selesai. No path
+# back from selesai (matches the "finished" semantics of a real ad platform).
+_TRANSISI_STATUS_IKLAN = {
+    "draft": {"aktif", "selesai"},
+    "aktif": {"dijeda", "selesai"},
+    "dijeda": {"aktif", "selesai"},
+    "selesai": set(),
+}
+
+
+async def create_campaign(session: AsyncSession, payload: IklanCampaignIn) -> IklanCampaign:
+    akun = await get_akun_marketplace(session, payload.akun_id)
+    if payload.produk_id:
+        await get_produk(session, payload.produk_id)
+    if payload.tanggal_selesai and payload.tanggal_selesai < payload.tanggal_mulai:
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="tanggal_selesai sebelum tanggal_mulai")
+    campaign = IklanCampaign(
+        akun_id=akun.id,
+        platform=akun.platform,
+        produk_id=payload.produk_id,
+        nama=payload.nama,
+        budget_harian=payload.budget_harian,
+        tanggal_mulai=payload.tanggal_mulai,
+        tanggal_selesai=payload.tanggal_selesai,
+        catatan=payload.catatan,
+    )
+    session.add(campaign)
+    await session.flush()
+    return campaign
+
+
+async def list_campaign(
+    session: AsyncSession, *, akun_id: str | None = None, platform: str | None = None, status_filter: str | None = None
+) -> list[IklanCampaign]:
+    stmt = select(IklanCampaign).order_by(IklanCampaign.created_at.desc())
+    if akun_id:
+        stmt = stmt.where(IklanCampaign.akun_id == akun_id)
+    if platform:
+        stmt = stmt.where(IklanCampaign.platform == _validate_platform(platform))
+    if status_filter:
+        status_filter = status_filter.strip().lower()
+        if status_filter not in STATUS_IKLAN:
+            raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Status iklan tidak dikenal")
+        stmt = stmt.where(IklanCampaign.status == status_filter)
+    return list((await session.execute(stmt)).scalars().all())
+
+
+async def get_campaign(session: AsyncSession, campaign_id: str) -> IklanCampaign:
+    campaign = await session.get(IklanCampaign, campaign_id)
+    if not campaign:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Campaign iklan tidak ditemukan")
+    return campaign
+
+
+async def update_campaign(session: AsyncSession, campaign_id: str, payload: IklanCampaignPatch) -> IklanCampaign:
+    campaign = await get_campaign(session, campaign_id)
+    data = payload.model_dump(exclude_unset=True)
+    status_baru = data.pop("status", None)
+    for field, value in data.items():
+        setattr(campaign, field, value)
+    if status_baru is not None:
+        status_baru = status_baru.strip().lower()
+        if status_baru not in STATUS_IKLAN:
+            raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Status iklan tidak dikenal")
+        if status_baru not in _TRANSISI_STATUS_IKLAN.get(campaign.status, set()):
+            raise HTTPException(
+                status_code=status.HTTP_409_CONFLICT,
+                detail=f"Tidak bisa ubah status dari '{campaign.status}' ke '{status_baru}'",
+            )
+        campaign.status = status_baru
+    await session.flush()
+    return campaign
+
+
+async def delete_campaign(session: AsyncSession, campaign_id: str) -> None:
+    campaign = await get_campaign(session, campaign_id)
+    if campaign.status != "draft":
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail="Hanya campaign berstatus draft yang boleh dihapus; hentikan (selesai) untuk yang lain",
+        )
+    await session.delete(campaign)
+    await session.flush()
+
+
+async def record_metrik_harian(
+    session: AsyncSession, campaign_id: str, payload: IklanMetrikHarianIn
+) -> IklanMetrikHarian:
+    """Upsert on (campaign_id, tanggal) -- re-entering the same day corrects
+    it rather than duplicating, since this is manual entry from the
+    platform's own ads dashboard and typos happen."""
+    await get_campaign(session, campaign_id)
+    existing = (
+        await session.execute(
+            select(IklanMetrikHarian).where(
+                IklanMetrikHarian.campaign_id == campaign_id, IklanMetrikHarian.tanggal == payload.tanggal
+            )
+        )
+    ).scalar_one_or_none()
+    if existing:
+        existing.impression = payload.impression
+        existing.klik = payload.klik
+        existing.biaya = payload.biaya
+        await session.flush()
+        return existing
+    metrik = IklanMetrikHarian(
+        campaign_id=campaign_id,
+        tanggal=payload.tanggal,
+        impression=payload.impression,
+        klik=payload.klik,
+        biaya=payload.biaya,
+    )
+    session.add(metrik)
+    await session.flush()
+    return metrik
+
+
+async def list_metrik_harian(session: AsyncSession, campaign_id: str) -> list[IklanMetrikHarian]:
+    stmt = (
+        select(IklanMetrikHarian)
+        .where(IklanMetrikHarian.campaign_id == campaign_id)
+        .order_by(IklanMetrikHarian.tanggal.asc())
+    )
+    return list((await session.execute(stmt)).scalars().all())
+
+
+async def laporan_iklan(session: AsyncSession, campaign_id: str, *, dari: datetime, sampai: datetime) -> dict:
+    """ROAS report for one campaign. omzet_atribusi comes from *actual*
+    ItemPesanan/Pesanan data for the campaign's linked produk_id in the
+    window -- not a number the owner enters -- which is what makes this an
+    ERP feature rather than a standalone ad-spend tracker."""
+    campaign = await get_campaign(session, campaign_id)
+
+    metrik_stmt = select(IklanMetrikHarian).where(
+        IklanMetrikHarian.campaign_id == campaign_id,
+        IklanMetrikHarian.tanggal >= dari,
+        IklanMetrikHarian.tanggal <= sampai,
+    )
+    metrik_rows = list((await session.execute(metrik_stmt)).scalars().all())
+    total_impression = sum((m.impression for m in metrik_rows), 0)
+    total_klik = sum((m.klik for m in metrik_rows), 0)
+    total_biaya = sum((m.biaya for m in metrik_rows), Decimal("0"))
+    ctr = (Decimal(total_klik) / Decimal(total_impression) * 100) if total_impression else Decimal("0")
+
+    omzet_atribusi = Decimal("0")
+    if campaign.produk_id:
+        item_stmt = (
+            select(func.coalesce(func.sum(ItemPesanan.subtotal), 0))
+            .select_from(ItemPesanan)
+            .join(Pesanan, Pesanan.id == ItemPesanan.pesanan_id)
+            .where(
+                ItemPesanan.produk_id == campaign.produk_id,
+                Pesanan.status.in_(_STATUS_TERHITUNG_PENJUALAN),
+                Pesanan.created_at >= dari,
+                Pesanan.created_at <= sampai,
+            )
+        )
+        omzet_atribusi = Decimal(str((await session.execute(item_stmt)).scalar_one()))
+
+    roas = (omzet_atribusi / total_biaya) if total_biaya else None
+
+    return {
+        "campaign_id": campaign.id,
+        "dari": dari,
+        "sampai": sampai,
+        "total_impression": total_impression,
+        "total_klik": total_klik,
+        "ctr": ctr,
+        "total_biaya": total_biaya,
+        "omzet_atribusi": omzet_atribusi,
+        "roas": roas,
     }
 
 

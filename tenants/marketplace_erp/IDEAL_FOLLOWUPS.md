@@ -9,7 +9,8 @@ Does **not** expand `tenants/toko`.
 |-------|--------|
 | **Tahap 1 (M0)** | Auth owner, AkunMarketplace, Produk (SKU induk), ProdukListing. PR #105. |
 | **Tahap 2** | Stock reservation + ledger; OMS inbox (`Pesanan`/`ItemPesanan`) with confirm→process→ship stubs; Shopee OAuth URL + token exchange + signed request helper; Lazada/TikTok/Blibli placeholders; seed-now gate (`MARKETPLACE_ERP_SEED_SECRET`); tests. |
-| **Tahap 3 (this PR)** | Multi-gudang + transfer; `staff` role + `StaffAkunMarketplace` per-shop scoping (`/akun`, `/pesanan`, pengiriman); manual pengiriman (kurir/resi) on `Pesanan`; `Settlement` (manual payout reconciliation, auto matched/discrepancy); `GET /laporan/ringkas` (omzet, pesanan per status, produk terlaris, stok kritis). All local-data -- built ahead of any live marketplace API connection, per owner's request (30 toko: 15 Shopee, 5 TikTokShop, 5 Lazada, 5 Blibli being registered separately). |
+| **Tahap 3** | Multi-gudang + transfer; `staff` role + `StaffAkunMarketplace` per-shop scoping (`/akun`, `/pesanan`, pengiriman); manual pengiriman (kurir/resi) on `Pesanan`; `Settlement` (manual payout reconciliation, auto matched/discrepancy); `GET /laporan/ringkas` (omzet, pesanan per status, produk terlaris, stok kritis). All local-data -- built ahead of any live marketplace API connection, per owner's request (30 toko: 15 Shopee, 5 TikTokShop, 5 Lazada, 5 Blibli being registered separately). |
+| **Tahap 4 (this PR)** | `IklanCampaign` + `IklanMetrikHarian` (ads). Manual daily spend entry (no ads API partner approval exists yet -- separate from the shop OAuth this tenant has); `GET /iklan/{id}/laporan` computes ROAS from **actual** `Pesanan`/`ItemPesanan` sales of the campaign's linked `produk_id`, not a manually-entered revenue figure. |
 
 ### Tahap 2 detail
 
@@ -26,6 +27,11 @@ Does **not** expand `tenants/toko`.
 - **Settlement:** `Settlement` table (`akun_id`, periode, gross/fee/net breakdown). `POST /settlement` auto-computes `status` (`matched` if `net` reconciles against gross-fees within a small epsilon, else `discrepancy`); `PATCH /settlement/{id}` can promote to `paid` after human review, or edit the numbers (re-triggers the same auto-check unless promoting to paid).
 - **Laporan ringkas:** `GET /laporan/ringkas?dari=&sampai=&batas_stok_kritis=` -- total omzet (orders counted from `to_ship` onward, same convention as `tenants/toko/modules/erp`), count per status, top-10 produk terlaris by qty, produk with `stok <= batas_stok_kritis`.
 
+### Tahap 4 detail
+
+- **Iklan:** `IklanCampaign` (`akun_id`, optional `produk_id`, `budget_harian`, `tanggal_mulai`/`selesai`, linear `status`: `draft -> aktif <-> dijeda -> selesai`, no path back from `selesai`). `IklanMetrikHarian` is a manual daily entry (`impression`/`klik`/`biaya`) upserted on `(campaign_id, tanggal)` -- re-entering a day corrects it. `POST/GET/PATCH/DELETE /iklan`, `POST/GET /iklan/{id}/metrik`.
+- **ROAS:** `GET /iklan/{id}/laporan?dari=&sampai=` sums `IklanMetrikHarian.biaya` in the window and, when the campaign has a `produk_id`, sums `ItemPesanan.subtotal` for that produk across `Pesanan` counted as real sales (`to_ship`/`shipped`/`completed`) in the same window -- `roas = omzet_atribusi / total_biaya` (`None` when `total_biaya` is 0). This is computed from real order data, not a number entered by hand, which is what makes it an ERP feature rather than a standalone spend tracker.
+
 ## Deferred / next
 
 | Item | Why deferred |
@@ -33,7 +39,8 @@ Does **not** expand `tenants/toko`.
 | Live Shopee GetItemList / GetOrderList / SetOrderReadyToShip | Needs approved Partner Key + sandbox shop; structure ready behind `SHOPEE_LIVE_SYNC` |
 | Shopee webhook receiver | Idempotent upsert already keyed on `(platform, id_eksternal)` |
 | Lazada / TikTok Shop / Blibli OAuth + sync | Placeholders only (Shopee first; owner is registering these separately) |
-| Chat / iklan | M4–M5 per product spek |
+| Shopee Ads / TikTok Ads / Lazada Sponsored Discovery / Blibli Ads API integration | Separate partner approval from shop OAuth; `IklanCampaign`/`IklanMetrikHarian` today are manual-entry only |
+| Chat | M4–M5 per product spek |
 | Encrypt shop tokens at rest | Open decision; DB already isolated |
 | Settlement auto-import from platform statement API | M4 -- currently manual entry only, matches design in `docs/marketplace-erp-spek.md` |
 | Per-warehouse StokReservasi allocation (reserve from a specific gudang, not just DEFAULT) | Reservation still always resolves to `ensure_default_gudang`; multi-gudang so far covers manual stock and transfers, not order-time allocation |
