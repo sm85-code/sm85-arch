@@ -121,6 +121,29 @@ def _parse_tanggal(text: str) -> Optional[date]:
         return None
 
 
+def _tanggal_lahir_from_nik(nik: str) -> Optional[date]:
+    """The NIK itself encodes birth date at digits 7-12 (DDMMYY) -- for a
+    woman DD has 40 added to it (a woman born on the 27th gets 67). NIK
+    digits practically never get OCR-corrupted the way free-form printed
+    dates elsewhere on the form do (that's a single misread among 16
+    digits we already validated as a clean match), so this is a more
+    reliable source for tanggal_lahir than the date text block, not just
+    a fallback for when that block is missing or garbled."""
+    if not nik or len(nik) != 16 or not nik.isdigit():
+        return None
+    day_raw = int(nik[6:8])
+    month = int(nik[8:10])
+    year_2digit = int(nik[10:12])
+    day = day_raw - 40 if day_raw > 40 else day_raw
+    if not (1 <= day <= 31 and 1 <= month <= 12):
+        return None
+    century = 2000 if year_2digit <= date.today().year % 100 else 1900
+    try:
+        return date(century + year_2digit, month, day)
+    except ValueError:
+        return None
+
+
 def _find_jenis_kelamin(text: str) -> Optional[str]:
     upper = text.upper()
     for keyword, code in _JENIS_KELAMIN_MAP.items():
@@ -296,7 +319,7 @@ def parse_kartu_keluarga(raw_text: str) -> dict:
                 "nama": _find_nama_before(lines, line_idx, window_start, tempat_lahir),
                 "nik": nik,
                 "tempat_lahir": tempat_lahir,
-                "tanggal_lahir": _parse_tanggal(window_text),
+                "tanggal_lahir": _tanggal_lahir_from_nik(nik) or _parse_tanggal(window_text),
                 "jenis_kelamin": _find_jenis_kelamin(window_text),
                 "agama": _find_agama(window_text),
                 "status_dalam_keluarga": None,
