@@ -154,6 +154,140 @@ def test_parse_kartu_keluarga_extracts_all_rows():
     assert anak["nama_ibu"] == "ENDAH TRESNASARI"
 
 
+# Real OCR.space output for the EXACT SAME photo as SAMPLE_KK_TEXT above, but
+# from a different OCR run that happened to read the table column-by-column
+# (all 3 names together, then all 3 NIK+gender+tempat rows, then all 3
+# tanggal+agama rows, ...) instead of person-by-person. Same underlying
+# document, structurally different OCR output -- both must parse correctly.
+SAMPLE_KK_TEXT_COLUMN_MAJOR = """No
+Nama Kepala Keluarga
+Alamat
+RT/RW
+Kode Pos
+Nama Lengkap
+(1)
+HERU HERMAWAN, S.IP
+ENDAH TRESNASARI
+RAYYAN ATTAR HERMAWAN
+KARTU KELUARGA
+No . 3218090905170001
+: HERU HERMAWAN, S.IP
+Desa/Kelurahan
+: DUSUN WONOHARJO
+Kecamatan
+001/012
+Kabupaten/Kota
+46396
+Provinsi
+K 32180213463
+: WONOHARJO
+PANGANDARAN
+PANGANDARAN
+: JAWA BARAT
+NIK
+Jenis
+Kelamin
+Tempat Lahir
+(2)
+3207222205920002 LAKI-LAKI
+CIAMIS
+3207226703920002 PEREMPUAN CIAMIS
+3218092003180001 LAKI-LAKI
+PANGANDARAN
+Tanggal
+Agama
+Lahir
+(5)
+（6）
+22-05-1992 ISLAM
+27-03-1992 ISLAM
+220-03-2018 ISLAM
+Pendidikan
+Jenis Pekerjaan
+(7)
+DIPLOMA IV/STRATA I
+SLTA/SEDERAJAT
+TIDAK/BLM SEKOLAH
+(8)
+WIRASWASTA
+PERANGKAT DESA
+BELUM/TIDAK BEKERJA
+No.
+Status
+Perkawinan
+(9)
+KAWIN
+KAWIN
+BELUM KAWIN
+Status Hubungan
+Dalam Keluarga
+(10)
+KEPALA KELUARGA
+ISTRI
+ANAK
+Kewarganegaraan
+(11)
+WNI
+WNI
+WNI
+Dokumen Imigrasi
+No. Paspor
+No. KITAP
+(12)
+(13)
+Ayah
+(14)
+RASIDI
+ADPAR
+HERU HERMAWAN, S.IP
+Nama Orang Tua
+YULINAR
+HATOYAH
+ENDAH TRESNASARI
+bu
+（15）
+Dikeluarkan Tanggal
+LEMBAR
+24-04-2018
+Kepala Keluarga
+RT
+III. Desa/Kelurahan
+1V. Kecamatan
+SRAGAM : 125.000
+.. Instaran : 25.000
+KEPALA KELUARGA
+HERU HERMAWAN. S.IP
+Tanda Tangan/Cap Jempol
+"""
+
+
+def test_parse_kartu_keluarga_column_major_ocr_layout():
+    result = parse_kartu_keluarga(SAMPLE_KK_TEXT_COLUMN_MAJOR)
+    assert result["nomor_kk"] == "3218090905170001"
+    assert result["alamat_lengkap"] == "DUSUN WONOHARJO"
+    assert len(result["anggota"]) == 3
+
+    ayah, ibu, anak = result["anggota"]
+    assert ayah["nama"] == "HERU HERMAWAN, S.IP"
+    assert ayah["tanggal_lahir"] == date(1992, 5, 22)
+    assert ayah["agama"] == "Islam"
+    assert ayah["status_dalam_keluarga"] == "Kepala Keluarga"
+
+    assert ibu["nama"] == "ENDAH TRESNASARI"
+    assert ibu["tanggal_lahir"] == date(1992, 3, 27)
+    assert ibu["status_dalam_keluarga"] == "Istri"
+
+    assert anak["nama"] == "RAYYAN ATTAR HERMAWAN"
+    # OCR misread this one date as "220-03-2018" (extra leading digit) --
+    # an unrecoverable corruption, not a parser bug; best-effort just means
+    # it comes back None here instead of a WRONG date, for the admin to
+    # fill in during the mandatory review step.
+    assert anak["tanggal_lahir"] is None
+    assert anak["status_dalam_keluarga"] == "Anak"
+    assert anak["nama_ayah"] == "HERU HERMAWAN, S.IP"
+    assert anak["nama_ibu"] == "ENDAH TRESNASARI"
+
+
 def test_parse_kartu_keluarga_empty_text_returns_no_members():
     result = parse_kartu_keluarga("")
     assert result["anggota"] == []

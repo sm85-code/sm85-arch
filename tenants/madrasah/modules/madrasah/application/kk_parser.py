@@ -168,7 +168,7 @@ def _find_alamat(lines: list[str], nomor_kk: Optional[str], nama_kepala_keluarga
     exclude = nama_kepala_keluarga.upper() if nama_kepala_keluarga else None
     for line in lines[start + 1 : start + 8]:
         candidate = line.strip().lstrip(": ").strip()
-        if not candidate or candidate.upper() == exclude:
+        if not candidate or candidate.upper() == exclude or candidate.upper() in _HEADER_STOPWORDS:
             continue
         if re.fullmatch(r"[A-Za-z][A-Za-z0-9 ./,'-]{3,79}", candidate):
             return candidate
@@ -217,6 +217,47 @@ def _find_tempat_lahir(lines_from_nik: list[str]) -> Optional[str]:
     return None
 
 
+def _find_value_block(lines: list[str], label: str, value_of, count: int) -> list:
+    """OCR sometimes reads the KK table column-by-column instead of
+    person-by-person -- in that layout, a whole column's values (e.g. all
+    3 names, or all 3 birth dates) come out as one consecutive block right
+    after that column's own label, far from the NIKs they belong to (see
+    _find_nama_before's docstring for the row-by-row layout this doesn't
+    cover). This is the fallback for that case: find `label`'s line, then
+    collect up to `count` consecutive values satisfying `value_of` (which
+    returns None for a non-match), skipping paren column markers and any
+    other label lines before the block starts, stopping at the first
+    non-match once collection has begun (that means the block ended)."""
+    label_idx = next((i for i, line in enumerate(lines) if line.strip().upper() == label), None)
+    if label_idx is None:
+        return []
+    values = []
+    for line in lines[label_idx + 1 : label_idx + 1 + count + 15]:
+        candidate = line.strip()
+        if _PAREN_MARKER_RE.match(candidate):
+            continue
+        value = value_of(candidate) if candidate else None
+        if value is None:
+            if values:
+                break
+            continue
+        values.append(value)
+        if len(values) == count:
+            break
+    return values
+
+
+def _nama_value(candidate: str) -> Optional[str]:
+    if candidate.upper() in _HEADER_STOPWORDS:
+        return None
+    if _find_jenis_kelamin(candidate) or _find_agama(candidate) or _DATE_RE.search(candidate) or _NIK_RE.search(candidate):
+        return None
+    stripped = candidate.lstrip(": ").strip()
+    if stripped and re.search(r"[A-Za-z]{2,}", stripped) and len(stripped) <= 60:
+        return stripped
+    return None
+
+
 def parse_kartu_keluarga(raw_text: str) -> dict:
     """Turns the OCR adapter's raw text into a KkOcrResult-shaped dict:
     {nomor_kk, alamat_lengkap, anggota: [...], raw_text}.
@@ -262,25 +303,49 @@ def parse_kartu_keluarga(raw_text: str) -> dict:
             }
         )
 
+    # Column-major fallback: when OCR reads the table column-by-column
+    # instead of person-by-person, a whole column's values land far from
+    # the NIKs they belong to, so the per-person window above finds
+    # nothing for that field on EVERY person at once. Only fills genuine
+    # gaps -- never overwrites a value the per-person pass already found.
+    if any(a["nama"] is None for a in anggota):
+        block = _find_value_block(lines, "NAMA LENGKAP", _nama_value, len(anggota))
+        for person, value in zip((a for a in anggota if a["nama"] is None), block):
+            person["nama"] = value
+    if any(a["tanggal_lahir"] is None for a in anggota):
+        block = _find_value_block(lines, "TANGGAL", _parse_tanggal, len(anggota))
+        for person, value in zip((a for a in anggota if a["tanggal_lahir"] is None), block):
+            person["tanggal_lahir"] = value
+    if any(a["agama"] is None for a in anggota):
+        block = _find_value_block(lines, "AGAMA", _find_agama, len(anggota))
+        for person, value in zip((a for a in anggota if a["agama"] is None), block):
+            person["agama"] = value
+
     # The KK always lists the head of family first -- used to keep their
     # name from being mistaken for the Alamat value below (see _find_alamat).
     nama_kepala_keluarga = anggota[0]["nama"] if anggota else None
     alamat_lengkap = _find_alamat(lines, nomor_kk, nama_kepala_keluarga)
 
     # Second table ("Status Hubungan Dalam Keluarga") lists the same people
-    # in the same order, further down -- matched by position, not by name.
-    # Bounded to the region after the LAST "(9)".."(15)" column marker (the
-    # second table's own header row) and before "Dikeluarkan Tanggal" (the
-    # footer) -- otherwise header lines like "Nama Kepala Keluarga" (top of
-    # the form) or "Nama Orang Tua" (second table's own column header) get
-    # matched as if they were a person's actual status.
-    paren_indices = [i for i, line in enumerate(lines) if _PAREN_MARKER_RE.match(line)]
-    status_start = paren_indices[-1] + 1 if paren_indices else 0
-    status_end = next(
-        (i for i in range(status_start, len(lines)) if "DIKELUARKAN" in lines[i].upper()),
-        len(lines),
-    )
-    status_matches = [s for s in (_find_status_hubungan(line) for line in lines[status_start:status_end]) if s]
+    # in the same order -- matched by position, not by name. Two header
+    # phrases contain a status keyword as a literal substring and must be
+    # excluded explicitly rather than by position: "Nama Kepala Keluarga"
+    # (top of the form, contains "Kepala Keluarga") and "Nama Orang Tua"
+    # (this table's own column header, contains "Orang Tua") -- their
+    # position relative to the real data varies with how OCR happened to
+    # read the table (row-by-row vs column-by-column), so a position-only
+    # boundary that works for one layout breaks on the other. Still bounded
+    # above "Dikeluarkan Tanggal" (the footer), which repeats "Kepala
+    # Keluarga" as a signature label.
+    status_end = next((i for i, line in enumerate(lines) if "DIKELUARKAN" in line.upper()), len(lines))
+    status_header_phrases = {"NAMA KEPALA KELUARGA", "NAMA ORANG TUA"}
+    status_matches = []
+    for line in lines[:status_end]:
+        if line.strip().upper() in status_header_phrases:
+            continue
+        status = _find_status_hubungan(line)
+        if status:
+            status_matches.append(status)
     for person, status in zip(anggota, status_matches):
         person["status_dalam_keluarga"] = status
 
