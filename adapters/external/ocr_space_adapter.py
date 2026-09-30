@@ -52,13 +52,17 @@ def _parse_sync(image_bytes: bytes, file_name: str) -> str:
         _PARSE_URL,
         data={
             "apikey": api_key,
-            "language": "ind",
+            # OCR.space rejects "ind" (Indonesian isn't in OCREngine=2's
+            # supported language list -- confirmed via their API, error
+            # "E201: Value for parameter 'language' is invalid"). "auto"
+            # works fine for Indonesian's Latin script.
+            "language": "auto",
             "OCREngine": 2,
             "isOverlayRequired": False,
             "scale": True,
         },
         files={"file": (file_name or "document.jpg", image_bytes)},
-        timeout=_REQUEST_TIMEOUT_SECONDS,
+        timeout=(10, _REQUEST_TIMEOUT_SECONDS),
     )
     response.raise_for_status()
     payload = response.json()
