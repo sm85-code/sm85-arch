@@ -576,3 +576,120 @@ def test_parse_kartu_keluarga_table_mode_circled_row_number():
 """
     a = parse_kartu_keluarga(text)["anggota"][0]
     assert (a["nama"], a["tempat_lahir"], a["agama"]) == ("RAYYAN ATTAR HERMAWAN", "Pangandaran", "Islam")
+
+
+SAMPLE_KK_TEXT_COLUMN_SCRAMBLED = """No
+Nama Kepala Keluarga
+Alamat
+RT/RW
+Kode Pos
+Nama Lengkap
+(1)
+HERU HERMAWAN, S.IP
+ENDAH TRESNASARI
+RAYYAN ATTAR HERMAWAN
+KARTU KELUARGA
+No . 3218090905170001
+HERU HERMAWAN, S.IP
+Desa/Kelurahan
+DUSUN WONOHARJO
+Kecamatan
+001/012
+Kabupaten/Kota
+: 46396
+Provinsi
+K 32180213463
+NIK
+Jenis
+Kelamin
+Tempat Lahir
+(2)
+(3)
+3207222205920002
+LAKI-LAKI
+CIAMIS
+(4)
+3207226703920002 PEREMPUAN CIAMIS
+3218092003180001 LAKI-LAKI
+PANGANDARAN
+: WONOHARJO
+: PANGANDARAN
+: PANGANDARAN
+: JAWA BARAT
+Tanggal
+Lahir
+Agama
+(5)
+(G)
+22-05-1992 ISLAM
+27-03-1992 ISLAM
+20-03-2018 ISLAM
+Pendidikan
+Jenis Pekerjaan
+(7)
+_(8)
+DIPLOMA IV/STRATA I
+WIRASWASTA
+SLTA/SEDERAJAT
+PERANGKAT DESA
+TIDAK/BLM SEKOLAH
+BELUM/TIDAK BEKERJA
+10
+No.
+1
+2
+Status
+Perkawinan
+(9)
+KAWIN
+KAWIN
+BELUM KAWIN
+Status Hubungan
+Dalam Keluarga
+(10)
+KEPALA KELUARGA
+ISTRI
+ANAK
+Kewarganegaraan
+(11)
+WNI
+WNI
+WNI
+5
+101
+Dikeluarkan Tanggal
+LEMBAR
+24-04-2018
+Kepala Keluarga
+RT
+IlI. Desa/Kelurahan
+IV. Kecamatan
+SRAGAM : 125:000
+D. 1a taran : 25.000
+Dokumen Imigrasi
+No. Paspor
+No. KITAP
+(12)
+(13)
+Ayah
+(14)
+RASIDI
+ADPAR
+HERU HERMAWAN, S.IP
+Nama Orang Tua
+YULINAR
+HATOYAH
+ENDAH TRESNASARI
+Ibu
+(15)
+KEPALA KELUARGA
+HERU HERMAWAN, S.IP
+Tanda Tangan/Cap Jempol
+"""
+
+
+def test_parse_kartu_keluarga_wilayah_skips_table_labels_after_k_number():
+    result = parse_kartu_keluarga(SAMPLE_KK_TEXT_COLUMN_SCRAMBLED)
+    assert (result["desa_kelurahan"], result["kecamatan"], result["kabupaten_kota"], result["provinsi"]) == (
+        "WONOHARJO", "PANGANDARAN", "PANGANDARAN", "JAWA BARAT")
+    assert [a["nama"] for a in result["anggota"]] == ["HERU HERMAWAN, S.IP", "ENDAH TRESNASARI", "RAYYAN ATTAR HERMAWAN"]

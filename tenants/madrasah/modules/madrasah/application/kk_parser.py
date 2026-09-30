@@ -246,9 +246,15 @@ def _find_wilayah(lines: list[str]) -> dict:
     k_idx = next((i for i, line in enumerate(lines) if _K_NUMBER_RE.match(line.strip())), None)
     if k_idx is None:
         return empty
+    # Prefer ":"-prefixed lines -- the form prints every header value that
+    # way, while the table's column labels/values that can follow the K line
+    # in some OCR layouts (NIK, Jenis Kelamin, LAKI-LAKI, CIAMIS...) never
+    # carry the colon. Falls back to any name-like line when none do.
+    window = [line.strip() for line in lines[k_idx + 1 : k_idx + 30]]
+    pool = [line for line in window if line.startswith(":")] or window
     values = []
-    for line in lines[k_idx + 1 : k_idx + 9]:
-        candidate = line.strip().lstrip(": ").strip()
+    for line in pool:
+        candidate = line.lstrip(": ").strip()
         if candidate and re.fullmatch(r"[A-Za-z][A-Za-z .'-]{1,59}", candidate):
             values.append(candidate)
         if len(values) == 4:
