@@ -1675,6 +1675,16 @@ async def create_santri(
         kelas_id=payload.kelas_id or payload.rombel_id,
         orang_tua_id=orang_tua_id,
         madrasah_unit_id=unit_id,
+        nik=payload.nik,
+        tempat_lahir=payload.tempat_lahir,
+        tanggal_lahir=payload.tanggal_lahir,
+        jenis_kelamin=payload.jenis_kelamin,
+        agama=payload.agama,
+        status_dalam_keluarga=payload.status_dalam_keluarga,
+        alamat_lengkap=payload.alamat_lengkap,
+        nomor_kk=payload.nomor_kk,
+        nama_ayah=payload.nama_ayah,
+        nama_ibu=payload.nama_ibu,
     )
     session.add(row)
     await session.flush()
@@ -1695,6 +1705,26 @@ async def patch_santri(session: AsyncSession, santri_id: str, payload: SantriPat
         await _catat_riwayat_penempatan(session, santri_id, payload.rombel_id)
     if payload.orang_tua_id is not None:
         row.orang_tua_id = payload.orang_tua_id or None
+    if payload.nik is not None:
+        row.nik = payload.nik
+    if payload.tempat_lahir is not None:
+        row.tempat_lahir = payload.tempat_lahir
+    if payload.tanggal_lahir is not None:
+        row.tanggal_lahir = payload.tanggal_lahir
+    if payload.jenis_kelamin is not None:
+        row.jenis_kelamin = payload.jenis_kelamin
+    if payload.agama is not None:
+        row.agama = payload.agama
+    if payload.status_dalam_keluarga is not None:
+        row.status_dalam_keluarga = payload.status_dalam_keluarga
+    if payload.alamat_lengkap is not None:
+        row.alamat_lengkap = payload.alamat_lengkap
+    if payload.nomor_kk is not None:
+        row.nomor_kk = payload.nomor_kk
+    if payload.nama_ayah is not None:
+        row.nama_ayah = payload.nama_ayah
+    if payload.nama_ibu is not None:
+        row.nama_ibu = payload.nama_ibu
     await session.flush()
     return row
 

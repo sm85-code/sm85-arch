@@ -9,10 +9,12 @@ from decimal import Decimal
 import os
 import secrets as pysecrets
 
-from fastapi import APIRouter, Depends, HTTPException, Query, Request, Response, status
+from fastapi import APIRouter, Depends, File, HTTPException, Query, Request, Response, UploadFile, status
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from adapters.external import google_vision_adapter
 from tenants.madrasah.modules.madrasah.application import services
+from tenants.madrasah.modules.madrasah.application.kk_parser import parse_kartu_keluarga
 from tenants.madrasah.modules.madrasah.application.schemas import (
     AbsenBulkRequest,
     AbsenMapelBulkRequest,
@@ -20,6 +22,7 @@ from tenants.madrasah.modules.madrasah.application.schemas import (
     GuruIn,
     JadwalIn,
     KegiatanIn,
+    KkOcrResult,
     LoginRequest,
     MapelIn,
     MapelPatch,
@@ -674,6 +677,47 @@ async def admin_wali_santri_delete(
     )
 
 
+def _santri_kependudukan_out(row) -> dict:
+    return {
+        "nik": row.nik,
+        "tempat_lahir": row.tempat_lahir,
+        "tanggal_lahir": row.tanggal_lahir.isoformat() if row.tanggal_lahir else None,
+        "jenis_kelamin": row.jenis_kelamin,
+        "agama": row.agama,
+        "status_dalam_keluarga": row.status_dalam_keluarga,
+        "alamat_lengkap": row.alamat_lengkap,
+        "nomor_kk": row.nomor_kk,
+        "nama_ayah": row.nama_ayah,
+        "nama_ibu": row.nama_ibu,
+    }
+
+
+@admin_r.post("/santri/kk-ocr", response_model=KkOcrResult)
+async def admin_santri_kk_ocr(
+    file: UploadFile = File(...),
+    _user: UserMadrasah = Depends(require_roles_madrasah(*SANTRI_WRITE_ROLES)),
+):
+    """OCR sebuah foto Kartu Keluarga dan kembalikan daftar anggota keluarga
+    yang terbaca, TANPA menyimpan apa pun. Admin memilih baris yang sesuai
+    santri yang akan didaftarkan lalu mengisi/verifikasi form sebelum
+    POST /admin/santri yang sebenarnya menyimpan data."""
+    if not google_vision_adapter.is_configured():
+        raise HTTPException(
+            status_code=503,
+            detail="OCR Kartu Keluarga belum dikonfigurasi (GOOGLE_VISION_API_KEY belum diset)",
+        )
+    file_bytes = await file.read()
+    if not file_bytes:
+        raise HTTPException(status_code=400, detail="File foto kosong")
+    try:
+        raw_text = await google_vision_adapter.detect_document_text(file_bytes)
+    except Exception as exc:  # noqa: BLE001 -- surface Vision's own error message
+        raise HTTPException(status_code=502, detail=f"OCR gagal: {exc}") from exc
+    if not raw_text:
+        raise HTTPException(status_code=422, detail="Tidak ada teks yang terbaca dari foto ini")
+    return parse_kartu_keluarga(raw_text)
+
+
 @admin_r.post("/santri", status_code=status.HTTP_201_CREATED)
 async def admin_santri_create(
     payload: SantriIn,
@@ -690,6 +734,7 @@ async def admin_santri_create(
         "rombel_id": row.rombel_id,
         "orang_tua_id": row.orang_tua_id,
         "madrasah_unit_id": row.madrasah_unit_id,
+        **_santri_kependudukan_out(row),
     }
     if wali_username:
         out["wali_username"] = wali_username
@@ -711,7 +756,16 @@ async def admin_santri_list(
         scope = _unit_scope(user, unit_id)
         rows = await services.list_santri(session, None, status=status, unit_id=scope)
     return [
-        {"id": r.id, "nama": r.nama, "rombel_id": r.rombel_id, "orang_tua_id": r.orang_tua_id, "orang_tua": r.orang_tua.nama if r.orang_tua else None, "status": r.status, "madrasah_unit_id": r.madrasah_unit_id}
+        {
+            "id": r.id,
+            "nama": r.nama,
+            "rombel_id": r.rombel_id,
+            "orang_tua_id": r.orang_tua_id,
+            "orang_tua": r.orang_tua.nama if r.orang_tua else None,
+            "status": r.status,
+            "madrasah_unit_id": r.madrasah_unit_id,
+            **_santri_kependudukan_out(r),
+        }
         for r in rows
     ]
 
@@ -727,7 +781,13 @@ async def admin_santri_patch(
         row = await services.patch_santri(session, santri_id, payload)
     except services.MadrasahNotFoundError as exc:
         raise HTTPException(status_code=404, detail=str(exc)) from exc
-    return {"id": row.id, "nama": row.nama, "rombel_id": row.rombel_id, "orang_tua_id": row.orang_tua_id}
+    return {
+        "id": row.id,
+        "nama": row.nama,
+        "rombel_id": row.rombel_id,
+        "orang_tua_id": row.orang_tua_id,
+        **_santri_kependudukan_out(row),
+    }
 
 
 @admin_r.delete("/santri/{santri_id}", status_code=status.HTTP_204_NO_CONTENT)
