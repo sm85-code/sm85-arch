@@ -5,6 +5,11 @@ The OCR adapter (adapters/external/ocr_space_adapter.py) only returns plain
 text -- it has no notion of "this is a KK" or which line is whose NIK. All
 of the field-to-column mapping below is our own logic.
 
+The adapter now always requests table mode (isTable), which returns one line
+per table row, e.g. "1 NAMA 3207... LAKI-LAKI CIAMIS 27-03-1992 ISLAM"; the
+parser handles that layout (name on the NIK line) and still falls back to
+the older layout below.
+
 The official KK form is a bordered table, and OCR (without table-structure
 detection) reads it as a flat sequence of lines that do NOT start with a
 row number -- the "(1)" "(2)" ... column markers are their own lines, and
@@ -252,6 +257,18 @@ def _find_wilayah(lines: list[str]) -> dict:
     return {key: (values[i] if i < len(values) else None) for i, key in enumerate(keys)}
 
 
+def _nama_on_nik_line(line: str, nik: str) -> Optional[str]:
+    """Table mode (isTable) puts a person's whole row on one line, so the
+    name sits before the NIK on that same line, optionally preceded by the
+    row number cell ("1 HERU HERMAWAN 3207..."). Returns None when nothing
+    name-like precedes the NIK (the older one-cell-per-line layout)."""
+    prefix = line.split(nik, 1)[0]
+    prefix = re.sub(r"^\s*\d{1,2}[.)]?\s+", "", prefix).strip(" :|")
+    if prefix and re.search(r"[A-Za-z]{2,}", prefix) and len(prefix) <= 60:
+        return prefix
+    return None
+
+
 def _find_nama_before(lines: list[str], nik_idx: int, search_start: int, tempat_lahir: Optional[str]) -> Optional[str]:
     """Scans backward from the NIK line for the nearest line that's plausibly
     a person's name -- skipping header/column labels, paren column markers,
@@ -282,7 +299,11 @@ def _find_tempat_lahir(lines_from_nik: list[str]) -> Optional[str]:
     first_line = lines_from_nik[0]
     gender_match = re.search(r"LAKI-LAKI|PEREMPUAN", first_line.upper())
     if gender_match:
-        remainder = first_line[gender_match.end() :].strip(" :.-")
+        # In table mode the whole row is one line, so the place is followed
+        # by the birth date/agama/etc. -- cut at the first digit.
+        remainder = re.split(r"\d", first_line[gender_match.end() :], maxsplit=1)[0].strip(" :.-")
+        for keyword in _AGAMA_KEYWORDS:
+            remainder = re.sub(rf"\b{keyword}\b.*", "", remainder, flags=re.IGNORECASE).strip(" :.-")
         if remainder and _PLACE_RE.fullmatch(remainder):
             return remainder.title()
     for line in lines_from_nik[1:3]:
@@ -370,7 +391,8 @@ def parse_kartu_keluarga(raw_text: str) -> dict:
         anggota.append(
             {
                 "baris": person_index + 1,
-                "nama": _find_nama_before(lines, line_idx, window_start, tempat_lahir),
+                "nama": _nama_on_nik_line(lines[line_idx], nik)
+                or _find_nama_before(lines, line_idx, window_start, tempat_lahir),
                 "nik": nik,
                 "tempat_lahir": tempat_lahir,
                 "tanggal_lahir": _tanggal_lahir_from_nik(nik) or _parse_tanggal(window_text),

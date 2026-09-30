@@ -538,3 +538,33 @@ async def test_wali_password_falls_back_to_random_without_birthdate(session):
     _row, _wali_username, wali_password = await services.patch_santri(session, santri.id, SantriPatch(nama_wali="Heru Hermawan"))
     assert wali_password
     assert wali_password != "200318"
+
+
+def test_parse_kartu_keluarga_table_mode_rows():
+    text = """KARTU KELUARGA
+No . 3218090905170001
+1 HERU HERMAWAN, S.IP 3207222205920002 LAKI-LAKI CIAMIS 22-05-1992 ISLAM SLTA/SEDERAJAT
+2 SITI AMINAH 3207226708940003 PEREMPUAN CIAMIS 27-08-1994ISLAM SLTA/SEDERAJAT
+KEPALA KELUARGA
+ISTRI
+"""
+    result = parse_kartu_keluarga(text)
+    a, b = result["anggota"]
+    assert (a["nama"], a["nik"], a["jenis_kelamin"], a["tempat_lahir"], a["agama"]) == (
+        "HERU HERMAWAN, S.IP", "3207222205920002", "L", "Ciamis", "Islam")
+    assert (b["nama"], b["jenis_kelamin"], b["tempat_lahir"]) == ("SITI AMINAH", "P", "Ciamis")
+    assert b["tanggal_lahir"] == date(1994, 8, 27)
+    assert a["status_dalam_keluarga"] == "Kepala Keluarga" and a["nama_ibu"] == "SITI AMINAH"
+
+
+def test_ocr_space_request_always_uses_table_mode(monkeypatch):
+    monkeypatch.setenv("OCR_SPACE_API_KEY", "k")
+    sent = {}
+
+    class R:
+        def raise_for_status(self): pass
+        def json(self): return {"ParsedResults": [{"ParsedText": "x"}]}
+
+    monkeypatch.setattr(ocr_space_adapter.requests, "post", lambda *a, **kw: sent.update(kw) or R())
+    ocr_space_adapter._parse_sync(b"img", "kk.jpg")
+    assert sent["data"]["isTable"] is True
