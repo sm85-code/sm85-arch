@@ -1,6 +1,6 @@
 """FastAPI application entrypoint (modular monolith).
 
-Serves the madrasah, toko (incl. toko ERP), marketplace_erp and store tenants.
+Serves the madrasah, marketplace_erp and store tenants.
 SIABUMDES moved to its own service: sm85-code/backend-siabumdes.
 """
 from __future__ import annotations
@@ -26,9 +26,6 @@ from tenants.marketplace_erp.modules.marketplace_erp.infrastructure.seeder impor
 from tenants.store.adapters.api.v1.store_admin_router import store_admin_router
 from tenants.store.adapters.api.v1.store_buyer_router import store_buyer_router
 from tenants.store.modules.store.infrastructure import database as store_database
-from tenants.toko.adapters.api.v1.erp_router import erp_router
-from tenants.toko.adapters.api.v1.toko_router import toko_router
-from tenants.toko.modules.toko.infrastructure import database as toko_database
 from shared.config import APP_TITLE, CORS_ORIGIN_REGEX, CORS_ORIGINS, origin_allowed
 
 logging.basicConfig(
@@ -72,8 +69,6 @@ app.add_middleware(
 )
 
 app.include_router(madrasah_router, prefix="/api/madrasah", tags=["Madrasah"])
-app.include_router(toko_router, prefix="/api/toko", tags=["Toko"])
-app.include_router(erp_router, prefix="/api/toko/marketplace", tags=["Toko ERP"])
 app.include_router(marketplace_erp_router, prefix="/api/marketplace-erp", tags=["Marketplace ERP"])
 app.include_router(store_admin_router, prefix="/api/store/admin", tags=["Store Admin"])
 app.include_router(store_buyer_router, prefix="/api/store/buyer", tags=["Store Buyer"])
@@ -92,7 +87,7 @@ class CsrfOriginMiddleware(BaseHTTPMiddleware):
     Class-based (BaseHTTPMiddleware) instead of the @app.middleware("http")
     decorator: that decorator is deprecated and removed in Starlette 1.0, and
     this middleware guards the cookie-based auth every frontend (diniyah/
-    madrasah, toko, marketplace_erp) depends on -- it must keep working across a starlette bump.
+    madrasah, marketplace_erp, store) depends on -- it must keep working across a starlette bump.
     """
 
     async def dispatch(self, request: Request, call_next):
@@ -152,7 +147,6 @@ app.add_middleware(CsrfOriginMiddleware)
 
 _TENANT_DB_MODULES = {
     "madrasah": madrasah_database,
-    "toko": toko_database,
     "marketplace_erp": marketplace_erp_database,
     "store": store_database,
 }

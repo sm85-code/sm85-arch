@@ -1,5 +1,5 @@
 # Runtime — FastAPI + PostgreSQL (no MongoDB / pymongo / motor)
-# Tenant engines (madrasah / toko / marketplace_erp) rewrite their URLs to
+# Tenant engines (madrasah / marketplace_erp / store) rewrite their URLs to
 # postgresql+asyncpg. SIABUMDES-only deps (alembic, psycopg, reportlab,
 # weasyprint, pydyf, openpyxl, python-docx) left with SIABUMDES for
 # sm85-code/backend-siabumdes.
