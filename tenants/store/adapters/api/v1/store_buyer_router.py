@@ -86,7 +86,7 @@ async def me(user: PembeliStore = Depends(get_current_buyer)):
 
 @store_buyer_router.get("/produk")
 async def list_produk(session: AsyncSession = Depends(get_db_store)):
-    return [services.produk_out(p) for p in await services.list_produk(session, hanya_aktif=True)]
+    return [services.produk_out(p) for p in await services.list_produk_publik(session)]
 
 
 @store_buyer_router.get("/produk/{ref}")
