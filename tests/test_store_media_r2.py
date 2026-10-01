@@ -103,7 +103,7 @@ async def test_r2_failure_becomes_502_without_leaking_details(stubbed):
 
 
 @pytest.mark.asyncio
-async def test_unconfigured_r2_is_503_and_never_builds_a_client(monkeypatch):
+async def test_unconfigured_r2_is_501_and_never_builds_a_client(monkeypatch):
     for name in ("R2_ACCOUNT_ID", "R2_ACCESS_KEY_ID", "R2_SECRET_ACCESS_KEY", "R2_BUCKET"):
         monkeypatch.delenv(name, raising=False)
 
@@ -113,7 +113,7 @@ async def test_unconfigured_r2_is_503_and_never_builds_a_client(monkeypatch):
     monkeypatch.setattr(media_storage, "_client", boom)
     with pytest.raises(HTTPException) as exc:
         await media_storage.upload_produk_photo(PNG, "image/png")
-    assert exc.value.status_code == 503
+    assert exc.value.status_code == 501
 
 
 def test_real_client_targets_the_account_endpoint_with_sigv4(r2_env):

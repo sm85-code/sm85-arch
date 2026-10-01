@@ -1,7 +1,7 @@
 """iPaymu payment gateway adapter -- PLACEHOLDER (fails closed).
 
 The merchant account is not verified yet, so there is no key to build or
-test the real HTTP call against. Every entry point raises HTTP 503 instead
+test the real HTTP call against. Every entry point raises HTTP 501 instead
 of faking a successful payment, and the webhook is NEVER trusted: an
 unauthenticated POST must not be able to mark an order as paid.
 
@@ -21,6 +21,9 @@ from dataclasses import dataclass
 
 from fastapi import HTTPException, status
 
+# "Not available yet" is answered with 501, never 503: on DigitalOcean App Platform the edge replaces
+# an application 503 with its own HTML 504 page, so the client never sees our JSON message.
+
 _BASE_URLS = {
     "sandbox": "https://sandbox.ipaymu.com/api/v2",
     "production": "https://my.ipaymu.com/api/v2",
@@ -29,7 +32,7 @@ _BASE_URLS = {
 
 class IpaymuNotReady(HTTPException):
     def __init__(self, detail: str = "Pembayaran (iPaymu) belum aktif. Menunggu verifikasi merchant dan integrasi API."):
-        super().__init__(status_code=status.HTTP_503_SERVICE_UNAVAILABLE, detail=detail)
+        super().__init__(status_code=status.HTTP_501_NOT_IMPLEMENTED, detail=detail)
 
 
 @dataclass
