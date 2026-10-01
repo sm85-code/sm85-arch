@@ -128,3 +128,23 @@ async def upload_produk_photo(file_bytes: bytes, content_type: str) -> str:
             detail="Foto gagal disimpan. Coba lagi sebentar lagi.",
         ) from None
     return key
+
+
+def _delete_sync(cfg: R2Config, key: str) -> None:
+    _client(cfg).delete_object(Bucket=cfg.bucket, Key=key)
+
+
+async def delete_foto(key: Optional[str]) -> None:
+    """Best-effort removal of a product photo that nothing points at any more.
+
+    Never raises: a leftover file only costs a few KB, while failing here would
+    turn a successful photo replacement into an error for the admin. Only keys
+    under our own prefix are ever deleted.
+    """
+    cfg = r2_config()
+    if not key or cfg is None or not key.startswith(_KEY_PREFIX):
+        return
+    try:
+        await asyncio.to_thread(_delete_sync, cfg, key)
+    except Exception:  # noqa: BLE001 -- details go to the log, not to the client
+        logger.warning("R2 delete failed key=%s", key, exc_info=True)

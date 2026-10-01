@@ -36,7 +36,7 @@ from tenants.store.modules.store.infrastructure.auth import (
     set_admin_cookie,
 )
 from tenants.store.modules.store.infrastructure.database import get_db_store
-from tenants.store.modules.store.infrastructure.media_storage import upload_produk_photo
+from tenants.store.modules.store.infrastructure.media_storage import delete_foto, upload_produk_photo
 from tenants.store.modules.store.infrastructure.models import ADMIN_ROLES_STORE, ROLE_OWNER, AdminStore
 from tenants.store.modules.store.infrastructure.seeder import seed_store
 
@@ -153,9 +153,18 @@ async def upload_foto_produk(
     _user: AdminStore = Depends(admin_only),
 ):
     """Upload a photo to the media bucket (Cloudflare R2; 501 until the R2_*
-    env vars are set) and store its object key on the product."""
+    env vars are set), store its object key on the product and remove the
+    photo it replaces."""
+    # Look the product up first: an unknown id must not leave an orphan upload behind.
+    kunci_lama = (await services.get_produk(session, produk_id)).foto_key
     foto_key = await upload_produk_photo(await file.read(), file.content_type or "")
-    return services.produk_out(await services.set_foto_produk(session, produk_id, foto_key))
+    hasil = services.produk_out(await services.set_foto_produk(session, produk_id, foto_key))
+    # The old object is only removed once the new key is safely committed, and
+    # only if no other product shares it.
+    await session.commit()
+    if kunci_lama and kunci_lama != foto_key and not await services.foto_masih_dipakai(session, kunci_lama):
+        await delete_foto(kunci_lama)
+    return hasil
 
 
 @store_admin_router.get("/kategori")
