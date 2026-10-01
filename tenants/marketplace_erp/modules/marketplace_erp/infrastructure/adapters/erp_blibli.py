@@ -23,7 +23,7 @@ class BlibliNotConfigured(HTTPException):
             "Isi BLIBLI_CLIENT_ID/BLIBLI_CLIENT_SECRET setelah aplikasi partner disetujui."
         ),
     ):
-        super().__init__(status_code=status.HTTP_503_SERVICE_UNAVAILABLE, detail=detail)
+        super().__init__(status_code=status.HTTP_501_NOT_IMPLEMENTED, detail=detail)
 
 
 def _configured() -> bool:

@@ -139,7 +139,7 @@ async def seed_now(
     try:
         return await seed_marketplace_erp(session)
     except RuntimeError as exc:
-        raise HTTPException(status_code=status.HTTP_503_SERVICE_UNAVAILABLE, detail=str(exc)) from exc
+        raise HTTPException(status_code=status.HTTP_501_NOT_IMPLEMENTED, detail=str(exc)) from exc
 
 
 # --- Auth ----------------------------------------------------------------
@@ -600,7 +600,7 @@ async def oauth_shopee_start(
     base_redirect = (redirect_uri or os.getenv("SHOPEE_REDIRECT_URI") or "").strip()
     if not base_redirect:
         raise HTTPException(
-            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+            status_code=status.HTTP_501_NOT_IMPLEMENTED,
             detail="SHOPEE_REDIRECT_URI belum diisi",
         )
     # If redirect points at our callback root, ensure akun_id is in the path.

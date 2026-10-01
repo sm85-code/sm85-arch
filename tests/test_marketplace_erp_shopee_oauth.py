@@ -49,7 +49,7 @@ def test_build_authorize_url_requires_partner(monkeypatch):
     erp_shopee.SHOPEE_PARTNER_KEY = ""
     with pytest.raises(HTTPException) as exc:
         erp_shopee.build_authorize_url(redirect_uri="https://example.com/cb")
-    assert exc.value.status_code == 503
+    assert exc.value.status_code == 501
 
 
 def test_apply_token_payload_sets_akun_fields():
@@ -81,3 +81,18 @@ def test_live_sync_off_by_default(monkeypatch):
     erp_shopee.SHOPEE_PARTNER_ID = "1"
     erp_shopee.SHOPEE_PARTNER_KEY = "k"
     assert erp_shopee.live_sync_enabled() is False
+
+
+def test_marketplace_erp_never_answers_503_from_application_code():
+    """DigitalOcean App Platform replaces an application 503 with its own HTML 504 page, so the owner
+    saw "504 Gateway Timeout" instead of "Shopee belum dikonfigurasi" (found in production on
+    /oauth/shopee/start). "Not configured yet" is 501."""
+    import pathlib
+
+    root = pathlib.Path(__file__).resolve().parents[1] / "tenants" / "marketplace_erp"
+    offenders = [
+        str(p.relative_to(root))
+        for p in root.rglob("*.py")
+        if "HTTP_503" in p.read_text() or "status_code=503" in p.read_text()
+    ]
+    assert offenders == []
