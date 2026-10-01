@@ -140,8 +140,8 @@ async def upload_foto_produk(
     session: AsyncSession = Depends(get_db_store),
     _user: AdminStore = Depends(admin_only),
 ):
-    """Upload a photo to the media bucket (Cloudflare R2 -- placeholder, 503
-    until wired) and store its object key on the product."""
+    """Upload a photo to the media bucket (Cloudflare R2; 503 until the R2_*
+    env vars are set) and store its object key on the product."""
     foto_key = await upload_produk_photo(await file.read(), file.content_type or "")
     return services.produk_out(await services.set_foto_produk(session, produk_id, foto_key))
 
