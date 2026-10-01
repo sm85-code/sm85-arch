@@ -4,7 +4,7 @@ import re
 from decimal import Decimal
 from typing import Optional
 
-from pydantic import BaseModel, EmailStr, Field, field_validator
+from pydantic import BaseModel, EmailStr, Field, field_validator, model_validator
 
 _TELEPON_RE = re.compile(r"^\+?[0-9][0-9\-\s]{7,19}$")
 _KODE_POS_RE = re.compile(r"^[0-9]{5}$")
@@ -61,12 +61,41 @@ class GoogleLoginRequest(BaseModel):
     id_token: str
 
 
+MAKS_FOTO_PRODUK = 7
+MAKS_VARIAN = 50
+HARI_PROSES_READY = 2
+HARI_PREORDER_MIN, HARI_PREORDER_MAX = 3, 14
+
+_BERAT = Field(0, ge=0, le=500_000)  # grams
+_DIMENSI = Field(Decimal("0"), ge=0, le=1000)  # centimetres
+
+
+def normalisasi_proses(preorder: bool, hari: int) -> int:
+    """Ready stock is processed within 2 days (whatever was sent); a pre-order must say 3-14 days."""
+    if not preorder:
+        return HARI_PROSES_READY
+    if not HARI_PREORDER_MIN <= hari <= HARI_PREORDER_MAX:
+        raise ValueError(f"Pre-order harus {HARI_PREORDER_MIN} sampai {HARI_PREORDER_MAX} hari")
+    return hari
+
+
 class ProdukIn(BaseModel):
     nama: str
     deskripsi: str = ""
     kategori_id: Optional[str] = None
     harga: Decimal = Field(..., ge=0)
     stok: int = Field(0, ge=0)
+    berat_gram: int = _BERAT
+    panjang_cm: Decimal = _DIMENSI
+    lebar_cm: Decimal = _DIMENSI
+    tinggi_cm: Decimal = _DIMENSI
+    preorder: bool = False
+    hari_proses: int = HARI_PROSES_READY
+
+    @model_validator(mode="after")
+    def _proses(self):
+        self.hari_proses = normalisasi_proses(self.preorder, self.hari_proses)
+        return self
 
 
 class ProdukPatch(BaseModel):
@@ -76,6 +105,44 @@ class ProdukPatch(BaseModel):
     harga: Optional[Decimal] = Field(None, ge=0)
     stok: Optional[int] = Field(None, ge=0)
     aktif: Optional[bool] = None
+    berat_gram: Optional[int] = Field(None, ge=0, le=500_000)
+    panjang_cm: Optional[Decimal] = Field(None, ge=0, le=1000)
+    lebar_cm: Optional[Decimal] = Field(None, ge=0, le=1000)
+    tinggi_cm: Optional[Decimal] = Field(None, ge=0, le=1000)
+    preorder: Optional[bool] = None
+    hari_proses: Optional[int] = None
+
+
+class VarianIn(BaseModel):
+    """One variant in the full list sent to PUT /produk/{id}/varian (id = an existing variant to keep/update)."""
+
+    id: Optional[str] = None
+    nama: str = Field(..., min_length=1, max_length=120)
+    sku: str = Field("", max_length=64)
+    harga: Optional[Decimal] = Field(None, ge=0)
+    stok: int = Field(0, ge=0)
+    berat_gram: Optional[int] = Field(None, ge=0, le=500_000)
+    panjang_cm: Optional[Decimal] = Field(None, ge=0, le=1000)
+    lebar_cm: Optional[Decimal] = Field(None, ge=0, le=1000)
+    tinggi_cm: Optional[Decimal] = Field(None, ge=0, le=1000)
+    foto_id: Optional[str] = None
+    aktif: bool = True
+
+    @field_validator("nama")
+    @classmethod
+    def _nama(cls, v: str) -> str:
+        v = v.strip()
+        if not v:
+            raise ValueError("Nama varian wajib diisi")
+        return v
+
+
+class VarianListIn(BaseModel):
+    varian: list[VarianIn] = Field(default_factory=list, max_length=MAKS_VARIAN)
+
+
+class FotoUrutanIn(BaseModel):
+    ids: list[str] = Field(..., max_length=MAKS_FOTO_PRODUK)
 
 
 class KategoriIn(BaseModel):
@@ -85,6 +152,7 @@ class KategoriIn(BaseModel):
 class KeranjangItemIn(BaseModel):
     produk_id: str
     qty: int = 1
+    varian_id: Optional[str] = None
 
 
 class KeranjangItemPatch(BaseModel):

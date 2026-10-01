@@ -150,26 +150,26 @@ async def add_to_keranjang(
     session: AsyncSession = Depends(get_db_store),
     user: PembeliStore = Depends(get_current_buyer),
 ):
-    item = await services.tambah_ke_keranjang(session, user.id, payload.produk_id, payload.qty)
+    item = await services.tambah_ke_keranjang(session, user.id, payload.produk_id, payload.qty, payload.varian_id)
     return services.keranjang_item_out(item)
 
 
-@store_buyer_router.patch("/keranjang/{produk_id}")
+@store_buyer_router.patch("/keranjang/{ref}")
 async def patch_keranjang(
-    produk_id: str,
+    ref: str,
     payload: KeranjangItemPatch,
     session: AsyncSession = Depends(get_db_store),
     user: PembeliStore = Depends(get_current_buyer),
 ):
-    item = await services.ubah_qty_keranjang(session, user.id, produk_id, payload.qty)
+    item = await services.ubah_qty_keranjang(session, user.id, ref, payload.qty)
     return services.keranjang_item_out(item)
 
 
-@store_buyer_router.delete("/keranjang/{produk_id}")
+@store_buyer_router.delete("/keranjang/{ref}")
 async def remove_from_keranjang(
-    produk_id: str, session: AsyncSession = Depends(get_db_store), user: PembeliStore = Depends(get_current_buyer)
+    ref: str, session: AsyncSession = Depends(get_db_store), user: PembeliStore = Depends(get_current_buyer)
 ):
-    await services.hapus_dari_keranjang(session, user.id, produk_id)
+    await services.hapus_dari_keranjang(session, user.id, ref)
     return {"ok": True}
 
 

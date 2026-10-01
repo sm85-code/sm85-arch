@@ -83,6 +83,33 @@ async def ensure_store_schema() -> None:
                 await conn.execute(
                     text(f"ALTER TABLE {table} ADD COLUMN IF NOT EXISTS {column}{suffix} VARCHAR({size}) NOT NULL DEFAULT ''")
                 )
+        # Gallery / variants / weight, size and lead time (the new tables come from create_all above).
+        for column, ddl in (
+            ("berat_gram", "INTEGER NOT NULL DEFAULT 0"),
+            ("panjang_cm", "NUMERIC(8,1) NOT NULL DEFAULT 0"),
+            ("lebar_cm", "NUMERIC(8,1) NOT NULL DEFAULT 0"),
+            ("tinggi_cm", "NUMERIC(8,1) NOT NULL DEFAULT 0"),
+            ("preorder", "BOOLEAN NOT NULL DEFAULT false"),
+            ("hari_proses", "INTEGER NOT NULL DEFAULT 2"),
+        ):
+            await conn.execute(text(f"ALTER TABLE store_produk ADD COLUMN IF NOT EXISTS {column} {ddl}"))
+        await conn.execute(
+            text("ALTER TABLE store_item_keranjang ADD COLUMN IF NOT EXISTS varian_id VARCHAR(64) REFERENCES store_produk_varian(id) ON DELETE CASCADE")
+        )
+        await conn.execute(text("ALTER TABLE store_item_keranjang DROP CONSTRAINT IF EXISTS uq_store_keranjang_user_produk"))
+        await conn.execute(
+            text(
+                "CREATE UNIQUE INDEX IF NOT EXISTS uq_store_keranjang_line "
+                "ON store_item_keranjang (user_id, produk_id, COALESCE(varian_id, ''))"
+            )
+        )
+        for column, ddl in (
+            ("varian_id", "VARCHAR(64) REFERENCES store_produk_varian(id) ON DELETE SET NULL"),
+            ("nama_varian", "VARCHAR(120) NOT NULL DEFAULT ''"),
+            ("preorder", "BOOLEAN NOT NULL DEFAULT false"),
+            ("hari_proses", "INTEGER NOT NULL DEFAULT 2"),
+        ):
+            await conn.execute(text(f"ALTER TABLE store_item_pesanan ADD COLUMN IF NOT EXISTS {column} {ddl}"))
     async with session_local() as session:
         filled = await backfill_slugs(session)
         await session.commit()
