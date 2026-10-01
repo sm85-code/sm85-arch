@@ -12,6 +12,7 @@ from sqlalchemy.orm import selectinload
 from shared.security import hash_password, verify_password
 from tenants.marketplace_erp.modules.marketplace_erp.application.schemas import (
     AkunMarketplaceIn,
+    normalisasi_proses,
     AkunMarketplacePatch,
     ChangePasswordIn,
     GudangIn,
@@ -261,6 +262,12 @@ async def create_produk(session: AsyncSession, payload: ProdukIn) -> Produk:
         harga_dasar=payload.harga_dasar,
         stok=payload.stok,
         foto_url=payload.foto_url,
+        berat_gram=payload.berat_gram,
+        panjang_cm=payload.panjang_cm,
+        lebar_cm=payload.lebar_cm,
+        tinggi_cm=payload.tinggi_cm,
+        preorder=payload.preorder,
+        hari_proses=payload.hari_proses,
     )
     session.add(produk)
     try:
@@ -298,6 +305,15 @@ async def update_produk(session: AsyncSession, produk_id: str, payload: ProdukPa
             status_code=status.HTTP_400_BAD_REQUEST,
             detail="Ubah stok lewat POST /stok/adjust, bukan PATCH produk",
         )
+    for kolom in ("berat_gram", "panjang_cm", "lebar_cm", "tinggi_cm", "preorder", "hari_proses"):
+        if kolom in data and data[kolom] is None:
+            del data[kolom]
+    if "preorder" in data or "hari_proses" in data:
+        try:
+            data["preorder"] = data.get("preorder", produk.preorder)
+            data["hari_proses"] = normalisasi_proses(data["preorder"], data.get("hari_proses", produk.hari_proses))
+        except ValueError as exc:
+            raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=str(exc)) from exc
     for field, value in data.items():
         setattr(produk, field, value)
     await session.flush()

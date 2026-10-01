@@ -345,6 +345,12 @@ async def publish_produk_ke_toko(
         platform_asal=platform_asal,
         foto_key=foto_key,
         aktif=payload.aktif,
+        berat_gram=produk.berat_gram,
+        panjang_cm=produk.panjang_cm,
+        lebar_cm=produk.lebar_cm,
+        tinggi_cm=produk.tinggi_cm,
+        preorder=produk.preorder,
+        hari_proses=produk.hari_proses,
     )
     return {
         "dibuat": dibuat,

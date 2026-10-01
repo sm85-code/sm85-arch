@@ -101,6 +101,13 @@ class Produk(MarketplaceErpBase):
     stok: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
     foto_url: Mapped[Optional[str]] = mapped_column(String(1024), nullable=True)
     aktif: Mapped[bool] = mapped_column(Boolean, nullable=False, default=True)
+    # Shipping weight/size and lead time (ready stock = 2 days, pre-order = 3-14 days).
+    berat_gram: Mapped[int] = mapped_column(Integer, nullable=False, default=0, server_default="0")
+    panjang_cm: Mapped[Decimal] = mapped_column(Numeric(8, 1), nullable=False, default=Decimal("0"), server_default="0")
+    lebar_cm: Mapped[Decimal] = mapped_column(Numeric(8, 1), nullable=False, default=Decimal("0"), server_default="0")
+    tinggi_cm: Mapped[Decimal] = mapped_column(Numeric(8, 1), nullable=False, default=Decimal("0"), server_default="0")
+    preorder: Mapped[bool] = mapped_column(Boolean, nullable=False, default=False, server_default="false")
+    hari_proses: Mapped[int] = mapped_column(Integer, nullable=False, default=2, server_default="2")
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=_utcnow)
     updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=_utcnow, onupdate=_utcnow)
 

@@ -178,3 +178,38 @@ async def test_importer_failure_returns_none_not_error(monkeypatch):
     monkeypatch.setattr(media_import, "_download_sync", boom)
     assert await media_import.import_foto_dari_url("https://cf.shopee.co.id/a.jpg") is None
     assert await media_import.import_foto_dari_url(None) is None
+
+
+@pytest.mark.asyncio
+async def test_weight_size_and_preorder_follow_the_erp_product(erp, store):
+    produk = await erp_services.create_produk(
+        erp,
+        ProdukIn(
+            sku_induk="PO-1", nama="Meja", harga_dasar=Decimal("100000"), stok=1,
+            berat_gram=2500, panjang_cm=Decimal("60"), lebar_cm=Decimal("40"), tinggi_cm=Decimal("30"),
+            preorder=True, hari_proses=10,
+        ),
+    )
+    await _publish(erp, store, produk)
+    toko = (await store.execute(__import__("sqlalchemy").select(ProdukStore))).scalar_one()
+    assert (toko.berat_gram, toko.preorder, toko.hari_proses) == (2500, True, 10)
+    assert (toko.panjang_cm, toko.lebar_cm, toko.tinggi_cm) == (Decimal("60"), Decimal("40"), Decimal("30"))
+
+
+def test_erp_preorder_rules():
+    base = dict(sku_induk="x", nama="x", harga_dasar=Decimal("1"))
+    assert ProdukIn(**base, hari_proses=9).hari_proses == 2
+    with pytest.raises(ValueError):
+        ProdukIn(**base, preorder=True, hari_proses=2)
+
+
+@pytest.mark.asyncio
+async def test_erp_patch_preorder_validates(erp):
+    produk = await erp_services.create_produk(erp, ProdukIn(sku_induk="P2", nama="a", harga_dasar=Decimal("1")))
+    await erp_services.update_produk(erp, produk.id, ProdukPatch(preorder=True, hari_proses=5))
+    assert (produk.preorder, produk.hari_proses) == (True, 5)
+    with pytest.raises(HTTPException) as exc:
+        await erp_services.update_produk(erp, produk.id, ProdukPatch(hari_proses=30))
+    assert exc.value.status_code == 400
+    await erp_services.update_produk(erp, produk.id, ProdukPatch(preorder=False))
+    assert produk.hari_proses == 2
