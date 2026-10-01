@@ -99,6 +99,16 @@ async def authenticate_admin(session: AsyncSession, email: str, password: str) -
     return user
 
 
+async def change_admin_password(session: AsyncSession, user: AdminStore, current: str, new: str) -> AdminStore:
+    if not verify_password(current, user.password_hash):
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Password saat ini salah")
+    if current == new:
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Password baru harus berbeda dari yang lama")
+    user.password_hash = hash_password(new)
+    await session.flush()
+    return user
+
+
 async def authenticate_buyer(session: AsyncSession, email: str, password: str) -> PembeliStore:
     user = (await session.execute(select(PembeliStore).where(PembeliStore.email == email))).scalar_one_or_none()
     # Google-only accounts have no password_hash; verify_password returns

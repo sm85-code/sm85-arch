@@ -29,6 +29,11 @@ class LoginRequest(BaseModel):
     password: str = Field(..., max_length=72)
 
 
+class ChangePasswordIn(BaseModel):
+    current_password: str = Field(..., min_length=1, max_length=72)
+    new_password: str = Field(..., min_length=8, max_length=72)
+
+
 class RegisterRequest(BaseModel):
     nama: str
     email: EmailStr
