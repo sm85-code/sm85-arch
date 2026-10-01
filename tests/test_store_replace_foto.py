@@ -99,3 +99,43 @@ async def test_unknown_product_uploads_nothing(session, monkeypatch):
     with pytest.raises(HTTPException) as exc:
         await _replace(session, "tidak-ada")
     assert exc.value.status_code == 404
+
+
+# --- deleting a whole product removes its photo too ---------------------------
+
+
+async def _remove(session, produk_id):
+    return await admin_module.remove_produk(produk_id, session=session, _user=SimpleNamespace())
+
+
+@pytest.mark.asyncio
+async def test_deleting_a_product_removes_its_photo_after_commit(session, r2):
+    p = await _produk(session, "produk/foto.jpg")
+    _count_commits(session, r2)
+    assert await _remove(session, p.id) == {"ok": True}
+    assert r2.deleted == ["produk/foto.jpg"]
+    assert r2.commits_at_delete == [1]
+    assert await session.get(ProdukStore, p.id) is None
+
+
+@pytest.mark.asyncio
+async def test_deleting_a_product_without_photo_deletes_nothing(session, r2):
+    p = await _produk(session, None)
+    await _remove(session, p.id)
+    assert r2.deleted == []
+
+
+@pytest.mark.asyncio
+async def test_deleting_keeps_a_photo_another_product_still_uses(session, r2):
+    p = await _produk(session, "produk/bersama.jpg")
+    await _produk(session, "produk/bersama.jpg")
+    await _remove(session, p.id)
+    assert r2.deleted == []
+
+
+@pytest.mark.asyncio
+async def test_deleting_an_unknown_product_is_404_and_touches_no_photo(session, r2):
+    with pytest.raises(HTTPException) as exc:
+        await _remove(session, "tidak-ada")
+    assert exc.value.status_code == 404
+    assert r2.deleted == []

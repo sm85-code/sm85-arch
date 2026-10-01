@@ -141,7 +141,13 @@ async def patch_produk(
 async def remove_produk(
     produk_id: str, session: AsyncSession = Depends(get_db_store), _user: AdminStore = Depends(admin_only)
 ):
+    kunci = (await services.get_produk(session, produk_id)).foto_key
     await services.delete_produk(session, produk_id)
+    # Same rule as replacing a photo: remove the object only once the delete is
+    # committed, and only if no other product shares it.
+    await session.commit()
+    if kunci and not await services.foto_masih_dipakai(session, kunci):
+        await delete_foto(kunci)
     return {"ok": True}
 
 
