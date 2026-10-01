@@ -130,3 +130,35 @@ def test_media_url_joins_base_and_key(monkeypatch):
     assert media_storage.media_url("produk/a.png") == "https://img.ampelkuning.com/produk/a.png"
     monkeypatch.delenv("MEDIA_BASE_URL")
     assert media_storage.media_url("produk/a.png") is None
+
+
+# --- removing the photo that a new upload replaces ---------------------------
+
+
+@pytest.mark.asyncio
+async def test_delete_foto_removes_the_object(stubbed):
+    stubbed.add_response("delete_object", {}, {"Bucket": "ampelkuning-media", "Key": "produk/lama.jpg"})
+    await media_storage.delete_foto("produk/lama.jpg")
+    stubbed.assert_no_pending_responses()
+
+
+@pytest.mark.asyncio
+async def test_delete_foto_never_touches_keys_outside_our_prefix(stubbed):
+    # No response queued: any delete_object call would raise inside the stub.
+    await media_storage.delete_foto("rahasia/other.jpg")
+    await media_storage.delete_foto("")
+    await media_storage.delete_foto(None)
+
+
+@pytest.mark.asyncio
+async def test_delete_foto_failure_is_swallowed(stubbed):
+    stubbed.add_client_error("delete_object", service_error_code="InternalError", http_status_code=500)
+    await media_storage.delete_foto("produk/lama.jpg")  # must not raise
+
+
+@pytest.mark.asyncio
+async def test_delete_foto_is_a_noop_when_r2_is_unconfigured(monkeypatch):
+    for name in ("R2_ACCOUNT_ID", "R2_ACCESS_KEY_ID", "R2_SECRET_ACCESS_KEY", "R2_BUCKET"):
+        monkeypatch.delenv(name, raising=False)
+    monkeypatch.setattr(media_storage, "_client", lambda cfg: pytest.fail("client must not be built"))
+    await media_storage.delete_foto("produk/lama.jpg")

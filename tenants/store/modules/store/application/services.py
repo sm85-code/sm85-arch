@@ -220,6 +220,14 @@ async def set_foto_produk(session: AsyncSession, produk_id: str, foto_key: str) 
     return produk
 
 
+async def foto_masih_dipakai(session: AsyncSession, foto_key: str) -> bool:
+    """True while any product still points at this photo object."""
+    total = (
+        await session.execute(select(func.count()).select_from(ProdukStore).where(ProdukStore.foto_key == foto_key))
+    ).scalar_one()
+    return total > 0
+
+
 async def delete_produk(session: AsyncSession, produk_id: str) -> None:
     produk = await get_produk(session, produk_id)
     await session.delete(produk)
