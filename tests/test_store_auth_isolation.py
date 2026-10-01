@@ -303,7 +303,9 @@ async def test_ipaymu_and_biteship_placeholders_return_503():
 
 
 @pytest.mark.asyncio
-async def test_photo_upload_validates_then_reports_r2_not_ready():
+async def test_photo_upload_validates_then_reports_r2_not_ready(monkeypatch):
+    for name in ("R2_ACCOUNT_ID", "R2_ACCESS_KEY_ID", "R2_SECRET_ACCESS_KEY", "R2_BUCKET"):
+        monkeypatch.delenv(name, raising=False)
     with pytest.raises(HTTPException) as exc:
         await media_storage.upload_produk_photo(b"x", "application/pdf")
     assert exc.value.status_code == 400
@@ -311,7 +313,7 @@ async def test_photo_upload_validates_then_reports_r2_not_ready():
         await media_storage.upload_produk_photo(b"x" * (5 * 1024 * 1024 + 1), "image/png")
     assert exc.value.status_code == 400
     with pytest.raises(HTTPException) as exc:
-        await media_storage.upload_produk_photo(b"x", "image/png")
+        await media_storage.upload_produk_photo(b"\x89PNG\r\n\x1a\n" + b"0" * 16, "image/png")
     assert exc.value.status_code == 503
 
 
