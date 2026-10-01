@@ -102,3 +102,21 @@ async def test_backfill_fills_missing_slugs_oldest_first_and_skips_taken_ones(se
     assert await backfill_slugs(session) == 2
     assert old.slug == "teh-hijau-2" and new.slug == "gula"
     assert await backfill_slugs(session) == 0  # idempotent
+
+
+@pytest.mark.asyncio
+async def test_public_catalog_heals_missing_slugs_on_read(session):
+    session.add(ProdukStore(nama="Teh Hijau", harga=1, stok=1))
+    session.add(ProdukStore(nama="Teh Hijau", harga=1, stok=1))
+    await session.flush()
+    rows = await services.list_produk_publik(session)
+    assert sorted(p.slug for p in rows) == ["teh-hijau", "teh-hijau-2"]
+    # Already healed: a second read changes nothing and does not touch the slugs again.
+    assert sorted(p.slug for p in await services.list_produk_publik(session)) == ["teh-hijau", "teh-hijau-2"]
+
+
+@pytest.mark.asyncio
+async def test_slug_lookup_finds_a_product_that_predates_slugs(session):
+    session.add(ProdukStore(nama="Kopi Gayo", harga=1, stok=1))
+    await session.flush()
+    assert (await services.get_produk_by_ref(session, "kopi-gayo")).nama == "Kopi Gayo"

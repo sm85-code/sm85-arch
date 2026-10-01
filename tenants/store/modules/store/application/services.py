@@ -159,6 +159,34 @@ async def unique_slug(session: AsyncSession, nama: str, *, exclude_id: str | Non
         n += 1
 
 
+async def heal_slugs(session: AsyncSession) -> bool:
+    """Self-heal: give slug-less products (rows that predate slugs) their slug while the catalog is read.
+
+    Startup already backfills, but this makes the public catalog converge even if that step did not run or lost a
+    race. A savepoint keeps a lost race (another request filled the same slugs first) from poisoning the session.
+    Returns True when something was missing, i.e. the caller should (re)load its rows.
+    """
+    from sqlalchemy.exc import IntegrityError
+
+    from tenants.store.modules.store.infrastructure.seeder import backfill_slugs
+
+    missing = (await session.execute(select(func.count()).select_from(ProdukStore).where(ProdukStore.slug.is_(None)))).scalar_one()
+    if not missing:
+        return False
+    try:
+        async with session.begin_nested():
+            await backfill_slugs(session)
+    except IntegrityError:
+        pass
+    session.expire_all()
+    return True
+
+
+async def list_produk_publik(session: AsyncSession) -> list[ProdukStore]:
+    await heal_slugs(session)
+    return await list_produk(session, hanya_aktif=True)
+
+
 async def get_produk_by_ref(session: AsyncSession, ref: str) -> ProdukStore:
     """Public lookup: the URL segment is the slug; old links that carry the id keep working."""
     stmt = (
@@ -167,6 +195,10 @@ async def get_produk_by_ref(session: AsyncSession, ref: str) -> ProdukStore:
         .options(selectinload(ProdukStore.kategori))
     )
     produk = (await session.execute(stmt)).scalars().first()
+    if not produk:
+        # A slug that does not exist yet may belong to a product that predates slugs: fill them in and look again.
+        if await heal_slugs(session):
+            produk = (await session.execute(stmt)).scalars().first()
     if not produk:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Produk tidak ditemukan")
     return produk
