@@ -8,7 +8,7 @@ Real structure shipped in Tahap 2:
 
 Live catalog/order sync stays behind ``SHOPEE_LIVE_SYNC=true`` plus
 ``SHOPEE_PARTNER_ID`` / ``SHOPEE_PARTNER_KEY``. Without those, sync_* and
-proses_pesanan raise 503 (honest, not fake-success). Partner key never
+proses_pesanan raise 501 (honest, not fake-success). Partner key never
 lives in the repo or DB -- env only.
 """
 from __future__ import annotations
@@ -50,7 +50,7 @@ class ShopeeNotConfigured(HTTPException):
             "Isi SHOPEE_PARTNER_ID/SHOPEE_PARTNER_KEY setelah aplikasi partner disetujui."
         ),
     ):
-        super().__init__(status_code=status.HTTP_503_SERVICE_UNAVAILABLE, detail=detail)
+        super().__init__(status_code=status.HTTP_501_NOT_IMPLEMENTED, detail=detail)
 
 
 def partner_configured() -> bool:
