@@ -5,6 +5,7 @@ from decimal import Decimal
 
 from fastapi import HTTPException, status
 from sqlalchemy import func, select
+from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import selectinload
 
@@ -262,7 +263,14 @@ async def create_produk(session: AsyncSession, payload: ProdukIn) -> Produk:
         foto_url=payload.foto_url,
     )
     session.add(produk)
-    await session.flush()
+    try:
+        await session.flush()
+    except IntegrityError:
+        # Two saves of the same SKU raced past the check above (double click /
+        # retry): the unique index is the real guard, report it as a conflict.
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT, detail="SKU induk sudah dipakai produk lain"
+        ) from None
     if payload.stok:
         gudang = await ensure_default_gudang(session)
         session.add(
