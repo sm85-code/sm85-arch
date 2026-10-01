@@ -6,7 +6,7 @@ https://img.ampelkuning.com), so switching storage or domain later is an env
 change, not a data migration.
 
 Needs R2_ACCOUNT_ID, R2_ACCESS_KEY_ID, R2_SECRET_ACCESS_KEY and R2_BUCKET.
-Until all four are set, uploads answer HTTP 503 "not active yet" instead of
+Until all four are set, uploads answer HTTP 501 "not active yet" instead of
 failing obscurely.
 """
 from __future__ import annotations
@@ -34,7 +34,7 @@ _CACHE_CONTROL = "public, max-age=31536000, immutable"
 class MediaNotReady(HTTPException):
     def __init__(self):
         super().__init__(
-            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+            status_code=status.HTTP_501_NOT_IMPLEMENTED,
             detail="Penyimpanan foto (Cloudflare R2) belum aktif.",
         )
 

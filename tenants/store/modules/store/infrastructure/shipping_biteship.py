@@ -1,7 +1,7 @@
 """Biteship shipping adapter -- PLACEHOLDER (fails closed).
 
 Same situation as payment_ipaymu.py: no verified account/key yet, so every
-call raises HTTP 503 instead of fabricating rates or tracking numbers.
+call raises HTTP 501 instead of fabricating rates or tracking numbers.
 
 TODO with a BITESHIP_API_KEY: implement cek_ongkir() (POST
 /v1/rates/couriers) and buat_pengiriman() (POST /v1/orders), plus a
@@ -17,7 +17,7 @@ from fastapi import HTTPException, status
 
 class BiteshipNotReady(HTTPException):
     def __init__(self, detail: str = "Layanan pengiriman (Biteship) belum aktif. Menunggu akun terverifikasi dan integrasi API."):
-        super().__init__(status_code=status.HTTP_503_SERVICE_UNAVAILABLE, detail=detail)
+        super().__init__(status_code=status.HTTP_501_NOT_IMPLEMENTED, detail=detail)
 
 
 @dataclass

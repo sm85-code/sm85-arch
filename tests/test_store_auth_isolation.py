@@ -289,17 +289,17 @@ async def test_payment_callback_never_marks_an_order_paid_anonymously(session):
 
 
 @pytest.mark.asyncio
-async def test_ipaymu_and_biteship_placeholders_return_503():
+async def test_ipaymu_and_biteship_placeholders_return_501():
     from tenants.store.modules.store.infrastructure import payment_ipaymu, shipping_biteship
 
     with pytest.raises(HTTPException) as exc:
         await payment_ipaymu.create_payment(
             pesanan_id="p", total="1", nama_pembeli="n", email_pembeli="e@x.com", notify_url="/n", return_url="/r"
         )
-    assert exc.value.status_code == 503
+    assert exc.value.status_code == 501
     with pytest.raises(HTTPException) as exc:
         await shipping_biteship.cek_ongkir(kode_pos_asal="1", kode_pos_tujuan="2", berat_gram=1, nilai_barang="1")
-    assert exc.value.status_code == 503
+    assert exc.value.status_code == 501
 
 
 @pytest.mark.asyncio
@@ -314,7 +314,7 @@ async def test_photo_upload_validates_then_reports_r2_not_ready(monkeypatch):
     assert exc.value.status_code == 400
     with pytest.raises(HTTPException) as exc:
         await media_storage.upload_produk_photo(b"\x89PNG\r\n\x1a\n" + b"0" * 16, "image/png")
-    assert exc.value.status_code == 503
+    assert exc.value.status_code == 501
 
 
 def test_photo_file_name_pattern():
@@ -353,3 +353,17 @@ async def test_buyer_cannot_set_own_ongkir_or_touch_another_buyers_order(session
 
     out = await buyer_module.isi_alamat_pengiriman(pesanan.id, payload, session, owner_buyer)
     assert out["ongkir"] == "0"
+
+
+def test_store_never_answers_503_from_application_code():
+    """DigitalOcean App Platform replaces an application 503 with its own HTML 504 page, so the client
+    never sees our JSON message (found in production on the 'pay now' button). "Not available yet" is 501."""
+    import pathlib
+
+    root = pathlib.Path(__file__).resolve().parents[1] / "tenants" / "store"
+    offenders = [
+        str(p.relative_to(root))
+        for p in root.rglob("*.py")
+        if "HTTP_503" in p.read_text() or "status_code=503" in p.read_text()
+    ]
+    assert offenders == []

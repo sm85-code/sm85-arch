@@ -199,7 +199,7 @@ async def get_pesanan(
     return services.pesanan_out(await _pesanan_milik(session, pesanan_id, user))
 
 
-# --- Pembayaran (iPaymu -- placeholder, 503 until wired) --------------------
+# --- Pembayaran (iPaymu -- placeholder, 501 until wired) --------------------
 
 
 @store_buyer_router.post("/pesanan/{pesanan_id}/bayar")
@@ -239,7 +239,7 @@ async def payment_callback(payload: dict, session: AsyncSession = Depends(get_db
     return {"ok": True}
 
 
-# --- Pengiriman (Biteship -- placeholder, 503 until wired) ------------------
+# --- Pengiriman (Biteship -- placeholder, 501 until wired) ------------------
 
 
 @store_buyer_router.post("/pengiriman/cek-ongkir")

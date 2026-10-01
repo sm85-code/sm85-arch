@@ -21,7 +21,7 @@ _request = google_requests.Request()
 class GoogleLoginNotConfigured(HTTPException):
     def __init__(self):
         super().__init__(
-            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+            status_code=status.HTTP_501_NOT_IMPLEMENTED,
             detail="Login dengan Google belum dikonfigurasi (GOOGLE_CLIENT_ID belum diisi).",
         )
 
