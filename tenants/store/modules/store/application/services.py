@@ -153,6 +153,53 @@ async def create_produk(session: AsyncSession, payload: ProdukIn) -> ProdukStore
     return produk
 
 
+async def upsert_produk_dari_erp(
+    session: AsyncSession,
+    *,
+    erp_produk_id: str,
+    nama: str,
+    deskripsi: str,
+    harga: Decimal,
+    stok: int,
+    platform_asal: str | None,
+    foto_key: str | None,
+    aktif: bool,
+) -> tuple[ProdukStore, bool]:
+    """Create or refresh the store copy of an ERP product. Returns
+    (produk, dibuat). Stock is store-owned: it is only set when the copy is
+    first created, so republishing never overwrites stock the store already
+    sold from. A photo is only replaced when a new one was copied."""
+    produk = (
+        await session.execute(select(ProdukStore).where(ProdukStore.erp_produk_id == erp_produk_id))
+    ).scalar_one_or_none()
+    dibuat = produk is None
+    if produk is None:
+        produk = ProdukStore(
+            nama=nama,
+            deskripsi=deskripsi,
+            harga=harga,
+            stok=max(stok, 0),
+            foto_key=foto_key,
+            aktif=aktif,
+            sumber="erp",
+            erp_produk_id=erp_produk_id,
+            platform_asal=platform_asal,
+        )
+        session.add(produk)
+    else:
+        produk.nama = nama
+        produk.deskripsi = deskripsi
+        produk.harga = harga
+        produk.aktif = aktif
+        if platform_asal:
+            produk.platform_asal = platform_asal
+        if foto_key:
+            produk.foto_key = foto_key
+    await session.flush()
+    await session.refresh(produk, attribute_names=["kategori"])
+    return produk, dibuat
+
+
 async def update_produk(session: AsyncSession, produk_id: str, payload: ProdukPatch) -> ProdukStore:
     produk = await get_produk(session, produk_id)
     fields = payload.model_dump(exclude_unset=True)

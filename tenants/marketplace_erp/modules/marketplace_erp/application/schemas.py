@@ -154,6 +154,18 @@ class ProdukOut(BaseModel):
     model_config = ConfigDict(from_attributes=True)
 
 
+class PublishTokoIn(BaseModel):
+    """Options for copying one ERP product into the online store."""
+
+    aktif: bool = True
+    # Price in the store; defaults to the ERP base price.
+    harga: Optional[Decimal] = Field(None, ge=0)
+    # Starting stock in the store (first publish only -- the store owns its
+    # stock afterwards); defaults to the current ERP stock.
+    stok: Optional[int] = Field(None, ge=0)
+    salin_foto: bool = True
+
+
 class ProdukListingIn(BaseModel):
     produk_id: str
     akun_id: str
