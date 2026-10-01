@@ -137,6 +137,9 @@ async def create_produk(session: AsyncSession, payload: ProdukIn) -> ProdukStore
     produk = ProdukStore(**payload.model_dump())
     session.add(produk)
     await session.flush()
+    # produk_out() reads produk.kategori; load it here, a lazy load inside the
+    # async session would raise MissingGreenlet.
+    await session.refresh(produk, attribute_names=["kategori"])
     return produk
 
 

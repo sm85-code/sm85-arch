@@ -325,3 +325,25 @@ async def test_ringkasan_status_counts_orders(session):
     await services.checkout(session, user.id)
 
     assert await services.laporan_ringkasan_status(session) == {"menunggu_pembayaran": 1}
+
+
+@pytest.mark.asyncio
+async def test_create_produk_result_can_be_serialized_with_its_category(session):
+    """Regression: produk_out() reads produk.kategori, which must already be
+    loaded on the object create_produk returns -- a lazy load inside the async
+    session raised MissingGreenlet and POST /produk answered 500."""
+    kategori = await services.create_kategori(session, KategoriIn(nama="Sembako"))
+    kategori_id = kategori.id
+    # In production the category is not already in the session's identity map
+    # (it comes from an earlier request); with it there, SQLAlchemy would resolve
+    # the relationship without SQL and hide the bug.
+    await session.commit()
+    session.expunge_all()
+
+    produk = await services.create_produk(session, ProdukIn(nama="Beras", harga="65000", stok=3, kategori_id=kategori_id))
+    out = services.produk_out(produk)
+
+    assert out["kategori_nama"] == "Sembako"
+
+    tanpa = services.produk_out(await services.create_produk(session, ProdukIn(nama="Gula", harga="14000")))
+    assert tanpa["kategori_nama"] is None
