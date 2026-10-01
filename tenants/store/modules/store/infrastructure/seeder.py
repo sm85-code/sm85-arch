@@ -77,6 +77,12 @@ async def ensure_store_schema() -> None:
         await conn.run_sync(StoreBase.metadata.create_all)
         await conn.execute(text("ALTER TABLE store_produk ADD COLUMN IF NOT EXISTS slug VARCHAR(160)"))
         await conn.execute(text("CREATE UNIQUE INDEX IF NOT EXISTS ix_store_produk_slug ON store_produk (slug)"))
+        # Structured address (province > city > district > village + Kemendagri village code).
+        for table, suffix in (("store_alamat", ""), ("store_pengiriman", "_tujuan")):
+            for column, size in (("kecamatan", 128), ("kelurahan", 128), ("kode_wilayah", 16)):
+                await conn.execute(
+                    text(f"ALTER TABLE {table} ADD COLUMN IF NOT EXISTS {column}{suffix} VARCHAR({size}) NOT NULL DEFAULT ''")
+                )
     async with session_local() as session:
         filled = await backfill_slugs(session)
         await session.commit()

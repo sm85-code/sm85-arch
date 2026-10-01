@@ -24,6 +24,23 @@ def _validate_kode_pos(value: str) -> str:
     return value
 
 
+# The store ships within Java, Bali and Lampung (Kemendagri province codes: Banten, DKI Jakarta, Jawa Barat,
+# Jawa Tengah, DI Yogyakarta, Jawa Timur, Bali, Lampung).
+PROVINSI_DILAYANI = frozenset({"36", "31", "32", "33", "34", "35", "51", "18"})
+_KODE_WILAYAH_RE = re.compile(r"^\d{2}\.\d{2}\.\d{2}\.\d{4}$")
+
+
+def _validate_kode_wilayah(value: str) -> str:
+    value = value.strip()
+    if not value:
+        return value
+    if not _KODE_WILAYAH_RE.match(value):
+        raise ValueError("Kode wilayah tidak valid")
+    if value[:2] not in PROVINSI_DILAYANI:
+        raise ValueError("Pengiriman hanya ke Pulau Jawa, Bali, dan Lampung")
+    return value
+
+
 class LoginRequest(BaseModel):
     email: EmailStr
     password: str = Field(..., max_length=72)
@@ -95,9 +112,13 @@ class PengirimanIn(BaseModel):
     kota_tujuan: str = ""
     provinsi_tujuan: str = ""
     kode_pos_tujuan: str = ""
+    kecamatan_tujuan: str = ""
+    kelurahan_tujuan: str = ""
+    kode_wilayah_tujuan: str = ""
 
     _v_telepon = field_validator("telepon_penerima")(_validate_telepon)
     _v_kodepos = field_validator("kode_pos_tujuan")(_validate_kode_pos)
+    _v_wilayah = field_validator("kode_wilayah_tujuan")(_validate_kode_wilayah)
 
 
 class StatusPengirimanIn(BaseModel):
@@ -113,10 +134,14 @@ class AlamatIn(BaseModel):
     kota: str = ""
     provinsi: str = ""
     kode_pos: str = ""
+    kecamatan: str = ""
+    kelurahan: str = ""
+    kode_wilayah: str = ""
     utama: bool = False
 
     _v_telepon = field_validator("telepon_penerima")(_validate_telepon)
     _v_kodepos = field_validator("kode_pos")(_validate_kode_pos)
+    _v_wilayah = field_validator("kode_wilayah")(_validate_kode_wilayah)
 
 
 class AlamatPatch(BaseModel):
@@ -127,6 +152,9 @@ class AlamatPatch(BaseModel):
     kota: Optional[str] = None
     provinsi: Optional[str] = None
     kode_pos: Optional[str] = None
+    kecamatan: Optional[str] = None
+    kelurahan: Optional[str] = None
+    kode_wilayah: Optional[str] = None
     utama: Optional[bool] = None
 
     @field_validator("telepon_penerima")
@@ -138,6 +166,11 @@ class AlamatPatch(BaseModel):
     @classmethod
     def _v_kodepos(cls, v):
         return _validate_kode_pos(v) if v is not None else v
+
+    @field_validator("kode_wilayah")
+    @classmethod
+    def _v_wilayah(cls, v):
+        return _validate_kode_wilayah(v) if v is not None else v
 
 
 class PesanChatIn(BaseModel):

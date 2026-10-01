@@ -510,6 +510,12 @@ def pengiriman_out(pengiriman: PengirimanStore) -> dict:
         "nama_penerima": pengiriman.nama_penerima,
         "telepon_penerima": pengiriman.telepon_penerima,
         "alamat_tujuan": pengiriman.alamat_tujuan,
+        "kelurahan_tujuan": pengiriman.kelurahan_tujuan,
+        "kecamatan_tujuan": pengiriman.kecamatan_tujuan,
+        "kota_tujuan": pengiriman.kota_tujuan,
+        "provinsi_tujuan": pengiriman.provinsi_tujuan,
+        "kode_pos_tujuan": pengiriman.kode_pos_tujuan,
+        "kode_wilayah_tujuan": pengiriman.kode_wilayah_tujuan,
         "tracking_id": pengiriman.tracking_id,
         "status": pengiriman.status,
     }
@@ -685,6 +691,9 @@ def alamat_out(alamat: AlamatStore) -> dict:
         "kota": alamat.kota,
         "provinsi": alamat.provinsi,
         "kode_pos": alamat.kode_pos,
+        "kecamatan": alamat.kecamatan,
+        "kelurahan": alamat.kelurahan,
+        "kode_wilayah": alamat.kode_wilayah,
         "utama": alamat.utama,
     }
 
