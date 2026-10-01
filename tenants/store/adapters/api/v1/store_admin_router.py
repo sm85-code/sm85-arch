@@ -15,6 +15,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from tenants.store.modules.store.application import services
 from tenants.store.modules.store.application.schemas import (
+    ChangePasswordIn,
     KategoriIn,
     LoginRequest,
     PengaturanPatch,
@@ -98,6 +99,17 @@ async def do_logout(response: Response):
 @store_admin_router.get("/auth/me")
 async def me(user: AdminStore = Depends(get_current_admin)):
     return services.admin_out(user)
+
+
+@store_admin_router.post("/auth/ganti-password")
+async def ganti_password(
+    payload: ChangePasswordIn,
+    session: AsyncSession = Depends(get_db_store),
+    user: AdminStore = Depends(get_current_admin),
+):
+    """Any admin changes their own password; the current one is required."""
+    await services.change_admin_password(session, user, payload.current_password, payload.new_password)
+    return {"ok": True}
 
 
 # --- Produk & kategori -----------------------------------------------------
