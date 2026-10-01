@@ -4,7 +4,7 @@ from datetime import datetime
 from decimal import Decimal
 from typing import Optional
 
-from pydantic import BaseModel, ConfigDict, EmailStr, Field, field_validator
+from pydantic import BaseModel, ConfigDict, EmailStr, Field, field_validator, model_validator
 
 
 # --- Auth -----------------------------------------------------------------
@@ -123,6 +123,15 @@ class AkunMarketplaceOut(BaseModel):
 # --- Produk (SKU induk) + Listing -------------------------------------------
 
 
+def normalisasi_proses(preorder: bool, hari: int) -> int:
+    """Ready stock is processed within 2 days (whatever was sent); a pre-order must say 3-14 days."""
+    if not preorder:
+        return 2
+    if not 3 <= hari <= 14:
+        raise ValueError("Pre-order harus 3 sampai 14 hari")
+    return hari
+
+
 class ProdukIn(BaseModel):
     sku_induk: str
     nama: str
@@ -130,6 +139,17 @@ class ProdukIn(BaseModel):
     harga_dasar: Decimal
     stok: int = 0
     foto_url: Optional[str] = None
+    berat_gram: int = Field(0, ge=0, le=500_000)
+    panjang_cm: Decimal = Field(Decimal("0"), ge=0, le=1000)
+    lebar_cm: Decimal = Field(Decimal("0"), ge=0, le=1000)
+    tinggi_cm: Decimal = Field(Decimal("0"), ge=0, le=1000)
+    preorder: bool = False
+    hari_proses: int = 2
+
+    @model_validator(mode="after")
+    def _proses(self):
+        self.hari_proses = normalisasi_proses(self.preorder, self.hari_proses)
+        return self
 
 
 class ProdukPatch(BaseModel):
@@ -139,6 +159,12 @@ class ProdukPatch(BaseModel):
     stok: Optional[int] = None
     foto_url: Optional[str] = None
     aktif: Optional[bool] = None
+    berat_gram: Optional[int] = Field(None, ge=0, le=500_000)
+    panjang_cm: Optional[Decimal] = Field(None, ge=0, le=1000)
+    lebar_cm: Optional[Decimal] = Field(None, ge=0, le=1000)
+    tinggi_cm: Optional[Decimal] = Field(None, ge=0, le=1000)
+    preorder: Optional[bool] = None
+    hari_proses: Optional[int] = None
 
 
 class ProdukOut(BaseModel):
@@ -150,6 +176,12 @@ class ProdukOut(BaseModel):
     stok: int
     foto_url: Optional[str]
     aktif: bool
+    berat_gram: int = 0
+    panjang_cm: Decimal = Decimal("0")
+    lebar_cm: Decimal = Decimal("0")
+    tinggi_cm: Decimal = Decimal("0")
+    preorder: bool = False
+    hari_proses: int = 2
 
     model_config = ConfigDict(from_attributes=True)
 
