@@ -12,7 +12,7 @@ from datetime import datetime, timezone
 from decimal import Decimal
 from typing import Optional
 
-from sqlalchemy import Boolean, CheckConstraint, DateTime, ForeignKey, Integer, Numeric, String, Text, UniqueConstraint
+from sqlalchemy import Boolean, CheckConstraint, DateTime, ForeignKey, Index, Integer, Numeric, String, Text, UniqueConstraint, false, func
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 
 from tenants.store.modules.store.infrastructure.database import StoreBase
@@ -110,10 +110,72 @@ class ProdukStore(StoreBase):
     sumber: Mapped[str] = mapped_column(String(16), nullable=False, default="manual")
     erp_produk_id: Mapped[Optional[str]] = mapped_column(String(64), nullable=True, index=True)
     platform_asal: Mapped[Optional[str]] = mapped_column(String(16), nullable=True)
+    # Actual weight (grams) and packed size (cm) of one piece; a variant may override them. Courier APIs price on these.
+    berat_gram: Mapped[int] = mapped_column(Integer, nullable=False, default=0, server_default="0")
+    panjang_cm: Mapped[Decimal] = mapped_column(Numeric(8, 1), nullable=False, default=Decimal("0"), server_default="0")
+    lebar_cm: Mapped[Decimal] = mapped_column(Numeric(8, 1), nullable=False, default=Decimal("0"), server_default="0")
+    tinggi_cm: Mapped[Decimal] = mapped_column(Numeric(8, 1), nullable=False, default=Decimal("0"), server_default="0")
+    # Ready stock ships within 2 days; a pre-order product says how many days (3-14) it takes to make/obtain.
+    preorder: Mapped[bool] = mapped_column(Boolean, nullable=False, default=False, server_default=false())
+    hari_proses: Mapped[int] = mapped_column(Integer, nullable=False, default=2, server_default="2")
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=_utcnow)
     updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=_utcnow, onupdate=_utcnow)
 
     kategori: Mapped[Optional["KategoriStore"]] = relationship()
+    foto: Mapped[list["FotoProduk"]] = relationship(
+        back_populates="produk", order_by="FotoProduk.urutan", cascade="all, delete-orphan"
+    )
+    varian: Mapped[list["VarianProduk"]] = relationship(
+        back_populates="produk", order_by="VarianProduk.urutan", cascade="all, delete-orphan"
+    )
+
+
+class FotoProduk(StoreBase):
+    """Gallery photo of a product (at most 7). The first one (urutan 0) is the cover, mirrored in ProdukStore.foto_key."""
+
+    __tablename__ = "store_produk_foto"
+
+    id: Mapped[str] = mapped_column(String(64), primary_key=True, default=_uuid)
+    produk_id: Mapped[str] = mapped_column(
+        String(64), ForeignKey("store_produk.id", ondelete="CASCADE"), nullable=False, index=True
+    )
+    foto_key: Mapped[str] = mapped_column(String(512), nullable=False)
+    urutan: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=_utcnow)
+
+    produk: Mapped["ProdukStore"] = relationship(back_populates="foto")
+
+
+class VarianProduk(StoreBase):
+    """Optional variant of a product (colour, size, ...): its own price, stock, weight and size.
+    Empty price/weight/size fall back to the product's. A product with variants is bought by picking one."""
+
+    __tablename__ = "store_produk_varian"
+    __table_args__ = (
+        CheckConstraint("stok >= 0", name="ck_store_varian_stok_nonneg"),
+        UniqueConstraint("produk_id", "nama", name="uq_store_varian_nama"),
+    )
+
+    id: Mapped[str] = mapped_column(String(64), primary_key=True, default=_uuid)
+    produk_id: Mapped[str] = mapped_column(
+        String(64), ForeignKey("store_produk.id", ondelete="CASCADE"), nullable=False, index=True
+    )
+    nama: Mapped[str] = mapped_column(String(120), nullable=False)
+    sku: Mapped[str] = mapped_column(String(64), nullable=False, default="", server_default="")
+    harga: Mapped[Optional[Decimal]] = mapped_column(Numeric(20, 2), nullable=True)
+    stok: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
+    berat_gram: Mapped[Optional[int]] = mapped_column(Integer, nullable=True)
+    panjang_cm: Mapped[Optional[Decimal]] = mapped_column(Numeric(8, 1), nullable=True)
+    lebar_cm: Mapped[Optional[Decimal]] = mapped_column(Numeric(8, 1), nullable=True)
+    tinggi_cm: Mapped[Optional[Decimal]] = mapped_column(Numeric(8, 1), nullable=True)
+    foto_id: Mapped[Optional[str]] = mapped_column(
+        String(64), ForeignKey("store_produk_foto.id", ondelete="SET NULL"), nullable=True
+    )
+    aktif: Mapped[bool] = mapped_column(Boolean, nullable=False, default=True, server_default="true")
+    urutan: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=_utcnow)
+
+    produk: Mapped["ProdukStore"] = relationship(back_populates="varian")
 
 
 class AlamatStore(StoreBase):
@@ -143,10 +205,9 @@ class AlamatStore(StoreBase):
 
 
 class ItemKeranjang(StoreBase):
-    """One row per (buyer, produk) in the cart."""
+    """One row per (buyer, produk, variant) in the cart; varian_id is NULL for products without variants."""
 
     __tablename__ = "store_item_keranjang"
-    __table_args__ = (UniqueConstraint("user_id", "produk_id", name="uq_store_keranjang_user_produk"),)
 
     id: Mapped[str] = mapped_column(String(64), primary_key=True, default=_uuid)
     user_id: Mapped[str] = mapped_column(
@@ -155,9 +216,23 @@ class ItemKeranjang(StoreBase):
     produk_id: Mapped[str] = mapped_column(
         String(64), ForeignKey("store_produk.id", ondelete="CASCADE"), nullable=False, index=True
     )
+    varian_id: Mapped[Optional[str]] = mapped_column(
+        String(64), ForeignKey("store_produk_varian.id", ondelete="CASCADE"), nullable=True, index=True
+    )
     qty: Mapped[int] = mapped_column(Integer, nullable=False, default=1)
 
     produk: Mapped["ProdukStore"] = relationship()
+    varian: Mapped[Optional["VarianProduk"]] = relationship()
+
+
+# NULL varian_id must still be unique per (buyer, product): COALESCE makes NULLs comparable.
+Index(
+    "uq_store_keranjang_line",
+    ItemKeranjang.user_id,
+    ItemKeranjang.produk_id,
+    func.coalesce(ItemKeranjang.varian_id, ""),
+    unique=True,
+)
 
 
 # menunggu_pembayaran -> dibayar -> diproses -> dikirim -> selesai, or
@@ -205,6 +280,13 @@ class ItemPesanan(StoreBase):
     harga_satuan: Mapped[Decimal] = mapped_column(Numeric(20, 2), nullable=False)
     qty: Mapped[int] = mapped_column(Integer, nullable=False)
     subtotal: Mapped[Decimal] = mapped_column(Numeric(20, 2), nullable=False)
+    # Variant snapshot (the variant row may be deleted later) and the lead time promised at order time.
+    varian_id: Mapped[Optional[str]] = mapped_column(
+        String(64), ForeignKey("store_produk_varian.id", ondelete="SET NULL"), nullable=True
+    )
+    nama_varian: Mapped[str] = mapped_column(String(120), nullable=False, default="", server_default="")
+    preorder: Mapped[bool] = mapped_column(Boolean, nullable=False, default=False, server_default=false())
+    hari_proses: Mapped[int] = mapped_column(Integer, nullable=False, default=2, server_default="2")
 
     pesanan: Mapped["PesananStore"] = relationship(back_populates="items")
 

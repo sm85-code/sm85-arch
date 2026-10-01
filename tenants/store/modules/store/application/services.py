@@ -17,8 +17,11 @@ from tenants.store.modules.store.application.schemas import (
     PengaturanPatch,
     PengirimanIn,
     ProdukIn,
+    MAKS_FOTO_PRODUK,
     ProdukPatch,
     RegisterRequest,
+    VarianIn,
+    normalisasi_proses,
 )
 
 if TYPE_CHECKING:
@@ -40,8 +43,10 @@ from tenants.store.modules.store.infrastructure.models import (
     PengirimanStore,
     PesanChatStore,
     PesananStore,
+    FotoProduk,
     ProdukStore,
     PembeliStore,
+    VarianProduk,
 )
 
 # Transisi status pengiriman yang diizinkan.
@@ -77,7 +82,51 @@ def admin_out(user: AdminStore) -> dict:
     return {"id": user.id, "nama": user.nama, "email": user.email, "role": user.role}
 
 
+def _foto_keys(produk: ProdukStore) -> list[tuple[str | None, str]]:
+    """(foto id, object key) in gallery order. A product that predates the gallery has only its cover key."""
+    if produk.foto:
+        return [(f.id, f.foto_key) for f in produk.foto]
+    return [(None, produk.foto_key)] if produk.foto_key else []
+
+
+def harga_efektif(produk: ProdukStore, varian: VarianProduk | None) -> Decimal:
+    return varian.harga if varian is not None and varian.harga is not None else produk.harga
+
+
+def stok_total(produk: ProdukStore) -> int:
+    """Stock a buyer can still get: the sum of the active variants when there are variants, else the product's own."""
+    if produk.varian:
+        return sum(v.stok for v in produk.varian if v.aktif)
+    return produk.stok
+
+
+def varian_out(v: VarianProduk, produk: ProdukStore) -> dict:
+    foto = next((f for f in produk.foto if f.id == v.foto_id), None)
+    return {
+        "id": v.id,
+        "nama": v.nama,
+        "sku": v.sku,
+        "harga": str(harga_efektif(produk, v)),
+        "harga_sendiri": str(v.harga) if v.harga is not None else None,
+        "stok": v.stok,
+        "berat_gram": v.berat_gram if v.berat_gram is not None else produk.berat_gram,
+        "panjang_cm": str(v.panjang_cm if v.panjang_cm is not None else produk.panjang_cm),
+        "lebar_cm": str(v.lebar_cm if v.lebar_cm is not None else produk.lebar_cm),
+        "tinggi_cm": str(v.tinggi_cm if v.tinggi_cm is not None else produk.tinggi_cm),
+        "berat_gram_sendiri": v.berat_gram,
+        "panjang_cm_sendiri": str(v.panjang_cm) if v.panjang_cm is not None else None,
+        "lebar_cm_sendiri": str(v.lebar_cm) if v.lebar_cm is not None else None,
+        "tinggi_cm_sendiri": str(v.tinggi_cm) if v.tinggi_cm is not None else None,
+        "foto_id": v.foto_id,
+        "foto_url": media_url(foto.foto_key) if foto else None,
+        "aktif": v.aktif,
+    }
+
+
 def produk_out(produk: ProdukStore) -> dict:
+    keys = _foto_keys(produk)
+    aktif = [v for v in produk.varian if v.aktif]
+    harga_semua = [harga_efektif(produk, v) for v in aktif] or [produk.harga]
     return {
         "id": produk.id,
         "slug": produk.slug,
@@ -86,11 +135,21 @@ def produk_out(produk: ProdukStore) -> dict:
         "kategori_id": produk.kategori_id,
         "kategori_nama": produk.kategori.nama if produk.kategori else None,
         "harga": str(produk.harga),
-        "stok": produk.stok,
+        "harga_min": str(min(harga_semua)),
+        "harga_max": str(max(harga_semua)),
+        "stok": stok_total(produk),
         "foto_key": produk.foto_key,
         "foto_url": media_url(produk.foto_key),
+        "foto": [{"id": fid, "url": media_url(key)} for fid, key in keys],
         "aktif": produk.aktif,
         "sumber": produk.sumber,
+        "berat_gram": produk.berat_gram,
+        "panjang_cm": str(produk.panjang_cm),
+        "lebar_cm": str(produk.lebar_cm),
+        "tinggi_cm": str(produk.tinggi_cm),
+        "preorder": produk.preorder,
+        "hari_proses": produk.hari_proses,
+        "varian": [varian_out(v, produk) for v in produk.varian],
     }
 
 
@@ -130,15 +189,22 @@ async def register(session: AsyncSession, payload: RegisterRequest) -> PembeliSt
     return user
 
 
+_MUAT_PRODUK = (
+    selectinload(ProdukStore.kategori),
+    selectinload(ProdukStore.foto),
+    selectinload(ProdukStore.varian),
+)
+
+
 async def list_produk(session: AsyncSession, *, hanya_aktif: bool = False) -> list[ProdukStore]:
-    stmt = select(ProdukStore).options(selectinload(ProdukStore.kategori)).order_by(ProdukStore.created_at.desc())
+    stmt = select(ProdukStore).options(*_MUAT_PRODUK).order_by(ProdukStore.created_at.desc())
     if hanya_aktif:
         stmt = stmt.where(ProdukStore.aktif.is_(True))
     return list((await session.execute(stmt)).scalars().all())
 
 
 async def get_produk(session: AsyncSession, produk_id: str) -> ProdukStore:
-    stmt = select(ProdukStore).where(ProdukStore.id == produk_id).options(selectinload(ProdukStore.kategori))
+    stmt = select(ProdukStore).where(ProdukStore.id == produk_id).options(*_MUAT_PRODUK)
     produk = (await session.execute(stmt)).scalar_one_or_none()
     if not produk:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Produk tidak ditemukan")
@@ -192,7 +258,7 @@ async def get_produk_by_ref(session: AsyncSession, ref: str) -> ProdukStore:
     stmt = (
         select(ProdukStore)
         .where(or_(ProdukStore.slug == ref, ProdukStore.id == ref))
-        .options(selectinload(ProdukStore.kategori))
+        .options(*_MUAT_PRODUK)
     )
     produk = (await session.execute(stmt)).scalars().first()
     if not produk:
@@ -210,7 +276,7 @@ async def create_produk(session: AsyncSession, payload: ProdukIn) -> ProdukStore
     await session.flush()
     # produk_out() reads produk.kategori; load it here, a lazy load inside the
     # async session would raise MissingGreenlet.
-    await session.refresh(produk, attribute_names=["kategori"])
+    await session.refresh(produk, attribute_names=["kategori", "foto", "varian"])
     return produk
 
 
@@ -225,11 +291,19 @@ async def upsert_produk_dari_erp(
     platform_asal: str | None,
     foto_key: str | None,
     aktif: bool,
+    berat_gram: int | None = None,
+    panjang_cm: Decimal | None = None,
+    lebar_cm: Decimal | None = None,
+    tinggi_cm: Decimal | None = None,
+    preorder: bool | None = None,
+    hari_proses: int | None = None,
 ) -> tuple[ProdukStore, bool]:
     """Create or refresh the store copy of an ERP product. Returns
     (produk, dibuat). Stock is store-owned: it is only set when the copy is
     first created, so republishing never overwrites stock the store already
-    sold from. A photo is only replaced when a new one was copied."""
+    sold from. A photo is only added when a new one was copied; weight, size and
+    lead time follow the ERP product when it has them (an unset ERP value leaves
+    what the store already has)."""
     produk = (
         await session.execute(select(ProdukStore).where(ProdukStore.erp_produk_id == erp_produk_id))
     ).scalar_one_or_none()
@@ -248,6 +322,9 @@ async def upsert_produk_dari_erp(
             platform_asal=platform_asal,
         )
         session.add(produk)
+        await session.flush()
+        if foto_key:
+            session.add(FotoProduk(produk_id=produk.id, foto_key=foto_key, urutan=0))
     else:
         produk.nama = nama
         produk.deskripsi = deskripsi
@@ -256,15 +333,31 @@ async def upsert_produk_dari_erp(
         if platform_asal:
             produk.platform_asal = platform_asal
         if foto_key:
-            produk.foto_key = foto_key
+            await session.refresh(produk, attribute_names=["foto"])
+            await _tambah_foto_ke_galeri(session, produk, foto_key, melewati_batas=False)
+    for nama_field, nilai in (
+        ("berat_gram", berat_gram), ("panjang_cm", panjang_cm), ("lebar_cm", lebar_cm), ("tinggi_cm", tinggi_cm),
+    ):
+        if nilai is not None and nilai > 0:
+            setattr(produk, nama_field, nilai)
+    if preorder is not None:
+        produk.preorder = preorder
+        produk.hari_proses = normalisasi_proses(preorder, hari_proses if hari_proses is not None else produk.hari_proses)
     await session.flush()
-    await session.refresh(produk, attribute_names=["kategori"])
+    await session.refresh(produk, attribute_names=["kategori", "foto", "varian"])
     return produk, dibuat
 
 
 async def update_produk(session: AsyncSession, produk_id: str, payload: ProdukPatch) -> ProdukStore:
     produk = await get_produk(session, produk_id)
     fields = payload.model_dump(exclude_unset=True)
+    if "preorder" in fields or "hari_proses" in fields:
+        preorder = fields.get("preorder", produk.preorder)
+        try:
+            fields["hari_proses"] = normalisasi_proses(preorder, fields.get("hari_proses", produk.hari_proses))
+        except ValueError as exc:
+            raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=str(exc)) from exc
+        fields["preorder"] = preorder
     for field, value in fields.items():
         setattr(produk, field, value)
     await session.flush()
@@ -275,34 +368,151 @@ async def update_produk(session: AsyncSession, produk_id: str, payload: ProdukPa
     return produk
 
 
-async def set_foto_produk(session: AsyncSession, produk_id: str, foto_key: str) -> ProdukStore:
+async def _urut_berikut(produk: ProdukStore) -> int:
+    return max((f.urutan for f in produk.foto), default=-1) + 1
+
+
+async def _tambah_foto_ke_galeri(
+    session: AsyncSession, produk: ProdukStore, foto_key: str, *, melewati_batas: bool = True
+) -> FotoProduk:
+    """Append a photo. A cover that predates the gallery is first made a gallery row so it is not lost."""
+    if not produk.foto and produk.foto_key and produk.foto_key != foto_key:
+        session.add(FotoProduk(produk_id=produk.id, foto_key=produk.foto_key, urutan=0))
+        await session.flush()
+        await session.refresh(produk, attribute_names=["foto"])
+    if melewati_batas and len(produk.foto) >= MAKS_FOTO_PRODUK:
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=f"Maksimal {MAKS_FOTO_PRODUK} foto per produk")
+    if any(f.foto_key == foto_key for f in produk.foto):
+        return next(f for f in produk.foto if f.foto_key == foto_key)
+    foto = FotoProduk(produk_id=produk.id, foto_key=foto_key, urutan=await _urut_berikut(produk))
+    session.add(foto)
+    await session.flush()
+    await session.refresh(produk, attribute_names=["foto"])
+    produk.foto_key = produk.foto[0].foto_key
+    await session.flush()
+    return foto
+
+
+async def pastikan_bisa_tambah_foto(session: AsyncSession, produk_id: str) -> ProdukStore:
+    """Checked before the upload so a full gallery never leaves an orphan object in storage."""
     produk = await get_produk(session, produk_id)
-    produk.foto_key = foto_key
+    jumlah = len(produk.foto) if produk.foto else (1 if produk.foto_key else 0)
+    if jumlah >= MAKS_FOTO_PRODUK:
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=f"Maksimal {MAKS_FOTO_PRODUK} foto per produk")
+    return produk
+
+
+async def tambah_foto(session: AsyncSession, produk_id: str, foto_key: str) -> ProdukStore:
+    produk = await get_produk(session, produk_id)
+    await _tambah_foto_ke_galeri(session, produk, foto_key)
+    await session.refresh(produk, attribute_names=["foto", "varian"])
+    return produk
+
+
+async def hapus_foto(session: AsyncSession, produk_id: str, foto_id: str) -> tuple[ProdukStore, str]:
+    """Remove one photo; returns the object key so the caller can delete it from storage after commit."""
+    produk = await get_produk(session, produk_id)
+    foto = next((f for f in produk.foto if f.id == foto_id), None)
+    if foto is None:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Foto tidak ditemukan")
+    key = foto.foto_key
+    await session.delete(foto)
+    await session.flush()
+    await session.refresh(produk, attribute_names=["foto", "varian"])
+    produk.foto_key = produk.foto[0].foto_key if produk.foto else None
+    await session.flush()
+    return produk, key
+
+
+async def urutkan_foto(session: AsyncSession, produk_id: str, urutan_id: list[str]) -> ProdukStore:
+    produk = await get_produk(session, produk_id)
+    ada = {f.id for f in produk.foto}
+    if set(urutan_id) != ada or len(urutan_id) != len(ada):
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Daftar foto tidak sesuai")
+    posisi = {fid: i for i, fid in enumerate(urutan_id)}
+    for f in produk.foto:
+        f.urutan = posisi[f.id]
+    await session.flush()
+    await session.refresh(produk, attribute_names=["foto", "varian"])
+    produk.foto_key = produk.foto[0].foto_key if produk.foto else None
     await session.flush()
     return produk
 
 
+async def ganti_varian(session: AsyncSession, produk_id: str, items: list[VarianIn]) -> ProdukStore:
+    """Replace the whole variant list. Rows with a known id are updated, new ones created, missing ones removed."""
+    produk = await get_produk(session, produk_id)
+    nama = [v.nama.strip().lower() for v in items]
+    if len(set(nama)) != len(nama):
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Nama varian tidak boleh sama")
+    foto_ids = {f.id for f in produk.foto}
+    for v in items:
+        if v.foto_id and v.foto_id not in foto_ids:
+            raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Foto varian bukan milik produk ini")
+    ada = {v.id: v for v in produk.varian}
+    dipakai = {v.id for v in items if v.id}
+    # Drop removed variants first so a rename never trips the unique (produk_id, nama) constraint.
+    for row in list(produk.varian):
+        if row.id not in dipakai:
+            await session.delete(row)
+    await session.flush()
+    for i, v in enumerate(items):
+        row = ada.get(v.id) if v.id else None
+        if v.id and row is None:
+            raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Varian tidak ditemukan")
+        if row is None:
+            row = VarianProduk(produk_id=produk.id)
+            session.add(row)
+        row.nama = v.nama.strip()
+        row.sku = v.sku
+        row.harga = v.harga
+        row.stok = v.stok
+        row.berat_gram = v.berat_gram
+        row.panjang_cm = v.panjang_cm
+        row.lebar_cm = v.lebar_cm
+        row.tinggi_cm = v.tinggi_cm
+        row.foto_id = v.foto_id
+        row.aktif = v.aktif
+        row.urutan = i
+    await session.flush()
+    await session.refresh(produk, attribute_names=["varian"])
+    return produk
+
+
 async def foto_masih_dipakai(session: AsyncSession, foto_key: str) -> bool:
-    """True while any product still points at this photo object."""
+    """True while any product or gallery row still points at this photo object."""
     total = (
         await session.execute(select(func.count()).select_from(ProdukStore).where(ProdukStore.foto_key == foto_key))
+    ).scalar_one()
+    total += (
+        await session.execute(select(func.count()).select_from(FotoProduk).where(FotoProduk.foto_key == foto_key))
     ).scalar_one()
     return total > 0
 
 
-async def delete_produk(session: AsyncSession, produk_id: str) -> None:
+async def delete_produk(session: AsyncSession, produk_id: str) -> list[str]:
+    """Delete a product; returns every photo key it owned so the caller can clean storage after commit."""
     produk = await get_produk(session, produk_id)
+    keys = [key for _, key in _foto_keys(produk)]
     await session.delete(produk)
+    return keys
 
 
 def keranjang_item_out(item: ItemKeranjang) -> dict:
+    harga = harga_efektif(item.produk, item.varian)
     return {
+        "id": item.id,
         "produk_id": item.produk_id,
+        "varian_id": item.varian_id,
         "nama": item.produk.nama,
-        "harga": str(item.produk.harga),
+        "nama_varian": item.varian.nama if item.varian else None,
+        "harga": str(harga),
         "qty": item.qty,
-        "subtotal": str(item.produk.harga * item.qty),
-        "stok_tersedia": item.produk.stok,
+        "subtotal": str(harga * item.qty),
+        "stok_tersedia": item.varian.stok if item.varian else item.produk.stok,
+        "preorder": item.produk.preorder,
+        "hari_proses": item.produk.hari_proses,
+        "foto_url": media_url(item.produk.foto_key),
     }
 
 
@@ -316,10 +526,14 @@ def pesanan_out(pesanan: PesananStore) -> dict:
         "items": [
             {
                 "produk_id": it.produk_id,
+                "varian_id": it.varian_id,
                 "nama_produk": it.nama_produk,
+                "nama_varian": it.nama_varian or None,
                 "harga_satuan": str(it.harga_satuan),
                 "qty": it.qty,
                 "subtotal": str(it.subtotal),
+                "preorder": it.preorder,
+                "hari_proses": it.hari_proses,
             }
             for it in pesanan.items
         ],
@@ -330,49 +544,76 @@ async def get_keranjang(session: AsyncSession, user_id: str) -> list[ItemKeranja
     stmt = (
         select(ItemKeranjang)
         .where(ItemKeranjang.user_id == user_id)
-        .options(selectinload(ItemKeranjang.produk))
+        .options(selectinload(ItemKeranjang.produk), selectinload(ItemKeranjang.varian))
     )
     return list((await session.execute(stmt)).scalars().all())
 
 
-async def tambah_ke_keranjang(session: AsyncSession, user_id: str, produk_id: str, qty: int) -> ItemKeranjang:
+async def _muat_item(session: AsyncSession, item: ItemKeranjang) -> ItemKeranjang:
+    await session.flush()
+    await session.refresh(item, attribute_names=["produk", "varian"])
+    return item
+
+
+async def _cari_item(session: AsyncSession, user_id: str, ref: str) -> ItemKeranjang | None:
+    """A cart line is addressed by its own id; the product id still works for a product without variants."""
+    base = select(ItemKeranjang).where(ItemKeranjang.user_id == user_id)
+    item = (await session.execute(base.where(ItemKeranjang.id == ref))).scalar_one_or_none()
+    if item is None:
+        item = (
+            await session.execute(base.where(ItemKeranjang.produk_id == ref, ItemKeranjang.varian_id.is_(None)))
+        ).scalar_one_or_none()
+    return item
+
+
+async def tambah_ke_keranjang(
+    session: AsyncSession, user_id: str, produk_id: str, qty: int, varian_id: str | None = None
+) -> ItemKeranjang:
     if qty < 1:
         raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Qty minimal 1")
     produk = await get_produk(session, produk_id)
     if not produk.aktif:
         raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Produk tidak tersedia")
+    varian = None
+    if produk.varian:
+        varian = next((v for v in produk.varian if v.id == varian_id), None) if varian_id else None
+        if varian is None:
+            raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Pilih varian terlebih dahulu")
+        if not varian.aktif:
+            raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Varian tidak tersedia")
+    elif varian_id:
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Varian tidak ditemukan")
 
     stmt = select(ItemKeranjang).where(ItemKeranjang.user_id == user_id, ItemKeranjang.produk_id == produk_id)
+    stmt = stmt.where(ItemKeranjang.varian_id == varian.id if varian else ItemKeranjang.varian_id.is_(None))
     item = (await session.execute(stmt)).scalar_one_or_none()
     if item:
         item.qty += qty
     else:
-        item = ItemKeranjang(user_id=user_id, produk_id=produk_id, qty=qty)
+        item = ItemKeranjang(user_id=user_id, produk_id=produk_id, varian_id=varian.id if varian else None, qty=qty)
         session.add(item)
-    await session.flush()
-    await session.refresh(item, attribute_names=["produk"])
-    return item
+    return await _muat_item(session, item)
 
 
-async def ubah_qty_keranjang(session: AsyncSession, user_id: str, produk_id: str, qty: int) -> ItemKeranjang:
+async def ubah_qty_keranjang(session: AsyncSession, user_id: str, ref: str, qty: int) -> ItemKeranjang:
     if qty < 1:
         raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Qty minimal 1 (hapus item untuk qty 0)")
-    stmt = select(ItemKeranjang).where(ItemKeranjang.user_id == user_id, ItemKeranjang.produk_id == produk_id)
-    item = (await session.execute(stmt)).scalar_one_or_none()
+    item = await _cari_item(session, user_id, ref)
     if not item:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Item keranjang tidak ditemukan")
     item.qty = qty
-    await session.flush()
-    await session.refresh(item, attribute_names=["produk"])
-    return item
+    return await _muat_item(session, item)
 
 
-async def hapus_dari_keranjang(session: AsyncSession, user_id: str, produk_id: str) -> None:
-    stmt = select(ItemKeranjang).where(ItemKeranjang.user_id == user_id, ItemKeranjang.produk_id == produk_id)
-    item = (await session.execute(stmt)).scalar_one_or_none()
+async def hapus_dari_keranjang(session: AsyncSession, user_id: str, ref: str) -> None:
+    item = await _cari_item(session, user_id, ref)
     if item:
         await session.delete(item)
         await session.flush()
+
+
+def _nama_baris(item: ItemKeranjang) -> str:
+    return f"{item.produk.nama} ({item.varian.nama})" if item.varian else item.produk.nama
 
 
 async def checkout(session: AsyncSession, user_id: str) -> PesananStore:
@@ -381,14 +622,15 @@ async def checkout(session: AsyncSession, user_id: str) -> PesananStore:
         raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Keranjang kosong")
 
     for item in items:
-        if not item.produk.aktif:
+        stok = item.varian.stok if item.varian else item.produk.stok
+        if not item.produk.aktif or (item.varian is not None and not item.varian.aktif):
             raise HTTPException(
-                status_code=status.HTTP_409_CONFLICT, detail=f"Produk '{item.produk.nama}' sudah tidak tersedia"
+                status_code=status.HTTP_409_CONFLICT, detail=f"Produk '{_nama_baris(item)}' sudah tidak tersedia"
             )
-        if item.produk.stok < item.qty:
+        if stok < item.qty:
             raise HTTPException(
                 status_code=status.HTTP_409_CONFLICT,
-                detail=f"Stok '{item.produk.nama}' tidak cukup (tersisa {item.produk.stok})",
+                detail=f"Stok '{_nama_baris(item)}' tidak cukup (tersisa {stok})",
             )
 
     pesanan = PesananStore(user_id=user_id, status="menunggu_pembayaran", total=Decimal("0"))
@@ -397,29 +639,39 @@ async def checkout(session: AsyncSession, user_id: str) -> PesananStore:
 
     total = Decimal("0")
     for item in items:
-        subtotal = item.produk.harga * item.qty
+        harga = harga_efektif(item.produk, item.varian)
+        subtotal = harga * item.qty
         total += subtotal
         session.add(
             ItemPesanan(
                 pesanan_id=pesanan.id,
                 produk_id=item.produk_id,
+                varian_id=item.varian_id,
                 nama_produk=item.produk.nama,
-                harga_satuan=item.produk.harga,
+                nama_varian=item.varian.nama if item.varian else "",
+                harga_satuan=harga,
                 qty=item.qty,
                 subtotal=subtotal,
+                preorder=item.produk.preorder,
+                hari_proses=item.produk.hari_proses,
             )
         )
         # Conditional UPDATE so two concurrent checkouts can never push
         # stock below zero (the in-memory check above can be stale).
-        result = await session.execute(
-            update(ProdukStore)
-            .where(ProdukStore.id == item.produk_id, ProdukStore.stok >= item.qty)
-            .values(stok=ProdukStore.stok - item.qty)
-        )
-        if result.rowcount != 1:
-            raise HTTPException(
-                status_code=status.HTTP_409_CONFLICT, detail=f"Stok '{item.produk.nama}' tidak cukup"
+        if item.varian is not None:
+            result = await session.execute(
+                update(VarianProduk)
+                .where(VarianProduk.id == item.varian_id, VarianProduk.stok >= item.qty)
+                .values(stok=VarianProduk.stok - item.qty)
             )
+        else:
+            result = await session.execute(
+                update(ProdukStore)
+                .where(ProdukStore.id == item.produk_id, ProdukStore.stok >= item.qty)
+                .values(stok=ProdukStore.stok - item.qty)
+            )
+        if result.rowcount != 1:
+            raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail=f"Stok '{_nama_baris(item)}' tidak cukup")
         await session.delete(item)
 
     pesanan.total = total
@@ -468,9 +720,15 @@ async def ubah_status_pesanan(session: AsyncSession, pesanan_id: str, status_bar
     if status_baru == "dibatalkan":
         # checkout() took the stock when the order was placed; give it back.
         for item in pesanan.items:
-            await session.execute(
-                update(ProdukStore).where(ProdukStore.id == item.produk_id).values(stok=ProdukStore.stok + item.qty)
-            )
+            if item.varian_id:
+                # A variant deleted since the order was placed has nothing left to restock.
+                await session.execute(
+                    update(VarianProduk).where(VarianProduk.id == item.varian_id).values(stok=VarianProduk.stok + item.qty)
+                )
+            else:
+                await session.execute(
+                    update(ProdukStore).where(ProdukStore.id == item.produk_id).values(stok=ProdukStore.stok + item.qty)
+                )
     await session.flush()
     return pesanan
 

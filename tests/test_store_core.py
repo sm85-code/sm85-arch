@@ -154,7 +154,7 @@ def test_produk_input_rejects_negative_price_and_stock():
 async def test_produk_out_builds_foto_url_from_key_and_media_base(session, monkeypatch):
     monkeypatch.setenv("MEDIA_BASE_URL", "https://img.example.com/")
     produk = await services.create_produk(session, ProdukIn(nama="Gula", harga="14000", stok=3))
-    await services.set_foto_produk(session, produk.id, "ampelkuning_20260101_abc.jpg")
+    await services.tambah_foto(session, produk.id, "ampelkuning_20260101_abc.jpg")
 
     out = services.produk_out(await services.get_produk(session, produk.id))
 
@@ -167,7 +167,7 @@ async def test_produk_out_builds_foto_url_from_key_and_media_base(session, monke
 async def test_produk_out_has_no_foto_url_without_media_base(session, monkeypatch):
     monkeypatch.delenv("MEDIA_BASE_URL", raising=False)
     produk = await services.create_produk(session, ProdukIn(nama="Gula", harga="14000"))
-    await services.set_foto_produk(session, produk.id, "k.jpg")
+    await services.tambah_foto(session, produk.id, "k.jpg")
 
     assert services.produk_out(await services.get_produk(session, produk.id))["foto_url"] is None
 

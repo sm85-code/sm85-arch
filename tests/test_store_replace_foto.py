@@ -1,5 +1,4 @@
-"""Replacing a product photo removes the old R2 object -- but only after the
-new key is committed, and never while another product still uses it."""
+"""Product gallery: uploads append (max 7), deleting removes the R2 object only after\ncommit and never while something else still uses it."""
 from types import SimpleNamespace
 
 import pytest
@@ -9,7 +8,8 @@ from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker, create_asyn
 
 from tenants.store.adapters.api.v1 import store_admin_router as admin_module
 from tenants.store.modules.store.infrastructure.database import StoreBase
-from tenants.store.modules.store.infrastructure.models import ProdukStore
+from tenants.store.modules.store.application import services
+from tenants.store.modules.store.infrastructure.models import FotoProduk, ProdukStore
 
 
 @pytest_asyncio.fixture
@@ -66,28 +66,49 @@ async def _read():
 
 
 @pytest.mark.asyncio
-async def test_old_photo_is_deleted_after_the_new_key_is_committed(session, r2):
+async def test_upload_appends_and_keeps_the_legacy_cover(session, r2):
     p = await _produk(session, "produk/lama.jpg")
-    _count_commits(session, r2)
+    out = await _replace(session, p.id)
+    assert len(out["foto"]) == 2
+    assert out["foto_key"] == "produk/lama.jpg"  # first photo stays the cover
+    assert r2.deleted == []
+
+
+@pytest.mark.asyncio
+async def test_first_photo_becomes_the_cover(session, r2):
+    p = await _produk(session, None)
     out = await _replace(session, p.id)
     assert out["foto_key"] == "produk/baru.jpg"
-    assert r2.deleted == ["produk/lama.jpg"]
-    assert r2.commits_at_delete == [1]  # the new key was committed before the old object went
+    assert r2.deleted == []
 
 
 @pytest.mark.asyncio
-async def test_first_photo_has_nothing_to_delete(session, r2):
+async def test_gallery_is_capped_at_seven_without_uploading(session, r2, monkeypatch):
+    p = await _produk(session, None)
+    for i in range(7):
+        session.add(FotoProduk(produk_id=p.id, foto_key=f"produk/{i}.jpg", urutan=i))
+    await session.commit()
+
+    async def boom(*a, **k):
+        raise AssertionError("must not upload when the gallery is full")
+
+    monkeypatch.setattr(admin_module, "upload_produk_photo", boom)
+    with pytest.raises(HTTPException) as exc:
+        await _replace(session, p.id)
+    assert exc.value.status_code == 400
+
+
+@pytest.mark.asyncio
+async def test_deleting_a_photo_removes_the_object_after_commit_and_moves_the_cover(session, r2):
     p = await _produk(session, None)
     await _replace(session, p.id)
-    assert r2.deleted == []
-
-
-@pytest.mark.asyncio
-async def test_old_photo_still_used_by_another_product_is_kept(session, r2):
-    p = await _produk(session, "produk/bersama.jpg")
-    await _produk(session, "produk/bersama.jpg")
-    await _replace(session, p.id)
-    assert r2.deleted == []
+    out = await services.tambah_foto(session, p.id, "produk/dua.jpg")
+    first, second = out["foto"] if isinstance(out, dict) else services.produk_out(out)["foto"]
+    _count_commits(session, r2)
+    hasil = await admin_module.hapus_foto_produk(p.id, first["id"], session=session, _user=SimpleNamespace())
+    assert r2.deleted == ["produk/baru.jpg"]
+    assert r2.commits_at_delete == [1]
+    assert hasil["foto_key"] == "produk/dua.jpg"
 
 
 @pytest.mark.asyncio

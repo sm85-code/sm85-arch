@@ -22,7 +22,9 @@ from tenants.store.modules.store.application.schemas import (
     PengirimanIn,
     PesanChatIn,
     ProdukIn,
+    FotoUrutanIn,
     ProdukPatch,
+    VarianListIn,
     StaffIn,
     StaffPatch,
     StatusPengirimanIn,
@@ -141,13 +143,13 @@ async def patch_produk(
 async def remove_produk(
     produk_id: str, session: AsyncSession = Depends(get_db_store), _user: AdminStore = Depends(admin_only)
 ):
-    kunci = (await services.get_produk(session, produk_id)).foto_key
-    await services.delete_produk(session, produk_id)
-    # Same rule as replacing a photo: remove the object only once the delete is
-    # committed, and only if no other product shares it.
+    kunci = await services.delete_produk(session, produk_id)
+    # Remove the objects only once the delete is committed, and only if
+    # nothing else shares them.
     await session.commit()
-    if kunci and not await services.foto_masih_dipakai(session, kunci):
-        await delete_foto(kunci)
+    for k in set(kunci):
+        if not await services.foto_masih_dipakai(session, k):
+            await delete_foto(k)
     return {"ok": True}
 
 
@@ -158,19 +160,48 @@ async def upload_foto_produk(
     session: AsyncSession = Depends(get_db_store),
     _user: AdminStore = Depends(admin_only),
 ):
-    """Upload a photo to the media bucket (Cloudflare R2; 501 until the R2_*
-    env vars are set), store its object key on the product and remove the
-    photo it replaces."""
-    # Look the product up first: an unknown id must not leave an orphan upload behind.
-    kunci_lama = (await services.get_produk(session, produk_id)).foto_key
+    """Append a photo to the product gallery (max 7). Uploads to the media
+    bucket (Cloudflare R2; 501 until the R2_* env vars are set); the first
+    photo is the cover."""
+    # Check product and gallery size first: a full gallery must not leave an orphan upload behind.
+    await services.pastikan_bisa_tambah_foto(session, produk_id)
     foto_key = await upload_produk_photo(await file.read(), file.content_type or "")
-    hasil = services.produk_out(await services.set_foto_produk(session, produk_id, foto_key))
-    # The old object is only removed once the new key is safely committed, and
-    # only if no other product shares it.
+    return services.produk_out(await services.tambah_foto(session, produk_id, foto_key))
+
+
+@store_admin_router.delete("/produk/{produk_id}/foto/{foto_id}")
+async def hapus_foto_produk(
+    produk_id: str,
+    foto_id: str,
+    session: AsyncSession = Depends(get_db_store),
+    _user: AdminStore = Depends(admin_only),
+):
+    produk, kunci = await services.hapus_foto(session, produk_id, foto_id)
+    hasil = services.produk_out(produk)
     await session.commit()
-    if kunci_lama and kunci_lama != foto_key and not await services.foto_masih_dipakai(session, kunci_lama):
-        await delete_foto(kunci_lama)
+    if not await services.foto_masih_dipakai(session, kunci):
+        await delete_foto(kunci)
     return hasil
+
+
+@store_admin_router.put("/produk/{produk_id}/foto/urutan")
+async def urutkan_foto_produk(
+    produk_id: str,
+    payload: FotoUrutanIn,
+    session: AsyncSession = Depends(get_db_store),
+    _user: AdminStore = Depends(admin_only),
+):
+    return services.produk_out(await services.urutkan_foto(session, produk_id, payload.ids))
+
+
+@store_admin_router.put("/produk/{produk_id}/varian")
+async def ganti_varian_produk(
+    produk_id: str,
+    payload: VarianListIn,
+    session: AsyncSession = Depends(get_db_store),
+    _user: AdminStore = Depends(admin_only),
+):
+    return services.produk_out(await services.ganti_varian(session, produk_id, payload.varian))
 
 
 @store_admin_router.get("/kategori")
