@@ -89,9 +89,10 @@ async def list_produk(session: AsyncSession = Depends(get_db_store)):
     return [services.produk_out(p) for p in await services.list_produk(session, hanya_aktif=True)]
 
 
-@store_buyer_router.get("/produk/{produk_id}")
-async def get_produk(produk_id: str, session: AsyncSession = Depends(get_db_store)):
-    produk = await services.get_produk(session, produk_id)
+@store_buyer_router.get("/produk/{ref}")
+async def get_produk(ref: str, session: AsyncSession = Depends(get_db_store)):
+    """ref is the product slug (SEO URL); the plain id is still accepted for old links."""
+    produk = await services.get_produk_by_ref(session, ref)
     if not produk.aktif:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Produk tidak ditemukan")
     return services.produk_out(produk)

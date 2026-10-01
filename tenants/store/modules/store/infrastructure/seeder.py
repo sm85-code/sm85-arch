@@ -7,14 +7,18 @@ well-known login behind.
 """
 from __future__ import annotations
 
+import logging
 import os
 
-from sqlalchemy import select
+from sqlalchemy import select, text
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from shared.security import hash_password
+from tenants.store.modules.store.application.slug import slugify, with_suffix
 from tenants.store.modules.store.infrastructure.database import StoreBase, engine
-from tenants.store.modules.store.infrastructure.models import ROLE_OWNER, AdminStore
+from tenants.store.modules.store.infrastructure.models import ROLE_OWNER, AdminStore, ProdukStore
+
+logger = logging.getLogger(__name__)
 
 # EmailStr rejects RFC 2606 reserved TLDs (.test/.example/...); ".internal"
 # is accepted, so the placeholder owner can actually log in.
@@ -38,3 +42,43 @@ async def seed_store(session: AsyncSession) -> dict[str, str]:
         session.add(owner)
         await session.flush()
     return {"owner_id": owner.id, "owner_email": owner.email}
+
+
+async def backfill_slugs(session: AsyncSession) -> int:
+    """Give every product that has no slug yet a unique one (oldest first, so the oldest keeps the plain name)."""
+    taken = {s for (s,) in (await session.execute(select(ProdukStore.slug).where(ProdukStore.slug.is_not(None)))).all()}
+    rows = (
+        (await session.execute(select(ProdukStore).where(ProdukStore.slug.is_(None)).order_by(ProdukStore.created_at)))
+        .scalars()
+        .all()
+    )
+    for produk in rows:
+        base, n = slugify(produk.nama), 1
+        while with_suffix(base, n) in taken:
+            n += 1
+        produk.slug = with_suffix(base, n)
+        taken.add(produk.slug)
+    await session.flush()
+    return len(rows)
+
+
+async def ensure_store_schema() -> None:
+    """Startup hook (main.py lifespan): add what shipped after the first deploy.
+
+    The store has no migration tool, so this mirrors marketplace_erp: idempotent ``IF NOT EXISTS`` statements,
+    then a backfill. No-op when DATABASE_URL_STORE is not configured.
+    """
+    from tenants.store.modules.store.infrastructure import database as store_database
+
+    engine, session_local = store_database.engine, store_database.SessionLocal
+    if engine is None or session_local is None:
+        return
+    async with engine.begin() as conn:
+        await conn.run_sync(StoreBase.metadata.create_all)
+        await conn.execute(text("ALTER TABLE store_produk ADD COLUMN IF NOT EXISTS slug VARCHAR(160)"))
+        await conn.execute(text("CREATE UNIQUE INDEX IF NOT EXISTS ix_store_produk_slug ON store_produk (slug)"))
+    async with session_local() as session:
+        filled = await backfill_slugs(session)
+        await session.commit()
+    if filled:
+        logger.info("store: backfilled %d product slug(s)", filled)

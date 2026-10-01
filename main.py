@@ -26,6 +26,7 @@ from tenants.marketplace_erp.modules.marketplace_erp.infrastructure.seeder impor
 from tenants.store.adapters.api.v1.store_admin_router import store_admin_router
 from tenants.store.adapters.api.v1.store_buyer_router import store_buyer_router
 from tenants.store.modules.store.infrastructure import database as store_database
+from tenants.store.modules.store.infrastructure.seeder import ensure_store_schema
 from shared.config import APP_TITLE, CORS_ORIGIN_REGEX, CORS_ORIGINS, origin_allowed
 
 logging.basicConfig(
@@ -52,6 +53,11 @@ async def lifespan(_: FastAPI):
         await ensure_marketplace_erp_schema()
     except Exception:
         logger.exception("marketplace_erp schema repair failed — app continues")
+    try:
+        # Store: adds the product slug column (SEO URLs) to databases created before it existed and backfills it.
+        await ensure_store_schema()
+    except Exception:
+        logger.exception("store schema repair failed — app continues")
     yield
 
 
