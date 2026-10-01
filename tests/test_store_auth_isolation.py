@@ -215,7 +215,7 @@ def test_buyer_routes_are_public_only_for_catalog_and_auth():
         "/auth/google",
         "/auth/logout",
         "/produk",
-        "/produk/{produk_id}",
+        "/produk/{ref}",
         "/kategori",
         "/payment/callback",
     }

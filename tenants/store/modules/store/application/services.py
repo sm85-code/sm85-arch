@@ -5,7 +5,7 @@ from decimal import Decimal
 from typing import TYPE_CHECKING
 
 from fastapi import HTTPException, status
-from sqlalchemy import func, select, update
+from sqlalchemy import func, or_, select, update
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import selectinload
 
@@ -23,6 +23,7 @@ from tenants.store.modules.store.application.schemas import (
 
 if TYPE_CHECKING:
     from tenants.store.modules.store.application.schemas import StaffIn, StaffPatch
+from tenants.store.modules.store.application.slug import slugify, with_suffix
 from tenants.store.modules.store.infrastructure.media_storage import media_url
 from tenants.store.modules.store.infrastructure.models import (
     ROLE_ADMIN,
@@ -79,6 +80,7 @@ def admin_out(user: AdminStore) -> dict:
 def produk_out(produk: ProdukStore) -> dict:
     return {
         "id": produk.id,
+        "slug": produk.slug,
         "nama": produk.nama,
         "deskripsi": produk.deskripsi,
         "kategori_id": produk.kategori_id,
@@ -143,8 +145,35 @@ async def get_produk(session: AsyncSession, produk_id: str) -> ProdukStore:
     return produk
 
 
+async def unique_slug(session: AsyncSession, nama: str, *, exclude_id: str | None = None) -> str:
+    """slugify(nama), made unique among products: base, base-2, base-3 ..."""
+    base = slugify(nama)
+    n = 1
+    while True:
+        candidate = with_suffix(base, n)
+        stmt = select(ProdukStore.id).where(ProdukStore.slug == candidate)
+        if exclude_id:
+            stmt = stmt.where(ProdukStore.id != exclude_id)
+        if (await session.execute(stmt.limit(1))).first() is None:
+            return candidate
+        n += 1
+
+
+async def get_produk_by_ref(session: AsyncSession, ref: str) -> ProdukStore:
+    """Public lookup: the URL segment is the slug; old links that carry the id keep working."""
+    stmt = (
+        select(ProdukStore)
+        .where(or_(ProdukStore.slug == ref, ProdukStore.id == ref))
+        .options(selectinload(ProdukStore.kategori))
+    )
+    produk = (await session.execute(stmt)).scalars().first()
+    if not produk:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Produk tidak ditemukan")
+    return produk
+
+
 async def create_produk(session: AsyncSession, payload: ProdukIn) -> ProdukStore:
-    produk = ProdukStore(**payload.model_dump())
+    produk = ProdukStore(**payload.model_dump(), slug=await unique_slug(session, payload.nama))
     session.add(produk)
     await session.flush()
     # produk_out() reads produk.kategori; load it here, a lazy load inside the
@@ -176,6 +205,7 @@ async def upsert_produk_dari_erp(
     if produk is None:
         produk = ProdukStore(
             nama=nama,
+            slug=await unique_slug(session, nama),
             deskripsi=deskripsi,
             harga=harga,
             stok=max(stok, 0),

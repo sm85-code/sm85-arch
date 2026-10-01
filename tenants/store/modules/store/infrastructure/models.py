@@ -88,6 +88,9 @@ class ProdukStore(StoreBase):
 
     id: Mapped[str] = mapped_column(String(64), primary_key=True, default=_uuid)
     nama: Mapped[str] = mapped_column(String(255), nullable=False)
+    # Public URL segment (/produk/<slug>). Stays the same when the product is renamed, so links
+    # and search rankings survive; unique, filled by services.unique_slug (and backfilled at startup).
+    slug: Mapped[Optional[str]] = mapped_column(String(160), unique=True, nullable=True, index=True)
     deskripsi: Mapped[str] = mapped_column(Text, nullable=False, default="")
     kategori_id: Mapped[Optional[str]] = mapped_column(
         String(64), ForeignKey("store_kategori.id", ondelete="SET NULL"), nullable=True, index=True
