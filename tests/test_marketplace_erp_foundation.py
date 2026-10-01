@@ -147,3 +147,20 @@ async def test_create_listing_rejects_duplicate_platform_id_eksternal(session):
             session, ProdukListingIn(produk_id=produk.id, akun_id=akun.id, platform="lazada", id_eksternal="LZD-1")
         )
     assert exc_info.value.status_code == 409
+
+
+@pytest.mark.asyncio
+async def test_create_produk_race_on_same_sku_is_409_not_500():
+    """Two saves of one SKU that both pass the pre-check (no autoflush here, so
+    the first row is still pending) must end in 409 from the unique index."""
+    engine = create_async_engine("sqlite+aiosqlite:///:memory:")
+    async with engine.begin() as conn:
+        await conn.run_sync(MarketplaceErpBase.metadata.create_all)
+    async with async_sessionmaker(engine, class_=AsyncSession, expire_on_commit=False, autoflush=False)() as s:
+        from tenants.marketplace_erp.modules.marketplace_erp.infrastructure.models import Produk
+
+        s.add(Produk(sku_induk="DUP-1", nama="Pertama", harga_dasar=Decimal("1")))
+        with pytest.raises(HTTPException) as exc_info:
+            await services.create_produk(s, ProdukIn(sku_induk="DUP-1", nama="Kedua", harga_dasar=Decimal("2")))
+        assert exc_info.value.status_code == 409
+    await engine.dispose()
