@@ -46,6 +46,7 @@ from tenants.marketplace_erp.modules.marketplace_erp.application.schemas import 
     ProdukListingPatch,
     ProdukOut,
     ProdukPatch,
+    PublishTokoIn,
     RegisterIn,
     SettlementIn,
     SettlementOut,
@@ -70,6 +71,9 @@ from tenants.marketplace_erp.modules.marketplace_erp.infrastructure.auth import 
 from tenants.marketplace_erp.modules.marketplace_erp.infrastructure.database import get_db_marketplace_erp
 from tenants.marketplace_erp.modules.marketplace_erp.infrastructure.models import UserMarketplaceErp
 from tenants.marketplace_erp.modules.marketplace_erp.infrastructure.seeder import seed_marketplace_erp
+from tenants.store.modules.store.application import services as store_services
+from tenants.store.modules.store.infrastructure import database as store_database
+from tenants.store.modules.store.infrastructure.media_import import import_foto_dari_url
 
 marketplace_erp_router = APIRouter()
 
@@ -298,6 +302,55 @@ async def create_produk(
     _: UserMarketplaceErp = Depends(require_roles_marketplace_erp(*OWNER_ONLY)),
 ):
     return await services.create_produk(session, payload)
+
+
+async def _store_db():
+    """Session on the store database, for the ERP -> store publish. 501 when
+    the store database is not configured in this deployment."""
+    if store_database.SessionLocal is None:
+        raise HTTPException(status_code=status.HTTP_501_NOT_IMPLEMENTED, detail="Database toko belum dikonfigurasi")
+    async with store_database.SessionLocal() as store_session:
+        try:
+            yield store_session
+            await store_session.commit()
+        except Exception:
+            await store_session.rollback()
+            raise
+
+
+@marketplace_erp_router.post("/produk/{produk_id}/publish-toko")
+async def publish_produk_ke_toko(
+    produk_id: str,
+    payload: PublishTokoIn,
+    session: AsyncSession = Depends(get_db_marketplace_erp),
+    store_session: AsyncSession = Depends(_store_db),
+    _: UserMarketplaceErp = Depends(require_roles_marketplace_erp(*OWNER_ONLY)),
+):
+    """Copy (or refresh) one ERP product in the online store. Idempotent per
+    ERP product: republishing updates name/description/price but keeps the
+    store's own stock, and a photo only changes when a new one was copied."""
+    produk = await services.get_produk(session, produk_id)
+    listings = await services.list_listing(session, produk_id=produk.id)
+    platform_asal = next((li.platform for li in listings if li.aktif), None) or (
+        listings[0].platform if listings else None
+    )
+    foto_key = await import_foto_dari_url(produk.foto_url) if payload.salin_foto else None
+    toko_produk, dibuat = await store_services.upsert_produk_dari_erp(
+        store_session,
+        erp_produk_id=produk.id,
+        nama=produk.nama,
+        deskripsi=produk.deskripsi,
+        harga=payload.harga if payload.harga is not None else produk.harga_dasar,
+        stok=payload.stok if payload.stok is not None else produk.stok,
+        platform_asal=platform_asal,
+        foto_key=foto_key,
+        aktif=payload.aktif,
+    )
+    return {
+        "dibuat": dibuat,
+        "foto_disalin": foto_key is not None,
+        "produk": store_services.produk_out(toko_produk),
+    }
 
 
 @marketplace_erp_router.get("/produk/{produk_id}", response_model=ProdukOut)
