@@ -133,6 +133,11 @@ class AlamatStore(StoreBase):
     kota: Mapped[str] = mapped_column(String(128), nullable=False, default="")
     provinsi: Mapped[str] = mapped_column(String(128), nullable=False, default="")
     kode_pos: Mapped[str] = mapped_column(String(16), nullable=False, default="")
+    # Kecamatan / desa-kelurahan chosen from the region lists, and the Kemendagri code of the village
+    # (e.g. 32.73.01.1001) -- what a courier API needs to price and route a parcel.
+    kecamatan: Mapped[str] = mapped_column(String(128), nullable=False, default="", server_default="")
+    kelurahan: Mapped[str] = mapped_column(String(128), nullable=False, default="", server_default="")
+    kode_wilayah: Mapped[str] = mapped_column(String(16), nullable=False, default="", server_default="")
     utama: Mapped[bool] = mapped_column(Boolean, nullable=False, default=False)
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=_utcnow)
 
@@ -225,6 +230,9 @@ class PengirimanStore(StoreBase):
     kota_tujuan: Mapped[str] = mapped_column(String(128), nullable=False, default="")
     provinsi_tujuan: Mapped[str] = mapped_column(String(128), nullable=False, default="")
     kode_pos_tujuan: Mapped[str] = mapped_column(String(16), nullable=False, default="")
+    kecamatan_tujuan: Mapped[str] = mapped_column(String(128), nullable=False, default="", server_default="")
+    kelurahan_tujuan: Mapped[str] = mapped_column(String(128), nullable=False, default="", server_default="")
+    kode_wilayah_tujuan: Mapped[str] = mapped_column(String(16), nullable=False, default="", server_default="")
     tracking_id: Mapped[Optional[str]] = mapped_column(String(128), nullable=True)
     status: Mapped[str] = mapped_column(String(32), nullable=False, default="menunggu_pickup", index=True)
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=_utcnow)
