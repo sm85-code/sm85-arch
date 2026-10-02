@@ -659,13 +659,17 @@ async def batalkan_pesanan_marketplace(
 @marketplace_erp_router.get("/pesanan/{pesanan_id}/resi")
 async def cetak_resi_pesanan(
     pesanan_id: str,
+    tipe: str | None = Query(None, pattern="^(THERMAL_AIR_WAYBILL|NORMAL_AIR_WAYBILL)$", description="default: thermal (A6)"),
     session: AsyncSession = Depends(get_db_marketplace_erp),
     user: UserMarketplaceErp = Depends(require_roles_marketplace_erp(*OWNER_OR_STAFF)),
 ):
-    """The marketplace's own shipping label (PDF) for an order that was already processed."""
+    """The marketplace's own shipping label (PDF) for an order that was already processed.
+
+    ``tipe``: THERMAL_AIR_WAYBILL (100x150 mm, about A6; the default when offered) or NORMAL_AIR_WAYBILL (A4).
+    """
     pesanan = await services.get_pesanan(session, pesanan_id)
     await pastikan_akses_akun(user, session, pesanan.akun_id)
-    pdf, nama_file = await services.unduh_resi_pesanan(session, pesanan_id)
+    pdf, nama_file = await services.unduh_resi_pesanan(session, pesanan_id, tipe)
     return Response(content=pdf, media_type="application/pdf", headers={"Content-Disposition": f'inline; filename="{nama_file}"'})
 
 

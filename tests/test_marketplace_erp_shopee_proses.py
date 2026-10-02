@@ -182,7 +182,7 @@ async def test_id_pesanan_punya_resi(session):
 # --- shipping label ----------------------------------------------------------------------
 
 
-def _label_fake(statuses, calls):
+def _label_fake(statuses, calls, selectable=("NORMAL_AIR_WAYBILL", "THERMAL_AIR_WAYBILL")):
     seq = iter(statuses)
 
     async def fake(session, akun, path, *, method="GET", body=None, params=None, raw=False):
@@ -190,7 +190,13 @@ def _label_fake(statuses, calls):
         if path == erp_shopee._PATH_TRACKING:
             return {"response": {"tracking_number": "ID123"}}
         if path == erp_shopee._PATH_DOC_PARAM:
-            return {"response": {"result_list": [{"suggest_shipping_document_type": "THERMAL_AIR_WAYBILL"}]}}
+            return {
+                "response": {
+                    "result_list": [
+                        {"suggest_shipping_document_type": "NORMAL_AIR_WAYBILL", "selectable_shipping_document_type": list(selectable)}
+                    ]
+                }
+            }
         if path == erp_shopee._PATH_DOC_CREATE:
             return {"response": {"result_list": [{"order_sn": "SN1"}]}}
         if path == erp_shopee._PATH_DOC_RESULT:
@@ -202,7 +208,7 @@ def _label_fake(statuses, calls):
 
 
 @pytest.mark.asyncio
-async def test_unduh_resi_uses_suggested_template_and_waits_until_ready(live, monkeypatch):
+async def test_unduh_resi_prefers_thermal_a6_over_the_suggested_a4_and_waits_until_ready(live, monkeypatch):
     calls = []
     monkeypatch.setattr(erp_shopee, "signed_shop_request", _label_fake(["PROCESSING", "PROCESSING", "READY"], calls))
     pdf = await erp_shopee.unduh_resi(None, live, "SN1")
@@ -235,17 +241,21 @@ async def test_resi_endpoint_returns_pdf_only_for_processed_orders(session, monk
     user = SimpleNamespace(role="owner", id="u1")
 
     with pytest.raises(HTTPException) as exc:  # READY_TO_SHIP: not processed yet
-        await router.cetak_resi_pesanan(pesanan.id, session=session, user=user)
+        await router.cetak_resi_pesanan(pesanan.id, tipe=None, session=session, user=user)
     assert exc.value.status_code == 409
 
     await services.impor_pesanan_marketplace(session, akun, [{**row, "status_mentah": "PROCESSED"}])
 
-    async def fake_unduh(session, akun, order_sn, nomor_resi=None):
+    asked = {}
+
+    async def fake_unduh(session, akun, order_sn, nomor_resi=None, tipe=None):
         assert order_sn == "SN1"
+        asked["tipe"] = tipe
         return b"%PDF-1.4 x"
 
     monkeypatch.setattr(erp_shopee, "unduh_resi", fake_unduh)
-    resp = await router.cetak_resi_pesanan(pesanan.id, session=session, user=user)
+    resp = await router.cetak_resi_pesanan(pesanan.id, tipe="NORMAL_AIR_WAYBILL", session=session, user=user)
+    assert asked["tipe"] == "NORMAL_AIR_WAYBILL"
     assert resp.media_type == "application/pdf" and resp.body.startswith(b"%PDF")
     assert 'filename="resi-SN1.pdf"' in resp.headers["content-disposition"]
 
@@ -267,3 +277,24 @@ async def test_call_shop_api_raw_returns_file_bytes(live, monkeypatch):
 
     with pytest.raises(HTTPException):  # same body without raw=True is still an error
         await erp_shopee._call_shop_api(access_token="at", shop_id="5", api_path="/x", method="POST", body={})
+
+
+@pytest.mark.asyncio
+async def test_unduh_resi_template_choice(live, monkeypatch):
+    def create_type(calls):
+        return next(b for p, b in calls if p == erp_shopee._PATH_DOC_CREATE)["order_list"][0]["shipping_document_type"]
+
+    calls = []
+    monkeypatch.setattr(erp_shopee, "signed_shop_request", _label_fake(["READY"], calls))
+    await erp_shopee.unduh_resi(None, live, "SN1", tipe="NORMAL_AIR_WAYBILL")  # explicit A4
+    assert create_type(calls) == "NORMAL_AIR_WAYBILL"
+
+    calls = []
+    monkeypatch.setattr(erp_shopee, "signed_shop_request", _label_fake(["READY"], calls, selectable=("NORMAL_AIR_WAYBILL",)))
+    await erp_shopee.unduh_resi(None, live, "SN1")  # no thermal offered -> Shopee's suggestion
+    assert create_type(calls) == "NORMAL_AIR_WAYBILL"
+
+    monkeypatch.setattr(erp_shopee, "signed_shop_request", _label_fake(["READY"], [], selectable=("NORMAL_AIR_WAYBILL",)))
+    with pytest.raises(HTTPException) as exc:  # asking for a template the courier does not offer
+        await erp_shopee.unduh_resi(None, live, "SN1", tipe="THERMAL_AIR_WAYBILL")
+    assert exc.value.status_code == 409 and "NORMAL_AIR_WAYBILL" in exc.value.detail

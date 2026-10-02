@@ -773,11 +773,33 @@ async def proses_pengiriman(session: Any, akun: Any, order_sn: str) -> dict:
     return {"status_marketplace": "PROCESSED", "nomor_resi": await ambil_nomor_resi(session, akun, order_sn)}
 
 
-async def unduh_resi(session: Any, akun: Any, order_sn: str, nomor_resi: str | None = None) -> bytes:
+# Label templates: thermal is Shopee's 100x150 mm label (about A6), normal is an A4 sheet with a small label.
+TEMPLATE_RESI = ("THERMAL_AIR_WAYBILL", "NORMAL_AIR_WAYBILL")
+
+
+def pilih_template_resi(hasil: dict, tipe: str | None) -> str:
+    """Template to print: the requested one, else thermal (A6) when offered, else Shopee's suggestion."""
+    bisa = list(hasil.get("selectable_shipping_document_type") or [])
+    if tipe:
+        if bisa and tipe not in bisa:
+            raise HTTPException(
+                status_code=status.HTTP_409_CONFLICT,
+                detail=f"Template resi {tipe} tidak tersedia untuk pesanan ini. Tersedia: {', '.join(bisa)}.",
+            )
+        return tipe
+    if "THERMAL_AIR_WAYBILL" in bisa:
+        return "THERMAL_AIR_WAYBILL"
+    pilihan = hasil.get("suggest_shipping_document_type") or next(iter(bisa), None)
+    if not pilihan:
+        raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail="Shopee tidak menyediakan template resi untuk pesanan ini.")
+    return pilihan
+
+
+async def unduh_resi(session: Any, akun: Any, order_sn: str, nomor_resi: str | None = None, tipe: str | None = None) -> bytes:
     """Shopee's own shipping label (PDF) for an arranged order.
 
-    get_shipping_document_parameter (suggested template) -> create_shipping_document -> poll until
-    READY -> download_shipping_document.
+    get_shipping_document_parameter (template choice) -> create_shipping_document -> poll until
+    READY -> download_shipping_document. Defaults to the thermal (A6-sized) template.
     """
     if not live_sync_enabled() or not _akun_configured(akun):
         raise ShopeeNotConfigured("Shopee live sync nonaktif atau akun belum terhubung.")
@@ -793,9 +815,7 @@ async def unduh_resi(session: Any, akun: Any, order_sn: str, nomor_resi: str | N
             status_code=status.HTTP_409_CONFLICT,
             detail=f"Resi belum bisa dibuat: {hasil.get('fail_error')} {hasil.get('fail_message', '')}".strip(),
         )
-    tipe = hasil.get("suggest_shipping_document_type") or next(iter(hasil.get("selectable_shipping_document_type") or []), None)
-    if not tipe:
-        raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail="Shopee tidak menyediakan template resi untuk pesanan ini.")
+    tipe = pilih_template_resi(hasil, tipe)
 
     item: dict[str, Any] = {"order_sn": order_sn, "shipping_document_type": tipe}
     if nomor_resi:
