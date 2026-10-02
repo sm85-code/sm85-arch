@@ -232,6 +232,56 @@ async def delete_akun_marketplace(session: AsyncSession, akun_id: str) -> None:
     await session.flush()
 
 
+async def hubungkan_shopee_akun_utama(
+    session: AsyncSession,
+    akun: AkunMarketplace,
+    payload: dict,
+    nama_toko: dict[str, str] | None = None,
+) -> list[dict]:
+    """Bind every shop authorised from a Shopee main account (token payload carries shop_id_list).
+
+    - A shop already in the ERP just gets the new tokens (re-authorisation, no duplicate row).
+    - The row that started the flow (``akun``) takes the first new shop; further new shops get rows
+      named from ``nama_toko`` (shop name looked up by the caller) or "Shopee <shop_id>".
+    - If the starting row ends up unused it is removed, so no empty placeholder is left behind.
+    Returns one dict per shop: akun_id, id_toko_eksternal, nama_toko, baru.
+    """
+    from tenants.marketplace_erp.modules.marketplace_erp.infrastructure.adapters import erp_shopee
+
+    shop_ids = [str(sid) for sid in payload.get("shop_id_list") or []]
+    if not shop_ids:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="Shopee tidak mengembalikan toko yang diotorisasi. Pilih minimal satu toko lalu coba lagi.",
+        )
+    nama_toko = nama_toko or {}
+    akun_dipakai = False
+    hasil: list[dict] = []
+    for sid in shop_ids:
+        row = (
+            await session.execute(
+                select(AkunMarketplace).where(
+                    AkunMarketplace.platform == "shopee", AkunMarketplace.id_toko_eksternal == sid
+                )
+            )
+        ).scalar_one_or_none()
+        baru = row is None
+        if baru and not akun_dipakai and not akun.id_toko_eksternal:
+            row, akun_dipakai = akun, True
+        elif baru:
+            row = AkunMarketplace(platform="shopee", nama_toko=nama_toko.get(sid) or f"Shopee {sid}")
+            session.add(row)
+        erp_shopee.apply_token_payload(row, payload, shop_id=sid)
+        await session.flush()
+        hasil.append(
+            {"akun_id": row.id, "id_toko_eksternal": sid, "nama_toko": row.nama_toko, "baru": baru}
+        )
+    if not akun_dipakai and not akun.id_toko_eksternal:
+        await session.delete(akun)  # empty placeholder that started the flow
+        await session.flush()
+    return hasil
+
+
 # --- Produk (SKU induk) --------------------------------------------------------
 
 

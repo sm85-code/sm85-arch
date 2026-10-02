@@ -143,12 +143,17 @@ async def _http_post_json(url: str, body: dict, *, timeout: float = 25.0) -> dic
     return await asyncio.to_thread(_do)
 
 
-async def exchange_token(*, code: str, shop_id: str) -> dict[str, Any]:
-    """POST /api/v2/auth/token/get -- exchange OAuth code for shop tokens.
+async def exchange_token(
+    *, code: str, shop_id: str | None = None, main_account_id: str | None = None
+) -> dict[str, Any]:
+    """POST /api/v2/auth/token/get -- exchange OAuth code for tokens.
 
-    Returns dict with access_token, refresh_token, expire_in, shop_id, ...
-    Caller persists onto AkunMarketplace.
+    Pass exactly one of shop_id (authorised from a shop account) or main_account_id (authorised from
+    a main account; the response then carries shop_id_list). Returns dict with access_token,
+    refresh_token, expire_in, ... Caller persists onto AkunMarketplace.
     """
+    if bool(shop_id) == bool(main_account_id):
+        raise ValueError("exchange_token needs exactly one of shop_id / main_account_id")
     if not partner_configured():
         raise ShopeeNotConfigured()
     ts = int(time.time())
@@ -157,11 +162,11 @@ async def exchange_token(*, code: str, shop_id: str) -> dict[str, Any]:
         f"{_host()}{_PATH_TOKEN_GET}"
         f"?partner_id={_partner_id_int()}&timestamp={ts}&sign={sign}"
     )
-    body = {
-        "code": code,
-        "partner_id": _partner_id_int(),
-        "shop_id": int(shop_id) if str(shop_id).isdigit() else shop_id,
-    }
+    body: dict[str, Any] = {"code": code, "partner_id": _partner_id_int()}
+    if main_account_id:
+        body["main_account_id"] = int(main_account_id) if str(main_account_id).isdigit() else main_account_id
+    else:
+        body["shop_id"] = int(shop_id) if str(shop_id).isdigit() else shop_id
     data = await _http_post_json(url, body)
     # Shopee wraps errors as error/message even on HTTP 200.
     if data.get("error"):
@@ -282,13 +287,31 @@ async def signed_shop_request(
         raise ShopeeNotConfigured("Akun Shopee belum punya access_token / id_toko_eksternal.")
     await pastikan_token_segar(session, akun)
 
+    return await _call_shop_api(
+        access_token=str(akun.access_token),
+        shop_id=str(akun.id_toko_eksternal),
+        api_path=api_path,
+        method=method,
+        body=body,
+        params=params,
+    )
+
+
+async def _call_shop_api(
+    *,
+    access_token: str,
+    shop_id: str,
+    api_path: str,
+    method: str = "GET",
+    body: dict | None = None,
+    params: dict | None = None,
+) -> dict:
+    """Signed shop-level call with an explicit token (no AkunMarketplace row needed)."""
     import asyncio
 
     import requests
 
     ts = int(time.time())
-    shop_id = str(akun.id_toko_eksternal)
-    access_token = str(akun.access_token)
     sign = sign_request(api_path, ts, access_token=access_token, shop_id=shop_id)
     query = {
         "partner_id": _partner_id_int(),
@@ -322,6 +345,15 @@ async def signed_shop_request(
             detail=f"Shopee {api_path} gagal: {data.get('error')} {data.get('message', '')}".strip(),
         )
     return data
+
+
+async def get_shop_name(access_token: str, shop_id: str) -> str | None:
+    """Best-effort shop name (get_shop_info). Never raises: a missing name must not block connecting."""
+    try:
+        data = await _call_shop_api(access_token=access_token, shop_id=shop_id, api_path="/api/v2/shop/get_shop_info")
+    except Exception:  # noqa: BLE001
+        return None
+    return (data.get("shop_name") or "").strip() or None
 
 
 async def sync_produk(akun: Any) -> list[dict]:

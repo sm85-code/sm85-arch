@@ -623,19 +623,42 @@ async def oauth_shopee_start(
 async def oauth_shopee_callback(
     akun_id: str,
     code: str = Query(...),
-    shop_id: str = Query(...),
+    shop_id: str | None = Query(None),
+    main_account_id: str | None = Query(None),
     session: AsyncSession = Depends(get_db_marketplace_erp),
 ):
     """Exchange OAuth code for tokens and persist on AkunMarketplace.
 
     Public callback (Shopee redirects here). akun_id in the path binds the
     shop to the pending local row created before /oauth/shopee/start.
+    Shopee returns ``shop_id`` when a shop account authorised, or ``main_account_id``
+    when a main account authorised (possibly several shops at once).
     """
+    import asyncio
+
     from tenants.marketplace_erp.modules.marketplace_erp.infrastructure.adapters import erp_shopee
 
+    if bool(shop_id) == bool(main_account_id):
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="Callback Shopee harus berisi shop_id atau main_account_id",
+        )
     akun = await services.get_akun_marketplace(session, akun_id)
     if akun.platform != "shopee":
         raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Akun bukan platform shopee")
+
+    if main_account_id:
+        payload = await erp_shopee.exchange_token(code=code, main_account_id=str(main_account_id))
+        # Shop names make the new rows recognisable; failures just fall back to "Shopee <id>".
+        shop_ids = [str(sid) for sid in payload.get("shop_id_list") or []]
+        names = await asyncio.gather(
+            *(erp_shopee.get_shop_name(str(payload.get("access_token") or ""), sid) for sid in shop_ids)
+        )
+        toko = await services.hubungkan_shopee_akun_utama(
+            session, akun, payload, {sid: n for sid, n in zip(shop_ids, names) if n}
+        )
+        return {"ok": True, "akun_id": toko[0]["akun_id"], "status": "terhubung", "toko": toko}
+
     # Reject binding a shop_id already owned by another row.
     await services._cek_duplikat_id_toko_eksternal(
         session, platform="shopee", id_toko_eksternal=str(shop_id), exclude_id=akun.id
@@ -649,6 +672,9 @@ async def oauth_shopee_callback(
         "status": akun.status,
         "id_toko_eksternal": akun.id_toko_eksternal,
         "token_kedaluwarsa": akun.token_kedaluwarsa.isoformat() if akun.token_kedaluwarsa else None,
+        "toko": [
+            {"akun_id": akun.id, "id_toko_eksternal": akun.id_toko_eksternal, "nama_toko": akun.nama_toko, "baru": False}
+        ],
     }
 
 
