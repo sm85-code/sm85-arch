@@ -1222,14 +1222,14 @@ async def batalkan_pesanan_marketplace(session: AsyncSession, pesanan_id: str, a
     return pesanan
 
 
-async def unduh_resi_pesanan(session: AsyncSession, pesanan_id: str) -> tuple[bytes, str]:
+async def unduh_resi_pesanan(session: AsyncSession, pesanan_id: str, tipe: str | None = None) -> tuple[bytes, str]:
     """Shopee's shipping label PDF for a pulled, already-processed order. Returns (pdf, filename)."""
     from tenants.marketplace_erp.modules.marketplace_erp.infrastructure.adapters import erp_shopee
 
     pesanan, akun = await _pesanan_marketplace(session, pesanan_id)
     if pesanan.status_marketplace not in erp_shopee.STATUS_SUDAH_DIPROSES:
         raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail="Proses pesanan di Shopee dulu sebelum mencetak resi.")
-    pdf = await erp_shopee.unduh_resi(session, akun, pesanan.id_eksternal, pesanan.nomor_resi)
+    pdf = await erp_shopee.unduh_resi(session, akun, pesanan.id_eksternal, pesanan.nomor_resi, tipe)
     return pdf, f"resi-{pesanan.id_eksternal}.pdf"
 
 
