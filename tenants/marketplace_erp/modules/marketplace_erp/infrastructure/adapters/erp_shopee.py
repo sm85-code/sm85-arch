@@ -218,7 +218,53 @@ def apply_token_payload(akun: Any, payload: dict[str, Any], *, shop_id: str | No
     akun.status = "terhubung"
 
 
+# Access token lives 4h; refresh a bit early so a call never starts with a token about to die.
+TOKEN_REFRESH_MARGIN = timedelta(minutes=10)
+
+
+def token_perlu_refresh(akun: Any, *, now: datetime | None = None) -> bool:
+    expiry = getattr(akun, "token_kedaluwarsa", None)
+    if expiry is None:
+        return False
+    if expiry.tzinfo is None:
+        expiry = expiry.replace(tzinfo=timezone.utc)
+    return expiry - (now or datetime.now(timezone.utc)) <= TOKEN_REFRESH_MARGIN
+
+
+async def pastikan_token_segar(session: Any, akun: Any) -> None:
+    """Refresh the shop token when it is (about to be) expired and commit it right away.
+
+    Shopee refresh tokens are single-use: the response carries a *new* refresh_token and the old
+    one dies. If the new pair were only saved when the surrounding request finishes, any later
+    error would roll it back and leave the shop with a dead token, so it is committed here.
+    The row is locked first so two concurrent requests cannot both spend the same refresh_token.
+    """
+    if not token_perlu_refresh(akun):
+        return
+    await session.refresh(akun, with_for_update=True)
+    if not token_perlu_refresh(akun):
+        return  # another request refreshed it while we waited for the lock
+    if not getattr(akun, "refresh_token", None):
+        akun.status = "token_kadaluarsa"
+        await session.commit()
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail="Token Shopee kedaluwarsa dan tidak ada refresh token. Hubungkan ulang toko.",
+        )
+    try:
+        payload = await refresh_access_token(
+            refresh_token=akun.refresh_token, shop_id=str(akun.id_toko_eksternal)
+        )
+        apply_token_payload(akun, payload, shop_id=str(akun.id_toko_eksternal))
+    except HTTPException:
+        akun.status = "token_kadaluarsa"
+        await session.commit()
+        raise
+    await session.commit()
+
+
 async def signed_shop_request(
+    session: Any,
     akun: Any,
     api_path: str,
     *,
@@ -233,6 +279,7 @@ async def signed_shop_request(
         )
     if not _akun_configured(akun):
         raise ShopeeNotConfigured("Akun Shopee belum punya access_token / id_toko_eksternal.")
+    await pastikan_token_segar(session, akun)
 
     import asyncio
 
@@ -266,7 +313,14 @@ async def signed_shop_request(
                 detail=f"Shopee response bukan JSON (HTTP {resp.status_code})",
             ) from exc
 
-    return await asyncio.to_thread(_do)
+    data = await asyncio.to_thread(_do)
+    # Shopee reports failures as error/message, often with HTTP 200.
+    if data.get("error"):
+        raise HTTPException(
+            status_code=status.HTTP_502_BAD_GATEWAY,
+            detail=f"Shopee {api_path} gagal: {data.get('error')} {data.get('message', '')}".strip(),
+        )
+    return data
 
 
 async def sync_produk(akun: Any) -> list[dict]:
