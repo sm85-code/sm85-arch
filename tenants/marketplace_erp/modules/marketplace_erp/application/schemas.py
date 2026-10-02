@@ -300,6 +300,11 @@ class BatalkanPesananIn(BaseModel):
     alasan: str = "CUSTOMER_REQUEST"
 
 
+class ResiMassalIn(BaseModel):
+    pesanan_ids: list[str] = Field(min_length=1, max_length=50)
+    tipe: Optional[str] = Field(default=None, pattern="^(THERMAL_AIR_WAYBILL|NORMAL_AIR_WAYBILL)$")
+
+
 class ProsesMassalIn(BaseModel):
     # Each order costs several marketplace calls, so one request is capped; the UI sends chunks.
     pesanan_ids: list[str] = Field(min_length=1, max_length=25)

@@ -44,6 +44,7 @@ from tenants.marketplace_erp.modules.marketplace_erp.application.schemas import 
     PesananOut,
     PesananStatusIn,
     ProsesMassalIn,
+    ResiMassalIn,
     ProdukIn,
     ProdukListingIn,
     ProdukListingOut,
@@ -595,6 +596,20 @@ async def sinkron_pesanan_otomatis(
         "jumlah_diperbarui": sum(t["diperbarui"] for t in toko),
         "toko": toko,
     }
+
+
+@marketplace_erp_router.post("/pesanan/resi-massal")
+async def cetak_resi_massal(
+    payload: ResiMassalIn,
+    session: AsyncSession = Depends(get_db_marketplace_erp),
+    user: UserMarketplaceErp = Depends(require_roles_marketplace_erp(*OWNER_OR_STAFF)),
+):
+    """One PDF with Shopee's labels for several processed orders (same shop and courier, up to 50)."""
+    for pesanan_id in dict.fromkeys(payload.pesanan_ids):
+        pesanan = await services.get_pesanan(session, pesanan_id)
+        await pastikan_akses_akun(user, session, pesanan.akun_id)
+    pdf, nama_file = await services.unduh_resi_massal(session, payload.pesanan_ids, payload.tipe)
+    return Response(content=pdf, media_type="application/pdf", headers={"Content-Disposition": f'inline; filename="{nama_file}"'})
 
 
 @marketplace_erp_router.post("/pesanan/proses-massal")

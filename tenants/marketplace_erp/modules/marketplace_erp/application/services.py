@@ -1200,6 +1200,34 @@ async def proses_pesanan_marketplace(session: AsyncSession, pesanan_id: str) -> 
     return pesanan
 
 
+async def unduh_resi_massal(session: AsyncSession, pesanan_ids: list[str], tipe: str | None = None) -> tuple[bytes, str]:
+    """One PDF with the labels of several Shopee orders that are arranged and waiting for the courier.
+
+    Shopee prints one shop and one courier per download, so mixed selections are refused with a message
+    saying how to split them. Returns (pdf, filename).
+    """
+    from tenants.marketplace_erp.modules.marketplace_erp.infrastructure.adapters import erp_shopee
+
+    unik = list(dict.fromkeys(pesanan_ids))
+    semua = [await _pesanan_marketplace(session, pid) for pid in unik]
+    belum = [p.id_eksternal for p, _ in semua if p.status_marketplace != "PROCESSED"]
+    if belum:
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail=f"Hanya pesanan yang sudah diproses dan menunggu kurir yang bisa dicetak. Tidak memenuhi: {', '.join(belum)}.",
+        )
+    kelompok = {(p.akun_id, (p.kurir or "").strip().lower()) for p, _ in semua}
+    if len(kelompok) > 1:
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail="Cetak per toko dan per kurir: pilihanmu berisi toko atau kurir yang berbeda.",
+        )
+    akun = semua[0][1]
+    pdf = await erp_shopee.unduh_resi_banyak(session, akun, [(p.id_eksternal, p.nomor_resi) for p, _ in semua], tipe)
+    nama = f"resi-{semua[0][0].id_eksternal}.pdf" if len(semua) == 1 else f"resi-{len(semua)}-pesanan.pdf"
+    return pdf, nama
+
+
 async def batalkan_pesanan_marketplace(session: AsyncSession, pesanan_id: str, alasan: str) -> Pesanan:
     """Cancel a pulled Shopee order on Shopee, then locally (reserved stock is released).
 

@@ -185,7 +185,7 @@ async def test_id_pesanan_punya_resi(session):
 def _label_fake(statuses, calls, selectable=("NORMAL_AIR_WAYBILL", "THERMAL_AIR_WAYBILL")):
     seq = iter(statuses)
 
-    async def fake(session, akun, path, *, method="GET", body=None, params=None, raw=False):
+    async def fake(session, akun, path, *, method="GET", body=None, params=None, raw=False, timeout=None):
         calls.append((path, body))
         if path == erp_shopee._PATH_TRACKING:
             return {"response": {"tracking_number": "ID123"}}
@@ -218,21 +218,34 @@ async def test_unduh_resi_prefers_thermal_a6_over_the_suggested_a4_and_waits_unt
     assert create == {"order_list": [{"order_sn": "SN1", "shipping_document_type": "THERMAL_AIR_WAYBILL", "tracking_number": "ID123"}]}
     assert [p for p, _ in calls].count(erp_shopee._PATH_DOC_RESULT) == 3
     download = next(b for p, b in calls if p == erp_shopee._PATH_DOC_DOWNLOAD)
+    assert download["shipping_document_type"] == "THERMAL_AIR_WAYBILL"  # documented top-level template
     assert download["order_list"] == [{"order_sn": "SN1", "shipping_document_type": "THERMAL_AIR_WAYBILL"}]
 
 
 @pytest.mark.asyncio
-async def test_unduh_resi_failed_and_timeout_are_502(live, monkeypatch):
+async def test_unduh_resi_failed_and_not_ready_never_look_like_a_gateway_error(live, monkeypatch):
     monkeypatch.setattr(erp_shopee, "signed_shop_request", _label_fake(["FAILED"], []))
     with pytest.raises(HTTPException) as exc:
         await erp_shopee.unduh_resi(None, live, "SN1")
-    assert exc.value.status_code == 502
+    assert exc.value.status_code == 424  # not 5xx: the proxy would turn that into an opaque 504 page
 
     monkeypatch.setattr(erp_shopee, "_DOC_POLL_TRIES", 2)
     monkeypatch.setattr(erp_shopee, "signed_shop_request", _label_fake(["PROCESSING"] * 5, []))
     with pytest.raises(HTTPException) as exc:
         await erp_shopee.unduh_resi(None, live, "SN1")
-    assert exc.value.status_code == 502 and "belum siap" in exc.value.detail
+    assert exc.value.status_code == 409 and "belum siap" in exc.value.detail
+
+
+@pytest.mark.asyncio
+async def test_unduh_resi_gives_up_at_the_overall_deadline(live, monkeypatch):
+    """Slow Shopee answers must end in a readable 409 well before the proxy's ~100 s limit."""
+    monkeypatch.setattr(erp_shopee, "_DOC_BATAS_DETIK", 0)
+    calls = []
+    monkeypatch.setattr(erp_shopee, "signed_shop_request", _label_fake(["PROCESSING"] * 10, calls))
+    with pytest.raises(HTTPException) as exc:
+        await erp_shopee.unduh_resi(None, live, "SN1")
+    assert exc.value.status_code == 409 and "THERMAL_AIR_WAYBILL" in exc.value.detail
+    assert [p for p, _ in calls].count(erp_shopee._PATH_DOC_RESULT) == 1  # stopped after the first poll
 
 
 @pytest.mark.asyncio
