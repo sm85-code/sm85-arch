@@ -167,6 +167,7 @@ async def test_sync_after_courier_pickup_moves_order_to_shipped(session):
     assert hasil["diperbarui"] == 1
     out = await services.get_pesanan(session, pesanan.id)
     assert out.status == "shipped" and out.status_marketplace == "SHIPPED"
+    assert out.catatan_sinkron == "Status mengikuti shopee (SHIPPED)"  # no stale "menunggu kurir" note
     assert (out.kurir, out.nomor_resi) == ("J&T Express", "ID123") and out.tanggal_kirim is not None
 
 
