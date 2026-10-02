@@ -1063,6 +1063,10 @@ async def impor_pesanan_marketplace(session: AsyncSession, akun: AkunMarketplace
         sebelum_mp = pesanan.status_marketplace
         berubah = await _samakan_status_pesanan(session, pesanan, row["status"])
         pesanan.status_marketplace = row["status_mentah"]
+        if berubah and pesanan.status == row["status"]:
+            # Reached the marketplace status: replace stale notes such as "waiting for the courier".
+            pesanan.tersinkron_marketplace = True
+            pesanan.catatan_sinkron = f"Status mengikuti {akun.platform} ({row['status_mentah']})"
         if row.get("kurir") and not pesanan.kurir:
             pesanan.kurir = row["kurir"]
         if row.get("nomor_resi") and not pesanan.nomor_resi:
