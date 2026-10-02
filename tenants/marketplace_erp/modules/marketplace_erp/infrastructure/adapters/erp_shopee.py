@@ -16,6 +16,7 @@ from __future__ import annotations
 import hashlib
 import hmac
 import json
+import logging
 import os
 import time
 from datetime import datetime, timedelta, timezone
@@ -24,6 +25,8 @@ from typing import Any
 from urllib.parse import urlencode
 
 from fastapi import HTTPException, status
+
+_log = logging.getLogger(__name__)
 
 SHOPEE_PARTNER_ID = os.getenv("SHOPEE_PARTNER_ID", "").strip()
 SHOPEE_PARTNER_KEY = os.getenv("SHOPEE_PARTNER_KEY", "").strip()
@@ -278,6 +281,7 @@ async def signed_shop_request(
     body: dict | None = None,
     params: dict | None = None,
     raw: bool = False,
+    timeout: float = 25.0,
 ) -> dict:
     """Generic signed shop call. Used by sync_* once LIVE_SYNC is on."""
     if not live_sync_enabled():
@@ -296,6 +300,7 @@ async def signed_shop_request(
         body=body,
         params=params,
         raw=raw,
+        timeout=timeout,
     )
 
 
@@ -308,6 +313,7 @@ async def _call_shop_api(
     body: dict | None = None,
     params: dict | None = None,
     raw: bool = False,
+    timeout: float = 25.0,
 ) -> dict:
     """Signed shop-level call with an explicit token (no AkunMarketplace row needed).
 
@@ -331,9 +337,9 @@ async def _call_shop_api(
 
     def _do() -> dict:
         if method.upper() == "GET":
-            resp = requests.get(url, timeout=25)
+            resp = requests.get(url, timeout=timeout)
         else:
-            resp = requests.post(url, json=body or {}, timeout=25)
+            resp = requests.post(url, json=body or {}, timeout=timeout)
         try:
             return resp.json()
         except Exception as exc:  # noqa: BLE001
@@ -689,6 +695,9 @@ _PATH_DOC_DOWNLOAD = "/api/v2/logistics/download_shipping_document"
 STATUS_SUDAH_DIPROSES = frozenset({"PROCESSED", "SHIPPED", "TO_CONFIRM_RECEIVE", "COMPLETED"})
 _DOC_POLL_TRIES = 10
 _DOC_POLL_DELAY = 1.5
+# The whole label flow must answer well inside the proxy limit (~100 s, after which the user only sees a 504).
+_DOC_BATAS_DETIK = 60.0
+_DOC_TIMEOUT = 15.0
 
 
 def pilih_parameter_kirim(param: dict, nama_toko: str) -> dict:
@@ -795,59 +804,111 @@ def pilih_template_resi(hasil: dict, tipe: str | None) -> str:
     return pilihan
 
 
-async def unduh_resi(session: Any, akun: Any, order_sn: str, nomor_resi: str | None = None, tipe: str | None = None) -> bytes:
-    """Shopee's own shipping label (PDF) for an arranged order.
+# Shopee prints at most this many labels per download, all from one courier.
+MAKS_RESI_MASSAL = 50
 
-    get_shipping_document_parameter (template choice) -> create_shipping_document -> poll until
-    READY -> download_shipping_document. Defaults to the thermal (A6-sized) template.
+
+def _gagal(result_list: list[dict]) -> str | None:
+    """'SN: error message' for every order in a result_list that Shopee flagged, or None."""
+    teks = [
+        f"{r.get('order_sn')}: {r.get('fail_error')} {r.get('fail_message', '')}".strip()
+        for r in result_list
+        if r.get("fail_error")
+    ]
+    return "; ".join(teks) or None
+
+
+def _template_bersama(result_list: list[dict], tipe: str | None) -> str:
+    """One template for the whole batch: it must be offered for every order."""
+    bisa = [set(r.get("selectable_shipping_document_type") or []) for r in result_list]
+    bersama = set.intersection(*bisa) if bisa else set()
+    saran = result_list[0].get("suggest_shipping_document_type") if result_list else None
+    return pilih_template_resi(
+        {
+            "selectable_shipping_document_type": sorted(bersama),
+            "suggest_shipping_document_type": saran if saran in bersama else None,
+        },
+        tipe,
+    )
+
+
+async def unduh_resi_banyak(
+    session: Any, akun: Any, pesanan: list[tuple[str, str | None]], tipe: str | None = None
+) -> bytes:
+    """Shopee's own shipping labels as one PDF for several arranged orders of one shop and courier.
+
+    ``pesanan``: (order_sn, tracking number or None) pairs. get_shipping_document_parameter (template
+    choice) -> create_shipping_document -> poll until every order is READY -> download_shipping_document.
+    Defaults to the thermal (A6-sized) template. If any order cannot get a label the whole call fails,
+    so a parcel is never silently left without one.
     """
     if not live_sync_enabled() or not _akun_configured(akun):
         raise ShopeeNotConfigured("Shopee live sync nonaktif atau akun belum terhubung.")
+    if not pesanan or len(pesanan) > MAKS_RESI_MASSAL:
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=f"Pilih 1 sampai {MAKS_RESI_MASSAL} pesanan.")
     import asyncio
 
-    nomor_resi = nomor_resi or await ambil_nomor_resi(session, akun, order_sn)
-    data = await signed_shop_request(
-        session, akun, _PATH_DOC_PARAM, method="POST", body={"order_list": [{"order_sn": order_sn}]}
-    )
-    (hasil,) = (data.get("response") or {}).get("result_list") or [{}]
-    if hasil.get("fail_error"):
-        raise HTTPException(
-            status_code=status.HTTP_409_CONFLICT,
-            detail=f"Resi belum bisa dibuat: {hasil.get('fail_error')} {hasil.get('fail_message', '')}".strip(),
-        )
-    tipe = pilih_template_resi(hasil, tipe)
+    mulai = time.monotonic()
+    daftar = [{"order_sn": sn} for sn, _ in pesanan]
+    data = await signed_shop_request(session, akun, _PATH_DOC_PARAM, method="POST", body={"order_list": daftar}, timeout=_DOC_TIMEOUT)
+    hasil = (data.get("response") or {}).get("result_list") or []
+    if gagal := _gagal(hasil):
+        raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail=f"Resi belum bisa dibuat: {gagal}")
+    if len(hasil) != len(pesanan):
+        raise HTTPException(status_code=status.HTTP_424_FAILED_DEPENDENCY, detail="Shopee tidak menjawab untuk semua pesanan.")
+    tipe = _template_bersama(hasil, tipe)
+    _log.info("resi: %d pesanan, template %s, parameter ok setelah %.1fs", len(pesanan), tipe, time.monotonic() - mulai)
 
-    item: dict[str, Any] = {"order_sn": order_sn, "shipping_document_type": tipe}
-    if nomor_resi:
-        item["tracking_number"] = nomor_resi
-    data = await signed_shop_request(session, akun, _PATH_DOC_CREATE, method="POST", body={"order_list": [item]})
-    (hasil,) = (data.get("response") or {}).get("result_list") or [{}]
-    if hasil.get("fail_error"):
-        raise HTTPException(
-            status_code=status.HTTP_409_CONFLICT,
-            detail=f"Resi gagal dibuat: {hasil.get('fail_error')} {hasil.get('fail_message', '')}".strip(),
-        )
+    item_buat = []
+    for sn, resi in pesanan:
+        resi = resi or await ambil_nomor_resi(session, akun, sn)
+        item_buat.append({"order_sn": sn, "shipping_document_type": tipe, **({"tracking_number": resi} if resi else {})})
+    data = await signed_shop_request(session, akun, _PATH_DOC_CREATE, method="POST", body={"order_list": item_buat}, timeout=_DOC_TIMEOUT)
+    if gagal := _gagal((data.get("response") or {}).get("result_list") or []):
+        raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail=f"Resi gagal dibuat: {gagal}")
 
-    cek = {"order_list": [{"order_sn": order_sn, "shipping_document_type": tipe}]}
+    cek = {"order_list": [{"order_sn": sn, "shipping_document_type": tipe} for sn, _ in pesanan]}
     for _ in range(_DOC_POLL_TRIES):
-        data = await signed_shop_request(session, akun, _PATH_DOC_RESULT, method="POST", body=cek)
-        (hasil,) = (data.get("response") or {}).get("result_list") or [{}]
-        if hasil.get("status") == "READY":
+        data = await signed_shop_request(session, akun, _PATH_DOC_RESULT, method="POST", body=cek, timeout=_DOC_TIMEOUT)
+        hasil = (data.get("response") or {}).get("result_list") or []
+        _log.info("resi: status dokumen %s setelah %.1fs", [r.get("status") for r in hasil], time.monotonic() - mulai)
+        if any(r.get("status") == "FAILED" for r in hasil):
+            gagal = _gagal([r for r in hasil if r.get("status") == "FAILED"]) or "FAILED"
+            raise HTTPException(status_code=status.HTTP_424_FAILED_DEPENDENCY, detail=f"Shopee gagal membuat resi: {gagal}")
+        if len(hasil) == len(pesanan) and all(r.get("status") == "READY" for r in hasil):
             break
-        if hasil.get("status") == "FAILED":
-            raise HTTPException(
-                status_code=status.HTTP_502_BAD_GATEWAY,
-                detail=f"Shopee gagal membuat resi: {hasil.get('fail_error')} {hasil.get('fail_message', '')}".strip(),
-            )
+        if time.monotonic() - mulai >= _DOC_BATAS_DETIK:
+            break
         await asyncio.sleep(_DOC_POLL_DELAY)
     else:
-        raise HTTPException(status_code=status.HTTP_502_BAD_GATEWAY, detail="Resi belum siap di Shopee, coba lagi sebentar.")
+        hasil = []
+    if not (len(hasil) == len(pesanan) and all(r.get("status") == "READY" for r in hasil)):
+        # 409 (not 5xx): the proxy turns upstream-looking 5xx into an opaque 504 page; this is simply "try again".
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail=f"Resi {tipe} belum siap di Shopee setelah {_DOC_BATAS_DETIK:.0f} detik. Coba lagi sebentar, atau pakai template lain (A4).",
+        )
 
-    data = await signed_shop_request(session, akun, _PATH_DOC_DOWNLOAD, method="POST", body=cek, raw=True)
+    # The documented top-level template, plus the per-item one the A4 flow already worked with.
+    _log.info("resi: %d pesanan siap (%s), unduh setelah %.1fs", len(pesanan), tipe, time.monotonic() - mulai)
+    data = await signed_shop_request(
+        session,
+        akun,
+        _PATH_DOC_DOWNLOAD,
+        method="POST",
+        body={"shipping_document_type": tipe, "order_list": cek["order_list"]},
+        raw=True,
+        timeout=_DOC_TIMEOUT * 2,
+    )
     pdf = data.get("_bytes")
     if not pdf:
-        raise HTTPException(status_code=status.HTTP_502_BAD_GATEWAY, detail="Shopee tidak mengirim file resi.")
+        raise HTTPException(status_code=status.HTTP_424_FAILED_DEPENDENCY, detail="Shopee tidak mengirim file resi.")
     return pdf
+
+
+async def unduh_resi(session: Any, akun: Any, order_sn: str, nomor_resi: str | None = None, tipe: str | None = None) -> bytes:
+    """Shopee's own shipping label (PDF) for one arranged order."""
+    return await unduh_resi_banyak(session, akun, [(order_sn, nomor_resi)], tipe)
 
 
 # --- Cancel ---------------------------------------------------------------------------
