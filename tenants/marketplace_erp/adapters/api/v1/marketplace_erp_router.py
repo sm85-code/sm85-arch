@@ -12,8 +12,10 @@ Mounted in main.py as prefix=/api/marketplace-erp.
 """
 from __future__ import annotations
 
+import logging
 import os
 import secrets as pysecrets
+from types import SimpleNamespace
 from datetime import datetime
 
 from fastapi import APIRouter, Depends, HTTPException, Query, Request, Response, status
@@ -21,6 +23,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from tenants.marketplace_erp.modules.marketplace_erp.application import services
 from tenants.marketplace_erp.modules.marketplace_erp.application.schemas import (
+    BatalkanPesananIn,
     AkunMarketplaceIn,
     AkunMarketplaceOut,
     AkunMarketplacePatch,
@@ -40,6 +43,7 @@ from tenants.marketplace_erp.modules.marketplace_erp.application.schemas import 
     PesananIn,
     PesananOut,
     PesananStatusIn,
+    ProsesMassalIn,
     ProdukIn,
     ProdukListingIn,
     ProdukListingOut,
@@ -74,6 +78,8 @@ from tenants.marketplace_erp.modules.marketplace_erp.infrastructure.seeder impor
 from tenants.store.modules.store.application import services as store_services
 from tenants.store.modules.store.infrastructure import database as store_database
 from tenants.store.modules.store.infrastructure.media_import import import_foto_dari_url
+
+logger = logging.getLogger(__name__)
 
 marketplace_erp_router = APIRouter()
 
@@ -560,6 +566,71 @@ async def ubah_status_pesanan(
     return await services.ubah_status_pesanan(session, pesanan_id, payload.status)
 
 
+@marketplace_erp_router.post("/pesanan/sinkron")
+async def sinkron_pesanan_otomatis(
+    paksa: bool = Query(False, description="true = refresh now (still at most once per few seconds per shop)"),
+    session: AsyncSession = Depends(get_db_marketplace_erp),
+    user: UserMarketplaceErp = Depends(require_roles_marketplace_erp(*OWNER_OR_STAFF)),
+):
+    """Pull new/changed orders for every connected Shopee shop the user may see.
+
+    Meant to be called whenever the order page is opened or refreshed. Each shop is throttled
+    (default once a minute), so calling it often is cheap; it returns right away with
+    ``aktif: false`` when live sync is switched off.
+    """
+    from tenants.marketplace_erp.modules.marketplace_erp.infrastructure.adapters import erp_shopee
+
+    if not erp_shopee.live_sync_enabled():
+        return {"aktif": False, "jumlah_baru": 0, "jumlah_diperbarui": 0, "toko": []}
+    diizinkan = await akun_ids_diizinkan(user, session)
+    akun_list = [
+        a
+        for a in await services.list_akun_marketplace(session, platform="shopee")
+        if a.access_token and a.id_toko_eksternal and (diizinkan is None or a.id in diizinkan)
+    ]
+    toko = await services.sinkron_semua_pesanan(session, akun_list, jeda_detik=5 if paksa else 60)
+    return {
+        "aktif": True,
+        "jumlah_baru": sum(t["baru"] for t in toko),
+        "jumlah_diperbarui": sum(t["diperbarui"] for t in toko),
+        "toko": toko,
+    }
+
+
+@marketplace_erp_router.post("/pesanan/proses-massal")
+async def proses_massal_pesanan(
+    payload: ProsesMassalIn,
+    session: AsyncSession = Depends(get_db_marketplace_erp),
+    user: UserMarketplaceErp = Depends(require_roles_marketplace_erp(*OWNER_OR_STAFF)),
+):
+    """Arrange shipment for several Shopee orders. Every order is tried; a failure is reported, not fatal."""
+    hasil = []
+    # A rollback after one failed order expires loaded objects (including `user`); keep plain values.
+    pengguna = SimpleNamespace(role=user.role, id=user.id)
+    for pesanan_id in dict.fromkeys(payload.pesanan_ids):
+        info = {"id": pesanan_id, "id_eksternal": None, "ok": False, "pesan": None}
+        hasil.append(info)
+        try:
+            pesanan = await services.get_pesanan(session, pesanan_id)
+            info["id_eksternal"] = pesanan.id_eksternal
+            await pastikan_akses_akun(pengguna, session, pesanan.akun_id)
+            await services.proses_pesanan_marketplace(session, pesanan_id)
+            await session.commit()  # Shopee already acted: keep this order even if a later one fails
+            info["ok"] = True
+        except HTTPException as exc:
+            await session.rollback()
+            info["pesan"] = str(exc.detail)
+        except Exception:  # noqa: BLE001 -- report and carry on with the remaining orders
+            await session.rollback()
+            logger.exception("proses massal gagal untuk pesanan %s", pesanan_id)
+            info["pesan"] = "Kesalahan tak terduga."
+    return {
+        "berhasil": sum(1 for h in hasil if h["ok"]),
+        "gagal": sum(1 for h in hasil if not h["ok"]),
+        "hasil": hasil,
+    }
+
+
 @marketplace_erp_router.post("/pesanan/{pesanan_id}/proses", response_model=PesananOut)
 async def proses_pesanan_marketplace(
     pesanan_id: str,
@@ -570,6 +641,19 @@ async def proses_pesanan_marketplace(
     pesanan = await services.get_pesanan(session, pesanan_id)
     await pastikan_akses_akun(user, session, pesanan.akun_id)
     return await services.proses_pesanan_marketplace(session, pesanan_id)
+
+
+@marketplace_erp_router.post("/pesanan/{pesanan_id}/batalkan", response_model=PesananOut)
+async def batalkan_pesanan_marketplace(
+    pesanan_id: str,
+    payload: BatalkanPesananIn,
+    session: AsyncSession = Depends(get_db_marketplace_erp),
+    user: UserMarketplaceErp = Depends(require_roles_marketplace_erp(*OWNER_OR_STAFF)),
+):
+    """Cancel a Shopee order on Shopee (before shipment) and release its reserved stock."""
+    pesanan = await services.get_pesanan(session, pesanan_id)
+    await pastikan_akses_akun(user, session, pesanan.akun_id)
+    return await services.batalkan_pesanan_marketplace(session, pesanan_id, payload.alasan)
 
 
 @marketplace_erp_router.get("/pesanan/{pesanan_id}/resi")
@@ -710,16 +794,13 @@ async def sync_pesanan_akun(
     _: UserMarketplaceErp = Depends(require_roles_marketplace_erp(*OWNER_ONLY)),
 ):
     """Trigger platform order pull. Live Shopee sync gated by SHOPEE_LIVE_SYNC."""
-    from tenants.marketplace_erp.modules.marketplace_erp.infrastructure.adapters import erp_shopee
-
     akun = await services.get_akun_marketplace(session, akun_id)
     if akun.platform == "shopee":
         try:
-            rows = await erp_shopee.sync_pesanan(session, akun, await services.id_pesanan_punya_resi(session, akun))
+            hasil = await services.sinkron_pesanan_akun(session, akun)
         except NotImplementedError as exc:
             raise HTTPException(status_code=status.HTTP_501_NOT_IMPLEMENTED, detail=str(exc)) from exc
-        hasil = await services.impor_pesanan_marketplace(session, akun, rows)
-        return {"ok": True, "pulled": len(rows), **hasil}
+        return {"ok": True, **hasil}
     raise HTTPException(
         status_code=status.HTTP_501_NOT_IMPLEMENTED,
         detail=f"Sync pesanan untuk platform '{akun.platform}' belum tersedia (Shopee first)",

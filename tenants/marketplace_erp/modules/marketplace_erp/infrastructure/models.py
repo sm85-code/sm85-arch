@@ -79,6 +79,8 @@ class AkunMarketplace(MarketplaceErpBase):
     token_kedaluwarsa: Mapped[Optional[datetime]] = mapped_column(DateTime(timezone=True), nullable=True)
     status: Mapped[str] = mapped_column(String(16), nullable=False, default="belum_terhubung")
     catatan: Mapped[Optional[str]] = mapped_column(Text, nullable=True)
+    # When an automatic order sync last claimed this shop; throttles repeated refreshes of the order page.
+    terakhir_sinkron_pesanan: Mapped[Optional[datetime]] = mapped_column(DateTime(timezone=True), nullable=True)
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=_utcnow)
     updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=_utcnow, onupdate=_utcnow)
 

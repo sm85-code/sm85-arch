@@ -1,10 +1,12 @@
 from __future__ import annotations
 
-from datetime import datetime, timezone
+import logging
+import time
+from datetime import datetime, timedelta, timezone
 from decimal import Decimal
 
 from fastapi import HTTPException, status
-from sqlalchemy import func, select
+from sqlalchemy import func, or_, select, update
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import selectinload
@@ -1083,6 +1085,79 @@ async def impor_pesanan_marketplace(session: AsyncSession, akun: AkunMarketplace
     return hasil
 
 
+async def sinkron_pesanan_akun(session: AsyncSession, akun: AkunMarketplace) -> dict:
+    """Pull one shop's recent orders from Shopee and import them. Returns the import counts + pulled."""
+    from tenants.marketplace_erp.modules.marketplace_erp.infrastructure.adapters import erp_shopee
+
+    rows = await erp_shopee.sync_pesanan(session, akun, await id_pesanan_punya_resi(session, akun))
+    async with session.begin_nested():  # a failure while importing leaves no half-imported shop behind
+        hasil = await impor_pesanan_marketplace(session, akun, rows)
+    return {"pulled": len(rows), **hasil}
+
+
+async def klaim_sinkron_pesanan(session: AsyncSession, akun: AkunMarketplace, jeda_detik: float) -> bool:
+    """Atomically claim the right to sync this shop: True only if it was not synced in the last jeda_detik.
+
+    The claim is committed at once, so a second request (or worker) arriving a moment later is turned
+    away, and a shop whose sync keeps failing is not hammered either.
+    """
+    sekarang = datetime.now(timezone.utc)
+    kolom = AkunMarketplace.terakhir_sinkron_pesanan
+    hasil = await session.execute(
+        update(AkunMarketplace)
+        .where(AkunMarketplace.id == akun.id, or_(kolom.is_(None), kolom < sekarang - timedelta(seconds=jeda_detik)))
+        .values(terakhir_sinkron_pesanan=sekarang)
+    )
+    await session.commit()
+    return hasil.rowcount == 1
+
+
+async def sinkron_semua_pesanan(
+    session: AsyncSession,
+    akun_list: list[AkunMarketplace],
+    *,
+    jeda_detik: float = 60,
+    batas_detik: float = 45,
+) -> list[dict]:
+    """Sync every connected Shopee shop in akun_list, one after another.
+
+    One result dict per shop: hasil is ok / dilewati (synced recently) / ditunda (time budget used up,
+    picked up by the next call) / gagal (with pesan). A failing shop never stops the others.
+    """
+    mulai = time.monotonic()
+    keluar: list[dict] = []
+    # A rollback (after one shop fails) expires every loaded object, so keep plain ids and re-load each shop.
+    daftar = [(a.id, a.nama_toko) for a in akun_list]
+    for akun_id, nama_toko in daftar:
+        info = {"akun_id": akun_id, "nama_toko": nama_toko, "hasil": "ok", "baru": 0, "diperbarui": 0, "pesan": None}
+        keluar.append(info)
+        akun = await session.get(AkunMarketplace, akun_id)
+        if akun is None:
+            info.update(hasil="gagal", pesan="Toko tidak ditemukan.")
+            continue
+        if akun.status == "token_kadaluarsa":
+            info.update(hasil="gagal", pesan="Token Shopee kedaluwarsa, hubungkan ulang toko.")
+            continue
+        if time.monotonic() - mulai >= batas_detik:
+            info["hasil"] = "ditunda"
+            continue
+        if not await klaim_sinkron_pesanan(session, akun, jeda_detik):
+            info["hasil"] = "dilewati"
+            continue
+        try:
+            hasil = await sinkron_pesanan_akun(session, akun)
+            await session.commit()
+            info.update(baru=hasil["baru"], diperbarui=hasil["diperbarui"])
+        except HTTPException as exc:
+            await session.rollback()
+            info.update(hasil="gagal", pesan=str(exc.detail))
+        except Exception:  # noqa: BLE001 -- one broken shop must not break the page for the others
+            await session.rollback()
+            logging.getLogger(__name__).exception("sinkron pesanan gagal untuk akun %s", akun_id)
+            info.update(hasil="gagal", pesan="Kesalahan tak terduga saat sinkron.")
+    return keluar
+
+
 async def id_pesanan_punya_resi(session: AsyncSession, akun: AkunMarketplace) -> set[str]:
     """id_eksternal of this shop's orders that already store a tracking number (skipped when pulling)."""
     stmt = select(Pesanan.id_eksternal).where(
@@ -1121,6 +1196,28 @@ async def proses_pesanan_marketplace(session: AsyncSession, pesanan_id: str) -> 
         pesanan.nomor_resi = hasil["nomor_resi"]
     pesanan.tersinkron_marketplace = True
     pesanan.catatan_sinkron = "Diproses di Shopee, menunggu kurir pickup"
+    await session.flush()
+    return pesanan
+
+
+async def batalkan_pesanan_marketplace(session: AsyncSession, pesanan_id: str, alasan: str) -> Pesanan:
+    """Cancel a pulled Shopee order on Shopee, then locally (reserved stock is released).
+
+    Only possible before the courier has it; Shopee has the final say and its refusal is passed on.
+    """
+    from tenants.marketplace_erp.modules.marketplace_erp.infrastructure.adapters import erp_shopee
+
+    pesanan, akun = await _pesanan_marketplace(session, pesanan_id)
+    if pesanan.status not in {"unpaid", "to_ship"} or pesanan.status_marketplace not in erp_shopee.STATUS_BISA_DIBATALKAN:
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail="Pesanan sudah dikirim atau selesai, tidak bisa dibatalkan dari sini.",
+        )
+    await erp_shopee.batalkan_pesanan(session, akun, pesanan.id_eksternal, alasan)
+    pesanan = await ubah_status_pesanan(session, pesanan.id, "cancelled", dorong_marketplace=False)
+    pesanan.status_marketplace = "CANCELLED"
+    pesanan.tersinkron_marketplace = True
+    pesanan.catatan_sinkron = f"Dibatalkan di Shopee ({alasan})"
     await session.flush()
     return pesanan
 

@@ -830,6 +830,36 @@ async def unduh_resi(session: Any, akun: Any, order_sn: str, nomor_resi: str | N
     return pdf
 
 
+# --- Cancel ---------------------------------------------------------------------------
+
+_PATH_CANCEL = "/api/v2/order/cancel_order"
+# Seller-side reasons Shopee accepts for every region (UNDELIVERABLE_AREA is TW/MY only).
+ALASAN_BATAL = ("CUSTOMER_REQUEST", "OUT_OF_STOCK", "COD_NOT_SUPPORTED")
+# Raw Shopee statuses from which a seller can still cancel ("before the order has been shipped").
+STATUS_BISA_DIBATALKAN = frozenset({"UNPAID", "READY_TO_SHIP", "PROCESSED", "RETRY_SHIP"})
+
+
+async def batalkan_pesanan(session: Any, akun: Any, order_sn: str, alasan: str) -> None:
+    """Cancel an order on Shopee (cancel_order). OUT_OF_STOCK also needs the order's item/model ids,
+    which come from get_order_detail so they never depend on listings being linked in the ERP."""
+    if not live_sync_enabled() or not _akun_configured(akun):
+        raise ShopeeNotConfigured("Shopee live sync nonaktif atau akun belum terhubung.")
+    if alasan not in ALASAN_BATAL:
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Alasan pembatalan tidak dikenal")
+    body: dict[str, Any] = {"order_sn": order_sn, "cancel_reason": alasan}
+    if alasan == "OUT_OF_STOCK":
+        data = await signed_shop_request(
+            session, akun, _PATH_ORDER_DETAIL, params={"order_sn_list": order_sn, "response_optional_fields": "item_list"}
+        )
+        (order,) = (data.get("response") or {}).get("order_list") or [{}]
+        body["item_list"] = [
+            {"item_id": it["item_id"], "model_id": it.get("model_id") or 0} for it in order.get("item_list") or [] if it.get("item_id")
+        ]
+        if not body["item_list"]:
+            raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail="Shopee tidak mengembalikan item pesanan ini.")
+    await signed_shop_request(session, akun, _PATH_CANCEL, method="POST", body=body)
+
+
 async def proses_pesanan(akun: Any, pesanan: Any) -> None:
     """Push local to_ship acknowledgement. Stub until live sync + SetOrderReadyToShip."""
     if not live_sync_enabled() or not _akun_configured(akun):
