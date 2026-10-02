@@ -110,6 +110,12 @@ async def ensure_store_schema() -> None:
             ("hari_proses", "INTEGER NOT NULL DEFAULT 2"),
         ):
             await conn.execute(text(f"ALTER TABLE store_item_pesanan ADD COLUMN IF NOT EXISTS {column} {ddl}"))
+        for column, ddl in (
+            ("lampiran_key", "VARCHAR(255)"),
+            ("lampiran_jenis", "VARCHAR(16)"),
+            ("produk_id", "VARCHAR(64) REFERENCES store_produk(id) ON DELETE SET NULL"),
+        ):
+            await conn.execute(text(f"ALTER TABLE store_pesan_chat ADD COLUMN IF NOT EXISTS {column} {ddl}"))
     async with session_local() as session:
         filled = await backfill_slugs(session)
         await session.commit()

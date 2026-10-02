@@ -352,7 +352,14 @@ class PesanChatStore(StoreBase):
     # on pengirim_admin, so it is deliberately not a foreign key.
     pengirim_id: Mapped[str] = mapped_column(String(64), nullable=False, index=True)
     pengirim_admin: Mapped[bool] = mapped_column(Boolean, nullable=False, default=False)
-    isi: Mapped[str] = mapped_column(Text, nullable=False)
+    isi: Mapped[str] = mapped_column(Text, nullable=False, default="")
+    # Optional attachment (image/video object key under chat/) and a shared product card.
+    lampiran_key: Mapped[Optional[str]] = mapped_column(String(255), nullable=True)
+    lampiran_jenis: Mapped[Optional[str]] = mapped_column(String(16), nullable=True)
+    produk_id: Mapped[Optional[str]] = mapped_column(
+        String(64), ForeignKey("store_produk.id", ondelete="SET NULL"), nullable=True
+    )
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=_utcnow)
 
     percakapan: Mapped["PercakapanStore"] = relationship(back_populates="pesan")
+    produk: Mapped[Optional["ProdukStore"]] = relationship()
