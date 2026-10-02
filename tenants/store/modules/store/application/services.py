@@ -1048,7 +1048,10 @@ async def get_percakapan(session: AsyncSession, percakapan_id: str) -> Percakapa
     stmt = (
         select(PercakapanStore)
         .where(PercakapanStore.id == percakapan_id)
-        .options(selectinload(PercakapanStore.pesan), selectinload(PercakapanStore.pembeli))
+        .options(
+            selectinload(PercakapanStore.pesan).selectinload(PesanChatStore.produk),
+            selectinload(PercakapanStore.pembeli),
+        )
     )
     percakapan = (await session.execute(stmt)).scalar_one_or_none()
     if not percakapan:
@@ -1066,12 +1069,30 @@ async def list_percakapan_admin(session: AsyncSession) -> list[PercakapanStore]:
 
 
 async def kirim_pesan(
-    session: AsyncSession, percakapan_id: str, pengirim_id: str, isi: str, *, sebagai_admin: bool
+    session: AsyncSession,
+    percakapan_id: str,
+    pengirim_id: str,
+    isi: str,
+    *,
+    sebagai_admin: bool,
+    produk_id: str | None = None,
+    lampiran_key: str | None = None,
+    lampiran_jenis: str | None = None,
 ) -> PesanChatStore:
     percakapan = await session.get(PercakapanStore, percakapan_id)
     if not percakapan:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Percakapan tidak ditemukan")
-    pesan = PesanChatStore(percakapan_id=percakapan_id, pengirim_id=pengirim_id, pengirim_admin=sebagai_admin, isi=isi)
+    if produk_id and await session.get(ProdukStore, produk_id) is None:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Produk tidak ditemukan")
+    pesan = PesanChatStore(
+        percakapan_id=percakapan_id,
+        pengirim_id=pengirim_id,
+        pengirim_admin=sebagai_admin,
+        isi=isi,
+        produk_id=produk_id,
+        lampiran_key=lampiran_key,
+        lampiran_jenis=lampiran_jenis,
+    )
     session.add(pesan)
     percakapan.unread_admin = not sebagai_admin
     percakapan.unread_pembeli = sebagai_admin
@@ -1095,11 +1116,27 @@ async def tandai_dibaca(session: AsyncSession, percakapan_id: str, sebagai_admin
 
 
 def pesan_out(pesan: PesanChatStore) -> dict:
+    produk = pesan.produk
     return {
         "id": pesan.id,
         "pengirim_admin": pesan.pengirim_admin,
         "isi": pesan.isi,
         "created_at": pesan.created_at.isoformat(),
+        "lampiran": (
+            {"jenis": pesan.lampiran_jenis, "url": media_url(pesan.lampiran_key)} if pesan.lampiran_key else None
+        ),
+        # A product card; None when nothing was shared or the product has since been deleted.
+        "produk": (
+            {
+                "id": produk.id,
+                "slug": produk.slug,
+                "nama": produk.nama,
+                "harga": str(produk.harga),
+                "foto_url": media_url(produk.foto_key),
+            }
+            if produk
+            else None
+        ),
     }
 
 

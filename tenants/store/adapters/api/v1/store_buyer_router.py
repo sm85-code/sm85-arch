@@ -9,7 +9,7 @@ from __future__ import annotations
 
 from decimal import Decimal
 
-from fastapi import APIRouter, Depends, HTTPException, Response, status
+from fastapi import APIRouter, Depends, File, Form, HTTPException, Response, UploadFile, status
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from tenants.store.modules.store.application import services
@@ -33,6 +33,7 @@ from tenants.store.modules.store.infrastructure.auth import (
 )
 from tenants.store.modules.store.infrastructure.database import get_db_store
 from tenants.store.modules.store.infrastructure.google_auth import verify_google_id_token
+from tenants.store.modules.store.infrastructure.media_storage import upload_chat_media
 from tenants.store.modules.store.infrastructure.models import PembeliStore
 from tenants.store.modules.store.infrastructure.payment_ipaymu import create_payment as ipaymu_create_payment
 from tenants.store.modules.store.infrastructure.payment_ipaymu import verify_webhook as ipaymu_verify_webhook
@@ -295,6 +296,25 @@ async def kirim_pesan_saya(
     user: PembeliStore = Depends(get_current_buyer),
 ):
     percakapan = await services.get_or_create_percakapan(session, user.id)
-    await services.kirim_pesan(session, percakapan.id, user.id, payload.isi, sebagai_admin=False)
+    await services.kirim_pesan(
+        session, percakapan.id, user.id, payload.isi, sebagai_admin=False, produk_id=payload.produk_id
+    )
+    percakapan = await services.get_percakapan(session, percakapan.id)
+    return services.percakapan_out(percakapan, dengan_pesan=True)
+
+
+@store_buyer_router.post("/chat/lampiran")
+async def kirim_lampiran_saya(
+    file: UploadFile = File(...),
+    isi: str = Form("", max_length=2000),
+    session: AsyncSession = Depends(get_db_store),
+    user: PembeliStore = Depends(get_current_buyer),
+):
+    """Send a photo or short video (optionally with a caption) in the buyer's chat."""
+    key, jenis = await upload_chat_media(await file.read(), file.content_type or "")
+    percakapan = await services.get_or_create_percakapan(session, user.id)
+    await services.kirim_pesan(
+        session, percakapan.id, user.id, isi.strip(), sebagai_admin=False, lampiran_key=key, lampiran_jenis=jenis
+    )
     percakapan = await services.get_percakapan(session, percakapan.id)
     return services.percakapan_out(percakapan, dengan_pesan=True)

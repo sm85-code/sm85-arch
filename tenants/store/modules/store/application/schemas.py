@@ -242,7 +242,17 @@ class AlamatPatch(BaseModel):
 
 
 class PesanChatIn(BaseModel):
-    isi: str = Field(..., min_length=1, max_length=2000)
+    """A chat message: text, a shared product, or both (an attachment goes through POST /chat/lampiran)."""
+
+    isi: str = Field("", max_length=2000)
+    produk_id: Optional[str] = None
+
+    @model_validator(mode="after")
+    def _tidak_kosong(self):
+        self.isi = self.isi.strip()
+        if not self.isi and not self.produk_id:
+            raise ValueError("Pesan tidak boleh kosong")
+        return self
 
 
 class StaffIn(BaseModel):

@@ -26,6 +26,17 @@ logger = logging.getLogger(__name__)
 _ALLOWED_CONTENT_TYPES = {"image/jpeg": "jpg", "image/png": "png", "image/webp": "webp"}
 _MAX_BYTES = 5 * 1024 * 1024
 _KEY_PREFIX = "produk/"
+_CHAT_PREFIX = "chat/"
+_CHAT_TYPES = {
+    "image/jpeg": ("jpg", "gambar"),
+    "image/png": ("png", "gambar"),
+    "image/webp": ("webp", "gambar"),
+    "video/mp4": ("mp4", "video"),
+    "video/webm": ("webm", "video"),
+    "video/quicktime": ("mov", "video"),
+}
+_CHAT_MAX_IMAGE = 5 * 1024 * 1024
+_CHAT_MAX_VIDEO = 20 * 1024 * 1024
 # File names are random and never reused, so an object never changes: let browsers and
 # Cloudflare keep it for a year.
 _CACHE_CONTROL = "public, max-age=31536000, immutable"
@@ -66,6 +77,10 @@ def media_url(key: Optional[str]) -> Optional[str]:
 
 def _looks_like(content_type: str, data: bytes) -> bool:
     """Check the real bytes: the Content-Type header is chosen by the client."""
+    if content_type in ("video/mp4", "video/quicktime"):
+        return data[4:8] == b"ftyp"
+    if content_type == "video/webm":
+        return data.startswith(b"\x1a\x45\xdf\xa3")
     if content_type == "image/jpeg":
         return data.startswith(b"\xff\xd8\xff")
     if content_type == "image/png":
@@ -128,6 +143,36 @@ async def upload_produk_photo(file_bytes: bytes, content_type: str) -> str:
             detail="Foto gagal disimpan. Coba lagi sebentar lagi.",
         ) from None
     return key
+
+
+async def upload_chat_media(file_bytes: bytes, content_type: str) -> tuple[str, str]:
+    """Validate and store a chat attachment (photo or short video); returns (object key, "gambar" | "video")."""
+    if content_type not in _CHAT_TYPES:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST, detail="Format harus JPEG, PNG, WebP, MP4, WebM, atau MOV"
+        )
+    ext, jenis = _CHAT_TYPES[content_type]
+    limit = _CHAT_MAX_VIDEO if jenis == "video" else _CHAT_MAX_IMAGE
+    if len(file_bytes) > limit:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail=f"Ukuran {jenis} maksimal {limit // (1024 * 1024)} MB",
+        )
+    if not _looks_like(content_type, file_bytes):
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Isi file bukan media yang valid")
+    cfg = r2_config()
+    if cfg is None:
+        raise MediaNotReady()
+
+    key = f"{_CHAT_PREFIX}ampelkuning_{datetime.now(timezone.utc):%Y%m%d}_{secrets.token_hex(8)}.{ext}"
+    try:
+        await asyncio.to_thread(_put_sync, cfg, key, file_bytes, content_type)
+    except Exception:
+        logger.exception("R2 chat upload failed key=%s", key)
+        raise HTTPException(
+            status_code=status.HTTP_502_BAD_GATEWAY, detail="Lampiran gagal disimpan. Coba lagi sebentar lagi."
+        ) from None
+    return key, jenis
 
 
 def _delete_sync(cfg: R2Config, key: str) -> None:

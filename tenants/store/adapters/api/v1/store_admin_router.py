@@ -10,7 +10,7 @@ import os
 import secrets as pysecrets
 from datetime import date
 
-from fastapi import APIRouter, Depends, File, HTTPException, Request, Response, UploadFile, status
+from fastapi import APIRouter, Depends, File, Form, HTTPException, Request, Response, UploadFile, status
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from tenants.store.modules.store.application import services
@@ -38,7 +38,7 @@ from tenants.store.modules.store.infrastructure.auth import (
     set_admin_cookie,
 )
 from tenants.store.modules.store.infrastructure.database import get_db_store
-from tenants.store.modules.store.infrastructure.media_storage import delete_foto, upload_produk_photo
+from tenants.store.modules.store.infrastructure.media_storage import delete_foto, upload_chat_media, upload_produk_photo
 from tenants.store.modules.store.infrastructure.models import ADMIN_ROLES_STORE, ROLE_OWNER, AdminStore
 from tenants.store.modules.store.infrastructure.seeder import seed_store
 
@@ -332,7 +332,27 @@ async def kirim_pesan(
     session: AsyncSession = Depends(get_db_store),
     user: AdminStore = Depends(admin_only),
 ):
-    await services.kirim_pesan(session, percakapan_id, user.id, payload.isi, sebagai_admin=True)
+    await services.kirim_pesan(
+        session, percakapan_id, user.id, payload.isi, sebagai_admin=True, produk_id=payload.produk_id
+    )
+    percakapan = await services.get_percakapan(session, percakapan_id)
+    return services.percakapan_out(percakapan, dengan_pesan=True)
+
+
+@store_admin_router.post("/chat/{percakapan_id}/lampiran")
+async def kirim_lampiran(
+    percakapan_id: str,
+    file: UploadFile = File(...),
+    isi: str = Form("", max_length=2000),
+    session: AsyncSession = Depends(get_db_store),
+    user: AdminStore = Depends(admin_only),
+):
+    """Send a photo or short video (optionally with a caption) to a buyer."""
+    await services.get_percakapan(session, percakapan_id)  # unknown thread: 404 before anything is uploaded
+    key, jenis = await upload_chat_media(await file.read(), file.content_type or "")
+    await services.kirim_pesan(
+        session, percakapan_id, user.id, isi.strip(), sebagai_admin=True, lampiran_key=key, lampiran_jenis=jenis
+    )
     percakapan = await services.get_percakapan(session, percakapan_id)
     return services.percakapan_out(percakapan, dengan_pesan=True)
 
