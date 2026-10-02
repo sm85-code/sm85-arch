@@ -36,6 +36,7 @@ _SELF_HEAL_COLUMNS = (
     "ALTER TABLE IF EXISTS mpe_users "
     "ADD COLUMN IF NOT EXISTS must_change_password BOOLEAN NOT NULL DEFAULT FALSE",
     # Tahap 3: manual pengiriman (courier/AWB) fields on the orders inbox.
+    "ALTER TABLE IF EXISTS mpe_pesanan ADD COLUMN IF NOT EXISTS status_marketplace VARCHAR(32) NULL",
     "ALTER TABLE IF EXISTS mpe_pesanan ADD COLUMN IF NOT EXISTS kurir VARCHAR(64) NULL",
     "ALTER TABLE IF EXISTS mpe_pesanan ADD COLUMN IF NOT EXISTS nomor_resi VARCHAR(128) NULL",
     "ALTER TABLE IF EXISTS mpe_pesanan ADD COLUMN IF NOT EXISTS tanggal_kirim TIMESTAMPTZ NULL",

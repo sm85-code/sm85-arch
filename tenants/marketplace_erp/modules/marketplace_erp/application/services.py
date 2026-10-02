@@ -1060,15 +1060,76 @@ async def impor_pesanan_marketplace(session: AsyncSession, akun: AkunMarketplace
             await session.flush()
             pesanan = await get_pesanan(session, pesanan.id)
 
+        sebelum_mp = pesanan.status_marketplace
         berubah = await _samakan_status_pesanan(session, pesanan, row["status"])
+        pesanan.status_marketplace = row["status_mentah"]
+        if row.get("kurir") and not pesanan.kurir:
+            pesanan.kurir = row["kurir"]
+        if row.get("nomor_resi") and not pesanan.nomor_resi:
+            pesanan.nomor_resi = row["nomor_resi"]
+        if pesanan.status in {"shipped", "completed"} and pesanan.tanggal_kirim is None:
+            pesanan.tanggal_kirim = datetime.now(timezone.utc)
         if baru:
             hasil["baru"] += 1
-        elif berubah:
+        elif berubah or sebelum_mp != pesanan.status_marketplace:
             hasil["diperbarui"] += 1
         else:
             hasil["tidak_berubah"] += 1
     await session.flush()
     return hasil
+
+
+async def id_pesanan_punya_resi(session: AsyncSession, akun: AkunMarketplace) -> set[str]:
+    """id_eksternal of this shop's orders that already store a tracking number (skipped when pulling)."""
+    stmt = select(Pesanan.id_eksternal).where(
+        Pesanan.akun_id == akun.id, Pesanan.nomor_resi.is_not(None), Pesanan.nomor_resi != ""
+    )
+    return set((await session.execute(stmt)).scalars())
+
+
+async def _pesanan_marketplace(session: AsyncSession, pesanan_id: str) -> tuple[Pesanan, AkunMarketplace]:
+    """Order + shop for actions that talk to the marketplace; only orders that follow Shopee qualify."""
+    pesanan = await get_pesanan(session, pesanan_id)
+    if pesanan.platform != "shopee" or pesanan.status_marketplace is None or not pesanan.akun_id:
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail="Hanya pesanan hasil sinkron Shopee yang bisa diproses/dicetak dari sini.",
+        )
+    akun = await get_akun_marketplace(session, pesanan.akun_id)
+    return pesanan, akun
+
+
+async def proses_pesanan_marketplace(session: AsyncSession, pesanan_id: str) -> Pesanan:
+    """Arrange shipment on Shopee for a pulled order (courier pickup) and store the tracking number."""
+    from tenants.marketplace_erp.modules.marketplace_erp.infrastructure.adapters import erp_shopee
+
+    pesanan, akun = await _pesanan_marketplace(session, pesanan_id)
+    if pesanan.status != "to_ship":
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail=f"Pesanan berstatus '{pesanan.status}', hanya pesanan 'to_ship' yang bisa diproses.",
+        )
+    if pesanan.status_marketplace in erp_shopee.STATUS_SUDAH_DIPROSES:
+        raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail="Pesanan sudah diproses di Shopee.")
+    hasil = await erp_shopee.proses_pengiriman(session, akun, pesanan.id_eksternal)
+    pesanan.status_marketplace = hasil["status_marketplace"]
+    if hasil["nomor_resi"]:
+        pesanan.nomor_resi = hasil["nomor_resi"]
+    pesanan.tersinkron_marketplace = True
+    pesanan.catatan_sinkron = "Diproses di Shopee, menunggu kurir pickup"
+    await session.flush()
+    return pesanan
+
+
+async def unduh_resi_pesanan(session: AsyncSession, pesanan_id: str) -> tuple[bytes, str]:
+    """Shopee's shipping label PDF for a pulled, already-processed order. Returns (pdf, filename)."""
+    from tenants.marketplace_erp.modules.marketplace_erp.infrastructure.adapters import erp_shopee
+
+    pesanan, akun = await _pesanan_marketplace(session, pesanan_id)
+    if pesanan.status_marketplace not in erp_shopee.STATUS_SUDAH_DIPROSES:
+        raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail="Proses pesanan di Shopee dulu sebelum mencetak resi.")
+    pdf = await erp_shopee.unduh_resi(session, akun, pesanan.id_eksternal, pesanan.nomor_resi)
+    return pdf, f"resi-{pesanan.id_eksternal}.pdf"
 
 
 async def delete_pesanan(session: AsyncSession, pesanan_id: str) -> None:

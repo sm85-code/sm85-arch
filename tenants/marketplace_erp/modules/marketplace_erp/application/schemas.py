@@ -318,6 +318,7 @@ class PesananOut(BaseModel):
     total: Decimal
     tersinkron_marketplace: bool
     catatan_sinkron: Optional[str]
+    status_marketplace: Optional[str] = None
     kurir: Optional[str] = None
     nomor_resi: Optional[str] = None
     tanggal_kirim: Optional[datetime] = None

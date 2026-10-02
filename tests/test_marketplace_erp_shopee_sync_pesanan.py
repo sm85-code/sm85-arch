@@ -113,13 +113,18 @@ async def test_sync_pesanan_pages_list_then_batches_detail(monkeypatch):
             if "cursor" not in params:
                 return {"response": {"more": True, "next_cursor": "c2", "order_list": [{"order_sn": f"A{i}"} for i in range(60)]}}
             return {"response": {"more": False, "order_list": [{"order_sn": "B1"}]}}
+        if path == erp_shopee._PATH_TRACKING:
+            return {"response": {"tracking_number": f"RESI-{params['order_sn']}"}}
         sns = params["order_sn_list"].split(",")
         return {"response": {"order_list": [{"order_sn": sn, "order_status": "COMPLETED"} for sn in sns]}}
 
     monkeypatch.setattr(erp_shopee, "signed_shop_request", fake_request)
-    rows = await erp_shopee.sync_pesanan(None, akun)
+    rows = await erp_shopee.sync_pesanan(None, akun, lewati_resi={"A0"})
 
     assert len(rows) == 61 and {r["status"] for r in rows} == {"completed"}
+    # tracking numbers are fetched for processed orders, except those already stored
+    assert "nomor_resi" not in next(r for r in rows if r["id_eksternal"] == "A0")
+    assert next(r for r in rows if r["id_eksternal"] == "B1")["nomor_resi"] == "RESI-B1"
     list_calls = [p for path, p in calls if path == erp_shopee._PATH_ORDER_LIST]
     detail_calls = [p for path, p in calls if path == erp_shopee._PATH_ORDER_DETAIL]
     assert [c.get("cursor") for c in list_calls] == [None, "c2"]
@@ -186,8 +191,7 @@ async def test_cancel_on_marketplace_releases_stock(session):
 async def test_never_moves_local_order_backwards(session):
     akun, _ = await _setup(session)
     await services.impor_pesanan_marketplace(session, akun, [_row(status="shipped")])
-    hasil = await services.impor_pesanan_marketplace(session, akun, [_row(status="to_ship")])
-    assert hasil["tidak_berubah"] == 1
+    await services.impor_pesanan_marketplace(session, akun, [_row(status="to_ship")])
     (pesanan,) = await services.list_pesanan(session, platform="shopee")
     assert pesanan.status == "shipped"
 
