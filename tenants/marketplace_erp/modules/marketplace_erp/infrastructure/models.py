@@ -81,6 +81,10 @@ class AkunMarketplace(MarketplaceErpBase):
     catatan: Mapped[Optional[str]] = mapped_column(Text, nullable=True)
     # When an automatic order sync last claimed this shop; throttles repeated refreshes of the order page.
     terakhir_sinkron_pesanan: Mapped[Optional[datetime]] = mapped_column(DateTime(timezone=True), nullable=True)
+    # Incremental order sync: watermark = start of the last SUCCESSFUL sync (the next one only asks for orders
+    # changed since then); sinkron_penuh = last time the whole 15-day window was re-read as a safety net.
+    watermark_sinkron_pesanan: Mapped[Optional[datetime]] = mapped_column(DateTime(timezone=True), nullable=True)
+    sinkron_penuh_pesanan_at: Mapped[Optional[datetime]] = mapped_column(DateTime(timezone=True), nullable=True)
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=_utcnow)
     updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=_utcnow, onupdate=_utcnow)
 

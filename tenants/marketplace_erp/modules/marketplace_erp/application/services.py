@@ -1085,14 +1085,38 @@ async def impor_pesanan_marketplace(session: AsyncSession, akun: AkunMarketplace
     return hasil
 
 
-async def sinkron_pesanan_akun(session: AsyncSession, akun: AkunMarketplace) -> dict:
-    """Pull one shop's recent orders from Shopee and import them. Returns the import counts + pulled."""
+# Even with incremental pulls, the whole 15-day window is re-read this often to repair any drift.
+BATAS_SINKRON_PENUH = timedelta(hours=6)
+
+
+def _aware(waktu: datetime | None) -> datetime | None:
+    return waktu if waktu is None or waktu.tzinfo else waktu.replace(tzinfo=timezone.utc)
+
+
+async def sinkron_pesanan_akun(session: AsyncSession, akun: AkunMarketplace, *, penuh: bool = False) -> dict:
+    """Pull one shop's orders from Shopee and import them. Returns the import counts + pulled.
+
+    Normally incremental: only orders changed since the last successful sync are requested, which is
+    a handful of API calls instead of re-reading 15 days every time. A full 15-day read happens the
+    first time, when ``penuh`` is set (manual sync), or when the last full read is over 6 hours old.
+    The watermark only advances when the whole sync succeeded.
+    """
     from tenants.marketplace_erp.modules.marketplace_erp.infrastructure.adapters import erp_shopee
 
-    rows = await erp_shopee.sync_pesanan(session, akun, await id_pesanan_punya_resi(session, akun))
+    mulai = datetime.now(timezone.utc)  # taken before asking Shopee, so nothing changing meanwhile is skipped
+    watermark = _aware(akun.watermark_sinkron_pesanan)
+    terakhir_penuh = _aware(akun.sinkron_penuh_pesanan_at)
+    perlu_penuh = penuh or watermark is None or terakhir_penuh is None or mulai - terakhir_penuh >= BATAS_SINKRON_PENUH
+
+    rows = await erp_shopee.sync_pesanan(
+        session, akun, await id_pesanan_punya_resi(session, akun), None if perlu_penuh else watermark
+    )
     async with session.begin_nested():  # a failure while importing leaves no half-imported shop behind
         hasil = await impor_pesanan_marketplace(session, akun, rows)
-    return {"pulled": len(rows), **hasil}
+    akun.watermark_sinkron_pesanan = mulai
+    if perlu_penuh:
+        akun.sinkron_penuh_pesanan_at = mulai
+    return {"pulled": len(rows), "penuh": perlu_penuh, **hasil}
 
 
 async def klaim_sinkron_pesanan(session: AsyncSession, akun: AkunMarketplace, jeda_detik: float) -> bool:
