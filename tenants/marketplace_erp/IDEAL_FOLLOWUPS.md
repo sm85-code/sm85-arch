@@ -36,7 +36,7 @@ Does **not** expand `tenants/toko`.
 
 | Item | Why deferred |
 |------|----------------|
-| Live Shopee GetItemList / GetOrderList / SetOrderReadyToShip | Needs approved Partner Key + sandbox shop; structure ready behind `SHOPEE_LIVE_SYNC` |
+| Shopee live sync verified against a real shop | Pull orders/catalogue, token refresh, main-account auth and stock/price push are implemented (`SHOPEE_LIVE_SYNC=true`) and unit-tested with mocked Shopee responses; still to verify on the sandbox shop. `SetOrderReadyToShip` (push `to_ship`) is not implemented |
 | Shopee webhook receiver | Idempotent upsert already keyed on `(platform, id_eksternal)` |
 | Lazada / TikTok Shop / Blibli OAuth + sync | Placeholders only (Shopee first; owner is registering these separately) |
 | Shopee Ads / TikTok Ads / Lazada Sponsored Discovery / Blibli Ads API integration | Separate partner approval from shop OAuth; `IklanCampaign`/`IklanMetrikHarian` today are manual-entry only |
@@ -44,7 +44,7 @@ Does **not** expand `tenants/toko`.
 | Encrypt shop tokens at rest | Open decision; DB already isolated |
 | Settlement auto-import from platform statement API | M4 -- currently manual entry only, matches design in `docs/marketplace-erp-spek.md` |
 | Per-warehouse StokReservasi allocation (reserve from a specific gudang, not just DEFAULT) | Reservation still always resolves to `ensure_default_gudang`; multi-gudang so far covers manual stock and transfers, not order-time allocation |
-| Job runner (refresh tokens, pull orders) | Open decision (cron / ARQ / Celery) |
+| Job runner (periodic order pull, keep refresh tokens alive) | Open decision (cron / ARQ / Celery). Tokens are refreshed lazily before each Shopee call; a shop nobody syncs for 30 days loses its refresh token and must be reconnected |
 | FE private repo (`frontend-marketplace-erp`) | Out of this backend PR |
 | Revoke other sessions on password change | `/auth/change-password` re-issues the caller's cookie, but older JWTs stay valid until expiry (token `session_version` is always 0 for this tenant) -- add a `session_version` column + check in `get_current_user_marketplace_erp` |
 | Server-side enforcement of `must_change_password` | Currently FE-driven (redirect to Ganti Password); backend could 403 non-auth endpoints while the flag is set |
