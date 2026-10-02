@@ -19,6 +19,7 @@ import json
 import os
 import time
 from datetime import datetime, timedelta, timezone
+from decimal import Decimal
 from typing import Any
 from urllib.parse import urlencode
 
@@ -142,12 +143,17 @@ async def _http_post_json(url: str, body: dict, *, timeout: float = 25.0) -> dic
     return await asyncio.to_thread(_do)
 
 
-async def exchange_token(*, code: str, shop_id: str) -> dict[str, Any]:
-    """POST /api/v2/auth/token/get -- exchange OAuth code for shop tokens.
+async def exchange_token(
+    *, code: str, shop_id: str | None = None, main_account_id: str | None = None
+) -> dict[str, Any]:
+    """POST /api/v2/auth/token/get -- exchange OAuth code for tokens.
 
-    Returns dict with access_token, refresh_token, expire_in, shop_id, ...
-    Caller persists onto AkunMarketplace.
+    Pass exactly one of shop_id (authorised from a shop account) or main_account_id (authorised from
+    a main account; the response then carries shop_id_list). Returns dict with access_token,
+    refresh_token, expire_in, ... Caller persists onto AkunMarketplace.
     """
+    if bool(shop_id) == bool(main_account_id):
+        raise ValueError("exchange_token needs exactly one of shop_id / main_account_id")
     if not partner_configured():
         raise ShopeeNotConfigured()
     ts = int(time.time())
@@ -156,11 +162,11 @@ async def exchange_token(*, code: str, shop_id: str) -> dict[str, Any]:
         f"{_host()}{_PATH_TOKEN_GET}"
         f"?partner_id={_partner_id_int()}&timestamp={ts}&sign={sign}"
     )
-    body = {
-        "code": code,
-        "partner_id": _partner_id_int(),
-        "shop_id": int(shop_id) if str(shop_id).isdigit() else shop_id,
-    }
+    body: dict[str, Any] = {"code": code, "partner_id": _partner_id_int()}
+    if main_account_id:
+        body["main_account_id"] = int(main_account_id) if str(main_account_id).isdigit() else main_account_id
+    else:
+        body["shop_id"] = int(shop_id) if str(shop_id).isdigit() else shop_id
     data = await _http_post_json(url, body)
     # Shopee wraps errors as error/message even on HTTP 200.
     if data.get("error"):
@@ -218,7 +224,53 @@ def apply_token_payload(akun: Any, payload: dict[str, Any], *, shop_id: str | No
     akun.status = "terhubung"
 
 
+# Access token lives 4h; refresh a bit early so a call never starts with a token about to die.
+TOKEN_REFRESH_MARGIN = timedelta(minutes=10)
+
+
+def token_perlu_refresh(akun: Any, *, now: datetime | None = None) -> bool:
+    expiry = getattr(akun, "token_kedaluwarsa", None)
+    if expiry is None:
+        return False
+    if expiry.tzinfo is None:
+        expiry = expiry.replace(tzinfo=timezone.utc)
+    return expiry - (now or datetime.now(timezone.utc)) <= TOKEN_REFRESH_MARGIN
+
+
+async def pastikan_token_segar(session: Any, akun: Any) -> None:
+    """Refresh the shop token when it is (about to be) expired and commit it right away.
+
+    Shopee refresh tokens are single-use: the response carries a *new* refresh_token and the old
+    one dies. If the new pair were only saved when the surrounding request finishes, any later
+    error would roll it back and leave the shop with a dead token, so it is committed here.
+    The row is locked first so two concurrent requests cannot both spend the same refresh_token.
+    """
+    if not token_perlu_refresh(akun):
+        return
+    await session.refresh(akun, with_for_update=True)
+    if not token_perlu_refresh(akun):
+        return  # another request refreshed it while we waited for the lock
+    if not getattr(akun, "refresh_token", None):
+        akun.status = "token_kadaluarsa"
+        await session.commit()
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail="Token Shopee kedaluwarsa dan tidak ada refresh token. Hubungkan ulang toko.",
+        )
+    try:
+        payload = await refresh_access_token(
+            refresh_token=akun.refresh_token, shop_id=str(akun.id_toko_eksternal)
+        )
+        apply_token_payload(akun, payload, shop_id=str(akun.id_toko_eksternal))
+    except HTTPException:
+        akun.status = "token_kadaluarsa"
+        await session.commit()
+        raise
+    await session.commit()
+
+
 async def signed_shop_request(
+    session: Any,
     akun: Any,
     api_path: str,
     *,
@@ -233,14 +285,33 @@ async def signed_shop_request(
         )
     if not _akun_configured(akun):
         raise ShopeeNotConfigured("Akun Shopee belum punya access_token / id_toko_eksternal.")
+    await pastikan_token_segar(session, akun)
 
+    return await _call_shop_api(
+        access_token=str(akun.access_token),
+        shop_id=str(akun.id_toko_eksternal),
+        api_path=api_path,
+        method=method,
+        body=body,
+        params=params,
+    )
+
+
+async def _call_shop_api(
+    *,
+    access_token: str,
+    shop_id: str,
+    api_path: str,
+    method: str = "GET",
+    body: dict | None = None,
+    params: dict | None = None,
+) -> dict:
+    """Signed shop-level call with an explicit token (no AkunMarketplace row needed)."""
     import asyncio
 
     import requests
 
     ts = int(time.time())
-    shop_id = str(akun.id_toko_eksternal)
-    access_token = str(akun.access_token)
     sign = sign_request(api_path, ts, access_token=access_token, shop_id=shop_id)
     query = {
         "partner_id": _partner_id_int(),
@@ -251,7 +322,7 @@ async def signed_shop_request(
     }
     if params:
         query.update(params)
-    url = f"{_host()}{api_path}?{urlencode(query)}"
+    url = f"{_host()}{api_path}?{urlencode(query, doseq=True)}"
 
     def _do() -> dict:
         if method.upper() == "GET":
@@ -266,28 +337,314 @@ async def signed_shop_request(
                 detail=f"Shopee response bukan JSON (HTTP {resp.status_code})",
             ) from exc
 
-    return await asyncio.to_thread(_do)
+    data = await asyncio.to_thread(_do)
+    # Shopee reports failures as error/message, often with HTTP 200.
+    if data.get("error"):
+        raise HTTPException(
+            status_code=status.HTTP_502_BAD_GATEWAY,
+            detail=f"Shopee {api_path} gagal: {data.get('error')} {data.get('message', '')}".strip(),
+        )
+    return data
 
 
-async def sync_produk(akun: Any) -> list[dict]:
+async def get_shop_name(access_token: str, shop_id: str) -> str | None:
+    """Best-effort shop name (get_shop_info). Never raises: a missing name must not block connecting."""
+    try:
+        data = await _call_shop_api(access_token=access_token, shop_id=shop_id, api_path="/api/v2/shop/get_shop_info")
+    except Exception:  # noqa: BLE001
+        return None
+    return (data.get("shop_name") or "").strip() or None
+
+
+# --- Products ------------------------------------------------------------------
+
+_PATH_ITEM_LIST = "/api/v2/product/get_item_list"
+_PATH_ITEM_BASE = "/api/v2/product/get_item_base_info"
+_PATH_MODEL_LIST = "/api/v2/product/get_model_list"
+_PATH_UPDATE_STOCK = "/api/v2/product/update_stock"
+_PATH_UPDATE_PRICE = "/api/v2/product/update_price"
+_ITEM_LIST_PAGE_SIZE = 100
+_ITEM_LIST_MAX_PAGES = 10
+_ITEM_BASE_BATCH = 50
+_MODEL_CONCURRENCY = 5
+_PUSH_BATCH = 50
+
+
+def kunci_listing(item_id: Any, model_id: Any = None) -> str:
+    """ProdukListing.id_eksternal for a Shopee listing: "item_id", or "item_id:model_id" for a variant."""
+    return f"{item_id}:{model_id}" if model_id else str(item_id)
+
+
+def pecah_kunci_listing(kunci: str) -> tuple[int, int]:
+    """Inverse of kunci_listing -> (item_id, model_id); model_id 0 means the item has no variants."""
+    item, _, model = str(kunci).partition(":")
+    return int(item), int(model or 0)
+
+
+def _harga(price_info: Any) -> Decimal | None:
+    info = (price_info or [{}])[0] if isinstance(price_info, list) else (price_info or {})
+    value = info.get("current_price") if info.get("current_price") is not None else info.get("original_price")
+    return Decimal(str(value)) if value is not None else None
+
+
+def _stok(stock_info_v2: Any) -> int | None:
+    summary = ((stock_info_v2 or {}).get("summary_info")) or {}
+    value = summary.get("total_available_stock")
+    return int(value) if value is not None else None
+
+
+def _nama_model(model: dict, tier_variation: list[dict]) -> str:
+    names = []
+    for tier, idx in zip(tier_variation, model.get("tier_index") or []):
+        options = tier.get("option_list") or []
+        if 0 <= idx < len(options):
+            names.append(str(options[idx].get("option") or ""))
+    return " / ".join(n for n in names if n) or f"model {model.get('model_id')}"
+
+
+def normalisasi_item(item: dict, model_resp: dict | None = None) -> list[dict]:
+    """get_item_base_info entry (+ get_model_list response for variant items) -> listing dicts.
+
+    One dict per sellable unit: the item itself, or each of its models. Keys: id_eksternal,
+    nama_produk, sku, harga, stok, aktif.
+    """
+    item_id = item["item_id"]
+    nama = str(item.get("item_name") or "").strip() or f"item {item_id}"
+    aktif = str(item.get("item_status") or "NORMAL").upper() == "NORMAL"
+    if item.get("has_model") and model_resp:
+        out = []
+        for model in model_resp.get("model") or []:
+            if not model.get("model_id"):
+                continue
+            out.append(
+                {
+                    "id_eksternal": kunci_listing(item_id, model["model_id"]),
+                    "nama_produk": f"{nama} - {_nama_model(model, model_resp.get('tier_variation') or [])}"[:255],
+                    "sku": str(model.get("model_sku") or "").strip(),
+                    "harga": _harga(model.get("price_info")),
+                    "stok": _stok(model.get("stock_info_v2")),
+                    "aktif": aktif and str(model.get("model_status") or "MODEL_NORMAL") == "MODEL_NORMAL",
+                }
+            )
+        return out
+    return [
+        {
+            "id_eksternal": kunci_listing(item_id),
+            "nama_produk": nama[:255],
+            "sku": str(item.get("item_sku") or "").strip(),
+            "harga": _harga(item.get("price_info")),
+            "stok": _stok(item.get("stock_info_v2")),
+            "aktif": aktif,
+        }
+    ]
+
+
+async def sync_produk(session: Any, akun: Any) -> list[dict]:
+    """Pull the shop catalogue (NORMAL + UNLIST items, variants expanded) as listing dicts."""
     if not live_sync_enabled() or not _akun_configured(akun):
         raise ShopeeNotConfigured(
             "Shopee live sync nonaktif atau akun belum terhubung. "
             "Set SHOPEE_LIVE_SYNC=true + partner key, selesaikan OAuth dulu."
         )
-    raise NotImplementedError(
-        "Shopee sync_produk() menunggu mapping GetItemList -- hidupkan setelah sandbox verified."
-    )
+    import asyncio
+
+    item_ids: list[int] = []
+    offset = 0
+    for _ in range(_ITEM_LIST_MAX_PAGES):
+        data = await signed_shop_request(
+            session,
+            akun,
+            _PATH_ITEM_LIST,
+            params={
+                "offset": offset,
+                "page_size": _ITEM_LIST_PAGE_SIZE,
+                "item_status": ["NORMAL", "UNLIST"],
+            },
+        )
+        resp = data.get("response") or {}
+        item_ids += [int(i["item_id"]) for i in resp.get("item") or []]
+        if not resp.get("has_next_page"):
+            break
+        offset = int(resp.get("next_offset") or 0)
+
+    items: list[dict] = []
+    for i in range(0, len(item_ids), _ITEM_BASE_BATCH):
+        batch = item_ids[i : i + _ITEM_BASE_BATCH]
+        data = await signed_shop_request(
+            session, akun, _PATH_ITEM_BASE, params={"item_id_list": ",".join(map(str, batch))}
+        )
+        items += (data.get("response") or {}).get("item_list") or []
+
+    gate = asyncio.Semaphore(_MODEL_CONCURRENCY)
+
+    async def _models(item: dict) -> dict | None:
+        if not item.get("has_model"):
+            return None
+        async with gate:
+            data = await signed_shop_request(session, akun, _PATH_MODEL_LIST, params={"item_id": item["item_id"]})
+        return data.get("response") or {}
+
+    model_resps = await asyncio.gather(*(_models(it) for it in items))
+    return [row for it, mr in zip(items, model_resps) for row in normalisasi_item(it, mr)]
 
 
-async def sync_pesanan(akun: Any) -> list[dict]:
+async def kirim_stok_harga(session: Any, akun: Any, rows: list[dict]) -> dict:
+    """Push stock and price for listings. ``rows``: dicts with id_eksternal, stok (int), harga (Decimal).
+
+    Overwrites what Shopee currently holds, so callers must only trigger it deliberately.
+    One failing item does not stop the rest; failures are reported per listing.
+    """
+    if not live_sync_enabled() or not _akun_configured(akun):
+        raise ShopeeNotConfigured("Shopee live sync nonaktif atau akun belum terhubung.")
+    hasil: dict[str, Any] = {"stok_ok": 0, "harga_ok": 0, "gagal": []}
+    per_item: dict[int, list[tuple[int, dict]]] = {}
+    for row in rows:
+        try:
+            item_id, model_id = pecah_kunci_listing(row["id_eksternal"])
+        except ValueError:
+            hasil["gagal"].append({"id_eksternal": row["id_eksternal"], "alasan": "id_eksternal bukan format Shopee"})
+            continue
+        per_item.setdefault(item_id, []).append((model_id, row))
+
+    def _catat(item_id: int, models: list[tuple[int, dict]], failure_list: list[dict], alasan: str) -> None:
+        by_model = {m: r for m, r in models}
+        for f in failure_list:
+            row = by_model.get(int(f.get("model_id") or 0))
+            hasil["gagal"].append(
+                {"id_eksternal": (row or {}).get("id_eksternal", kunci_listing(item_id, f.get("model_id"))),
+                 "alasan": f"{alasan}: {f.get('failed_reason')}"}
+            )
+
+    for item_id, models in per_item.items():
+        for i in range(0, len(models), _PUSH_BATCH):
+            chunk = models[i : i + _PUSH_BATCH]
+            for jalur, body, kunci_ok, alasan in (
+                (
+                    _PATH_UPDATE_STOCK,
+                    {
+                        "item_id": item_id,
+                        "stock_list": [
+                            {"model_id": m, "seller_stock": [{"stock": max(0, int(r["stok"]))}]} for m, r in chunk
+                        ],
+                    },
+                    "stok_ok",
+                    "stok",
+                ),
+                (
+                    _PATH_UPDATE_PRICE,
+                    {
+                        "item_id": item_id,
+                        "price_list": [{"model_id": m, "original_price": float(r["harga"])} for m, r in chunk],
+                    },
+                    "harga_ok",
+                    "harga",
+                ),
+            ):
+                try:
+                    data = await signed_shop_request(session, akun, jalur, method="POST", body=body)
+                except HTTPException as exc:
+                    for _m, r in chunk:
+                        hasil["gagal"].append({"id_eksternal": r["id_eksternal"], "alasan": f"{alasan}: {exc.detail}"})
+                    continue
+                resp = data.get("response") or {}
+                hasil[kunci_ok] += len(resp.get("success_list") or [])
+                _catat(item_id, chunk, resp.get("failure_list") or [], alasan)
+    return hasil
+
+
+_PATH_ORDER_LIST = "/api/v2/order/get_order_list"
+_PATH_ORDER_DETAIL = "/api/v2/order/get_order_detail"
+# item_list / buyer_username / total_amount are not returned unless asked for.
+_ORDER_DETAIL_FIELDS = "buyer_username,item_list,total_amount"
+# Shopee rejects a time_from..time_to span over 15 days; stay a minute under.
+_ORDER_WINDOW_SECONDS = 15 * 24 * 3600 - 60
+_ORDER_LIST_PAGE_SIZE = 100
+_ORDER_DETAIL_BATCH = 50
+_ORDER_LIST_MAX_PAGES = 20
+
+
+def normalisasi_pesanan(order: dict) -> dict:
+    """Shopee get_order_detail entry -> neutral dict consumed by services.impor_pesanan_marketplace.
+
+    ``status`` is None for a Shopee status we do not map, so the importer skips it instead of
+    guessing (map_shopee_status would silently turn an unknown state into 'unpaid').
+    """
+    raw = str(order.get("order_status") or "").upper()
+    items = []
+    for it in order.get("item_list") or []:
+        qty = int(it.get("model_quantity_purchased") or 0)
+        if qty <= 0:
+            continue
+        nama = str(it.get("item_name") or "").strip()
+        model = str(it.get("model_name") or "").strip()
+        price = it.get("model_discounted_price") or it.get("model_original_price") or 0
+        items.append(
+            {
+                "nama_produk": (f"{nama} - {model}" if model else nama)[:255] or "(tanpa nama)",
+                "harga_satuan": Decimal(str(price)),
+                "qty": qty,
+                "id_eksternal_kandidat": [
+                    k
+                    for k in (
+                        kunci_listing(it.get("item_id"), it.get("model_id")) if it.get("item_id") else None,
+                        str(it["item_id"]) if it.get("item_id") else None,
+                    )
+                    if k
+                ],
+            }
+        )
+    return {
+        "id_eksternal": str(order["order_sn"]),
+        "status": SHOPEE_STATUS_MAP.get(raw),
+        "status_mentah": raw,
+        "nama_pembeli": str(order.get("buyer_username") or ""),
+        "total": Decimal(str(order.get("total_amount") or 0)),
+        "items": items,
+    }
+
+
+async def sync_pesanan(session: Any, akun: Any) -> list[dict]:
+    """Pull orders updated in the last ~15 days (get_order_list, then get_order_detail in batches).
+
+    Idempotent by design: the caller upserts on (platform, order_sn), so re-pulling the same window
+    is harmless. Returns normalised dicts, see normalisasi_pesanan().
+    """
     if not live_sync_enabled() or not _akun_configured(akun):
         raise ShopeeNotConfigured(
             "Shopee live sync nonaktif atau akun belum terhubung."
         )
-    raise NotImplementedError(
-        "Shopee sync_pesanan() menunggu mapping GetOrderList -- hidupkan setelah sandbox verified."
-    )
+    time_to = int(time.time())
+    time_from = time_to - _ORDER_WINDOW_SECONDS
+
+    order_sn_list: list[str] = []
+    cursor = ""
+    for _ in range(_ORDER_LIST_MAX_PAGES):
+        params: dict[str, Any] = {
+            "time_range_field": "update_time",
+            "time_from": time_from,
+            "time_to": time_to,
+            "page_size": _ORDER_LIST_PAGE_SIZE,
+        }
+        if cursor:
+            params["cursor"] = cursor
+        data = await signed_shop_request(session, akun, _PATH_ORDER_LIST, params=params)
+        resp = data.get("response") or {}
+        order_sn_list += [o["order_sn"] for o in resp.get("order_list") or []]
+        cursor = resp.get("next_cursor") or ""
+        if not resp.get("more") or not cursor:
+            break
+
+    rows: list[dict] = []
+    for i in range(0, len(order_sn_list), _ORDER_DETAIL_BATCH):
+        batch = order_sn_list[i : i + _ORDER_DETAIL_BATCH]
+        data = await signed_shop_request(
+            session,
+            akun,
+            _PATH_ORDER_DETAIL,
+            params={"order_sn_list": ",".join(batch), "response_optional_fields": _ORDER_DETAIL_FIELDS},
+        )
+        rows += [normalisasi_pesanan(o) for o in (data.get("response") or {}).get("order_list") or []]
+    return rows
 
 
 async def proses_pesanan(akun: Any, pesanan: Any) -> None:
@@ -306,7 +663,9 @@ SHOPEE_STATUS_MAP = {
     "UNPAID": "unpaid",
     "READY_TO_SHIP": "to_ship",
     "PROCESSED": "to_ship",
+    "RETRY_SHIP": "to_ship",
     "SHIPPED": "shipped",
+    "TO_CONFIRM_RECEIVE": "shipped",
     "COMPLETED": "completed",
     "CANCELLED": "cancelled",
     "IN_CANCEL": "cancelled",

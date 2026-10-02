@@ -96,3 +96,85 @@ def test_marketplace_erp_never_answers_503_from_application_code():
         if "HTTP_503" in p.read_text() or "status_code=503" in p.read_text()
     ]
     assert offenders == []
+
+
+# --- token refresh -----------------------------------------------------------
+
+
+class _FakeSession:
+    def __init__(self):
+        self.commits = 0
+        self.locked = 0
+
+    async def refresh(self, obj, with_for_update=False):
+        self.locked += int(with_for_update)
+
+    async def commit(self):
+        self.commits += 1
+
+
+def _akun(expires_in_minutes, refresh_token="rt-old"):
+    from datetime import datetime, timedelta, timezone
+
+    return SimpleNamespace(
+        access_token="at-old",
+        refresh_token=refresh_token,
+        id_toko_eksternal="227950881",
+        token_kedaluwarsa=datetime.now(timezone.utc) + timedelta(minutes=expires_in_minutes),
+        status="terhubung",
+    )
+
+
+def test_token_perlu_refresh_uses_margin():
+    assert erp_shopee.token_perlu_refresh(_akun(5)) is True
+    assert erp_shopee.token_perlu_refresh(_akun(-1)) is True
+    assert erp_shopee.token_perlu_refresh(_akun(120)) is False
+    assert erp_shopee.token_perlu_refresh(SimpleNamespace(token_kedaluwarsa=None)) is False
+
+
+@pytest.mark.asyncio
+async def test_pastikan_token_segar_noop_when_fresh(monkeypatch):
+    async def boom(**_):
+        raise AssertionError("must not refresh a fresh token")
+
+    monkeypatch.setattr(erp_shopee, "refresh_access_token", boom)
+    session, akun = _FakeSession(), _akun(120)
+    await erp_shopee.pastikan_token_segar(session, akun)
+    assert session.commits == 0 and akun.access_token == "at-old"
+
+
+@pytest.mark.asyncio
+async def test_pastikan_token_segar_rotates_and_commits(monkeypatch):
+    seen = {}
+
+    async def fake_refresh(*, refresh_token, shop_id):
+        seen.update(refresh_token=refresh_token, shop_id=shop_id)
+        return {"access_token": "at-new", "refresh_token": "rt-new", "expire_in": 14400}
+
+    monkeypatch.setattr(erp_shopee, "refresh_access_token", fake_refresh)
+    session, akun = _FakeSession(), _akun(2)
+    await erp_shopee.pastikan_token_segar(session, akun)
+    assert seen == {"refresh_token": "rt-old", "shop_id": "227950881"}
+    assert (akun.access_token, akun.refresh_token) == ("at-new", "rt-new")
+    assert erp_shopee.token_perlu_refresh(akun) is False
+    assert session.locked == 1 and session.commits == 1  # row locked, new pair committed at once
+
+
+@pytest.mark.asyncio
+async def test_pastikan_token_segar_marks_expired_when_refresh_fails(monkeypatch):
+    async def fail(**_):
+        raise HTTPException(status_code=502, detail="Shopee refresh gagal")
+
+    monkeypatch.setattr(erp_shopee, "refresh_access_token", fail)
+    session, akun = _FakeSession(), _akun(-5)
+    with pytest.raises(HTTPException):
+        await erp_shopee.pastikan_token_segar(session, akun)
+    assert akun.status == "token_kadaluarsa" and session.commits == 1
+
+
+@pytest.mark.asyncio
+async def test_pastikan_token_segar_without_refresh_token_asks_reconnect():
+    session, akun = _FakeSession(), _akun(-5, refresh_token=None)
+    with pytest.raises(HTTPException) as exc:
+        await erp_shopee.pastikan_token_segar(session, akun)
+    assert exc.value.status_code == 409 and akun.status == "token_kadaluarsa"

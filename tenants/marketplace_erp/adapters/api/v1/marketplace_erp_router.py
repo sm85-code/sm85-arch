@@ -623,19 +623,42 @@ async def oauth_shopee_start(
 async def oauth_shopee_callback(
     akun_id: str,
     code: str = Query(...),
-    shop_id: str = Query(...),
+    shop_id: str | None = Query(None),
+    main_account_id: str | None = Query(None),
     session: AsyncSession = Depends(get_db_marketplace_erp),
 ):
     """Exchange OAuth code for tokens and persist on AkunMarketplace.
 
     Public callback (Shopee redirects here). akun_id in the path binds the
     shop to the pending local row created before /oauth/shopee/start.
+    Shopee returns ``shop_id`` when a shop account authorised, or ``main_account_id``
+    when a main account authorised (possibly several shops at once).
     """
+    import asyncio
+
     from tenants.marketplace_erp.modules.marketplace_erp.infrastructure.adapters import erp_shopee
 
+    if bool(shop_id) == bool(main_account_id):
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="Callback Shopee harus berisi shop_id atau main_account_id",
+        )
     akun = await services.get_akun_marketplace(session, akun_id)
     if akun.platform != "shopee":
         raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Akun bukan platform shopee")
+
+    if main_account_id:
+        payload = await erp_shopee.exchange_token(code=code, main_account_id=str(main_account_id))
+        # Shop names make the new rows recognisable; failures just fall back to "Shopee <id>".
+        shop_ids = [str(sid) for sid in payload.get("shop_id_list") or []]
+        names = await asyncio.gather(
+            *(erp_shopee.get_shop_name(str(payload.get("access_token") or ""), sid) for sid in shop_ids)
+        )
+        toko = await services.hubungkan_shopee_akun_utama(
+            session, akun, payload, {sid: n for sid, n in zip(shop_ids, names) if n}
+        )
+        return {"ok": True, "akun_id": toko[0]["akun_id"], "status": "terhubung", "toko": toko}
+
     # Reject binding a shop_id already owned by another row.
     await services._cek_duplikat_id_toko_eksternal(
         session, platform="shopee", id_toko_eksternal=str(shop_id), exclude_id=akun.id
@@ -649,6 +672,9 @@ async def oauth_shopee_callback(
         "status": akun.status,
         "id_toko_eksternal": akun.id_toko_eksternal,
         "token_kedaluwarsa": akun.token_kedaluwarsa.isoformat() if akun.token_kedaluwarsa else None,
+        "toko": [
+            {"akun_id": akun.id, "id_toko_eksternal": akun.id_toko_eksternal, "nama_toko": akun.nama_toko, "baru": False}
+        ],
     }
 
 
@@ -664,10 +690,11 @@ async def sync_pesanan_akun(
     akun = await services.get_akun_marketplace(session, akun_id)
     if akun.platform == "shopee":
         try:
-            rows = await erp_shopee.sync_pesanan(akun)
+            rows = await erp_shopee.sync_pesanan(session, akun)
         except NotImplementedError as exc:
             raise HTTPException(status_code=status.HTTP_501_NOT_IMPLEMENTED, detail=str(exc)) from exc
-        return {"ok": True, "pulled": len(rows)}
+        hasil = await services.impor_pesanan_marketplace(session, akun, rows)
+        return {"ok": True, "pulled": len(rows), **hasil}
     raise HTTPException(
         status_code=status.HTTP_501_NOT_IMPLEMENTED,
         detail=f"Sync pesanan untuk platform '{akun.platform}' belum tersedia (Shopee first)",
@@ -680,19 +707,48 @@ async def sync_produk_akun(
     session: AsyncSession = Depends(get_db_marketplace_erp),
     _: UserMarketplaceErp = Depends(require_roles_marketplace_erp(*OWNER_ONLY)),
 ):
+    """Pull the shop catalogue and link entries to Produk by SKU (no stock/price is changed)."""
     from tenants.marketplace_erp.modules.marketplace_erp.infrastructure.adapters import erp_shopee
 
     akun = await services.get_akun_marketplace(session, akun_id)
     if akun.platform == "shopee":
         try:
-            rows = await erp_shopee.sync_produk(akun)
+            rows = await erp_shopee.sync_produk(session, akun)
         except NotImplementedError as exc:
             raise HTTPException(status_code=status.HTTP_501_NOT_IMPLEMENTED, detail=str(exc)) from exc
-        return {"ok": True, "pulled": len(rows)}
+        hasil = await services.impor_listing_marketplace(session, akun, rows)
+        return {"ok": True, "pulled": len(rows), **hasil}
     raise HTTPException(
         status_code=status.HTTP_501_NOT_IMPLEMENTED,
         detail=f"Sync produk untuk platform '{akun.platform}' belum tersedia (Shopee first)",
     )
+
+
+@marketplace_erp_router.post("/akun/{akun_id}/push/stok-harga")
+async def push_stok_harga_akun(
+    akun_id: str,
+    dry_run: bool = Query(True, description="true = only show what would be sent (default)"),
+    session: AsyncSession = Depends(get_db_marketplace_erp),
+    _: UserMarketplaceErp = Depends(require_roles_marketplace_erp(*OWNER_ONLY)),
+):
+    """Send ERP stock and price of this shop's active listings to the marketplace.
+
+    This OVERWRITES the marketplace's stock/price, so it only sends when ``dry_run=false`` is passed
+    explicitly; the default just previews the rows.
+    """
+    from tenants.marketplace_erp.modules.marketplace_erp.infrastructure.adapters import erp_shopee
+
+    akun = await services.get_akun_marketplace(session, akun_id)
+    if akun.platform != "shopee":
+        raise HTTPException(
+            status_code=status.HTTP_501_NOT_IMPLEMENTED,
+            detail=f"Push stok/harga untuk platform '{akun.platform}' belum tersedia (Shopee first)",
+        )
+    rows = await services.baris_push_listing(session, akun)
+    if dry_run:
+        return {"ok": True, "dry_run": True, "jumlah": len(rows), "rows": rows}
+    hasil = await erp_shopee.kirim_stok_harga(session, akun, rows)
+    return {"ok": True, "dry_run": False, "jumlah": len(rows), **hasil}
 
 
 @marketplace_erp_router.get("/oauth/lazada/start")
