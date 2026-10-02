@@ -560,6 +560,31 @@ async def ubah_status_pesanan(
     return await services.ubah_status_pesanan(session, pesanan_id, payload.status)
 
 
+@marketplace_erp_router.post("/pesanan/{pesanan_id}/proses", response_model=PesananOut)
+async def proses_pesanan_marketplace(
+    pesanan_id: str,
+    session: AsyncSession = Depends(get_db_marketplace_erp),
+    user: UserMarketplaceErp = Depends(require_roles_marketplace_erp(*OWNER_OR_STAFF)),
+):
+    """Arrange shipment on the marketplace (courier pickup). Shopee orders pulled by sync only."""
+    pesanan = await services.get_pesanan(session, pesanan_id)
+    await pastikan_akses_akun(user, session, pesanan.akun_id)
+    return await services.proses_pesanan_marketplace(session, pesanan_id)
+
+
+@marketplace_erp_router.get("/pesanan/{pesanan_id}/resi")
+async def cetak_resi_pesanan(
+    pesanan_id: str,
+    session: AsyncSession = Depends(get_db_marketplace_erp),
+    user: UserMarketplaceErp = Depends(require_roles_marketplace_erp(*OWNER_OR_STAFF)),
+):
+    """The marketplace's own shipping label (PDF) for an order that was already processed."""
+    pesanan = await services.get_pesanan(session, pesanan_id)
+    await pastikan_akses_akun(user, session, pesanan.akun_id)
+    pdf, nama_file = await services.unduh_resi_pesanan(session, pesanan_id)
+    return Response(content=pdf, media_type="application/pdf", headers={"Content-Disposition": f'inline; filename="{nama_file}"'})
+
+
 @marketplace_erp_router.post("/pesanan/{pesanan_id}/pengiriman", response_model=PesananOut)
 async def set_pengiriman(
     pesanan_id: str,
@@ -690,7 +715,7 @@ async def sync_pesanan_akun(
     akun = await services.get_akun_marketplace(session, akun_id)
     if akun.platform == "shopee":
         try:
-            rows = await erp_shopee.sync_pesanan(session, akun)
+            rows = await erp_shopee.sync_pesanan(session, akun, await services.id_pesanan_punya_resi(session, akun))
         except NotImplementedError as exc:
             raise HTTPException(status_code=status.HTTP_501_NOT_IMPLEMENTED, detail=str(exc)) from exc
         hasil = await services.impor_pesanan_marketplace(session, akun, rows)

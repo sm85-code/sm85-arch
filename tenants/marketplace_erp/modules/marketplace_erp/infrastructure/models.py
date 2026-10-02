@@ -229,6 +229,10 @@ class Pesanan(MarketplaceErpBase):
     total: Mapped[Decimal] = mapped_column(Numeric(20, 2), nullable=False, default=Decimal("0"))
     tersinkron_marketplace: Mapped[bool] = mapped_column(Boolean, nullable=False, default=False)
     catatan_sinkron: Mapped[Optional[str]] = mapped_column(Text, nullable=True)
+    # Raw marketplace status (e.g. Shopee READY_TO_SHIP / PROCESSED). Set only for orders that follow the
+    # marketplace (pulled by sync); NULL for orders typed in by hand. Lets the UI tell "needs processing"
+    # from "arranged, waiting for the courier" -- both are status to_ship locally.
+    status_marketplace: Mapped[Optional[str]] = mapped_column(String(32), nullable=True)
     # Pengiriman (Tahap 3) -- manual input for now (no courier API wired
     # yet); nullable/additive, added to existing Postgres DBs via
     # seeder.ensure_marketplace_erp_schema() self-heal ALTER TABLE, same

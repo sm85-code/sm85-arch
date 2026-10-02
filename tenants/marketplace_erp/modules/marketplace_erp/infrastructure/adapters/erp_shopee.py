@@ -277,6 +277,7 @@ async def signed_shop_request(
     method: str = "GET",
     body: dict | None = None,
     params: dict | None = None,
+    raw: bool = False,
 ) -> dict:
     """Generic signed shop call. Used by sync_* once LIVE_SYNC is on."""
     if not live_sync_enabled():
@@ -294,6 +295,7 @@ async def signed_shop_request(
         method=method,
         body=body,
         params=params,
+        raw=raw,
     )
 
 
@@ -305,8 +307,11 @@ async def _call_shop_api(
     method: str = "GET",
     body: dict | None = None,
     params: dict | None = None,
+    raw: bool = False,
 ) -> dict:
-    """Signed shop-level call with an explicit token (no AkunMarketplace row needed)."""
+    """Signed shop-level call with an explicit token (no AkunMarketplace row needed).
+
+    ``raw=True`` is for file downloads: a non-JSON 2xx body comes back as {"_bytes": ...}."""
     import asyncio
 
     import requests
@@ -332,12 +337,16 @@ async def _call_shop_api(
         try:
             return resp.json()
         except Exception as exc:  # noqa: BLE001
+            if raw and resp.ok and resp.content:
+                return {"_bytes": resp.content}
             raise HTTPException(
                 status_code=status.HTTP_502_BAD_GATEWAY,
                 detail=f"Shopee response bukan JSON (HTTP {resp.status_code})",
             ) from exc
 
     data = await asyncio.to_thread(_do)
+    if "_bytes" in data:
+        return data
     # Shopee reports failures as error/message, often with HTTP 200.
     if data.get("error"):
         raise HTTPException(
@@ -555,7 +564,7 @@ async def kirim_stok_harga(session: Any, akun: Any, rows: list[dict]) -> dict:
 _PATH_ORDER_LIST = "/api/v2/order/get_order_list"
 _PATH_ORDER_DETAIL = "/api/v2/order/get_order_detail"
 # item_list / buyer_username / total_amount are not returned unless asked for.
-_ORDER_DETAIL_FIELDS = "buyer_username,item_list,total_amount"
+_ORDER_DETAIL_FIELDS = "buyer_username,item_list,total_amount,shipping_carrier"
 # Shopee rejects a time_from..time_to span over 15 days; stay a minute under.
 _ORDER_WINDOW_SECONDS = 15 * 24 * 3600 - 60
 _ORDER_LIST_PAGE_SIZE = 100
@@ -599,12 +608,16 @@ def normalisasi_pesanan(order: dict) -> dict:
         "status_mentah": raw,
         "nama_pembeli": str(order.get("buyer_username") or ""),
         "total": Decimal(str(order.get("total_amount") or 0)),
+        "kurir": str(order.get("shipping_carrier") or "").strip() or None,
         "items": items,
     }
 
 
-async def sync_pesanan(session: Any, akun: Any) -> list[dict]:
+async def sync_pesanan(session: Any, akun: Any, lewati_resi: frozenset[str] | set[str] = frozenset()) -> list[dict]:
     """Pull orders updated in the last ~15 days (get_order_list, then get_order_detail in batches).
+
+    Orders already arranged for shipping get their tracking number (get_tracking_number) too, except
+    those in ``lewati_resi`` (already stored), so repeated pulls do not re-ask Shopee for every order.
 
     Idempotent by design: the caller upserts on (platform, order_sn), so re-pulling the same window
     is harmless. Returns normalised dicts, see normalisasi_pesanan().
@@ -644,7 +657,177 @@ async def sync_pesanan(session: Any, akun: Any) -> list[dict]:
             params={"order_sn_list": ",".join(batch), "response_optional_fields": _ORDER_DETAIL_FIELDS},
         )
         rows += [normalisasi_pesanan(o) for o in (data.get("response") or {}).get("order_list") or []]
+
+    import asyncio
+
+    gate = asyncio.Semaphore(_MODEL_CONCURRENCY)
+
+    async def _resi(row: dict) -> None:
+        async with gate:
+            row["nomor_resi"] = await ambil_nomor_resi(session, akun, row["id_eksternal"])
+
+    await asyncio.gather(
+        *(
+            _resi(r)
+            for r in rows
+            if r["status_mentah"] in STATUS_SUDAH_DIPROSES and r["id_eksternal"] not in lewati_resi
+        )
+    )
     return rows
+
+
+# --- Logistics: arrange shipment + shipping label ---------------------------------
+
+_PATH_SHIP_PARAM = "/api/v2/logistics/get_shipping_parameter"
+_PATH_SHIP_ORDER = "/api/v2/logistics/ship_order"
+_PATH_TRACKING = "/api/v2/logistics/get_tracking_number"
+_PATH_DOC_PARAM = "/api/v2/logistics/get_shipping_document_parameter"
+_PATH_DOC_CREATE = "/api/v2/logistics/create_shipping_document"
+_PATH_DOC_RESULT = "/api/v2/logistics/get_shipping_document_result"
+_PATH_DOC_DOWNLOAD = "/api/v2/logistics/download_shipping_document"
+# Shopee statuses after "arrange shipment": a tracking number exists from here on.
+STATUS_SUDAH_DIPROSES = frozenset({"PROCESSED", "SHIPPED", "TO_CONFIRM_RECEIVE", "COMPLETED"})
+_DOC_POLL_TRIES = 10
+_DOC_POLL_DELAY = 1.5
+
+
+def pilih_parameter_kirim(param: dict, nama_toko: str) -> dict:
+    """get_shipping_parameter response -> the pickup/dropoff/non_integrated part of ship_order's body.
+
+    Prefers courier pickup (seller does nothing), then drop-off. Modes that need a tracking number
+    assigned by a 3PL cannot be automated, so those raise a clear 409 pointing at Seller Centre.
+    """
+    info = param.get("info_needed") or {}
+    pickup = param.get("pickup") or {}
+    addresses = pickup.get("address_list") or []
+    if addresses:
+        needed = info.get("pickup") or []
+        if "tracking_number" in needed:
+            raise HTTPException(
+                status_code=status.HTTP_409_CONFLICT,
+                detail="Kurir pesanan ini butuh nomor resi dari kurir; proses lewat Seller Centre Shopee.",
+            )
+        def _rank(a: dict) -> int:
+            flags = a.get("address_flag") or []
+            return 0 if "pickup_address" in flags else 1 if "default_address" in flags else 2
+
+        address = sorted(addresses, key=_rank)[0]
+        body: dict[str, Any] = {"address_id": address["address_id"]}
+        if "pickup_time_id" in needed:
+            slots = address.get("time_slot_list") or []
+            if not slots:
+                raise HTTPException(
+                    status_code=status.HTTP_409_CONFLICT, detail="Shopee tidak mengembalikan jadwal pickup untuk pesanan ini."
+                )
+            slot = next((x for x in slots if "recommended" in (x.get("flags") or [])), slots[0])
+            body["pickup_time_id"] = slot["pickup_time_id"]
+        return {"pickup": body}
+
+    dropoff = param.get("dropoff") or {}
+    needed = info.get("dropoff") or []
+    if dropoff.get("branch_list") or needed:
+        if "tracking_no" in needed or "tracking_number" in needed:
+            raise HTTPException(
+                status_code=status.HTTP_409_CONFLICT,
+                detail="Kurir pesanan ini butuh nomor resi dari kurir; proses lewat Seller Centre Shopee.",
+            )
+        body = {}
+        if "branch_id" in needed:
+            branches = dropoff.get("branch_list") or []
+            if not branches:
+                raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail="Shopee tidak mengembalikan cabang drop-off.")
+            body["branch_id"] = branches[0]["branch_id"]
+        if "sender_real_name" in needed:
+            body["sender_real_name"] = nama_toko
+        return {"dropoff": body}
+
+    if info.get("non_integrated") is not None and "non_integrated" in info:
+        if "tracking_no" in (info.get("non_integrated") or []):
+            raise HTTPException(
+                status_code=status.HTTP_409_CONFLICT,
+                detail="Kurir non-integrasi butuh nomor resi manual; proses lewat Seller Centre Shopee.",
+            )
+        return {"non_integrated": {}}
+    raise HTTPException(
+        status_code=status.HTTP_409_CONFLICT,
+        detail="Pesanan belum bisa diproses di Shopee (belum siap kirim atau sudah diproses).",
+    )
+
+
+async def ambil_nomor_resi(session: Any, akun: Any, order_sn: str) -> str | None:
+    """Best-effort tracking number; None when Shopee has none yet or the call fails."""
+    try:
+        data = await signed_shop_request(session, akun, _PATH_TRACKING, params={"order_sn": order_sn})
+    except HTTPException:
+        return None
+    return str((data.get("response") or {}).get("tracking_number") or "").strip() or None
+
+
+async def proses_pengiriman(session: Any, akun: Any, order_sn: str) -> dict:
+    """Arrange shipment on Shopee (get_shipping_parameter -> ship_order) and fetch the tracking number."""
+    if not live_sync_enabled() or not _akun_configured(akun):
+        raise ShopeeNotConfigured("Shopee live sync nonaktif atau akun belum terhubung.")
+    data = await signed_shop_request(session, akun, _PATH_SHIP_PARAM, params={"order_sn": order_sn})
+    mode = pilih_parameter_kirim(data.get("response") or {}, akun.nama_toko)
+    await signed_shop_request(session, akun, _PATH_SHIP_ORDER, method="POST", body={"order_sn": order_sn, **mode})
+    return {"status_marketplace": "PROCESSED", "nomor_resi": await ambil_nomor_resi(session, akun, order_sn)}
+
+
+async def unduh_resi(session: Any, akun: Any, order_sn: str, nomor_resi: str | None = None) -> bytes:
+    """Shopee's own shipping label (PDF) for an arranged order.
+
+    get_shipping_document_parameter (suggested template) -> create_shipping_document -> poll until
+    READY -> download_shipping_document.
+    """
+    if not live_sync_enabled() or not _akun_configured(akun):
+        raise ShopeeNotConfigured("Shopee live sync nonaktif atau akun belum terhubung.")
+    import asyncio
+
+    nomor_resi = nomor_resi or await ambil_nomor_resi(session, akun, order_sn)
+    data = await signed_shop_request(
+        session, akun, _PATH_DOC_PARAM, method="POST", body={"order_list": [{"order_sn": order_sn}]}
+    )
+    (hasil,) = (data.get("response") or {}).get("result_list") or [{}]
+    if hasil.get("fail_error"):
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail=f"Resi belum bisa dibuat: {hasil.get('fail_error')} {hasil.get('fail_message', '')}".strip(),
+        )
+    tipe = hasil.get("suggest_shipping_document_type") or next(iter(hasil.get("selectable_shipping_document_type") or []), None)
+    if not tipe:
+        raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail="Shopee tidak menyediakan template resi untuk pesanan ini.")
+
+    item: dict[str, Any] = {"order_sn": order_sn, "shipping_document_type": tipe}
+    if nomor_resi:
+        item["tracking_number"] = nomor_resi
+    data = await signed_shop_request(session, akun, _PATH_DOC_CREATE, method="POST", body={"order_list": [item]})
+    (hasil,) = (data.get("response") or {}).get("result_list") or [{}]
+    if hasil.get("fail_error"):
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail=f"Resi gagal dibuat: {hasil.get('fail_error')} {hasil.get('fail_message', '')}".strip(),
+        )
+
+    cek = {"order_list": [{"order_sn": order_sn, "shipping_document_type": tipe}]}
+    for _ in range(_DOC_POLL_TRIES):
+        data = await signed_shop_request(session, akun, _PATH_DOC_RESULT, method="POST", body=cek)
+        (hasil,) = (data.get("response") or {}).get("result_list") or [{}]
+        if hasil.get("status") == "READY":
+            break
+        if hasil.get("status") == "FAILED":
+            raise HTTPException(
+                status_code=status.HTTP_502_BAD_GATEWAY,
+                detail=f"Shopee gagal membuat resi: {hasil.get('fail_error')} {hasil.get('fail_message', '')}".strip(),
+            )
+        await asyncio.sleep(_DOC_POLL_DELAY)
+    else:
+        raise HTTPException(status_code=status.HTTP_502_BAD_GATEWAY, detail="Resi belum siap di Shopee, coba lagi sebentar.")
+
+    data = await signed_shop_request(session, akun, _PATH_DOC_DOWNLOAD, method="POST", body=cek, raw=True)
+    pdf = data.get("_bytes")
+    if not pdf:
+        raise HTTPException(status_code=status.HTTP_502_BAD_GATEWAY, detail="Shopee tidak mengirim file resi.")
+    return pdf
 
 
 async def proses_pesanan(akun: Any, pesanan: Any) -> None:
