@@ -19,6 +19,7 @@ import json
 import os
 import time
 from datetime import datetime, timedelta, timezone
+from decimal import Decimal
 from typing import Any
 from urllib.parse import urlencode
 
@@ -334,14 +335,92 @@ async def sync_produk(akun: Any) -> list[dict]:
     )
 
 
-async def sync_pesanan(akun: Any) -> list[dict]:
+_PATH_ORDER_LIST = "/api/v2/order/get_order_list"
+_PATH_ORDER_DETAIL = "/api/v2/order/get_order_detail"
+# item_list / buyer_username / total_amount are not returned unless asked for.
+_ORDER_DETAIL_FIELDS = "buyer_username,item_list,total_amount"
+# Shopee rejects a time_from..time_to span over 15 days; stay a minute under.
+_ORDER_WINDOW_SECONDS = 15 * 24 * 3600 - 60
+_ORDER_LIST_PAGE_SIZE = 100
+_ORDER_DETAIL_BATCH = 50
+_ORDER_LIST_MAX_PAGES = 20
+
+
+def normalisasi_pesanan(order: dict) -> dict:
+    """Shopee get_order_detail entry -> neutral dict consumed by services.impor_pesanan_marketplace.
+
+    ``status`` is None for a Shopee status we do not map, so the importer skips it instead of
+    guessing (map_shopee_status would silently turn an unknown state into 'unpaid').
+    """
+    raw = str(order.get("order_status") or "").upper()
+    items = []
+    for it in order.get("item_list") or []:
+        qty = int(it.get("model_quantity_purchased") or 0)
+        if qty <= 0:
+            continue
+        nama = str(it.get("item_name") or "").strip()
+        model = str(it.get("model_name") or "").strip()
+        price = it.get("model_discounted_price") or it.get("model_original_price") or 0
+        items.append(
+            {
+                "nama_produk": (f"{nama} - {model}" if model else nama)[:255] or "(tanpa nama)",
+                "harga_satuan": Decimal(str(price)),
+                "qty": qty,
+                "id_eksternal_kandidat": [str(it[k]) for k in ("item_id", "model_id") if it.get(k)],
+            }
+        )
+    return {
+        "id_eksternal": str(order["order_sn"]),
+        "status": SHOPEE_STATUS_MAP.get(raw),
+        "status_mentah": raw,
+        "nama_pembeli": str(order.get("buyer_username") or ""),
+        "total": Decimal(str(order.get("total_amount") or 0)),
+        "items": items,
+    }
+
+
+async def sync_pesanan(session: Any, akun: Any) -> list[dict]:
+    """Pull orders updated in the last ~15 days (get_order_list, then get_order_detail in batches).
+
+    Idempotent by design: the caller upserts on (platform, order_sn), so re-pulling the same window
+    is harmless. Returns normalised dicts, see normalisasi_pesanan().
+    """
     if not live_sync_enabled() or not _akun_configured(akun):
         raise ShopeeNotConfigured(
             "Shopee live sync nonaktif atau akun belum terhubung."
         )
-    raise NotImplementedError(
-        "Shopee sync_pesanan() menunggu mapping GetOrderList -- hidupkan setelah sandbox verified."
-    )
+    time_to = int(time.time())
+    time_from = time_to - _ORDER_WINDOW_SECONDS
+
+    order_sn_list: list[str] = []
+    cursor = ""
+    for _ in range(_ORDER_LIST_MAX_PAGES):
+        params: dict[str, Any] = {
+            "time_range_field": "update_time",
+            "time_from": time_from,
+            "time_to": time_to,
+            "page_size": _ORDER_LIST_PAGE_SIZE,
+        }
+        if cursor:
+            params["cursor"] = cursor
+        data = await signed_shop_request(session, akun, _PATH_ORDER_LIST, params=params)
+        resp = data.get("response") or {}
+        order_sn_list += [o["order_sn"] for o in resp.get("order_list") or []]
+        cursor = resp.get("next_cursor") or ""
+        if not resp.get("more") or not cursor:
+            break
+
+    rows: list[dict] = []
+    for i in range(0, len(order_sn_list), _ORDER_DETAIL_BATCH):
+        batch = order_sn_list[i : i + _ORDER_DETAIL_BATCH]
+        data = await signed_shop_request(
+            session,
+            akun,
+            _PATH_ORDER_DETAIL,
+            params={"order_sn_list": ",".join(batch), "response_optional_fields": _ORDER_DETAIL_FIELDS},
+        )
+        rows += [normalisasi_pesanan(o) for o in (data.get("response") or {}).get("order_list") or []]
+    return rows
 
 
 async def proses_pesanan(akun: Any, pesanan: Any) -> None:
@@ -360,7 +439,9 @@ SHOPEE_STATUS_MAP = {
     "UNPAID": "unpaid",
     "READY_TO_SHIP": "to_ship",
     "PROCESSED": "to_ship",
+    "RETRY_SHIP": "to_ship",
     "SHIPPED": "shipped",
+    "TO_CONFIRM_RECEIVE": "shipped",
     "COMPLETED": "completed",
     "CANCELLED": "cancelled",
     "IN_CANCEL": "cancelled",

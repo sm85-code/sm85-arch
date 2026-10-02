@@ -801,7 +801,9 @@ async def _dorong_proses_ke_marketplace(session: AsyncSession, pesanan: Pesanan)
         pesanan.catatan_sinkron = f"Berhasil disinkronkan ke {pesanan.platform}"
 
 
-async def ubah_status_pesanan(session: AsyncSession, pesanan_id: str, status_baru: str) -> Pesanan:
+async def ubah_status_pesanan(
+    session: AsyncSession, pesanan_id: str, status_baru: str, *, dorong_marketplace: bool = True
+) -> Pesanan:
     status_baru = (status_baru or "").strip().lower()
     if status_baru not in STATUS_PESANAN:
         raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Status tidak dikenal")
@@ -816,7 +818,12 @@ async def ubah_status_pesanan(session: AsyncSession, pesanan_id: str, status_bar
     if status_baru == "to_ship":
         await _reserve_for_pesanan(session, pesanan)
         pesanan.status = status_baru
-        await _dorong_proses_ke_marketplace(session, pesanan)
+        if dorong_marketplace:
+            await _dorong_proses_ke_marketplace(session, pesanan)
+        else:
+            # The marketplace is where this status came from; pushing it back would re-ship the order.
+            pesanan.tersinkron_marketplace = True
+            pesanan.catatan_sinkron = f"Status mengikuti {pesanan.platform}"
     elif status_baru == "cancelled":
         if prev == "to_ship":
             await _release_reservasi_pesanan(session, pesanan)
@@ -829,6 +836,114 @@ async def ubah_status_pesanan(session: AsyncSession, pesanan_id: str, status_bar
 
     await session.flush()
     return await get_pesanan(session, pesanan.id)
+
+
+def _jalur_status(dari: str, ke: str) -> list[str]:
+    """Shortest chain of allowed transitions dari -> ke (excluding dari); [] if none or already there."""
+    if dari == ke:
+        return []
+    antrean = [[dari]]
+    terlihat = {dari}
+    while antrean:
+        jalur = antrean.pop(0)
+        for nxt in sorted(_TRANSISI_STATUS.get(jalur[-1], set())):
+            if nxt == ke:
+                return jalur[1:] + [nxt]
+            if nxt not in terlihat:
+                terlihat.add(nxt)
+                antrean.append(jalur + [nxt])
+    return []
+
+
+async def _samakan_status_pesanan(session: AsyncSession, pesanan: Pesanan, status_target: str) -> bool:
+    """Walk the order forward to status_target. Returns True if the status changed.
+
+    Never moves an order backwards. A step that fails (e.g. not enough local stock to reserve)
+    is rolled back on its own and noted on the order instead of aborting the whole import.
+    """
+    berubah = False
+    for langkah in _jalur_status(pesanan.status, status_target):
+        try:
+            async with session.begin_nested():
+                await ubah_status_pesanan(session, pesanan.id, langkah, dorong_marketplace=False)
+        except HTTPException as exc:
+            pesanan.catatan_sinkron = f"Status {pesanan.platform} '{status_target}' belum bisa diterapkan: {exc.detail}"
+            pesanan.tersinkron_marketplace = False
+            break
+        berubah = True
+        await session.refresh(pesanan)
+    return berubah
+
+
+async def impor_pesanan_marketplace(session: AsyncSession, akun: AkunMarketplace, rows: list[dict]) -> dict:
+    """Upsert orders pulled from a marketplace, keyed on (platform, id_eksternal).
+
+    New orders are created as 'unpaid' and walked to the marketplace status through the normal
+    transition table, so stock reservation/ledger behave exactly like manually entered orders.
+    Existing orders only move forward; their items are never rewritten.
+    """
+    hasil = {"baru": 0, "diperbarui": 0, "tidak_berubah": 0, "dilewati": 0}
+
+    kandidat = {k for r in rows for it in r["items"] for k in it["id_eksternal_kandidat"]}
+    listing_by_eksternal: dict[str, ProdukListing] = {}
+    if kandidat:
+        stmt = select(ProdukListing).where(
+            ProdukListing.platform == akun.platform, ProdukListing.id_eksternal.in_(kandidat)
+        )
+        for listing in (await session.execute(stmt)).scalars():
+            listing_by_eksternal[listing.id_eksternal] = listing
+
+    for row in rows:
+        if row["status"] is None:
+            hasil["dilewati"] += 1
+            continue
+        pesanan = (
+            await session.execute(
+                select(Pesanan).where(
+                    Pesanan.platform == akun.platform, Pesanan.id_eksternal == row["id_eksternal"]
+                )
+            )
+        ).scalar_one_or_none()
+        baru = pesanan is None
+        if baru:
+            pesanan = Pesanan(
+                platform=akun.platform,
+                id_eksternal=row["id_eksternal"],
+                akun_id=akun.id,
+                status="unpaid",
+                nama_pembeli=row["nama_pembeli"],
+                total=row["total"],
+            )
+            session.add(pesanan)
+            await session.flush()
+            for it in row["items"]:
+                listing = next(
+                    (listing_by_eksternal[k] for k in it["id_eksternal_kandidat"] if k in listing_by_eksternal),
+                    None,
+                )
+                session.add(
+                    ItemPesanan(
+                        pesanan_id=pesanan.id,
+                        produk_id=listing.produk_id if listing else None,
+                        listing_id=listing.id if listing else None,
+                        nama_produk=it["nama_produk"],
+                        harga_satuan=it["harga_satuan"],
+                        qty=it["qty"],
+                        subtotal=it["harga_satuan"] * it["qty"],
+                    )
+                )
+            await session.flush()
+            pesanan = await get_pesanan(session, pesanan.id)
+
+        berubah = await _samakan_status_pesanan(session, pesanan, row["status"])
+        if baru:
+            hasil["baru"] += 1
+        elif berubah:
+            hasil["diperbarui"] += 1
+        else:
+            hasil["tidak_berubah"] += 1
+    await session.flush()
+    return hasil
 
 
 async def delete_pesanan(session: AsyncSession, pesanan_id: str) -> None:

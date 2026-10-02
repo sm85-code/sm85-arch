@@ -664,10 +664,11 @@ async def sync_pesanan_akun(
     akun = await services.get_akun_marketplace(session, akun_id)
     if akun.platform == "shopee":
         try:
-            rows = await erp_shopee.sync_pesanan(akun)
+            rows = await erp_shopee.sync_pesanan(session, akun)
         except NotImplementedError as exc:
             raise HTTPException(status_code=status.HTTP_501_NOT_IMPLEMENTED, detail=str(exc)) from exc
-        return {"ok": True, "pulled": len(rows)}
+        hasil = await services.impor_pesanan_marketplace(session, akun, rows)
+        return {"ok": True, "pulled": len(rows), **hasil}
     raise HTTPException(
         status_code=status.HTTP_501_NOT_IMPLEMENTED,
         detail=f"Sync pesanan untuk platform '{akun.platform}' belum tersedia (Shopee first)",
