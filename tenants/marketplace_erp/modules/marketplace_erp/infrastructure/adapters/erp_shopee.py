@@ -322,7 +322,7 @@ async def _call_shop_api(
     }
     if params:
         query.update(params)
-    url = f"{_host()}{api_path}?{urlencode(query)}"
+    url = f"{_host()}{api_path}?{urlencode(query, doseq=True)}"
 
     def _do() -> dict:
         if method.upper() == "GET":
@@ -356,15 +356,200 @@ async def get_shop_name(access_token: str, shop_id: str) -> str | None:
     return (data.get("shop_name") or "").strip() or None
 
 
-async def sync_produk(akun: Any) -> list[dict]:
+# --- Products ------------------------------------------------------------------
+
+_PATH_ITEM_LIST = "/api/v2/product/get_item_list"
+_PATH_ITEM_BASE = "/api/v2/product/get_item_base_info"
+_PATH_MODEL_LIST = "/api/v2/product/get_model_list"
+_PATH_UPDATE_STOCK = "/api/v2/product/update_stock"
+_PATH_UPDATE_PRICE = "/api/v2/product/update_price"
+_ITEM_LIST_PAGE_SIZE = 100
+_ITEM_LIST_MAX_PAGES = 10
+_ITEM_BASE_BATCH = 50
+_MODEL_CONCURRENCY = 5
+_PUSH_BATCH = 50
+
+
+def kunci_listing(item_id: Any, model_id: Any = None) -> str:
+    """ProdukListing.id_eksternal for a Shopee listing: "item_id", or "item_id:model_id" for a variant."""
+    return f"{item_id}:{model_id}" if model_id else str(item_id)
+
+
+def pecah_kunci_listing(kunci: str) -> tuple[int, int]:
+    """Inverse of kunci_listing -> (item_id, model_id); model_id 0 means the item has no variants."""
+    item, _, model = str(kunci).partition(":")
+    return int(item), int(model or 0)
+
+
+def _harga(price_info: Any) -> Decimal | None:
+    info = (price_info or [{}])[0] if isinstance(price_info, list) else (price_info or {})
+    value = info.get("current_price") if info.get("current_price") is not None else info.get("original_price")
+    return Decimal(str(value)) if value is not None else None
+
+
+def _stok(stock_info_v2: Any) -> int | None:
+    summary = ((stock_info_v2 or {}).get("summary_info")) or {}
+    value = summary.get("total_available_stock")
+    return int(value) if value is not None else None
+
+
+def _nama_model(model: dict, tier_variation: list[dict]) -> str:
+    names = []
+    for tier, idx in zip(tier_variation, model.get("tier_index") or []):
+        options = tier.get("option_list") or []
+        if 0 <= idx < len(options):
+            names.append(str(options[idx].get("option") or ""))
+    return " / ".join(n for n in names if n) or f"model {model.get('model_id')}"
+
+
+def normalisasi_item(item: dict, model_resp: dict | None = None) -> list[dict]:
+    """get_item_base_info entry (+ get_model_list response for variant items) -> listing dicts.
+
+    One dict per sellable unit: the item itself, or each of its models. Keys: id_eksternal,
+    nama_produk, sku, harga, stok, aktif.
+    """
+    item_id = item["item_id"]
+    nama = str(item.get("item_name") or "").strip() or f"item {item_id}"
+    aktif = str(item.get("item_status") or "NORMAL").upper() == "NORMAL"
+    if item.get("has_model") and model_resp:
+        out = []
+        for model in model_resp.get("model") or []:
+            if not model.get("model_id"):
+                continue
+            out.append(
+                {
+                    "id_eksternal": kunci_listing(item_id, model["model_id"]),
+                    "nama_produk": f"{nama} - {_nama_model(model, model_resp.get('tier_variation') or [])}"[:255],
+                    "sku": str(model.get("model_sku") or "").strip(),
+                    "harga": _harga(model.get("price_info")),
+                    "stok": _stok(model.get("stock_info_v2")),
+                    "aktif": aktif and str(model.get("model_status") or "MODEL_NORMAL") == "MODEL_NORMAL",
+                }
+            )
+        return out
+    return [
+        {
+            "id_eksternal": kunci_listing(item_id),
+            "nama_produk": nama[:255],
+            "sku": str(item.get("item_sku") or "").strip(),
+            "harga": _harga(item.get("price_info")),
+            "stok": _stok(item.get("stock_info_v2")),
+            "aktif": aktif,
+        }
+    ]
+
+
+async def sync_produk(session: Any, akun: Any) -> list[dict]:
+    """Pull the shop catalogue (NORMAL + UNLIST items, variants expanded) as listing dicts."""
     if not live_sync_enabled() or not _akun_configured(akun):
         raise ShopeeNotConfigured(
             "Shopee live sync nonaktif atau akun belum terhubung. "
             "Set SHOPEE_LIVE_SYNC=true + partner key, selesaikan OAuth dulu."
         )
-    raise NotImplementedError(
-        "Shopee sync_produk() menunggu mapping GetItemList -- hidupkan setelah sandbox verified."
-    )
+    import asyncio
+
+    item_ids: list[int] = []
+    offset = 0
+    for _ in range(_ITEM_LIST_MAX_PAGES):
+        data = await signed_shop_request(
+            session,
+            akun,
+            _PATH_ITEM_LIST,
+            params={
+                "offset": offset,
+                "page_size": _ITEM_LIST_PAGE_SIZE,
+                "item_status": ["NORMAL", "UNLIST"],
+            },
+        )
+        resp = data.get("response") or {}
+        item_ids += [int(i["item_id"]) for i in resp.get("item") or []]
+        if not resp.get("has_next_page"):
+            break
+        offset = int(resp.get("next_offset") or 0)
+
+    items: list[dict] = []
+    for i in range(0, len(item_ids), _ITEM_BASE_BATCH):
+        batch = item_ids[i : i + _ITEM_BASE_BATCH]
+        data = await signed_shop_request(
+            session, akun, _PATH_ITEM_BASE, params={"item_id_list": ",".join(map(str, batch))}
+        )
+        items += (data.get("response") or {}).get("item_list") or []
+
+    gate = asyncio.Semaphore(_MODEL_CONCURRENCY)
+
+    async def _models(item: dict) -> dict | None:
+        if not item.get("has_model"):
+            return None
+        async with gate:
+            data = await signed_shop_request(session, akun, _PATH_MODEL_LIST, params={"item_id": item["item_id"]})
+        return data.get("response") or {}
+
+    model_resps = await asyncio.gather(*(_models(it) for it in items))
+    return [row for it, mr in zip(items, model_resps) for row in normalisasi_item(it, mr)]
+
+
+async def kirim_stok_harga(session: Any, akun: Any, rows: list[dict]) -> dict:
+    """Push stock and price for listings. ``rows``: dicts with id_eksternal, stok (int), harga (Decimal).
+
+    Overwrites what Shopee currently holds, so callers must only trigger it deliberately.
+    One failing item does not stop the rest; failures are reported per listing.
+    """
+    if not live_sync_enabled() or not _akun_configured(akun):
+        raise ShopeeNotConfigured("Shopee live sync nonaktif atau akun belum terhubung.")
+    hasil: dict[str, Any] = {"stok_ok": 0, "harga_ok": 0, "gagal": []}
+    per_item: dict[int, list[tuple[int, dict]]] = {}
+    for row in rows:
+        try:
+            item_id, model_id = pecah_kunci_listing(row["id_eksternal"])
+        except ValueError:
+            hasil["gagal"].append({"id_eksternal": row["id_eksternal"], "alasan": "id_eksternal bukan format Shopee"})
+            continue
+        per_item.setdefault(item_id, []).append((model_id, row))
+
+    def _catat(item_id: int, models: list[tuple[int, dict]], failure_list: list[dict], alasan: str) -> None:
+        by_model = {m: r for m, r in models}
+        for f in failure_list:
+            row = by_model.get(int(f.get("model_id") or 0))
+            hasil["gagal"].append(
+                {"id_eksternal": (row or {}).get("id_eksternal", kunci_listing(item_id, f.get("model_id"))),
+                 "alasan": f"{alasan}: {f.get('failed_reason')}"}
+            )
+
+    for item_id, models in per_item.items():
+        for i in range(0, len(models), _PUSH_BATCH):
+            chunk = models[i : i + _PUSH_BATCH]
+            for jalur, body, kunci_ok, alasan in (
+                (
+                    _PATH_UPDATE_STOCK,
+                    {
+                        "item_id": item_id,
+                        "stock_list": [
+                            {"model_id": m, "seller_stock": [{"stock": max(0, int(r["stok"]))}]} for m, r in chunk
+                        ],
+                    },
+                    "stok_ok",
+                    "stok",
+                ),
+                (
+                    _PATH_UPDATE_PRICE,
+                    {
+                        "item_id": item_id,
+                        "price_list": [{"model_id": m, "original_price": float(r["harga"])} for m, r in chunk],
+                    },
+                    "harga_ok",
+                    "harga",
+                ),
+            ):
+                try:
+                    data = await signed_shop_request(session, akun, jalur, method="POST", body=body)
+                except HTTPException as exc:
+                    for _m, r in chunk:
+                        hasil["gagal"].append({"id_eksternal": r["id_eksternal"], "alasan": f"{alasan}: {exc.detail}"})
+                    continue
+                resp = data.get("response") or {}
+                hasil[kunci_ok] += len(resp.get("success_list") or [])
+                _catat(item_id, chunk, resp.get("failure_list") or [], alasan)
+    return hasil
 
 
 _PATH_ORDER_LIST = "/api/v2/order/get_order_list"
@@ -398,7 +583,14 @@ def normalisasi_pesanan(order: dict) -> dict:
                 "nama_produk": (f"{nama} - {model}" if model else nama)[:255] or "(tanpa nama)",
                 "harga_satuan": Decimal(str(price)),
                 "qty": qty,
-                "id_eksternal_kandidat": [str(it[k]) for k in ("item_id", "model_id") if it.get(k)],
+                "id_eksternal_kandidat": [
+                    k
+                    for k in (
+                        kunci_listing(it.get("item_id"), it.get("model_id")) if it.get("item_id") else None,
+                        str(it["item_id"]) if it.get("item_id") else None,
+                    )
+                    if k
+                ],
             }
         )
     return {

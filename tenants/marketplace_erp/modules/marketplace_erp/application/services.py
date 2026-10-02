@@ -437,6 +437,81 @@ async def delete_listing(session: AsyncSession, listing_id: str) -> None:
     await session.flush()
 
 
+async def impor_listing_marketplace(session: AsyncSession, akun: AkunMarketplace, entries: list[dict]) -> dict:
+    """Link catalogue entries pulled from a marketplace to Produk by SKU.
+
+    A new ProdukListing is created when the entry's SKU equals a Produk.sku_induk (case-insensitive).
+    Existing listings are left alone: harga_jual / stok_listing are owner overrides that the
+    marketplace must not overwrite. A new listing starts with the marketplace's current price so
+    the first price push is a no-op. Entries without a matching SKU are reported, not created --
+    inventing Produk rows would also invent stock.
+    """
+    hasil: dict = {"listing_baru": 0, "sudah_ada": 0, "tanpa_sku_cocok": 0, "contoh_tanpa_sku": []}
+    ids = [e["id_eksternal"] for e in entries]
+    ada = set()
+    if ids:
+        stmt = select(ProdukListing.id_eksternal).where(
+            ProdukListing.platform == akun.platform, ProdukListing.id_eksternal.in_(ids)
+        )
+        ada = set((await session.execute(stmt)).scalars())
+    skus = {e["sku"].lower() for e in entries if e["sku"]}
+    produk_by_sku: dict[str, Produk] = {}
+    if skus:
+        stmt = select(Produk).where(func.lower(Produk.sku_induk).in_(skus))
+        produk_by_sku = {p.sku_induk.lower(): p for p in (await session.execute(stmt)).scalars()}
+
+    for e in entries:
+        if e["id_eksternal"] in ada:
+            hasil["sudah_ada"] += 1
+            continue
+        produk = produk_by_sku.get(e["sku"].lower()) if e["sku"] else None
+        if produk is None:
+            hasil["tanpa_sku_cocok"] += 1
+            if len(hasil["contoh_tanpa_sku"]) < 20:
+                hasil["contoh_tanpa_sku"].append(
+                    {"id_eksternal": e["id_eksternal"], "nama_produk": e["nama_produk"], "sku": e["sku"]}
+                )
+            continue
+        session.add(
+            ProdukListing(
+                produk_id=produk.id,
+                akun_id=akun.id,
+                platform=akun.platform,
+                id_eksternal=e["id_eksternal"],
+                harga_jual=e["harga"],
+                aktif=e["aktif"],
+            )
+        )
+        hasil["listing_baru"] += 1
+    await session.flush()
+    return hasil
+
+
+async def baris_push_listing(session: AsyncSession, akun: AkunMarketplace) -> list[dict]:
+    """What a stock/price push would send for a shop: active listings of active products.
+
+    Stock/price are the listing override when set, else the Produk value (stok = available quantity).
+    """
+    stmt = (
+        select(ProdukListing, Produk)
+        .join(Produk, ProdukListing.produk_id == Produk.id)
+        .where(ProdukListing.akun_id == akun.id, ProdukListing.aktif.is_(True), Produk.aktif.is_(True))
+        .order_by(Produk.sku_induk, ProdukListing.id_eksternal)
+    )
+    rows = []
+    for listing, produk in (await session.execute(stmt)).all():
+        rows.append(
+            {
+                "id_eksternal": listing.id_eksternal,
+                "sku_induk": produk.sku_induk,
+                "nama_produk": produk.nama,
+                "stok": listing.stok_listing if listing.stok_listing is not None else produk.stok,
+                "harga": listing.harga_jual if listing.harga_jual is not None else produk.harga_dasar,
+            }
+        )
+    return rows
+
+
 # --- Tahap 2: Gudang + Stock --------------------------------------------------
 
 

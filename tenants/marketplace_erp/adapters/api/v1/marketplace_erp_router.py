@@ -707,19 +707,48 @@ async def sync_produk_akun(
     session: AsyncSession = Depends(get_db_marketplace_erp),
     _: UserMarketplaceErp = Depends(require_roles_marketplace_erp(*OWNER_ONLY)),
 ):
+    """Pull the shop catalogue and link entries to Produk by SKU (no stock/price is changed)."""
     from tenants.marketplace_erp.modules.marketplace_erp.infrastructure.adapters import erp_shopee
 
     akun = await services.get_akun_marketplace(session, akun_id)
     if akun.platform == "shopee":
         try:
-            rows = await erp_shopee.sync_produk(akun)
+            rows = await erp_shopee.sync_produk(session, akun)
         except NotImplementedError as exc:
             raise HTTPException(status_code=status.HTTP_501_NOT_IMPLEMENTED, detail=str(exc)) from exc
-        return {"ok": True, "pulled": len(rows)}
+        hasil = await services.impor_listing_marketplace(session, akun, rows)
+        return {"ok": True, "pulled": len(rows), **hasil}
     raise HTTPException(
         status_code=status.HTTP_501_NOT_IMPLEMENTED,
         detail=f"Sync produk untuk platform '{akun.platform}' belum tersedia (Shopee first)",
     )
+
+
+@marketplace_erp_router.post("/akun/{akun_id}/push/stok-harga")
+async def push_stok_harga_akun(
+    akun_id: str,
+    dry_run: bool = Query(True, description="true = only show what would be sent (default)"),
+    session: AsyncSession = Depends(get_db_marketplace_erp),
+    _: UserMarketplaceErp = Depends(require_roles_marketplace_erp(*OWNER_ONLY)),
+):
+    """Send ERP stock and price of this shop's active listings to the marketplace.
+
+    This OVERWRITES the marketplace's stock/price, so it only sends when ``dry_run=false`` is passed
+    explicitly; the default just previews the rows.
+    """
+    from tenants.marketplace_erp.modules.marketplace_erp.infrastructure.adapters import erp_shopee
+
+    akun = await services.get_akun_marketplace(session, akun_id)
+    if akun.platform != "shopee":
+        raise HTTPException(
+            status_code=status.HTTP_501_NOT_IMPLEMENTED,
+            detail=f"Push stok/harga untuk platform '{akun.platform}' belum tersedia (Shopee first)",
+        )
+    rows = await services.baris_push_listing(session, akun)
+    if dry_run:
+        return {"ok": True, "dry_run": True, "jumlah": len(rows), "rows": rows}
+    hasil = await erp_shopee.kirim_stok_harga(session, akun, rows)
+    return {"ok": True, "dry_run": False, "jumlah": len(rows), **hasil}
 
 
 @marketplace_erp_router.get("/oauth/lazada/start")
