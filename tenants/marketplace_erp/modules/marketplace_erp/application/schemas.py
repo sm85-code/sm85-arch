@@ -300,6 +300,10 @@ class BatalkanPesananIn(BaseModel):
     alasan: str = "CUSTOMER_REQUEST"
 
 
+class TandaiResiIn(BaseModel):
+    dicetak: bool = True
+
+
 class ResiMassalIn(BaseModel):
     pesanan_ids: list[str] = Field(min_length=1, max_length=50)
     tipe: Optional[str] = Field(default=None, pattern="^(THERMAL_AIR_WAYBILL|NORMAL_AIR_WAYBILL)$")
@@ -333,6 +337,8 @@ class PesananOut(BaseModel):
     tersinkron_marketplace: bool
     catatan_sinkron: Optional[str]
     status_marketplace: Optional[str] = None
+    resi_dicetak_at: Optional[datetime] = None
+    resi_dicetak_oleh: Optional[str] = None
     kurir: Optional[str] = None
     nomor_resi: Optional[str] = None
     tanggal_kirim: Optional[datetime] = None

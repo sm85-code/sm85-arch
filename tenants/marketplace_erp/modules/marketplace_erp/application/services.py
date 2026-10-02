@@ -1200,7 +1200,9 @@ async def proses_pesanan_marketplace(session: AsyncSession, pesanan_id: str) -> 
     return pesanan
 
 
-async def unduh_resi_massal(session: AsyncSession, pesanan_ids: list[str], tipe: str | None = None) -> tuple[bytes, str]:
+async def unduh_resi_massal(
+    session: AsyncSession, pesanan_ids: list[str], tipe: str | None = None, oleh: str | None = None
+) -> tuple[bytes, str]:
     """One PDF with the labels of several Shopee orders that are arranged and waiting for the courier.
 
     Shopee prints one shop and one courier per download, so mixed selections are refused with a message
@@ -1224,6 +1226,7 @@ async def unduh_resi_massal(session: AsyncSession, pesanan_ids: list[str], tipe:
         )
     akun = semua[0][1]
     pdf = await erp_shopee.unduh_resi_banyak(session, akun, [(p.id_eksternal, p.nomor_resi) for p, _ in semua], tipe)
+    _tandai_dicetak([p for p, _ in semua], oleh)
     nama = f"resi-{semua[0][0].id_eksternal}.pdf" if len(semua) == 1 else f"resi-{len(semua)}-pesanan.pdf"
     return pdf, nama
 
@@ -1250,14 +1253,38 @@ async def batalkan_pesanan_marketplace(session: AsyncSession, pesanan_id: str, a
     return pesanan
 
 
-async def unduh_resi_pesanan(session: AsyncSession, pesanan_id: str, tipe: str | None = None) -> tuple[bytes, str]:
-    """Shopee's shipping label PDF for a pulled, already-processed order. Returns (pdf, filename)."""
+def _tandai_dicetak(pesanan: list[Pesanan], oleh: str | None) -> None:
+    sekarang = datetime.now(timezone.utc)
+    for p in pesanan:
+        p.resi_dicetak_at = sekarang
+        p.resi_dicetak_oleh = oleh
+
+
+async def tandai_resi_pesanan(session: AsyncSession, pesanan_id: str, dicetak: bool, oleh: str | None) -> Pesanan:
+    """Mark a pulled order's label as printed, or clear the mark (e.g. it was printed but got lost)."""
+    pesanan, _ = await _pesanan_marketplace(session, pesanan_id)
+    if dicetak:
+        _tandai_dicetak([pesanan], oleh)
+    else:
+        pesanan.resi_dicetak_at = None
+        pesanan.resi_dicetak_oleh = None
+    await session.flush()
+    return pesanan
+
+
+async def unduh_resi_pesanan(
+    session: AsyncSession, pesanan_id: str, tipe: str | None = None, oleh: str | None = None
+) -> tuple[bytes, str]:
+    """Shopee's shipping label PDF for a pulled, already-processed order. Returns (pdf, filename).
+
+    The order is marked as printed (time + who) once the PDF exists; a failed attempt leaves it unmarked."""
     from tenants.marketplace_erp.modules.marketplace_erp.infrastructure.adapters import erp_shopee
 
     pesanan, akun = await _pesanan_marketplace(session, pesanan_id)
     if pesanan.status_marketplace not in erp_shopee.STATUS_SUDAH_DIPROSES:
         raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail="Proses pesanan di Shopee dulu sebelum mencetak resi.")
     pdf = await erp_shopee.unduh_resi(session, akun, pesanan.id_eksternal, pesanan.nomor_resi, tipe)
+    _tandai_dicetak([pesanan], oleh)
     return pdf, f"resi-{pesanan.id_eksternal}.pdf"
 
 
