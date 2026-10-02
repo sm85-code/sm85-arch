@@ -21,6 +21,7 @@ from tenants.madrasah.adapters.api.v1.madrasah_router import madrasah_router
 from tenants.madrasah.modules.madrasah.infrastructure import database as madrasah_database
 from tenants.madrasah.modules.madrasah.infrastructure.seeder import ensure_madrasah_schema
 from tenants.marketplace_erp.adapters.api.v1.marketplace_erp_router import marketplace_erp_router
+from tenants.marketplace_erp.modules.marketplace_erp.application import auto_sync as marketplace_erp_auto_sync
 from tenants.marketplace_erp.modules.marketplace_erp.infrastructure import database as marketplace_erp_database
 from tenants.marketplace_erp.modules.marketplace_erp.infrastructure.seeder import ensure_marketplace_erp_schema
 from tenants.store.adapters.api.v1.store_admin_router import store_admin_router
@@ -58,7 +59,18 @@ async def lifespan(_: FastAPI):
         await ensure_store_schema()
     except Exception:
         logger.exception("store schema repair failed — app continues")
-    yield
+    # Marketplace ERP: pull Shopee orders in the background (SHOPEE_AUTO_SYNC_MINUTES, 0 = off).
+    tugas_sinkron = None
+    interval = marketplace_erp_auto_sync.interval_seconds()
+    if interval and marketplace_erp_database.SessionLocal is not None:
+        tugas_sinkron = asyncio.create_task(
+            marketplace_erp_auto_sync.jalankan_berkala(marketplace_erp_database.SessionLocal, interval)
+        )
+    try:
+        yield
+    finally:
+        if tugas_sinkron is not None:
+            tugas_sinkron.cancel()
 
 
 app = FastAPI(title=APP_TITLE, version="1.0.0", lifespan=lifespan)
