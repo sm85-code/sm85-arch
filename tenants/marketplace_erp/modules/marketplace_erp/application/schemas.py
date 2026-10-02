@@ -296,6 +296,15 @@ class PesananStatusIn(BaseModel):
     status: str
 
 
+class BatalkanPesananIn(BaseModel):
+    alasan: str = "CUSTOMER_REQUEST"
+
+
+class ProsesMassalIn(BaseModel):
+    # Each order costs several marketplace calls, so one request is capped; the UI sends chunks.
+    pesanan_ids: list[str] = Field(min_length=1, max_length=25)
+
+
 class ItemPesananOut(BaseModel):
     id: str
     produk_id: Optional[str]
