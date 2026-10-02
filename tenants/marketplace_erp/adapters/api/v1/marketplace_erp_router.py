@@ -835,7 +835,7 @@ async def sync_pesanan_akun(
     akun = await services.get_akun_marketplace(session, akun_id)
     if akun.platform == "shopee":
         try:
-            hasil = await services.sinkron_pesanan_akun(session, akun)
+            hasil = await services.sinkron_pesanan_akun(session, akun, penuh=True)  # explicit click: full window
         except NotImplementedError as exc:
             raise HTTPException(status_code=status.HTTP_501_NOT_IMPLEMENTED, detail=str(exc)) from exc
         return {"ok": True, **hasil}

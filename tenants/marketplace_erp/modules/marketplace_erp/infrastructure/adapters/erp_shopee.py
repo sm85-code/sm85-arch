@@ -573,6 +573,19 @@ _PATH_ORDER_DETAIL = "/api/v2/order/get_order_detail"
 _ORDER_DETAIL_FIELDS = "buyer_username,item_list,total_amount,shipping_carrier"
 # Shopee rejects a time_from..time_to span over 15 days; stay a minute under.
 _ORDER_WINDOW_SECONDS = 15 * 24 * 3600 - 60
+# An incremental pull starts this much before the previous one, so a change that landed while it ran is not missed.
+_ORDER_OVERLAP_SECONDS = 10 * 60
+
+
+def jendela_sinkron_pesanan(dari: datetime | None, sekarang: int) -> tuple[int, int]:
+    """(time_from, time_to) for get_order_list: everything changed since ``dari`` (minus the overlap),
+    never further back than Shopee's 15-day limit; the whole window when ``dari`` is None."""
+    paling_awal = sekarang - _ORDER_WINDOW_SECONDS
+    if dari is None:
+        return paling_awal, sekarang
+    if dari.tzinfo is None:
+        dari = dari.replace(tzinfo=timezone.utc)
+    return max(int(dari.timestamp()) - _ORDER_OVERLAP_SECONDS, paling_awal), sekarang
 _ORDER_LIST_PAGE_SIZE = 100
 _ORDER_DETAIL_BATCH = 50
 _ORDER_LIST_MAX_PAGES = 20
@@ -619,8 +632,10 @@ def normalisasi_pesanan(order: dict) -> dict:
     }
 
 
-async def sync_pesanan(session: Any, akun: Any, lewati_resi: frozenset[str] | set[str] = frozenset()) -> list[dict]:
-    """Pull orders updated in the last ~15 days (get_order_list, then get_order_detail in batches).
+async def sync_pesanan(
+    session: Any, akun: Any, lewati_resi: frozenset[str] | set[str] = frozenset(), dari: datetime | None = None
+) -> list[dict]:
+    """Pull orders updated since ``dari`` (default: the last ~15 days) via get_order_list, then get_order_detail in batches.
 
     Orders already arranged for shipping get their tracking number (get_tracking_number) too, except
     those in ``lewati_resi`` (already stored), so repeated pulls do not re-ask Shopee for every order.
@@ -632,8 +647,7 @@ async def sync_pesanan(session: Any, akun: Any, lewati_resi: frozenset[str] | se
         raise ShopeeNotConfigured(
             "Shopee live sync nonaktif atau akun belum terhubung."
         )
-    time_to = int(time.time())
-    time_from = time_to - _ORDER_WINDOW_SECONDS
+    time_from, time_to = jendela_sinkron_pesanan(dari, int(time.time()))
 
     order_sn_list: list[str] = []
     cursor = ""
