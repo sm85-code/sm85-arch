@@ -235,6 +235,10 @@ class Pesanan(MarketplaceErpBase):
     # marketplace (pulled by sync); NULL for orders typed in by hand. Lets the UI tell "needs processing"
     # from "arranged, waiting for the courier" -- both are status to_ship locally.
     status_marketplace: Mapped[Optional[str]] = mapped_column(String(32), nullable=True)
+    # When the shipping label was last generated for this order and by whom (marks "already printed" so
+    # the same parcel is not printed twice; can be set or cleared by hand).
+    resi_dicetak_at: Mapped[Optional[datetime]] = mapped_column(DateTime(timezone=True), nullable=True)
+    resi_dicetak_oleh: Mapped[Optional[str]] = mapped_column(String(255), nullable=True)
     # Pengiriman (Tahap 3) -- manual input for now (no courier API wired
     # yet); nullable/additive, added to existing Postgres DBs via
     # seeder.ensure_marketplace_erp_schema() self-heal ALTER TABLE, same

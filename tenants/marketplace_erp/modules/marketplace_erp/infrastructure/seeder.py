@@ -38,6 +38,8 @@ _SELF_HEAL_COLUMNS = (
     # Tahap 3: manual pengiriman (courier/AWB) fields on the orders inbox.
     "ALTER TABLE IF EXISTS mpe_akun_marketplace ADD COLUMN IF NOT EXISTS terakhir_sinkron_pesanan TIMESTAMPTZ NULL",
     "ALTER TABLE IF EXISTS mpe_pesanan ADD COLUMN IF NOT EXISTS status_marketplace VARCHAR(32) NULL",
+    "ALTER TABLE IF EXISTS mpe_pesanan ADD COLUMN IF NOT EXISTS resi_dicetak_at TIMESTAMPTZ NULL",
+    "ALTER TABLE IF EXISTS mpe_pesanan ADD COLUMN IF NOT EXISTS resi_dicetak_oleh VARCHAR(255) NULL",
     "ALTER TABLE IF EXISTS mpe_pesanan ADD COLUMN IF NOT EXISTS kurir VARCHAR(64) NULL",
     "ALTER TABLE IF EXISTS mpe_pesanan ADD COLUMN IF NOT EXISTS nomor_resi VARCHAR(128) NULL",
     "ALTER TABLE IF EXISTS mpe_pesanan ADD COLUMN IF NOT EXISTS tanggal_kirim TIMESTAMPTZ NULL",

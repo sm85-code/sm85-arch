@@ -45,6 +45,7 @@ from tenants.marketplace_erp.modules.marketplace_erp.application.schemas import 
     PesananStatusIn,
     ProsesMassalIn,
     ResiMassalIn,
+    TandaiResiIn,
     ProdukIn,
     ProdukListingIn,
     ProdukListingOut,
@@ -598,6 +599,24 @@ async def sinkron_pesanan_otomatis(
     }
 
 
+def _nama_pengguna(user) -> str | None:
+    """Who to record on a printed label: the user's name, else the email."""
+    return getattr(user, "nama", None) or getattr(user, "email", None)
+
+
+@marketplace_erp_router.post("/pesanan/{pesanan_id}/resi/tandai", response_model=PesananOut)
+async def tandai_resi_dicetak(
+    pesanan_id: str,
+    payload: TandaiResiIn,
+    session: AsyncSession = Depends(get_db_marketplace_erp),
+    user: UserMarketplaceErp = Depends(require_roles_marketplace_erp(*OWNER_OR_STAFF)),
+):
+    """Mark the label as printed (default) or clear the mark by hand."""
+    pesanan = await services.get_pesanan(session, pesanan_id)
+    await pastikan_akses_akun(user, session, pesanan.akun_id)
+    return await services.tandai_resi_pesanan(session, pesanan_id, payload.dicetak, _nama_pengguna(user))
+
+
 @marketplace_erp_router.post("/pesanan/resi-massal")
 async def cetak_resi_massal(
     payload: ResiMassalIn,
@@ -608,7 +627,7 @@ async def cetak_resi_massal(
     for pesanan_id in dict.fromkeys(payload.pesanan_ids):
         pesanan = await services.get_pesanan(session, pesanan_id)
         await pastikan_akses_akun(user, session, pesanan.akun_id)
-    pdf, nama_file = await services.unduh_resi_massal(session, payload.pesanan_ids, payload.tipe)
+    pdf, nama_file = await services.unduh_resi_massal(session, payload.pesanan_ids, payload.tipe, _nama_pengguna(user))
     return Response(content=pdf, media_type="application/pdf", headers={"Content-Disposition": f'inline; filename="{nama_file}"'})
 
 
@@ -684,7 +703,7 @@ async def cetak_resi_pesanan(
     """
     pesanan = await services.get_pesanan(session, pesanan_id)
     await pastikan_akses_akun(user, session, pesanan.akun_id)
-    pdf, nama_file = await services.unduh_resi_pesanan(session, pesanan_id, tipe)
+    pdf, nama_file = await services.unduh_resi_pesanan(session, pesanan_id, tipe, _nama_pengguna(user))
     return Response(content=pdf, media_type="application/pdf", headers={"Content-Disposition": f'inline; filename="{nama_file}"'})
 
 
