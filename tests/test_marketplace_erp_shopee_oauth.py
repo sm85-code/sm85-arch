@@ -36,7 +36,7 @@ def test_build_authorize_url_shape(monkeypatch):
     erp_shopee.SHOPEE_ENV = "sandbox"
     url = erp_shopee.build_authorize_url(redirect_uri="https://example.com/cb")
     parsed = urlparse(url)
-    assert parsed.netloc == "partner.test-stable.shopeemobile.com"
+    assert parsed.netloc == "openplatform.sandbox.test-stable.shopee.sg"
     assert parsed.path == "/api/v2/shop/auth_partner"
     q = parse_qs(parsed.query)
     assert q["partner_id"] == ["12345"]

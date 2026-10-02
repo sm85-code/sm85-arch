@@ -27,7 +27,7 @@ from fastapi import HTTPException, status
 SHOPEE_PARTNER_ID = os.getenv("SHOPEE_PARTNER_ID", "").strip()
 SHOPEE_PARTNER_KEY = os.getenv("SHOPEE_PARTNER_KEY", "").strip()
 SHOPEE_REDIRECT_URI = os.getenv("SHOPEE_REDIRECT_URI", "").strip()
-# "sandbox" -> partner.test-stable.shopeemobile.com ; else production host
+# "sandbox" -> Open Platform v2 sandbox host (Test Account-Sandbox v2); else production host
 SHOPEE_ENV = (os.getenv("SHOPEE_ENV", "sandbox") or "sandbox").strip().lower()
 # Gate for live pull/push (still needs partner + shop tokens).
 SHOPEE_LIVE_SYNC = (os.getenv("SHOPEE_LIVE_SYNC", "") or "").strip().lower() in {
@@ -64,7 +64,7 @@ def live_sync_enabled() -> bool:
 def _host() -> str:
     if SHOPEE_ENV in {"live", "production", "prod"}:
         return "https://partner.shopeemobile.com"
-    return "https://partner.test-stable.shopeemobile.com"
+    return "https://openplatform.sandbox.test-stable.shopee.sg"
 
 
 def _partner_id_int() -> int:
