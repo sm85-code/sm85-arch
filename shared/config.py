@@ -41,6 +41,7 @@ JWT_EXPIRE_HOURS = int(os.getenv("JWT_EXPIRE_HOURS", str(24 * 7)))
 JWT_TENANT_MADRASAH = "madrasah"
 JWT_TENANT_TOKO = "toko"
 JWT_TENANT_MARKETPLACE_ERP = "marketplace_erp"
+JWT_TENANT_BUMI_LESTARI = "bumi_lestari"
 
 
 def jwt_issuer_for(tenant: str) -> str:

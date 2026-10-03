@@ -99,7 +99,27 @@ Endpoint tambahan: `GET /laporan/kas-kecil?bulan=YYYY-MM`, `GET /laporan/umum?da
 | `bl_tukang` | nama, kontak, catatan, aktif |
 | `bl_order` | no_order_shopee, tanggal_order, nama_pembeli, status, produk_id, qty, harga_jual, potongan_marketplace, ongkir, tukang_id, biaya_tukang (1 harga borongan: bahan + jasa), tgl_pesan_tukang, tgl_diambil, tgl_selesai, catatan |
 
-Status: `dipesan → dikerjakan → diambil → dikirim → selesai` (+ `batal`).
+### Saluran penjualan (bukan hanya Shopee)
+
+Order bisa datang dari tiga jenis saluran, semuanya masuk ke satu tabel order:
+
+| Jenis saluran | Contoh | Perbedaan perlakuan |
+|---|---|---|
+| `marketplace` | Shopee, Tokopedia, TikTok Shop | Ada potongan marketplace; uang cair ke saldo marketplace, ditarik tiap Selasa |
+| `web` | Toko online web sendiri | Pembayaran dari pembeli langsung (transfer/payment gateway) ke akun bank/e-wallet |
+| `reseller` | Penjual online lain yang memesan ke Anda | Harga grosir per reseller; bisa dibayar di muka atau **tempo → piutang** |
+
+Tabel tambahan: `bl_saluran` (nama, jenis, akun kas tujuan pencairan), `bl_pelanggan`
+(reseller/pembeli tetap: nama, kontak, harga grosir, tempo hari), dan `bl_harga_grosir`
+(produk × pelanggan, opsional). `bl_order` mendapat `saluran_id` dan `pelanggan_id`.
+Setiap saluran marketplace punya akun kas sendiri (mis. "Saldo Shopee", "Saldo TikTok").
+Order reseller yang belum dibayar menjadi `bl_piutang` (kebalikan utang), dilunasi saat
+uangnya masuk ke akun kas.
+
+Katalog produk (SKU dan harga yang sudah ada) dipakai bersama semua saluran; harga bisa
+dioverride per saluran atau per reseller.
+
+Status: `dipesan → dikerjakan → diambil → dikirim → selesai` (+ `batal`), sama untuk semua saluran.
 
 Efek ke keuangan:
 - **diambil** → buat `bl_utang` ke tukang sebesar `biaya_tukang`.
@@ -132,7 +152,7 @@ Efek ke keuangan:
 ## 6. Asumsi yang perlu dikonfirmasi
 
 1. Nama tenant `bumi_lestari` (prefix tabel `bl_`, route `/api/bumi-lestari`).
-2. Order Shopee **diinput manual** dulu; tautan ke sinkron di `marketplace_erp` ditunda.
+2. Order dari semua saluran (marketplace, web sendiri, reseller) **diinput manual** dulu; tautan ke sinkron di `marketplace_erp` ditunda.
 3. Biaya tukang per order, **satu harga borongan sudah termasuk bahan dan jasa**. Tidak ada pencatatan bahan terpisah per order; laba per order = harga jual bersih − biaya tukang.
 4. Kas kecil memakai sistem imprest (plafon Rp 3 juta, diisi kembali tiap minggu). Pencatatan sederhana (kas masuk/keluar + utang), **bukan** akuntansi double-entry penuh. Cukup, atau perlu neraca/jurnal?
 5. Satu usaha dan satu pemilik; belum multi-cabang. Staff opsional.
@@ -140,8 +160,8 @@ Efek ke keuangan:
 
 ## 7. Tahap pengerjaan
 
-- **T1** — tenant + auth + akun kas + kategori + transaksi + transfer.
-- **T2** — master produk/tukang + order + status.
+- **T1 (selesai di kode: `tenants/bumi_lestari/`, modul tunggal `modules/bumi_lestari/` — dipecah per modul saat order ditambahkan)** — tenant + auth + akun kas + kategori + transaksi + transfer.
+- **T2** — katalog produk (SKU, harga), tukang, saluran, pelanggan/reseller, order + status.
 - **T3** — utang, batch bayar Selasa, integrasi order → transaksi.
 - **T4** — dashboard, laporan laba-rugi/arus kas, ekspor.
 - **T5** — (opsional) tautan `marketplace_erp`, pengingat Selasa.

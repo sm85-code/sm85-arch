@@ -1,0 +1,107 @@
+"""ORM models -- bumi_lestari tenant, Tahap 1 (keuangan dasar).
+
+Users, akun kas (termasuk kas kecil imprest), kategori, transaksi, transfer.
+Transaksi/transfer tidak pernah dihapus: dibatalkan (dibatalkan=True) supaya
+jejak audit tetap ada dan saldo dihitung ulang dari baris yang tidak batal.
+"""
+from __future__ import annotations
+
+import uuid
+from datetime import date, datetime, timezone
+from decimal import Decimal
+from typing import Optional
+
+from sqlalchemy import Boolean, Date, DateTime, ForeignKey, Numeric, String, Text
+from sqlalchemy.orm import Mapped, mapped_column
+
+from tenants.bumi_lestari.modules.bumi_lestari.infrastructure.database import BumiLestariBase
+
+
+def _uuid() -> str:
+    return str(uuid.uuid4())
+
+
+def _utcnow() -> datetime:
+    return datetime.now(timezone.utc)
+
+
+# Plain string enums (not Postgres ENUM): adding a value needs no ALTER TYPE.
+ROLE_USER = ("owner", "staff")
+JENIS_AKUN = ("kas", "bank", "ewallet", "kas_kecil")
+JENIS_KATEGORI = ("pemasukan", "pengeluaran")
+JENIS_TRANSAKSI = ("masuk", "keluar")
+JENIS_TRANSFER = ("biasa", "pengisian_kas_kecil")
+
+KODE_KAS_UTAMA = "KAS_UTAMA"
+KODE_SALDO_SHOPEE = "SALDO_SHOPEE"
+KODE_KAS_KECIL = "KAS_KECIL"
+PLAFON_KAS_KECIL_DEFAULT = Decimal("3000000")
+
+
+class BlUser(BumiLestariBase):
+    __tablename__ = "bl_users"
+
+    id: Mapped[str] = mapped_column(String(64), primary_key=True, default=_uuid)
+    nama: Mapped[str] = mapped_column(String(255), nullable=False)
+    email: Mapped[str] = mapped_column(String(255), nullable=False, unique=True, index=True)
+    password_hash: Mapped[str] = mapped_column(String(255), nullable=False)
+    role: Mapped[str] = mapped_column(String(32), nullable=False, default="staff")
+    must_change_password: Mapped[bool] = mapped_column(Boolean, nullable=False, default=False)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=_utcnow)
+
+
+class BlAkunKas(BumiLestariBase):
+    __tablename__ = "bl_akun_kas"
+
+    id: Mapped[str] = mapped_column(String(64), primary_key=True, default=_uuid)
+    kode: Mapped[str] = mapped_column(String(64), nullable=False, unique=True, index=True)
+    nama: Mapped[str] = mapped_column(String(255), nullable=False)
+    jenis: Mapped[str] = mapped_column(String(32), nullable=False, default="kas")
+    saldo_awal: Mapped[Decimal] = mapped_column(Numeric(14, 2), nullable=False, default=Decimal("0"))
+    # Hanya untuk jenis "kas_kecil": saldo yang dijaga lewat pengisian mingguan.
+    plafon: Mapped[Optional[Decimal]] = mapped_column(Numeric(14, 2), nullable=True)
+    aktif: Mapped[bool] = mapped_column(Boolean, nullable=False, default=True)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=_utcnow)
+
+
+class BlKategori(BumiLestariBase):
+    __tablename__ = "bl_kategori"
+
+    id: Mapped[str] = mapped_column(String(64), primary_key=True, default=_uuid)
+    nama: Mapped[str] = mapped_column(String(128), nullable=False, unique=True)
+    jenis: Mapped[str] = mapped_column(String(16), nullable=False)
+    aktif: Mapped[bool] = mapped_column(Boolean, nullable=False, default=True)
+
+
+class BlTransaksi(BumiLestariBase):
+    __tablename__ = "bl_transaksi"
+
+    id: Mapped[str] = mapped_column(String(64), primary_key=True, default=_uuid)
+    tanggal: Mapped[date] = mapped_column(Date, nullable=False, index=True)
+    akun_id: Mapped[str] = mapped_column(ForeignKey("bl_akun_kas.id"), nullable=False, index=True)
+    kategori_id: Mapped[str] = mapped_column(ForeignKey("bl_kategori.id"), nullable=False)
+    jenis: Mapped[str] = mapped_column(String(16), nullable=False)
+    jumlah: Mapped[Decimal] = mapped_column(Numeric(14, 2), nullable=False)
+    keterangan: Mapped[str] = mapped_column(Text, nullable=False, default="")
+    dibuat_oleh: Mapped[str] = mapped_column(String(64), nullable=False)
+    dibatalkan: Mapped[bool] = mapped_column(Boolean, nullable=False, default=False)
+    dibatalkan_at: Mapped[Optional[datetime]] = mapped_column(DateTime(timezone=True), nullable=True)
+    alasan_batal: Mapped[Optional[str]] = mapped_column(Text, nullable=True)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=_utcnow)
+
+
+class BlTransfer(BumiLestariBase):
+    __tablename__ = "bl_transfer"
+
+    id: Mapped[str] = mapped_column(String(64), primary_key=True, default=_uuid)
+    tanggal: Mapped[date] = mapped_column(Date, nullable=False, index=True)
+    dari_akun_id: Mapped[str] = mapped_column(ForeignKey("bl_akun_kas.id"), nullable=False, index=True)
+    ke_akun_id: Mapped[str] = mapped_column(ForeignKey("bl_akun_kas.id"), nullable=False, index=True)
+    jumlah: Mapped[Decimal] = mapped_column(Numeric(14, 2), nullable=False)
+    jenis: Mapped[str] = mapped_column(String(32), nullable=False, default="biasa")
+    keterangan: Mapped[str] = mapped_column(Text, nullable=False, default="")
+    dibuat_oleh: Mapped[str] = mapped_column(String(64), nullable=False)
+    dibatalkan: Mapped[bool] = mapped_column(Boolean, nullable=False, default=False)
+    dibatalkan_at: Mapped[Optional[datetime]] = mapped_column(DateTime(timezone=True), nullable=True)
+    alasan_batal: Mapped[Optional[str]] = mapped_column(Text, nullable=True)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=_utcnow)
