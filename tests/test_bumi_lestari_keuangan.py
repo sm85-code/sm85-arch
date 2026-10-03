@@ -65,7 +65,7 @@ async def _isi_kas_utama(session, owner, jumlah):
     ku = await _akun(session, "KAS_UTAMA")
     await services.create_transaksi(
         session, owner,
-        TransaksiIn(akun_id=ku.id, kategori_id=(await _kat(session, "Penjualan")).id, jenis="masuk", jumlah=jumlah),
+        TransaksiIn(akun_id=ku.id, kategori_id=(await _kat(session, "Penjualan marketplace")).id, jenis="masuk", jumlah=jumlah),
     )
     return ku
 
@@ -105,7 +105,7 @@ async def test_transaksi_jenis_must_match_kategori(session):
     with pytest.raises(HTTPException) as exc:
         await services.create_transaksi(
             session, owner,
-            TransaksiIn(akun_id=ku.id, kategori_id=(await _kat(session, "Penjualan")).id, jenis="keluar", jumlah=Decimal("1")),
+            TransaksiIn(akun_id=ku.id, kategori_id=(await _kat(session, "Penjualan marketplace")).id, jenis="keluar", jumlah=Decimal("1")),
         )
     assert exc.value.status_code == 400
 
@@ -121,7 +121,7 @@ async def test_transfer_needs_enough_balance(session):
     assert exc.value.status_code == 400
     await services.create_transaksi(
         session, owner,
-        TransaksiIn(akun_id=shopee.id, kategori_id=(await _kat(session, "Penjualan")).id, jenis="masuk", jumlah=Decimal("500000")),
+        TransaksiIn(akun_id=shopee.id, kategori_id=(await _kat(session, "Penjualan marketplace")).id, jenis="masuk", jumlah=Decimal("500000")),
     )
     await services.create_transfer(session, owner, TransferIn(dari_akun_id=shopee.id, ke_akun_id=ku.id, jumlah=Decimal("500000")))
     assert await services.saldo_akun(session, shopee) == 0
@@ -175,7 +175,7 @@ async def test_staf_hanya_pengeluaran_kas_kecil(session):
 
     for payload in (
         TransaksiIn(akun_id=ku.id, kategori_id=ops.id, jenis="keluar", jumlah=Decimal("1000")),
-        TransaksiIn(akun_id=kk.id, kategori_id=(await _kat(session, "Penjualan")).id, jenis="masuk", jumlah=Decimal("1000")),
+        TransaksiIn(akun_id=kk.id, kategori_id=(await _kat(session, "Penjualan marketplace")).id, jenis="masuk", jumlah=Decimal("1000")),
     ):
         with pytest.raises(HTTPException) as exc:
             await services.create_transaksi(session, staf, payload)

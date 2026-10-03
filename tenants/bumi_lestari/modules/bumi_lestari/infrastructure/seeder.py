@@ -35,7 +35,9 @@ DEFAULT_AKUN = (
 )
 
 DEFAULT_KATEGORI = (
-    ("Penjualan", "pemasukan"),
+    ("Penjualan marketplace", "pemasukan"),
+    ("Penjualan toko web", "pemasukan"),
+    ("Penjualan reseller", "pemasukan"),
     ("Pemasukan lain", "pemasukan"),
     ("Biaya produksi (tukang)", "pengeluaran"),
     ("Transport", "pengeluaran"),

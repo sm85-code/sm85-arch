@@ -145,6 +145,14 @@ Efek ke keuangan:
 - Setiap perhitungan bagi hasil menyimpan **snapshot** proporsi saat dihitung, jadi mengubah
   proporsi tidak mengubah periode yang sudah dihitung.
 - Periode bagi hasil: **bulanan** (`periode` = `YYYY-MM`, satu perhitungan per bulan).
+- **Dasar laba = uang yang sudah masuk (basis kas).** Pemasukan hanya dari empat sumber:
+  1. saldo toko marketplace (diakui saat dana masuk ke saldo toko, bukan saat ditarik ke
+     kas utama, karena penarikan hanya transfer),
+  2. toko web sendiri,
+  3. pesanan penjual lain (reseller; diakui saat dibayar, bukan saat order bertempo),
+  4. pemasukan lain.
+  Kategori pemasukan: "Penjualan marketplace", "Penjualan toko web", "Penjualan reseller",
+  "Pemasukan lain".
 - Laba bersih periode = semua pemasukan − semua pengeluaran periode itu (biaya produksi
   tukang, gaji, operasional kas kecil, transport, packing, dll). **Tidak dihitung sebagai
   biaya:** transfer antar akun, kategori "Prive" dan "Bagi hasil".
