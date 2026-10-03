@@ -266,6 +266,20 @@ async def get_pengiriman(
     return services.pengiriman_out(await services.get_pengiriman(session, pesanan_id))
 
 
+@store_admin_router.post("/pesanan/{pesanan_id}/pengiriman/biteship")
+async def buat_pengiriman_biteship(
+    pesanan_id: str, session: AsyncSession = Depends(get_db_store), _user: AdminStore = Depends(admin_only)
+):
+    return services.pengiriman_out(await services.buat_order_biteship(session, pesanan_id))
+
+
+@store_admin_router.get("/pesanan/{pesanan_id}/pengiriman/lacak")
+async def lacak_pengiriman(
+    pesanan_id: str, session: AsyncSession = Depends(get_db_store), _user: AdminStore = Depends(admin_only)
+):
+    return await services.lacak_pengiriman(session, pesanan_id)
+
+
 @store_admin_router.patch("/pesanan/{pesanan_id}/pengiriman/status")
 async def ubah_status_pengiriman(
     pesanan_id: str,

@@ -29,6 +29,8 @@ if TYPE_CHECKING:
 from tenants.store.modules.store.application.slug import slugify, with_suffix
 from tenants.store.modules.store.infrastructure.media_storage import media_url
 from tenants.store.modules.store.infrastructure.shipping_biteship import ItemKirim, berat_default
+from tenants.store.modules.store.infrastructure.shipping_biteship import buat_order as buat_order_kurir
+from tenants.store.modules.store.infrastructure.shipping_biteship import lacak as lacak_kurir
 from tenants.store.modules.store.infrastructure.models import (
     ROLE_ADMIN,
     ROLE_OWNER,
@@ -794,6 +796,7 @@ def pengiriman_out(pengiriman: PengirimanStore) -> dict:
         "kode_pos_tujuan": pengiriman.kode_pos_tujuan,
         "kode_wilayah_tujuan": pengiriman.kode_wilayah_tujuan,
         "tracking_id": pengiriman.tracking_id,
+        "biteship": bool(pengiriman.biteship_order_id),
         "status": pengiriman.status,
     }
 
@@ -814,11 +817,8 @@ async def buat_pengiriman_lokal(session: AsyncSession, pesanan_id: str, payload:
     session.add(pengiriman)
     # The order total is items + shipping; the price was set by the server, never by the buyer.
     pesanan = await get_pesanan(session, pesanan_id)
-    if payload.ongkir > 0 and pesanan.status != "menunggu_pembayaran":
-        raise HTTPException(
-            status_code=status.HTTP_409_CONFLICT, detail=f"Pesanan berstatus '{pesanan.status}', ongkir tidak bisa diubah"
-        )
-    pesanan.total = sum((it.subtotal for it in pesanan.items), Decimal("0")) + payload.ongkir
+    if pesanan.status == "menunggu_pembayaran":  # once paid, the amount charged is fixed
+        pesanan.total = sum((it.subtotal for it in pesanan.items), Decimal("0")) + payload.ongkir
     await session.flush()
     return pengiriman
 
@@ -863,6 +863,73 @@ async def get_pengiriman(session: AsyncSession, pesanan_id: str) -> PengirimanSt
     if not pengiriman:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Data pengiriman tidak ditemukan")
     return pengiriman
+
+
+# Biteship's status -> the path our own shipment status has to walk (see _TRANSISI_STATUS_PENGIRIMAN).
+_JALUR_STATUS_BITESHIP = {
+    "picked": ["dikirim"],
+    "dropping_off": ["dikirim"],
+    "delivered": ["dikirim", "diterima"],
+    "on_hold": ["bermasalah"],
+    "return_in_transit": ["bermasalah"],
+    "returned": ["bermasalah"],
+    "rejected": ["bermasalah"],
+    "disposed": ["bermasalah"],
+    "courier_not_found": ["bermasalah"],
+    "cancelled": ["bermasalah"],
+}
+
+
+async def buat_order_biteship(session: AsyncSession, pesanan_id: str) -> PengirimanStore:
+    """Book the courier for a paid order and keep the waybill. Safe to press twice: a second call is refused."""
+    pesanan = await get_pesanan(session, pesanan_id)
+    if pesanan.status not in ("dibayar", "diproses"):
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT, detail="Pengiriman hanya bisa dibuat untuk pesanan yang sudah dibayar"
+        )
+    pengiriman = await get_pengiriman(session, pesanan_id)
+    if pengiriman.biteship_order_id:
+        raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail="Pengiriman ini sudah dibuat di Biteship")
+    order = await buat_order_kurir(
+        kurir=pengiriman.kurir,
+        layanan=pengiriman.layanan,
+        nama_penerima=pengiriman.nama_penerima,
+        telepon_penerima=pengiriman.telepon_penerima,
+        alamat_tujuan=pengiriman.alamat_tujuan,
+        kode_pos_tujuan=pengiriman.kode_pos_tujuan,
+        items=await item_kirim_pesanan(session, pesanan),
+        catatan=f"Pesanan {pesanan.id[:8]}",
+    )
+    pengiriman.biteship_order_id = order.order_id
+    pengiriman.biteship_tracking_id = order.tracking_id or None
+    pengiriman.tracking_id = order.waybill_id or pengiriman.tracking_id
+    if "diproses" in _TRANSISI_STATUS.get(pesanan.status, set()):
+        pesanan.status = "diproses"
+    await session.flush()
+    return pengiriman
+
+
+async def lacak_pengiriman(session: AsyncSession, pesanan_id: str) -> dict:
+    """Ask Biteship where the parcel is and bring our own shipment status in line with the answer."""
+    pengiriman = await get_pengiriman(session, pesanan_id)
+    if not pengiriman.biteship_tracking_id:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Belum ada pelacakan untuk pengiriman ini")
+    hasil = await lacak_kurir(pengiriman.biteship_tracking_id)
+    if hasil.waybill_id and hasil.waybill_id != pengiriman.tracking_id:
+        pengiriman.tracking_id = hasil.waybill_id
+    for langkah in _JALUR_STATUS_BITESHIP.get(hasil.status, []):
+        if pengiriman.status == langkah:
+            continue
+        if langkah not in _TRANSISI_STATUS_PENGIRIMAN.get(pengiriman.status, set()):
+            break
+        pengiriman = await ubah_status_pengiriman(session, pesanan_id, langkah)
+    await session.flush()
+    return {
+        "status_kurir": hasil.status,
+        "status": pengiriman.status,
+        "tracking_id": pengiriman.tracking_id,
+        "riwayat": [{"status": r.status, "catatan": r.catatan, "waktu": r.waktu} for r in hasil.riwayat],
+    }
 
 
 async def ubah_status_pengiriman(
