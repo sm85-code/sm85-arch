@@ -4,6 +4,7 @@ Environment:
   IPAYMU_VA       merchant VA number (Integrasi menu of the iPaymu dashboard)
   IPAYMU_API_KEY  merchant API key (same place) -- a secret: set it only in the environment
   IPAYMU_MODE     "sandbox" (default) or "production"; the two modes have different VA / API keys
+  IPAYMU_PROXY_URL  optional: send iPaymu calls through a fixed-IP proxy (see shared/egress.py)
 
 Until IPAYMU_VA and IPAYMU_API_KEY are both set, every entry point answers HTTP 501 instead of faking a payment,
 and the webhook is never trusted.
@@ -28,6 +29,8 @@ from typing import Any
 
 import requests
 from fastapi import HTTPException, status
+
+from shared.egress import proxies_for
 
 logger = logging.getLogger(__name__)
 
@@ -104,7 +107,9 @@ def _post_sync(path: str, body: dict[str, Any]) -> dict[str, Any]:
         "signature": buat_signature(va, key, body_json),
         "timestamp": datetime.now().strftime("%Y%m%d%H%M%S"),
     }
-    resp = requests.post(f"{_BASE_URLS[_mode()]}{path}", data=body_json, headers=headers, timeout=_TIMEOUT)
+    resp = requests.post(
+        f"{_BASE_URLS[_mode()]}{path}", data=body_json, headers=headers, timeout=_TIMEOUT, proxies=proxies_for("IPAYMU_PROXY_URL")
+    )
     try:
         data = resp.json()
     except ValueError:
