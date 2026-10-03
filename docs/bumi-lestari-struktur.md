@@ -66,6 +66,22 @@ Cara kerja:
 - Pengisian bukan pengeluaran baru: di laporan umum, pengeluaran operasional diakui saat
   dipakai (transaksi kas kecil), sedangkan pengisian hanya pemindahan antar akun.
 
+### Siklus hari Selasa (urutan tetap)
+
+1. **Tarik saldo Shopee → kas utama** (`bl_transfer`, akun "Saldo Shopee" → "Kas utama").
+2. **Isi kembali kas kecil** dari kas utama sebesar plafon − saldo kas kecil. Hanya bisa
+   dilakukan setelah langkah 1 selesai bila saldo kas utama tidak cukup (sistem memperingatkan).
+3. **Bayar tukang** (batch) dari kas utama untuk semua order yang sudah diambil.
+
+Halaman "Selasa" di web menampilkan ketiga langkah ini berurutan dengan angkanya.
+
+### Peran
+- **owner (Anda):** akses penuh.
+- **staf (pemegang kas kecil):** hanya bisa mencatat pengeluaran di akun kas kecil, melihat
+  laporan kas kecil, dan mengajukan angka pengisian. Tidak bisa melihat kas utama, order,
+  utang, atau laporan umum, dan tidak bisa menghapus/membatalkan transaksi. Pengisian
+  kembali dikonfirmasi owner.
+
 Dua laporan:
 1. **Laporan kas kecil** (per bulan, dengan rincian mingguan): saldo awal, daftar
    pengeluaran per kategori, total pakai per minggu, pengisian kembali, saldo akhir
