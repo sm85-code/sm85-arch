@@ -90,6 +90,7 @@ class ProdukIn(BaseModel):
     lebar_cm: Decimal = _DIMENSI
     tinggi_cm: Decimal = _DIMENSI
     preorder: bool = False
+    cod: bool = False
     hari_proses: int = HARI_PROSES_READY
 
     @model_validator(mode="after")
@@ -110,6 +111,7 @@ class ProdukPatch(BaseModel):
     lebar_cm: Optional[Decimal] = Field(None, ge=0, le=1000)
     tinggi_cm: Optional[Decimal] = Field(None, ge=0, le=1000)
     preorder: Optional[bool] = None
+    cod: Optional[bool] = None
     hari_proses: Optional[int] = None
 
 
@@ -167,8 +169,13 @@ class CekOngkirIn(BaseModel):
     """Only the destination: weight, value and origin are worked out on the server."""
 
     kode_pos_tujuan: str
+    cod: bool = False
 
     _v_kodepos = field_validator("kode_pos_tujuan")(_validate_kode_pos)
+
+
+class CheckoutIn(BaseModel):
+    cod: bool = False
 
 
 class PengirimanIn(BaseModel):
@@ -176,6 +183,7 @@ class PengirimanIn(BaseModel):
     layanan: str
     layanan_nama: str = ""
     ongkir: Decimal = Decimal("0")
+    biaya_cod: Decimal = Decimal("0")
     nama_penerima: str
     telepon_penerima: str
     alamat_tujuan: str

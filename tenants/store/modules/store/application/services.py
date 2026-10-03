@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from datetime import date
+import os
 from decimal import Decimal
 from typing import TYPE_CHECKING
 
@@ -29,6 +30,7 @@ if TYPE_CHECKING:
 from tenants.store.modules.store.application.slug import slugify, with_suffix
 from tenants.store.modules.store.infrastructure.media_storage import media_url
 from tenants.store.modules.store.infrastructure.shipping_biteship import ItemKirim, berat_default
+from tenants.store.modules.store.infrastructure.shipping_biteship import aktif as shipping_aktif
 from tenants.store.modules.store.infrastructure.shipping_biteship import buat_order as buat_order_kurir
 from tenants.store.modules.store.infrastructure.shipping_biteship import cek_ongkir as cek_ongkir_kurir
 from tenants.store.modules.store.infrastructure.shipping_biteship import lacak as lacak_kurir
@@ -69,6 +71,7 @@ _STATUS_TERHITUNG_PENJUALAN = ("dibayar", "diproses", "dikirim", "selesai")
 # sebelum selesai/dikirim (pembatalan setelah dikirim harus lewat proses
 # retur, bukan sekadar ubah status -- di luar scope modul ini).
 _TRANSISI_STATUS = {
+    "menunggu_konfirmasi": {"diproses", "dibatalkan"},
     "menunggu_pembayaran": {"dibayar", "dibatalkan"},
     "dibayar": {"diproses", "dibatalkan"},
     "diproses": {"dikirim"},
@@ -152,6 +155,7 @@ def produk_out(produk: ProdukStore) -> dict:
         "lebar_cm": str(produk.lebar_cm),
         "tinggi_cm": str(produk.tinggi_cm),
         "preorder": produk.preorder,
+        "cod": produk.cod,
         "hari_proses": produk.hari_proses,
         "varian": [varian_out(v, produk) for v in produk.varian],
     }
@@ -515,6 +519,7 @@ def keranjang_item_out(item: ItemKeranjang) -> dict:
         "subtotal": str(harga * item.qty),
         "stok_tersedia": item.varian.stok if item.varian else item.produk.stok,
         "preorder": item.produk.preorder,
+        "cod": item.produk.cod,
         "hari_proses": item.produk.hari_proses,
         "foto_url": media_url(item.produk.foto_key),
     }
@@ -620,10 +625,42 @@ def _nama_baris(item: ItemKeranjang) -> str:
     return f"{item.produk.nama} ({item.varian.nama})" if item.varian else item.produk.nama
 
 
-async def checkout(session: AsyncSession, user_id: str) -> PesananStore:
+def batas_cod() -> int:
+    """Largest order value (rupiah) that may be paid on delivery."""
+    try:
+        return max(int(os.getenv("COD_BATAS_TOTAL", "500000")), 0)
+    except ValueError:
+        return 500_000
+
+
+def cek_syarat_cod(items: list[ItemKeranjang]) -> Decimal:
+    """COD only for carts made entirely of COD products and not above the limit. Returns the items' subtotal."""
+    if not items:
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Keranjang kosong")
+    bukan_cod = [_nama_baris(it) for it in items if not it.produk.cod]
+    if bukan_cod:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST, detail=f"Bayar di tempat tidak tersedia untuk: {', '.join(bukan_cod)}"
+        )
+    subtotal = sum((harga_efektif(it.produk, it.varian) * it.qty for it in items), Decimal("0"))
+    if subtotal > batas_cod():
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail=f"Bayar di tempat hanya untuk pesanan sampai Rp {batas_cod():,}".replace(",", "."),
+        )
+    return subtotal
+
+
+async def checkout(session: AsyncSession, user_id: str, cod: bool = False) -> PesananStore:
     items = await get_keranjang(session, user_id)
     if not items:
         raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Keranjang kosong")
+    if cod:
+        if not shipping_aktif():
+            raise HTTPException(
+                status_code=status.HTTP_409_CONFLICT, detail="Bayar di tempat belum tersedia saat ini"
+            )
+        cek_syarat_cod(items)
 
     for item in items:
         stok = item.varian.stok if item.varian else item.produk.stok
@@ -637,7 +674,12 @@ async def checkout(session: AsyncSession, user_id: str) -> PesananStore:
                 detail=f"Stok '{_nama_baris(item)}' tidak cukup (tersisa {stok})",
             )
 
-    pesanan = PesananStore(user_id=user_id, status="menunggu_pembayaran", total=Decimal("0"))
+    pesanan = PesananStore(
+        user_id=user_id,
+        status="menunggu_konfirmasi" if cod else "menunggu_pembayaran",
+        metode_pembayaran="cod" if cod else None,
+        total=Decimal("0"),
+    )
     session.add(pesanan)
     await session.flush()
 
@@ -787,6 +829,7 @@ def pengiriman_out(pengiriman: PengirimanStore) -> dict:
         "layanan": pengiriman.layanan,
         "layanan_nama": pengiriman.layanan_nama,
         "ongkir": str(pengiriman.ongkir),
+        "biaya_cod": str(pengiriman.biaya_cod),
         "nama_penerima": pengiriman.nama_penerima,
         "telepon_penerima": pengiriman.telepon_penerima,
         "alamat_tujuan": pengiriman.alamat_tujuan,
@@ -818,8 +861,8 @@ async def buat_pengiriman_lokal(session: AsyncSession, pesanan_id: str, payload:
     session.add(pengiriman)
     # The order total is items + shipping; the price was set by the server, never by the buyer.
     pesanan = await get_pesanan(session, pesanan_id)
-    if pesanan.status == "menunggu_pembayaran":  # once paid, the amount charged is fixed
-        pesanan.total = sum((it.subtotal for it in pesanan.items), Decimal("0")) + payload.ongkir
+    if pesanan.status in ("menunggu_pembayaran", "menunggu_konfirmasi"):  # once paid / confirmed, the amount is fixed
+        pesanan.total = sum((it.subtotal for it in pesanan.items), Decimal("0")) + payload.ongkir + payload.biaya_cod
     await session.flush()
     return pengiriman
 
@@ -900,6 +943,7 @@ async def buat_order_biteship(session: AsyncSession, pesanan_id: str) -> Pengiri
         kode_pos_tujuan=pengiriman.kode_pos_tujuan,
         items=await item_kirim_pesanan(session, pesanan),
         catatan=f"Pesanan {pesanan.id[:8]}",
+        cod_nilai=int(pesanan.total) if pesanan.metode_pembayaran == "cod" else 0,
     )
     pengiriman.biteship_order_id = order.order_id
     pengiriman.biteship_tracking_id = order.tracking_id or None
@@ -925,7 +969,9 @@ async def opsi_kurir_pesanan(session: AsyncSession, pesanan_id: str) -> list:
     pengiriman = await get_pengiriman(session, pesanan_id)
     _kurir_bisa_diganti(pesanan, pengiriman)
     return await cek_ongkir_kurir(
-        kode_pos_tujuan=pengiriman.kode_pos_tujuan, items=await item_kirim_pesanan(session, pesanan)
+        kode_pos_tujuan=pengiriman.kode_pos_tujuan,
+        items=await item_kirim_pesanan(session, pesanan),
+        cod_nilai=int(pesanan.total) if pesanan.metode_pembayaran == "cod" else 0,
     )
 
 

@@ -43,7 +43,7 @@ async def test_not_configured_is_501(monkeypatch):
 async def test_rates_request_and_sorted_options(monkeypatch):
     seen = {}
 
-    def fake(kode_pos, items):
+    def fake(kode_pos, items, cod_nilai=0):
         seen["kode_pos"], seen["items"] = kode_pos, items
         return PRICING
 
@@ -87,14 +87,14 @@ async def test_bad_postal_code_is_400(kode_pos):
 
 @pytest.mark.asyncio
 async def test_upstream_error_and_empty_result(monkeypatch):
-    def refuse(kode_pos, items):
+    def refuse(kode_pos, items, cod_nilai=0):
         raise HTTPException(status_code=400, detail="x")
 
     monkeypatch.setattr(bs, "_rates_sync", refuse)
     with pytest.raises(HTTPException) as exc:
         await bs.cek_ongkir(kode_pos_tujuan="40115", items=[ITEM])
     assert exc.value.status_code == 400
-    monkeypatch.setattr(bs, "_rates_sync", lambda k, i: {"success": True, "pricing": []})
+    monkeypatch.setattr(bs, "_rates_sync", lambda k, i, c=0: {"success": True, "pricing": []})
     with pytest.raises(HTTPException) as exc:
         await bs.cek_ongkir(kode_pos_tujuan="40115", items=[ITEM])
     assert exc.value.status_code == 404
@@ -140,7 +140,7 @@ async def test_missing_weight_uses_the_default_and_order_lines_feed_the_rates(se
 @pytest.mark.asyncio
 async def test_shipping_price_comes_from_biteship_not_from_the_buyer(session, monkeypatch):
     user, pesanan = await _order(session)
-    monkeypatch.setattr(bs, "_rates_sync", lambda k, i: PRICING)
+    monkeypatch.setattr(bs, "_rates_sync", lambda k, i, c=0: PRICING)
     out = await buyer_module.isi_alamat_pengiriman(pesanan.id, _form(ongkir=Decimal("1")), session, user)
     assert Decimal(out["ongkir"]) == 18000 and out["layanan_nama"] == "Reguler" and out["kurir"] == "jne"
     assert (await services.get_pesanan(session, pesanan.id)).total == Decimal("218000")
@@ -149,7 +149,7 @@ async def test_shipping_price_comes_from_biteship_not_from_the_buyer(session, mo
 @pytest.mark.asyncio
 async def test_unknown_service_is_rejected_and_nothing_is_saved(session, monkeypatch):
     user, pesanan = await _order(session)
-    monkeypatch.setattr(bs, "_rates_sync", lambda k, i: PRICING)
+    monkeypatch.setattr(bs, "_rates_sync", lambda k, i, c=0: PRICING)
     with pytest.raises(HTTPException) as exc:
         await buyer_module.isi_alamat_pengiriman(pesanan.id, _form(layanan="yes"), session, user)
     assert exc.value.status_code == 400
@@ -248,7 +248,7 @@ async def test_admin_can_still_add_shipping_to_a_paid_order_without_changing_the
 @pytest.mark.asyncio
 async def test_seller_can_switch_courier_before_booking_and_the_paid_shipping_stays(session, monkeypatch):
     _user, pesanan = await _dengan_pengiriman(session)
-    monkeypatch.setattr(bs, "_rates_sync", lambda k, i: PRICING)
+    monkeypatch.setattr(bs, "_rates_sync", lambda k, i, c=0: PRICING)
     opsi = await services.opsi_kurir_pesanan(session, pesanan.id)
     assert {(o.kurir, o.layanan) for o in opsi} == {("jne", "reg"), ("jnt", "ez")}
     out = await services.ganti_kurir(session, pesanan.id, "JNT", "ez")
@@ -264,7 +264,7 @@ async def test_seller_can_switch_courier_before_booking_and_the_paid_shipping_st
 async def test_courier_can_be_switched_after_a_failed_booking_but_not_a_working_one(session, monkeypatch):
     _user, pesanan = await _dengan_pengiriman(session)
     monkeypatch.setattr(bs, "_request_sync", lambda m, p, b=None: ORDER_OK)
-    monkeypatch.setattr(bs, "_rates_sync", lambda k, i: PRICING)
+    monkeypatch.setattr(bs, "_rates_sync", lambda k, i, c=0: PRICING)
     await services.buat_order_biteship(session, pesanan.id)
     with pytest.raises(HTTPException) as exc:
         await services.ganti_kurir(session, pesanan.id, "jnt", "ez")
@@ -281,7 +281,146 @@ async def test_courier_can_be_switched_after_a_failed_booking_but_not_a_working_
 @pytest.mark.asyncio
 async def test_switching_courier_needs_a_paid_order(session, monkeypatch):
     _user, pesanan = await _dengan_pengiriman(session, status="menunggu_pembayaran")
-    monkeypatch.setattr(bs, "_rates_sync", lambda k, i: PRICING)
+    monkeypatch.setattr(bs, "_rates_sync", lambda k, i, c=0: PRICING)
     with pytest.raises(HTTPException) as exc:
         await services.opsi_kurir_pesanan(session, pesanan.id)
     assert exc.value.status_code == 409
+
+
+COD_PRICING = {
+    "success": True,
+    "pricing": [
+        {"courier_code": "jne", "courier_name": "JNE", "courier_service_code": "reg", "courier_service_name": "Reguler", "price": 20000, "shipping_fee": 18000, "cash_on_delivery_fee": 2000, "available_for_cash_on_delivery": True, "duration": "1 - 2 days"},
+        {"courier_code": "jnt", "courier_name": "J&T", "courier_service_code": "ez", "courier_service_name": "EZ", "price": 21000, "shipping_fee": 21000, "cash_on_delivery_fee": 0, "available_for_cash_on_delivery": False},
+    ],
+}
+
+
+@pytest.mark.asyncio
+async def test_cod_rates_keep_only_cod_couriers_and_split_the_fee(monkeypatch):
+    seen = {}
+
+    def fake(kode_pos, items, cod_nilai=0):
+        seen["cod"] = cod_nilai
+        return COD_PRICING
+
+    monkeypatch.setattr(bs, "_rates_sync", fake)
+    options = await bs.cek_ongkir(kode_pos_tujuan="40115", items=[ITEM], cod_nilai=200000)
+    assert seen["cod"] == 200000
+    assert [(o.kurir, o.ongkir, o.biaya_cod) for o in options] == [("jne", "18000", "2000")]
+
+
+def test_cod_fields_are_sent_to_biteship(monkeypatch):
+    sent = {}
+
+    class Resp:
+        status_code = 200
+
+        @staticmethod
+        def json():
+            return COD_PRICING
+
+    monkeypatch.setattr(bs.requests, "post", lambda url, json, headers, timeout: sent.update(json=json) or Resp())
+    bs._rates_sync("40115", [ITEM], 200000)
+    assert sent["json"]["destination_cash_on_delivery"] == 200000
+    assert sent["json"]["destination_cash_on_delivery_type"] == "7_days"
+    sent.clear()
+    bs._rates_sync("40115", [ITEM])
+    assert "destination_cash_on_delivery" not in sent["json"]
+
+
+async def _keranjang(session, cod=True, harga="200000", qty=1):
+    from tenants.store.modules.store.infrastructure.models import ItemKeranjang
+
+    user = PembeliStore(nama="P", email="c@test.com", password_hash="x")
+    produk = ProdukStore(nama="Talenan", harga=Decimal(harga), stok=5, berat_gram=500, cod=cod)
+    session.add_all([user, produk])
+    await session.flush()
+    session.add(ItemKeranjang(user_id=user.id, produk_id=produk.id, qty=qty))
+    await session.flush()
+    return user
+
+
+@pytest.mark.asyncio
+async def test_cod_checkout_makes_an_order_waiting_for_the_seller(session):
+    user = await _keranjang(session)
+    pesanan = await services.checkout(session, user.id, cod=True)
+    assert pesanan.status == "menunggu_konfirmasi" and pesanan.metode_pembayaran == "cod"
+
+
+@pytest.mark.asyncio
+async def test_cod_is_refused_for_non_cod_products_big_orders_and_without_shipping(session, monkeypatch):
+    bukan = await _keranjang(session, cod=False)
+    with pytest.raises(HTTPException) as exc:
+        await services.checkout(session, bukan.id, cod=True)
+    assert exc.value.status_code == 400 and "Talenan" in exc.value.detail
+    mahal = PembeliStore(nama="Q", email="q@test.com", password_hash="x")
+    session.add(mahal)
+    await session.flush()
+    from tenants.store.modules.store.infrastructure.models import ItemKeranjang
+
+    produk = ProdukStore(nama="Lemari", harga=Decimal("600000"), stok=5, cod=True)
+    session.add(produk)
+    await session.flush()
+    session.add(ItemKeranjang(user_id=mahal.id, produk_id=produk.id, qty=1))
+    await session.flush()
+    with pytest.raises(HTTPException) as exc:
+        await services.checkout(session, mahal.id, cod=True)
+    assert exc.value.status_code == 400 and "500.000" in exc.value.detail
+    monkeypatch.delenv("BITESHIP_API_KEY")
+    ok = await _keranjang_ok(session)
+    with pytest.raises(HTTPException) as exc:
+        await services.checkout(session, ok.id, cod=True)
+    assert exc.value.status_code == 409
+
+
+async def _keranjang_ok(session):
+    from tenants.store.modules.store.infrastructure.models import ItemKeranjang
+
+    user = PembeliStore(nama="R", email="r@test.com", password_hash="x")
+    produk = ProdukStore(nama="Sendok", harga=Decimal("50000"), stok=5, cod=True)
+    session.add_all([user, produk])
+    await session.flush()
+    session.add(ItemKeranjang(user_id=user.id, produk_id=produk.id, qty=1))
+    await session.flush()
+    return user
+
+
+@pytest.mark.asyncio
+async def test_cod_order_total_carries_shipping_and_cod_fee_and_goes_through_confirmation(session, monkeypatch):
+    user = await _keranjang(session)
+    monkeypatch.setattr(bs, "_rates_sync", lambda k, i, c=0: COD_PRICING if c else PRICING)
+    pesanan = await services.checkout(session, user.id, cod=True)
+    out = await buyer_module.isi_alamat_pengiriman(pesanan.id, _form(), session, user)
+    assert Decimal(out["ongkir"]) == 18000 and Decimal(out["biaya_cod"]) == 2000
+    pesanan = await services.get_pesanan(session, pesanan.id)
+    assert pesanan.total == Decimal("220000")  # 200000 items + 18000 shipping + 2000 COD fee
+    # The courier cannot be booked before the seller confirms the order.
+    with pytest.raises(HTTPException) as exc:
+        await services.buat_order_biteship(session, pesanan.id)
+    assert exc.value.status_code == 409
+    # COD orders are not paid online.
+    with pytest.raises(HTTPException) as exc:
+        await buyer_module.mulai_pembayaran(pesanan.id, session, user)
+    assert exc.value.status_code == 409
+    await services.ubah_status_pesanan(session, pesanan.id, "diproses")
+    sent = {}
+
+    def fake(method, path, body=None):
+        sent.update(body=body)
+        return ORDER_OK
+
+    monkeypatch.setattr(bs, "_request_sync", fake)
+    await services.buat_order_biteship(session, pesanan.id)
+    assert sent["body"]["destination_cash_on_delivery"] == 220000
+
+
+@pytest.mark.asyncio
+async def test_cancelling_a_cod_order_gives_the_stock_back(session):
+    user = await _keranjang(session, qty=2)
+    pesanan = await services.checkout(session, user.id, cod=True)
+    produk = await session.get(ProdukStore, pesanan.items[0].produk_id)
+    assert produk.stok == 3
+    await services.ubah_status_pesanan(session, pesanan.id, "dibatalkan")
+    await session.refresh(produk)
+    assert produk.stok == 5
