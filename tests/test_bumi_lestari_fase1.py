@@ -107,6 +107,18 @@ async def _trx(c, user, akun, kategori, jenis, jumlah, tanggal=None, **kw):
     )
 
 
+async def _platform(c, nama="Meta", grup="eksternal"):
+    """Platform iklan untuk top up kas iklan (wajib, AB-KI-3); dibuat sekali per fixture."""
+    from tenants.bumi_lestari.modules.bumi_lestari.infrastructure.models_iklan import BlPlatformIklan
+
+    p = (await c.s.execute(select(BlPlatformIklan).where(BlPlatformIklan.nama == nama))).scalar_one_or_none()
+    if p is None:
+        p = BlPlatformIklan(nama=nama, grup=grup)
+        c.s.add(p)
+        await c.s.flush()
+    return p
+
+
 async def _kode(c, fn, *a, **kw):
     with pytest.raises(HTTPException) as exc:
         await fn(*a, **kw)
@@ -265,7 +277,7 @@ async def test_kirim_kas_kecil_kunci_batal_kiriman_dan_kirim_ulang(c):
 async def test_kirim_semua_sumber_order_dan_owner_tanpa_kas_iklan(c):
     await _modal(c)
     await services.catat_pengisian(c.s, c.admin, "kas_iklan", date(2026, 9, 1))
-    await _trx(c, c.admin, "KAS_IKLAN", "Biaya iklan", "keluar", "300000", date(2026, 9, 2))
+    await _trx(c, c.admin, "KAS_IKLAN", "Biaya iklan", "keluar", "300000", date(2026, 9, 2), platform_iklan_id=(await _platform(c)).id)
     o = await _order_reseller(c, date(2026, 9, 22))
     pen = await pembayaran.buat_penerimaan_reseller(c.s, c.admin, PenerimaanResellerIn(pelanggan_id=c.rina.id, order_ids=[o.id], tanggal=date(2026, 9, 29)))
     assert pen.status_kirim == "draf"

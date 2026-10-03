@@ -11,7 +11,7 @@ from datetime import date, datetime, timezone
 from decimal import Decimal
 from typing import Optional
 
-from sqlalchemy import JSON, Boolean, Date, DateTime, ForeignKey, Index, Integer, Numeric, String, Text
+from sqlalchemy import JSON, Boolean, Date, DateTime, ForeignKey, Index, Integer, Numeric, String, Text, false
 from sqlalchemy.orm import Mapped, mapped_column
 
 from tenants.bumi_lestari.modules.bumi_lestari.infrastructure.database import BumiLestariBase
@@ -32,7 +32,9 @@ JENIS_AKUN = ("kas", "bank", "ewallet", "kas_kecil", "kas_iklan")
 JENIS_IMPRESET = ("kas_kecil", "kas_iklan")
 JENIS_KATEGORI = ("pemasukan", "pengeluaran")
 JENIS_TRANSAKSI = ("masuk", "keluar")
-JENIS_TRANSFER = ("biasa", "pengisian_kas_kecil", "pengisian_kas_iklan", "sisihan_dana", "pelunasan_talangan")
+JENIS_TRANSFER = (
+    "biasa", "pengisian_kas_kecil", "pengisian_kas_iklan", "sisihan_dana", "pelunasan_talangan", "pengembalian_kas_iklan",
+)
 # Akun kewajiban virtual (bukan kas): tidak tampil di daftar akun/total kas, tidak bisa dipakai transaksi manual.
 JENIS_KEWAJIBAN = "kewajiban"
 KODE_TALANGAN = "TALANGAN"
@@ -121,6 +123,9 @@ class BlTransaksi(BumiLestariBase):
     sumber_ref: Mapped[Optional[str]] = mapped_column(String(255), nullable=True)
     # Koreksi atas bulan yang sudah tutup buku (YYYY-MM); transaksi tetap bertanggal & dihitung di bulan berjalan.
     koreksi_periode: Mapped[Optional[str]] = mapped_column(String(7), nullable=True)
+    # Top up kas iklan (spesifikasi 8.7): platform wajib; tanda bila melebihi porsi grup 25/75 bulan itu.
+    platform_iklan_id: Mapped[Optional[str]] = mapped_column(String(64), nullable=True, index=True)
+    melebihi_porsi: Mapped[bool] = mapped_column(Boolean, nullable=False, default=False, server_default=false())
     dibatalkan: Mapped[bool] = mapped_column(Boolean, nullable=False, default=False)
     dibatalkan_at: Mapped[Optional[datetime]] = mapped_column(DateTime(timezone=True), nullable=True)
     alasan_batal: Mapped[Optional[str]] = mapped_column(Text, nullable=True)
@@ -142,7 +147,7 @@ class BlTransfer(BumiLestariBase):
     dibatalkan_at: Mapped[Optional[datetime]] = mapped_column(DateTime(timezone=True), nullable=True)
     alasan_batal: Mapped[Optional[str]] = mapped_column(Text, nullable=True)
     # Isi ulang kas kecil/kas iklan di luar jadwal Selasa (AB-TL-3): wajib alasan.
-    di_luar_jadwal: Mapped[bool] = mapped_column(Boolean, nullable=False, default=False)
+    di_luar_jadwal: Mapped[bool] = mapped_column(Boolean, nullable=False, default=False, server_default=false())
     alasan_luar_jadwal: Mapped[Optional[str]] = mapped_column(Text, nullable=True)
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=_utcnow)
 
@@ -165,6 +170,10 @@ class BlProfil(BumiLestariBase):
         Text, nullable=False,
         default="Jl. Ampel Kuning, Padasuka, Desa Wonoharjo, Kec. Pangandaran, Kab. Pangandaran, Jawa Barat",
     )
+    # Budget iklan (AB-KI-4): porsi internal/eksternal (%) dan budget bulanan (None = plafon kas iklan × jumlah Selasa).
+    porsi_iklan_internal: Mapped[Decimal] = mapped_column(Numeric(5, 2), nullable=False, default=Decimal("25"))
+    porsi_iklan_eksternal: Mapped[Decimal] = mapped_column(Numeric(5, 2), nullable=False, default=Decimal("75"))
+    budget_iklan_bulanan: Mapped[Optional[Decimal]] = mapped_column(Numeric(14, 2), nullable=True)
     telepon: Mapped[str] = mapped_column(String(64), nullable=False, default="")
     email: Mapped[str] = mapped_column(String(255), nullable=False, default="")
     catatan: Mapped[str] = mapped_column(Text, nullable=False, default="")

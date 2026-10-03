@@ -20,6 +20,7 @@ from tenants.bumi_lestari.modules.bumi_lestari.infrastructure.models_order impor
 from tenants.bumi_lestari.modules.bumi_lestari.infrastructure import models_pembayaran  # noqa: F401  (register tables)
 from tenants.bumi_lestari.modules.bumi_lestari.infrastructure.models_pembayaran import BlLangganan
 from tenants.bumi_lestari.modules.bumi_lestari.infrastructure import models_talangan  # noqa: F401 (daftarkan tabel)
+from tenants.bumi_lestari.modules.bumi_lestari.infrastructure.models_iklan import BlPlatformIklan
 from tenants.bumi_lestari.modules.bumi_lestari.infrastructure.models_pencairan import (
     BlFormatPenghasilan,
     BlFormatPenghasilanKolom,
@@ -127,6 +128,16 @@ FORMAT_SHOPEE_SEMENTARA = {
     ],
 }
 
+# Platform iklan bawaan (AB-KI-3): internal = iklan di marketplace (dihubungkan ke salurannya bila ada).
+DEFAULT_PLATFORM_IKLAN = (
+    ("Shopee", "internal", "Shopee"),
+    ("TikTok Shop", "internal", "TikTok Shop"),
+    ("Lazada", "internal", "Lazada"),
+    ("Blibli", "internal", "Blibli"),
+    ("Meta", "eksternal", None),
+    ("Google", "eksternal", None),
+)
+
 # Entri pembuka modal Owner (spesifikasi AB-MD-1): dicatat sekali oleh seed.
 SETORAN_MODAL_AWAL = Decimal("20000000")
 TANGGAL_SETORAN_MODAL_AWAL = date(2026, 9, 1)
@@ -157,6 +168,12 @@ _ALTER_POSTGRES = (
     "ALTER TABLE bl_order ADD COLUMN IF NOT EXISTS kembali_stok BOOLEAN NOT NULL DEFAULT false",
     "ALTER TABLE bl_transfer ADD COLUMN IF NOT EXISTS di_luar_jadwal BOOLEAN NOT NULL DEFAULT false",
     "ALTER TABLE bl_transfer ADD COLUMN IF NOT EXISTS alasan_luar_jadwal TEXT",
+    "ALTER TABLE bl_transaksi ADD COLUMN IF NOT EXISTS platform_iklan_id VARCHAR(64)",
+    "ALTER TABLE bl_transaksi ADD COLUMN IF NOT EXISTS melebihi_porsi BOOLEAN NOT NULL DEFAULT false",
+    "CREATE INDEX IF NOT EXISTS ix_bl_transaksi_platform_iklan_id ON bl_transaksi (platform_iklan_id)",
+    "ALTER TABLE bl_profil ADD COLUMN IF NOT EXISTS porsi_iklan_internal NUMERIC(5, 2) NOT NULL DEFAULT 25",
+    "ALTER TABLE bl_profil ADD COLUMN IF NOT EXISTS porsi_iklan_eksternal NUMERIC(5, 2) NOT NULL DEFAULT 75",
+    "ALTER TABLE bl_profil ADD COLUMN IF NOT EXISTS budget_iklan_bulanan NUMERIC(14, 2)",
     "CREATE INDEX IF NOT EXISTS ix_bl_order_status_cair ON bl_order (status_cair)",
     "CREATE INDEX IF NOT EXISTS ix_bl_order_pencairan_baris_id ON bl_order (pencairan_baris_id)",
     "CREATE INDEX IF NOT EXISTS ix_bl_transaksi_status_kirim ON bl_transaksi (status_kirim)",
@@ -243,6 +260,13 @@ async def seed_bumi_lestari(session: AsyncSession) -> dict[str, str]:
     if (await session.execute(select(BlProporsiBagiHasil.id))).first() is None:
         for penerima, persen in (("admin", 40), ("owner", 60)):
             session.add(BlProporsiBagiHasil(penerima=penerima, persen=persen))
+    await session.flush()
+    for nama, grup, nama_saluran in DEFAULT_PLATFORM_IKLAN:
+        if (await session.execute(select(BlPlatformIklan.id).where(BlPlatformIklan.nama == nama))).first() is None:
+            sid = None
+            if nama_saluran:
+                sid = (await session.execute(select(BlSaluran.id).where(BlSaluran.nama == nama_saluran))).scalar_one_or_none()
+            session.add(BlPlatformIklan(nama=nama, grup=grup, saluran_id=sid))
     await session.flush()
     await _seed_format_shopee(session)
     await _seed_setoran_modal(session, owner)

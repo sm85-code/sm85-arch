@@ -6,7 +6,7 @@ from decimal import Decimal
 
 import pytest
 
-from test_bumi_lestari_fase1 import _kode, _modal, _trx, c  # noqa: F401
+from test_bumi_lestari_fase1 import _kode, _modal, _platform, _trx, c  # noqa: F401
 from tenants.bumi_lestari.modules.bumi_lestari.application import kiriman_services as kirim
 from tenants.bumi_lestari.modules.bumi_lestari.application import laporan_services as lap
 from tenants.bumi_lestari.modules.bumi_lestari.application import services
@@ -112,7 +112,7 @@ async def test_saldo_nol_seluruhnya_talangan_dan_batal_setelah_kirim_ditolak(c):
     await kirim.batal_kiriman(c.s, c.admin, k.id, "koreksi")
     assert (await tl.batal_talangan(c.s, c.admin, x.id, "salah catat")).dibatalkan
     # Kas iklan: talangan hanya terlihat oleh admin.
-    await _trx(c, c.admin, "KAS_IKLAN", "Biaya iklan", "keluar", "10000", date(2026, 9, 4), talangan_oleh="Admin")
+    await _trx(c, c.admin, "KAS_IKLAN", "Biaya iklan", "keluar", "10000", date(2026, 9, 4), talangan_oleh="Admin", platform_iklan_id=(await _platform(c)).id)
     assert len(await tl.list_talangan(c.s, c.admin, status_filter="belum_lunas")) == 1
     assert await tl.list_talangan(c.s, c.owner, status_filter="belum_lunas") == []
 

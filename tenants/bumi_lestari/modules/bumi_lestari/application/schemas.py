@@ -167,6 +167,8 @@ class TransaksiIn(BaseModel):
     koreksi_periode: Optional[str] = Field(default=None, pattern=r"^\d{4}-(0[1-9]|1[0-2])$")
     # Kas kecil/kas iklan kurang: kekurangannya dicatat sebagai talangan oleh orang ini (AB-TL-1).
     talangan_oleh: Optional[str] = Field(default=None, max_length=128)
+    # Wajib untuk pengeluaran (top up) kas iklan (AB-KI-3).
+    platform_iklan_id: Optional[str] = None
 
 
 class TransaksiOut(BaseModel):
@@ -183,6 +185,8 @@ class TransaksiOut(BaseModel):
     status_kirim: str = "terkirim"  # draf = belum masuk laporan keuangan
     kiriman_id: Optional[str] = None
     koreksi_periode: Optional[str] = None
+    platform_iklan_id: Optional[str] = None
+    melebihi_porsi: bool = False
     dibatalkan: bool
     alasan_batal: Optional[str] = None
     created_at: datetime

@@ -18,6 +18,7 @@ from tenants.bumi_lestari.modules.bumi_lestari.application.schemas import (
     TransferIn,
     UserCreateIn,
 )
+from tenants.bumi_lestari.modules.bumi_lestari.infrastructure.models_iklan import BlPlatformIklan
 from tenants.bumi_lestari.modules.bumi_lestari.infrastructure.database import BumiLestariBase
 from tenants.bumi_lestari.modules.bumi_lestari.infrastructure.models import BlAkunKas, BlKategori
 from tenants.bumi_lestari.modules.bumi_lestari.infrastructure.seeder import DEFAULT_AKUN, DEFAULT_KATEGORI
@@ -275,12 +276,16 @@ async def test_kas_iklan_imprest_weekly_refill_to_plafon_admin_only(session):
 
     t = await services.catat_pengisian(session, admin, "kas_iklan")
     assert t.jenis == "pengisian_kas_iklan" and await services.saldo_akun(session, iklan) == Decimal("2000000")
+    meta = BlPlatformIklan(nama="Meta", grup="eksternal")
+    session.add(meta)
+    await session.flush()
     await services.create_transaksi(
-        session, admin, TransaksiIn(akun_id=iklan.id, kategori_id=iklan_kat.id, jenis="keluar", jumlah=Decimal("450000"))
+        session, admin, TransaksiIn(akun_id=iklan.id, kategori_id=iklan_kat.id, jenis="keluar", jumlah=Decimal("450000"), platform_iklan_id=meta.id)
     )
     with pytest.raises(HTTPException) as exc:  # tidak boleh melebihi saldo kas iklan
         await services.create_transaksi(
-            session, admin, TransaksiIn(akun_id=iklan.id, kategori_id=iklan_kat.id, jenis="keluar", jumlah=Decimal("2000000"))
+            session, admin,
+            TransaksiIn(akun_id=iklan.id, kategori_id=iklan_kat.id, jenis="keluar", jumlah=Decimal("2000000"), platform_iklan_id=meta.id),
         )
     assert exc.value.status_code == 400
 

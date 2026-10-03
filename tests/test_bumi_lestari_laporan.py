@@ -8,6 +8,7 @@ from fastapi import HTTPException
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker, create_async_engine
 
+from test_bumi_lestari_fase1 import _platform
 from tenants.bumi_lestari.modules.bumi_lestari.application import laporan_services as lap
 from tenants.bumi_lestari.modules.bumi_lestari.application import provisi_services as ps
 from tenants.bumi_lestari.modules.bumi_lestari.application import kiriman_services, services, pembayaran_services as pembayaran
@@ -52,10 +53,10 @@ async def ctx():
     await engine.dispose()
 
 
-async def _trx(c, user, akun, kategori, jenis, jumlah, tanggal):
+async def _trx(c, user, akun, kategori, jenis, jumlah, tanggal, **kw):
     return await services.create_transaksi(
         c.s, user,
-        TransaksiIn(akun_id=c.akun[akun].id, kategori_id=c.kat[kategori].id, jenis=jenis, jumlah=Decimal(jumlah), tanggal=tanggal),
+        TransaksiIn(akun_id=c.akun[akun].id, kategori_id=c.kat[kategori].id, jenis=jenis, jumlah=Decimal(jumlah), tanggal=tanggal, **kw),
     )
 
 
@@ -77,7 +78,7 @@ async def _skenario_september(c):
     await _trf(c, c.owner, "KAS_UTAMA", "KAS_KECIL", "50000", date(2026, 9, 22))
     # Kas iklan (admin): isi 2jt, pakai 400rb
     await _trf(c, c.admin, "KAS_UTAMA", "KAS_IKLAN", "2000000", date(2026, 9, 1))
-    await _trx(c, c.admin, "KAS_IKLAN", "Biaya iklan", "keluar", "400000", date(2026, 9, 5))
+    await _trx(c, c.admin, "KAS_IKLAN", "Biaya iklan", "keluar", "400000", date(2026, 9, 5), platform_iklan_id=(await _platform(c)).id)
     await _trx(c, c.admin, "KAS_UTAMA", "Prive", "keluar", "100000", date(2026, 9, 12))
     # Gaji 2jt dicicil: 2 cicilan (500rb) pada Selasa 1 & 8 Sep
     await pembayaran.create_karyawan(c.s, KaryawanIn(nama="Sari", peran="kas_kecil_packing", gaji_bulanan=Decimal("2000000")))

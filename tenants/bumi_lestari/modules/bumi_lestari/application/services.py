@@ -10,7 +10,7 @@ from sqlalchemy import func, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from shared.security import hash_password, verify_password
-from tenants.bumi_lestari.modules.bumi_lestari.application import kategori_core
+from tenants.bumi_lestari.modules.bumi_lestari.application import iklan_core, kategori_core
 from tenants.bumi_lestari.modules.bumi_lestari.application.audit_core import (
     bulan_tertutup,
     catat_audit,
@@ -50,6 +50,7 @@ from tenants.bumi_lestari.modules.bumi_lestari.infrastructure.models import (
     BlTransfer,
     BlUser,
 )
+from tenants.bumi_lestari.modules.bumi_lestari.infrastructure.models_iklan import BlPlatformIklan
 from tenants.bumi_lestari.modules.bumi_lestari.infrastructure.models_talangan import REF_TALANGAN, BlTalangan
 
 WIB = ZoneInfo("Asia/Jakarta")
@@ -362,6 +363,18 @@ async def create_transaksi(session: AsyncSession, user: BlUser, payload: Transak
     if payload.koreksi_periode is not None:
         if payload.koreksi_periode >= periode_dari(tanggal) or not await periode_tertutup(session, payload.koreksi_periode):
             raise _bad("Koreksi bulan lalu hanya untuk bulan yang sudah tutup buku, dicatat di bulan berjalan", 422)
+    # Top up kas iklan wajib memilih platform; ditandai bila melebihi porsi grup bulan ini (AB-KI-3/4, KP-KI-1/2).
+    iklan: dict = {}
+    if akun.jenis == "kas_iklan" and payload.jenis == "keluar":
+        platform = await session.get(BlPlatformIklan, payload.platform_iklan_id) if payload.platform_iklan_id else None
+        if platform is None or not platform.aktif:
+            raise _bad("Pilih platform iklan untuk top up kas iklan", 422)
+        iklan = {
+            "platform_iklan_id": platform.id,
+            "melebihi_porsi": await iklan_core.melebihi_porsi(session, platform, tanggal, payload.jumlah),
+        }
+    elif payload.platform_iklan_id:
+        raise _bad("Platform iklan hanya untuk pengeluaran kas iklan")
     # Akun imprest (kas kecil, kas iklan) berplafon: tidak boleh minus. Kekurangannya boleh dicatat sebagai
     # talangan atas nama seseorang (AB-TL-1): biaya tetap penuh, bagian akun asal hanya sebesar saldonya.
     if akun.jenis in JENIS_IMPRESET and payload.jenis == "keluar":
@@ -369,7 +382,7 @@ async def create_transaksi(session: AsyncSession, user: BlUser, payload: Transak
         if saldo < payload.jumlah:
             if not (payload.talangan_oleh or "").strip():
                 raise _bad(f"Saldo {akun.nama} tidak cukup")
-            return await _catat_dengan_talangan(session, user, payload, akun, kategori, tanggal, max(saldo, Decimal("0")))
+            return await _catat_dengan_talangan(session, user, payload, akun, kategori, tanggal, max(saldo, Decimal("0")), iklan)
     elif payload.talangan_oleh:
         raise _bad("Talangan hanya untuk pengeluaran kas kecil/kas iklan")
     trx = BlTransaksi(
@@ -382,6 +395,7 @@ async def create_transaksi(session: AsyncSession, user: BlUser, payload: Transak
         dibuat_oleh=user.id,
         status_kirim=status_awal_transaksi(akun),
         koreksi_periode=payload.koreksi_periode,
+        **iklan,
     )
     session.add(trx)
     await session.flush()
@@ -432,7 +446,7 @@ async def list_transaksi(
 
 async def _catat_dengan_talangan(
     session: AsyncSession, user: BlUser, payload: TransaksiIn, akun: BlAkunKas, kategori: BlKategori,
-    tanggal: date, saldo: Decimal,
+    tanggal: date, saldo: Decimal, iklan: dict | None = None,
 ) -> BlTransaksi:
     """Pecah pengeluaran: `saldo` dari akun asal + kekurangannya di akun TALANGAN (keduanya biaya, keduanya draf
     dan ikut kiriman sumber akun asal). Mengembalikan transaksi akun asal (atau transaksi talangan bila saldo 0)."""
@@ -445,7 +459,7 @@ async def _catat_dengan_talangan(
         return BlTransaksi(
             tanggal=tanggal, akun_id=akun_id, kategori_id=kategori.id, jenis="keluar", jumlah=jumlah,
             keterangan=keterangan, dibuat_oleh=user.id, status_kirim=STATUS_DRAF, koreksi_periode=payload.koreksi_periode,
-            ref_jenis=REF_TALANGAN if ref else None,
+            ref_jenis=REF_TALANGAN if ref else None, **(iklan or {}),
         )
 
     utama = baris(akun.id, saldo, ket, False) if saldo > 0 else None
