@@ -31,7 +31,7 @@ if TYPE_CHECKING:
     from tenants.store.modules.store.application.schemas import StaffIn, StaffPatch
 from tenants.store.modules.store.application.slug import slugify, with_suffix
 from tenants.store.modules.store.infrastructure.media_storage import media_url
-from tenants.store.modules.store.infrastructure.shipping_biteship import ItemKirim, PengaturanKirim, berat_default
+from tenants.store.modules.store.infrastructure.shipping_biteship import ItemKirim, PengaturanKirim, asal_kirim, berat_default
 from tenants.store.modules.store.infrastructure.shipping_biteship import aktif as shipping_aktif
 from tenants.store.modules.store.infrastructure.shipping_biteship import buat_order as buat_order_kurir
 from tenants.store.modules.store.infrastructure.shipping_biteship import cek_ongkir as cek_ongkir_kurir
@@ -1044,6 +1044,37 @@ def catatan_indonesia(status: str, catatan_asli: str) -> str:
     if catatan_asli:
         logger.info("Biteship: catatan belum diterjemahkan (status=%r): %s", status, catatan_asli)
     return catatan_asli or status
+
+
+async def label_pengiriman(session: AsyncSession, pesanan_id: str) -> dict:
+    """Everything printed on the shipping label (resi) of an order: waybill, courier, recipient, sender, items and,
+    for COD, the amount the courier collects."""
+    pesanan = await get_pesanan(session, pesanan_id)
+    pengiriman = await get_pengiriman(session, pesanan_id)
+    if not pengiriman.tracking_id:
+        raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail="Belum ada nomor resi. Pesan kurir lebih dulu.")
+    items = await item_kirim_pesanan(session, pesanan)
+    return {
+        "pesanan_id": pesanan.id,
+        "resi": pengiriman.tracking_id,
+        "kurir": pengiriman.kurir,
+        "layanan": pengiriman.layanan_nama or pengiriman.layanan,
+        "cod": int(pesanan.total) if pesanan.metode_pembayaran == "cod" else 0,
+        "penerima": {
+            "nama": pengiriman.nama_penerima,
+            "telepon": pengiriman.telepon_penerima,
+            "alamat": pengiriman.alamat_tujuan,
+            "kelurahan": pengiriman.kelurahan_tujuan,
+            "kecamatan": pengiriman.kecamatan_tujuan,
+            "kota": pengiriman.kota_tujuan,
+            "provinsi": pengiriman.provinsi_tujuan,
+            "kode_pos": pengiriman.kode_pos_tujuan,
+        },
+        "pengirim": asal_kirim(await pengaturan_kirim(session)),
+        "barang": [{"nama": i.nama, "qty": i.qty, "berat_gram": i.berat_gram} for i in items],
+        "berat_gram": sum(i.berat_gram * i.qty for i in items),
+        "catatan": f"Pesanan {pesanan.id[:8]}",
+    }
 
 
 _EVENT_WEBHOOK_BITESHIP = {"order.status", "order.waybill_id"}
