@@ -144,6 +144,7 @@ Efek ke keuangan:
   Nilai awal Admin 40 / Owner 60 hanya data seed. Penerima bisa ditambah (mis. dana cadangan).
 - Setiap perhitungan bagi hasil menyimpan **snapshot** proporsi saat dihitung, jadi mengubah
   proporsi tidak mengubah periode yang sudah dihitung.
+- Periode bagi hasil: **bulanan** (`periode` = `YYYY-MM`, satu perhitungan per bulan).
 - Laba bersih periode = semua pemasukan − semua pengeluaran periode itu (biaya produksi
   tukang, gaji, operasional kas kecil, transport, packing, dll). **Tidak dihitung sebagai
   biaya:** transfer antar akun, kategori "Prive" dan "Bagi hasil".
