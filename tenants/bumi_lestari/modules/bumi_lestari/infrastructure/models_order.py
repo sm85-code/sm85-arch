@@ -136,7 +136,5 @@ class BlOrder(BumiLestariBase):
     tgl_dicat: Mapped[Optional[date]] = mapped_column(Date, nullable=True)
     tgl_dikirim: Mapped[Optional[date]] = mapped_column(Date, nullable=True)
     tgl_selesai: Mapped[Optional[date]] = mapped_column(Date, nullable=True)
-    # Nomor resi pengiriman: untuk order penjual lain, resi dikirim penjual itu ke UMKM lalu ditempel UMKM.
-    resi: Mapped[str] = mapped_column(String(128), nullable=False, default="")
     catatan: Mapped[str] = mapped_column(Text, nullable=False, default="")
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=_utcnow)

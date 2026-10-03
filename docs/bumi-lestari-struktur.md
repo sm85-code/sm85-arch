@@ -324,6 +324,7 @@ nilai awal 0 = belum disisihkan).
 - Semua bisa dibatalkan (transfer, beban, dan transaksi ikut dibatalkan).
 
 **Catatan proses penjual lain:** seluruh pengerjaan dilakukan UMKM (ambil dari tukang → cat oleh karyawan → tempel
-resi → kirim); penjual lain hanya mengirim resi ke UMKM (disimpan di `bl_order.resi`). Karena itu order sudah
+resi → kirim); penjual lain hanya mengirim resi ke UMKM (resi menjadi tanggung jawab penjual lain, tidak dicatat
+di sistem). Karena itu order sudah
 **bisa ditagih sejak barang jadi dan diambil dari tukang** (`tgl_diambil`), tidak menunggu dicat atau dikirim.
 Satu order = satu baris (di PO dan invoice, jumlah order = jumlah baris).

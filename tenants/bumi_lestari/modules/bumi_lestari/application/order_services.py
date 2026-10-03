@@ -278,7 +278,6 @@ async def create_order(session: AsyncSession, payload: OrderIn) -> BlOrder:
         biaya_pokok=biaya,
         butuh_cat=butuh_cat,
         status="dipesan",
-        resi=payload.resi.strip(),
         catatan=payload.catatan.strip(),
     )
     session.add(order)
