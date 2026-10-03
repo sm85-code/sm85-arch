@@ -50,6 +50,31 @@ pengeluaran yang tidak berhubungan dengan order.
 Fitur: catat pemasukan/pengeluaran, transfer antar akun, saldo per akun, utang & piutang,
 laporan laba-rugi dan arus kas per periode, ekspor CSV.
 
+## 2b. Kas kecil (imprest) dan dua laporan
+
+Kas kecil = akun kas tersendiri untuk **transaksi operasional**, dana awal diambil dari
+modal sebesar **Rp 3.000.000** (`plafon`). Setiap minggu dilakukan **pengisian kembali
+(replenishment)** sehingga saldo kembali Rp 3.000.000.
+
+Cara kerja:
+- `bl_akun_kas` punya kolom `jenis = "kas_kecil"` dan `plafon` (3.000.000, bisa diubah).
+- Pengeluaran operasional dicatat sebagai `bl_transaksi` pada akun kas kecil.
+- Tiap minggu: pengisian = **plafon − saldo saat ini**, tercatat sebagai `bl_transfer`
+  dari akun kas utama/modal ke kas kecil. Jumlahnya otomatis sama dengan total
+  pengeluaran kas kecil minggu itu. Endpoint `GET /kas-kecil/pengisian` menghitung
+  angkanya, `POST /kas-kecil/pengisian` mencatatnya.
+- Pengisian bukan pengeluaran baru: di laporan umum, pengeluaran operasional diakui saat
+  dipakai (transaksi kas kecil), sedangkan pengisian hanya pemindahan antar akun.
+
+Dua laporan:
+1. **Laporan kas kecil** (per bulan, dengan rincian mingguan): saldo awal, daftar
+   pengeluaran per kategori, total pakai per minggu, pengisian kembali, saldo akhir
+   (harus Rp 3.000.000 setelah pengisian). Menandai selisih bila saldo fisik berbeda.
+2. **Laporan umum** (laba-rugi, arus kas, saldo semua akun): mencakup semua akun,
+   termasuk pengeluaran kas kecil, order, dan utang tukang.
+
+Endpoint tambahan: `GET /laporan/kas-kecil?bulan=YYYY-MM`, `GET /laporan/umum?dari=&sampai=`.
+
 ## 3. Modul order produk
 
 | Tabel | Isi utama |
@@ -93,7 +118,7 @@ Efek ke keuangan:
 1. Nama tenant `bumi_lestari` (prefix tabel `bl_`, route `/api/bumi-lestari`).
 2. Order Shopee **diinput manual** dulu; tautan ke sinkron di `marketplace_erp` ditunda.
 3. Biaya tukang per order, **satu harga borongan sudah termasuk bahan dan jasa**. Tidak ada pencatatan bahan terpisah per order; laba per order = harga jual bersih − biaya tukang.
-4. Pencatatan sederhana (kas masuk/keluar + utang), **bukan** akuntansi double-entry penuh. Cukup, atau perlu neraca/jurnal?
+4. Kas kecil memakai sistem imprest (plafon Rp 3 juta, diisi kembali tiap minggu). Pencatatan sederhana (kas masuk/keluar + utang), **bukan** akuntansi double-entry penuh. Cukup, atau perlu neraca/jurnal?
 5. Satu usaha dan satu pemilik; belum multi-cabang. Staff opsional.
 6. Database Postgres baru lewat `DATABASE_URL_BUMI_LESTARI`.
 
