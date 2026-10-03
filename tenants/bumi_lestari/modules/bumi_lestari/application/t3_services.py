@@ -9,9 +9,14 @@ from datetime import date, timedelta
 from decimal import ROUND_HALF_UP, Decimal
 
 from fastapi import HTTPException, status
-from sqlalchemy import func, select
+from sqlalchemy import func, or_, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from tenants.bumi_lestari.modules.bumi_lestari.application.provisi_core import (
+    batalkan_provisi_sumber,
+    beban_provisi,
+    sesuaikan,
+)
 from tenants.bumi_lestari.modules.bumi_lestari.application.schemas_order import OrderOut
 from tenants.bumi_lestari.modules.bumi_lestari.application.schemas_t3 import (
     BagiHasilOut,
@@ -35,6 +40,7 @@ from tenants.bumi_lestari.modules.bumi_lestari.application.services import (
     saldo_akun,
 )
 from tenants.bumi_lestari.modules.bumi_lestari.infrastructure.models import (
+    KODE_DANA_CADANGAN,
     KODE_KAS_UTAMA,
     BlAkunKas,
     BlKategori,
@@ -54,6 +60,7 @@ from tenants.bumi_lestari.modules.bumi_lestari.infrastructure.models_t3 import (
     REF_GAJI,
     REF_PEMBAYARAN_PEMASOK,
     REF_PENERIMAAN_RESELLER,
+    REF_TAGIHAN,
     BlBagiHasil,
     BlGaji,
     BlKaryawan,
@@ -66,6 +73,7 @@ from tenants.bumi_lestari.modules.bumi_lestari.infrastructure.models_t3 import (
 KATEGORI_PRODUKSI = "Biaya produksi / pembelian barang"
 KATEGORI_RESELLER = "Penjualan reseller"
 KATEGORI_GAJI = "Gaji karyawan"
+KATEGORI_TAGIHAN = "Langganan & utilitas"
 KATEGORI_BAGI_HASIL = "Bagi hasil"
 # Bukan biaya usaha: tidak mengurangi laba bersih yang dibagi.
 KATEGORI_BUKAN_BIAYA = ("Prive", KATEGORI_BAGI_HASIL)
@@ -441,11 +449,17 @@ async def bayar_gaji(session: AsyncSession, user: BlUser, periode: str, tanggal:
     if not belum:
         raise _bad("Tidak ada gaji yang belum dibayar untuk periode ini (jalankan 'siapkan gaji' dulu)")
     total = sum((Decimal(g.jumlah) for g in belum), Decimal("0"))
-    akun = await _akun_by_kode(session, KODE_KAS_UTAMA)
+    # Gaji dibayar dari Dana cadangan (disisihkan mingguan); beban sudah diakui lewat cicilan, jadi transaksi
+    # pembayaran tidak dihitung lagi sebagai biaya (lihat KATEGORI_TIDAK_DIHITUNG di bagi hasil).
+    akun = await _akun_by_kode(session, KODE_DANA_CADANGAN)
     await _pastikan_saldo(session, akun, total)
     tanggal = tanggal or _hari_ini()
     nama = {k.id: k.nama for k in (await session.execute(select(BlKaryawan))).scalars()}
     for g in belum:
+        await sesuaikan(
+            session, tanggal=tanggal, periode=g.periode, jenis="gaji", target=Decimal(g.jumlah),
+            karyawan_id=g.karyawan_id, sumber_jenis=REF_GAJI, sumber_id=g.id,
+        )
         await _transaksi_otomatis(
             session, user, tanggal=tanggal, akun=akun, kategori=KATEGORI_GAJI, jenis="keluar",
             jumlah=Decimal(g.jumlah), keterangan=f"Gaji {nama[g.karyawan_id]} {periode}",
@@ -464,6 +478,7 @@ async def batalkan_bayar_gaji(session: AsyncSession, gaji_id: str, alasan: str) 
     if g.tanggal_bayar is None:
         raise _bad("Gaji ini belum dibayar", status.HTTP_409_CONFLICT)
     await _batalkan_transaksi_ref(session, REF_GAJI, g.id, alasan)
+    await batalkan_provisi_sumber(session, REF_GAJI, g.id, alasan)
     g.tanggal_bayar = None
     g.dibayar_oleh = None
     await session.flush()
@@ -484,7 +499,7 @@ async def hitung_bagi_hasil(session: AsyncSession, periode: str) -> BagiHasilOut
     """Laba bersih = pemasukan - pengeluaran periode (basis kas). Transfer, Prive, Bagi hasil tidak dihitung."""
     awal, akhir = _rentang_periode(periode)
 
-    async def jumlah(jenis: str, *, kecuali: tuple[str, ...] = ()) -> Decimal:
+    async def jumlah(jenis: str, *, kecuali: tuple[str, ...] = (), kecuali_ref: tuple[str, ...] = ()) -> Decimal:
         stmt = (
             select(func.coalesce(func.sum(BlTransaksi.jumlah), 0))
             .join(BlKategori, BlKategori.id == BlTransaksi.kategori_id)
@@ -495,10 +510,15 @@ async def hitung_bagi_hasil(session: AsyncSession, periode: str) -> BagiHasilOut
         )
         if kecuali:
             stmt = stmt.where(BlKategori.nama.not_in(kecuali))
+        if kecuali_ref:
+            stmt = stmt.where(or_(BlTransaksi.ref_jenis.is_(None), BlTransaksi.ref_jenis.not_in(kecuali_ref)))
         return Decimal(str((await session.execute(stmt)).scalar_one() or 0))
 
     pemasukan = await jumlah("masuk")
-    pengeluaran = await jumlah("keluar", kecuali=KATEGORI_BUKAN_BIAYA)
+    # Gaji & tagihan langganan dibayar dari Dana cadangan: bebannya sudah diakui lewat cicilan mingguan
+    # (BlProvisi), jadi transaksi pembayarannya dikecualikan agar tidak dihitung dua kali.
+    pengeluaran = await jumlah("keluar", kecuali=KATEGORI_BUKAN_BIAYA, kecuali_ref=(REF_GAJI, REF_TAGIHAN))
+    pengeluaran += await beban_provisi(session, awal, akhir)
     laba = pemasukan - pengeluaran
     proporsi = {p.penerima: Decimal(p.persen) for p in await get_proporsi(session)}
     if set(proporsi) != {"admin", "owner"}:

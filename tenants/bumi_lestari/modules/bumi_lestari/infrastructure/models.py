@@ -32,13 +32,14 @@ JENIS_AKUN = ("kas", "bank", "ewallet", "kas_kecil", "kas_iklan")
 JENIS_IMPRESET = ("kas_kecil", "kas_iklan")
 JENIS_KATEGORI = ("pemasukan", "pengeluaran")
 JENIS_TRANSAKSI = ("masuk", "keluar")
-JENIS_TRANSFER = ("biasa", "pengisian_kas_kecil", "pengisian_kas_iklan")
+JENIS_TRANSFER = ("biasa", "pengisian_kas_kecil", "pengisian_kas_iklan", "sisihan_dana")
 
 KODE_KAS_UTAMA = "KAS_UTAMA"
 KODE_SALDO_SHOPEE = "SALDO_SHOPEE"
 KODE_KAS_KECIL = "KAS_KECIL"
 PLAFON_KAS_KECIL_DEFAULT = Decimal("3000000")
 KODE_KAS_IKLAN = "KAS_IKLAN"
+KODE_DANA_CADANGAN = "DANA_CADANGAN"  # gaji & langganan disisihkan mingguan, dibayar awal bulan
 PLAFON_KAS_IKLAN_DEFAULT = Decimal("2000000")
 
 

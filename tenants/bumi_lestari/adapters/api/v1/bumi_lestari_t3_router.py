@@ -6,6 +6,7 @@ from datetime import date
 from fastapi import APIRouter, Depends, Query, status
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from tenants.bumi_lestari.modules.bumi_lestari.application import provisi_services as psvc
 from tenants.bumi_lestari.modules.bumi_lestari.application import t3_services as svc
 from tenants.bumi_lestari.modules.bumi_lestari.application.schemas import BatalIn
 from tenants.bumi_lestari.modules.bumi_lestari.application.schemas_t3 import (
@@ -17,6 +18,9 @@ from tenants.bumi_lestari.modules.bumi_lestari.application.schemas_t3 import (
     KaryawanIn,
     KaryawanOut,
     KaryawanPatch,
+    LanggananIn,
+    LanggananOut,
+    LanggananPatch,
     PembayaranPemasokDetailOut,
     PembayaranPemasokIn,
     PembayaranPemasokOut,
@@ -24,6 +28,11 @@ from tenants.bumi_lestari.modules.bumi_lestari.application.schemas_t3 import (
     PenerimaanResellerOut,
     PiutangPelangganOut,
     SiapBayarOut,
+    SisihanIn,
+    SisihanOut,
+    SisihanTersimpanOut,
+    TagihanBayarIn,
+    TagihanOut,
 )
 from tenants.bumi_lestari.modules.bumi_lestari.infrastructure.auth import require_roles_bumi_lestari
 from tenants.bumi_lestari.modules.bumi_lestari.infrastructure.database import get_db_bumi_lestari
@@ -151,3 +160,55 @@ async def bayar_bagi_hasil(
 @t3_router.post("/bagi-hasil/{bagi_hasil_id}/batal", response_model=BagiHasilTersimpanOut)
 async def batal_bagi_hasil(bagi_hasil_id: str, payload: BatalIn, session: AsyncSession = _db(), _: BlUser = _guard()):
     return await svc.batalkan_bagi_hasil(session, bagi_hasil_id, payload.alasan)
+
+
+# Langganan, sisihan mingguan gaji & langganan (Dana cadangan), pembayaran tagihan awal bulan
+@t3_router.get("/langganan", response_model=list[LanggananOut])
+async def list_langganan(session: AsyncSession = _db(), _: BlUser = _guard()):
+    return await psvc.list_langganan(session)
+
+
+@t3_router.post("/langganan", response_model=LanggananOut, status_code=status.HTTP_201_CREATED)
+async def create_langganan(payload: LanggananIn, session: AsyncSession = _db(), _: BlUser = _guard()):
+    return await psvc.create_langganan(session, payload)
+
+
+@t3_router.patch("/langganan/{langganan_id}", response_model=LanggananOut)
+async def update_langganan(langganan_id: str, payload: LanggananPatch, session: AsyncSession = _db(), _: BlUser = _guard()):
+    return await psvc.update_langganan(session, langganan_id, payload)
+
+
+@t3_router.get("/sisihan/hitung", response_model=SisihanOut)
+async def hitung_sisihan(tanggal: date | None = None, session: AsyncSession = _db(), _: BlUser = _guard()):
+    """Cicilan Selasa ini (1/4 gaji + 1/4 langganan) yang akan disisihkan ke Dana cadangan."""
+    return await psvc.hitung_sisihan(session, tanggal)
+
+
+@t3_router.post("/sisihan", response_model=SisihanTersimpanOut, status_code=status.HTTP_201_CREATED)
+async def catat_sisihan(payload: SisihanIn, session: AsyncSession = _db(), user: BlUser = _guard()):
+    return await psvc.catat_sisihan(session, user, payload.tanggal)
+
+
+@t3_router.get("/sisihan", response_model=list[SisihanTersimpanOut])
+async def list_sisihan(session: AsyncSession = _db(), _: BlUser = _guard()):
+    return await psvc.list_sisihan(session)
+
+
+@t3_router.post("/sisihan/{sisihan_id}/batal", response_model=SisihanTersimpanOut)
+async def batal_sisihan(sisihan_id: str, payload: BatalIn, session: AsyncSession = _db(), _: BlUser = _guard()):
+    return await psvc.batalkan_sisihan(session, sisihan_id, payload.alasan)
+
+
+@t3_router.post("/tagihan/bayar", response_model=list[TagihanOut], status_code=status.HTTP_201_CREATED)
+async def bayar_tagihan(payload: TagihanBayarIn, session: AsyncSession = _db(), user: BlUser = _guard()):
+    return await psvc.bayar_tagihan(session, user, payload)
+
+
+@t3_router.get("/tagihan", response_model=list[TagihanOut])
+async def list_tagihan(periode: str = PERIODE, session: AsyncSession = _db(), _: BlUser = _guard()):
+    return await psvc.list_tagihan(session, periode)
+
+
+@t3_router.post("/tagihan/{tagihan_id}/batal", response_model=TagihanOut)
+async def batal_tagihan(tagihan_id: str, payload: BatalIn, session: AsyncSession = _db(), _: BlUser = _guard()):
+    return await psvc.batalkan_tagihan(session, tagihan_id, payload.alasan)

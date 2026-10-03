@@ -13,6 +13,7 @@ from tenants.bumi_lestari.modules.bumi_lestari.application import services, t3_s
 from tenants.bumi_lestari.modules.bumi_lestari.application.schemas import (
     ResetPasswordIn,
     TransaksiIn,
+    TransferIn,
     UserCreateIn,
     UserPatchIn,
 )
@@ -193,8 +194,12 @@ async def test_reseller_piutang_and_payment(session, ctx):
     assert await services.saldo_akun(session, ctx.kas) == 0 and len(await t3.list_piutang_reseller(session)) == 1
 
 
+async def _akun(session, kode):
+    return (await session.execute(select(BlAkunKas).where(BlAkunKas.kode == kode))).scalar_one()
+
+
 @pytest.mark.asyncio
-async def test_gaji_monthly_paid_next_month_first(session, ctx):
+async def test_gaji_monthly_paid_next_month_first_from_dana_cadangan(session, ctx):
     await _kas_masuk(session, ctx, "10000000")
     await t3.create_karyawan(session, KaryawanIn(nama="Sari", peran="kas_kecil_packing", gaji_bulanan=Decimal("2000000")))
     await t3.create_karyawan(session, KaryawanIn(nama="Tono", peran="tukang_cat", gaji_bulanan=Decimal("2500000")))
@@ -205,8 +210,16 @@ async def test_gaji_monthly_paid_next_month_first(session, ctx):
     from tenants.bumi_lestari.modules.bumi_lestari.application.schemas_t3 import GajiOut
 
     assert GajiOut.model_validate(gaji[0]).jatuh_tempo == date(2026, 1, 1)
+    with pytest.raises(HTTPException):  # Dana cadangan masih kosong
+        await t3.bayar_gaji(session, ctx.admin, "2025-12", date(2026, 1, 1))
+
+    dana = await _akun(session, "DANA_CADANGAN")  # tanpa cicilan: isi manual dari kas utama
+    await services.create_transfer(
+        session, ctx.admin, TransferIn(dari_akun_id=ctx.kas.id, ke_akun_id=dana.id, jumlah=Decimal("4500000"))
+    )
     dibayar = await t3.bayar_gaji(session, ctx.admin, "2025-12", date(2026, 1, 1))
     assert sum(g.jumlah for g in dibayar) == Decimal("4500000")
+    assert await services.saldo_akun(session, dana) == 0
     assert await services.saldo_akun(session, ctx.kas) == Decimal("5500000")
     with pytest.raises(HTTPException):
         await t3.bayar_gaji(session, ctx.admin, "2025-12", None)  # sudah semua
@@ -264,3 +277,66 @@ async def test_admin_manages_users_and_resets_password(session, ctx):
     with pytest.raises(HTTPException) as exc:
         await services.authenticate_user(session, LoginIn(email="o@t.com", password="passwordbaru1"))
     assert exc.value.status_code == 403
+
+
+@pytest.mark.asyncio
+async def test_weekly_installments_then_payment_do_not_double_count(session, ctx):
+    from tenants.bumi_lestari.modules.bumi_lestari.application import provisi_services as ps
+    from tenants.bumi_lestari.modules.bumi_lestari.application.schemas_t3 import (
+        LanggananIn,
+        TagihanBayarIn,
+        TagihanItemIn,
+    )
+
+    await _kas_masuk(session, ctx, "20000000", tanggal=date(2026, 9, 1))
+    await t3.create_karyawan(session, KaryawanIn(nama="Sari", peran="kas_kecil_packing", gaji_bulanan=Decimal("2000000")))
+    wifi = await ps.create_langganan(session, LanggananIn(nama="Wifi A", jumlah_bulanan=Decimal("350000")))
+    listrik = await ps.create_langganan(session, LanggananIn(nama="Listrik A", jumlah_bulanan=Decimal("400001")))
+    dana = await _akun(session, "DANA_CADANGAN")
+
+    # 4 Selasa di September 2026: 1, 8, 15, 22 (tgl 29 = Selasa ke-5, tidak ada cicilan)
+    prev = await ps.hitung_sisihan(session, date(2026, 9, 1))
+    assert (prev.periode, prev.minggu_ke, prev.total) == ("2026-09", 1, Decimal("500000") + Decimal("87500") + Decimal("100000.25"))
+    for hari in (1, 8, 15, 22):
+        await ps.catat_sisihan(session, ctx.admin, date(2026, 9, hari))
+    with pytest.raises(HTTPException) as exc:  # sudah dicatat
+        await ps.catat_sisihan(session, ctx.admin, date(2026, 9, 22))
+    assert exc.value.status_code == 409
+    assert (await ps.hitung_sisihan(session, date(2026, 9, 29))).items == []
+    with pytest.raises(HTTPException):
+        await ps.catat_sisihan(session, ctx.admin, date(2026, 9, 29))
+
+    bulanan = Decimal("2000000") + Decimal("350000") + Decimal("400001")
+    assert await services.saldo_akun(session, dana) == bulanan  # total 4 cicilan = tepat sebulan
+    assert await services.saldo_akun(session, ctx.kas) == Decimal("20000000") - bulanan
+
+    # Laporan: beban diakui mingguan (September), bukan saat dibayar di Oktober.
+    h = await t3.hitung_bagi_hasil(session, "2026-09")
+    assert (h.pemasukan, h.pengeluaran, h.laba_bersih) == (Decimal("20000000"), bulanan, Decimal("20000000") - bulanan)
+
+    # Awal Oktober: bayar gaji + tagihan dari Dana cadangan. Listrik ternyata lebih mahal dari perkiraan.
+    await t3.siapkan_gaji(session, "2026-09")
+    await t3.bayar_gaji(session, ctx.admin, "2026-09", date(2026, 10, 1))
+    tagihan = TagihanBayarIn(
+        periode="2026-09", tanggal=date(2026, 10, 1),
+        items=[TagihanItemIn(langganan_id=wifi.id, jumlah=Decimal("350000")), TagihanItemIn(langganan_id=listrik.id, jumlah=Decimal("450001"))],
+    )
+    with pytest.raises(HTTPException) as exc:  # Dana cadangan kurang 50rb: top-up dulu dari kas utama
+        await ps.bayar_tagihan(session, ctx.admin, tagihan)
+    assert exc.value.status_code == 400
+    await services.create_transfer(session, ctx.admin, TransferIn(dari_akun_id=ctx.kas.id, ke_akun_id=dana.id, jumlah=Decimal("50000")))
+    dibayar = await ps.bayar_tagihan(session, ctx.admin, tagihan)
+    assert await services.saldo_akun(session, dana) == 0
+    with pytest.raises(HTTPException) as exc:  # tidak bisa dibayar dua kali untuk bulan yang sama
+        await ps.bayar_tagihan(session, ctx.admin, tagihan)
+    assert exc.value.status_code == 409
+
+    # Beban September = gaji + tagihan sebenarnya (selisih listrik 50rb diakui saat dibayar, di Oktober).
+    sep = await t3.hitung_bagi_hasil(session, "2026-09")
+    assert sep.pengeluaran == bulanan
+    okt = await t3.hitung_bagi_hasil(session, "2026-10")
+    assert okt.pengeluaran == Decimal("50000")
+    assert Decimal("50000") + bulanan == Decimal("2000000") + Decimal("350000") + Decimal("450001")
+
+    await ps.batalkan_tagihan(session, dibayar[1].id, "salah angka")  # batal -> penyesuaian & transaksi ikut batal
+    assert (await t3.hitung_bagi_hasil(session, "2026-10")).pengeluaran == Decimal("0")

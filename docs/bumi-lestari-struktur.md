@@ -304,3 +304,21 @@ dengan kas kecil: pengeluaran dicatat di akun ini (tidak boleh minus), lalu tiap
 plafon dengan transfer dari kas utama (`GET/POST /kas-iklan/pengisian`). Hanya admin/owner yang mengakses
 kas iklan; staf kas kecil tidak. Siklus Selasa: terima bayar reseller → tarik saldo toko → isi kas kecil →
 **isi kas iklan** → bayar tukang/supplier.
+
+## 11. Gaji dan langganan dicicil 4 minggu (Dana cadangan)
+
+Gaji dibayar bulanan (tanggal 1 bulan berikutnya), tetapi **di laporan keuangan dicicil 4 minggu** supaya uangnya
+tersedia di akhir bulan dan bisa dibayar di awal bulan. Hal yang sama berlaku untuk **langganan bulanan**: listrik,
+air, wifi, kebersihan, iuran BUMDES, langganan Komplace (daftar bisa ditambah; nominal diisi di halaman Langganan,
+nilai awal 0 = belum disisihkan).
+
+- Akun **Dana cadangan** (`DANA_CADANGAN`) menampung uang yang disisihkan.
+- **Tiap Selasa (Selasa ke-1 sampai ke-4 bulan itu)** tombol *Sisihkan*: `GET /sisihan/hitung` (pratinjau) lalu
+  `POST /sisihan`. Sistem mentransfer 1/4 gaji + 1/4 langganan dari kas utama ke Dana cadangan **dan** mencatat
+  1/4 itu sebagai beban minggu itu di laporan. Cicilan ke-4 menampung sisa pembulatan. Selasa ke-5 tidak ada cicilan.
+- **Awal bulan berikutnya**: `POST /gaji/bayar` dan `POST /tagihan/bayar` membayar dari Dana cadangan. Pembayaran
+  hanya menyesuaikan selisih (mis. listrik lebih mahal dari perkiraan, diakui sebagai beban saat dibayar) dan
+  **tidak dihitung dua kali** sebagai biaya. Kalau Dana cadangan kurang, transfer dulu dari kas utama.
+- Siklus Selasa: terima bayar reseller → tarik saldo toko → isi kas kecil → isi kas iklan →
+  **sisihkan dana gaji & langganan** → bayar tukang/supplier.
+- Semua bisa dibatalkan (transfer, beban, dan transaksi ikut dibatalkan).

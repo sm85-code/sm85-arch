@@ -172,3 +172,75 @@ class BagiHasilTersimpanOut(BaseModel):
     tanggal_bayar: Optional[date]
     dibatalkan: bool
     model_config = ConfigDict(from_attributes=True)
+
+
+class LanggananIn(BaseModel):
+    nama: str = Field(min_length=1, max_length=128)
+    jumlah_bulanan: Decimal = Field(default=Decimal("0"), ge=0, max_digits=14, decimal_places=2)
+
+
+class LanggananPatch(BaseModel):
+    nama: Optional[str] = Field(default=None, min_length=1, max_length=128)
+    jumlah_bulanan: Optional[Decimal] = Field(default=None, ge=0, max_digits=14, decimal_places=2)
+    aktif: Optional[bool] = None
+
+
+class LanggananOut(BaseModel):
+    id: str
+    nama: str
+    jumlah_bulanan: Decimal
+    aktif: bool
+    model_config = ConfigDict(from_attributes=True)
+
+
+class SisihanIn(BaseModel):
+    tanggal: Optional[date] = None
+
+
+class SisihanItemOut(BaseModel):
+    jenis: str  # gaji | langganan
+    nama: str
+    jumlah: Decimal
+
+
+class SisihanOut(BaseModel):
+    selasa: date
+    periode: str  # bulan yang didanai
+    minggu_ke: int  # Selasa ke-N bulan ini; cicilan hanya 1-4
+    items: list[SisihanItemOut]
+    total: Decimal
+    saldo_kas_utama: Decimal
+    cukup: bool
+    sudah_dicatat_id: Optional[str]
+    catatan: str = ""
+
+
+class SisihanTersimpanOut(BaseModel):
+    id: str
+    selasa: date
+    periode: str
+    minggu_ke: int
+    total: Decimal
+    dibatalkan: bool
+    model_config = ConfigDict(from_attributes=True)
+
+
+class TagihanItemIn(BaseModel):
+    langganan_id: str
+    jumlah: Decimal = Field(ge=0, max_digits=14, decimal_places=2)  # tagihan sebenarnya
+
+
+class TagihanBayarIn(BaseModel):
+    periode: str = Periode
+    tanggal: Optional[date] = None
+    items: Optional[list[TagihanItemIn]] = None  # kosong -> semua langganan aktif sebesar jumlah_bulanan
+
+
+class TagihanOut(BaseModel):
+    id: str
+    periode: str
+    langganan_id: str
+    jumlah: Decimal
+    tanggal_bayar: date
+    dibatalkan: bool
+    model_config = ConfigDict(from_attributes=True)
