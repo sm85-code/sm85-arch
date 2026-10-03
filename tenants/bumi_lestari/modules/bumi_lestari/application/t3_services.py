@@ -9,12 +9,12 @@ from datetime import date, timedelta
 from decimal import ROUND_HALF_UP, Decimal
 
 from fastapi import HTTPException, status
-from sqlalchemy import func, or_, select
+from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from tenants.bumi_lestari.modules.bumi_lestari.application.laba_core import KATEGORI_BAGI_HASIL, ringkasan_laba
 from tenants.bumi_lestari.modules.bumi_lestari.application.provisi_core import (
     batalkan_provisi_sumber,
-    beban_provisi,
     sesuaikan,
 )
 from tenants.bumi_lestari.modules.bumi_lestari.application.schemas_order import OrderOut
@@ -73,9 +73,6 @@ KATEGORI_PRODUKSI = "Biaya produksi / pembelian barang"
 KATEGORI_RESELLER = "Penjualan reseller"
 KATEGORI_GAJI = "Gaji karyawan"
 KATEGORI_TAGIHAN = "Langganan & utilitas"
-KATEGORI_BAGI_HASIL = "Bagi hasil"
-# Bukan biaya usaha: tidak mengurangi laba bersih yang dibagi.
-KATEGORI_BUKAN_BIAYA = ("Prive", KATEGORI_BAGI_HASIL)
 
 
 def _bad(detail: str, code: int = status.HTTP_400_BAD_REQUEST) -> HTTPException:
@@ -497,28 +494,9 @@ def _rentang_periode(periode: str) -> tuple[date, date]:
 async def hitung_bagi_hasil(session: AsyncSession, periode: str) -> BagiHasilOut:
     """Laba bersih = pemasukan - pengeluaran periode (basis kas). Transfer, Prive, Bagi hasil tidak dihitung."""
     awal, akhir = _rentang_periode(periode)
-
-    async def jumlah(jenis: str, *, kecuali: tuple[str, ...] = (), kecuali_ref: tuple[str, ...] = ()) -> Decimal:
-        stmt = (
-            select(func.coalesce(func.sum(BlTransaksi.jumlah), 0))
-            .join(BlKategori, BlKategori.id == BlTransaksi.kategori_id)
-            .where(
-                BlTransaksi.jenis == jenis, BlTransaksi.dibatalkan.is_(False),
-                BlTransaksi.tanggal >= awal, BlTransaksi.tanggal <= akhir,
-            )
-        )
-        if kecuali:
-            stmt = stmt.where(BlKategori.nama.not_in(kecuali))
-        if kecuali_ref:
-            stmt = stmt.where(or_(BlTransaksi.ref_jenis.is_(None), BlTransaksi.ref_jenis.not_in(kecuali_ref)))
-        return Decimal(str((await session.execute(stmt)).scalar_one() or 0))
-
-    pemasukan = await jumlah("masuk")
-    # Gaji dibayar dari Dana cadangan: bebannya sudah diakui lewat cicilan mingguan (BlProvisi), jadi transaksi
-    # pembayarannya dikecualikan agar tidak dihitung dua kali. Langganan dibayar langsung, bebannya diakui di sini.
-    pengeluaran = await jumlah("keluar", kecuali=KATEGORI_BUKAN_BIAYA, kecuali_ref=(REF_GAJI,))
-    pengeluaran += await beban_provisi(session, awal, akhir)
-    laba = pemasukan - pengeluaran
+    ringkas = await ringkasan_laba(session, awal, akhir)
+    pemasukan, pengeluaran = ringkas.total_pemasukan, ringkas.total_biaya
+    laba = ringkas.laba
     proporsi = {p.penerima: Decimal(p.persen) for p in await get_proporsi(session)}
     if set(proporsi) != {"admin", "owner"}:
         raise _bad("Proporsi bagi hasil belum diatur (jalankan seed-now atau atur di profil UMKM)", 409)

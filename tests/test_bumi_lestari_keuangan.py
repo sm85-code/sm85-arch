@@ -246,32 +246,47 @@ async def test_profil_and_proporsi_bagi_hasil_configurable(session):
 
 
 @pytest.mark.asyncio
-async def test_kas_iklan_imprest_weekly_refill_to_plafon(session):
+async def test_kas_iklan_imprest_weekly_refill_to_plafon_admin_only(session):
+    admin = await _user(session, "admin", "adm@test.com")
     owner, staf = await _user(session, "owner"), await _user(session, "staff")
     await _isi_kas_utama(session, owner, Decimal("5000000"))
     iklan = (await session.execute(select(BlAkunKas).where(BlAkunKas.kode == "KAS_IKLAN"))).scalar_one()
     assert (await services.hitung_pengisian(session, "kas_iklan"))["perlu_diisi"] == Decimal("2000000")
-
-    t = await services.catat_pengisian(session, owner, "kas_iklan")
-    assert t.jenis == "pengisian_kas_iklan" and await services.saldo_akun(session, iklan) == Decimal("2000000")
-
     iklan_kat = await _kat(session, "Biaya iklan")
+    kas_utama = await _akun(session, "KAS_UTAMA")
+
+    # Kas iklan hanya untuk admin: owner & staf tidak bisa mencatat, mentransfer, melihat akun, atau melihat transaksinya.
+    for pelaku in (owner, staf):
+        with pytest.raises(HTTPException) as exc:
+            await services.create_transaksi(
+                session, pelaku, TransaksiIn(akun_id=iklan.id, kategori_id=iklan_kat.id, jenis="keluar", jumlah=Decimal("1000"))
+            )
+        assert exc.value.status_code == 403
+    with pytest.raises(HTTPException) as exc:
+        await services.create_transfer(session, owner, TransferIn(dari_akun_id=kas_utama.id, ke_akun_id=iklan.id, jumlah=Decimal("1000")))
+    assert exc.value.status_code == 403
+
+    t = await services.catat_pengisian(session, admin, "kas_iklan")
+    assert t.jenis == "pengisian_kas_iklan" and await services.saldo_akun(session, iklan) == Decimal("2000000")
     await services.create_transaksi(
-        session, owner, TransaksiIn(akun_id=iklan.id, kategori_id=iklan_kat.id, jenis="keluar", jumlah=Decimal("450000"))
+        session, admin, TransaksiIn(akun_id=iklan.id, kategori_id=iklan_kat.id, jenis="keluar", jumlah=Decimal("450000"))
     )
     with pytest.raises(HTTPException) as exc:  # tidak boleh melebihi saldo kas iklan
         await services.create_transaksi(
-            session, owner, TransaksiIn(akun_id=iklan.id, kategori_id=iklan_kat.id, jenis="keluar", jumlah=Decimal("2000000"))
+            session, admin, TransaksiIn(akun_id=iklan.id, kategori_id=iklan_kat.id, jenis="keluar", jumlah=Decimal("2000000"))
         )
     assert exc.value.status_code == 400
-    with pytest.raises(HTTPException) as exc:  # staf kas kecil tidak boleh mencatat iklan
-        await services.create_transaksi(
-            session, staf, TransaksiIn(akun_id=iklan.id, kategori_id=iklan_kat.id, jenis="keluar", jumlah=Decimal("1000"))
-        )
+
+    assert "KAS_IKLAN" in [a.kode for a, _ in await services.list_akun(session, admin)]
+    for pelaku in (owner, staf):
+        assert "KAS_IKLAN" not in [a.kode for a, _ in await services.list_akun(session, pelaku)]
+    assert len(await services.list_transaksi(session, admin, akun_id=iklan.id)) == 1
+    assert all(t.akun_id != iklan.id for t in await services.list_transaksi(session, owner))
+    with pytest.raises(HTTPException) as exc:
+        await services.list_transaksi(session, owner, akun_id=iklan.id)
     assert exc.value.status_code == 403
-    assert "KAS_IKLAN" not in [a.kode for a, _ in await services.list_akun(session, staf)]
 
     info = await services.hitung_pengisian(session, "kas_iklan")
     assert (info["saldo"], info["perlu_diisi"]) == (Decimal("1550000"), Decimal("450000"))
-    await services.catat_pengisian(session, owner, "kas_iklan")  # digenapkan lagi tiap minggu
+    await services.catat_pengisian(session, admin, "kas_iklan")  # digenapkan lagi tiap minggu
     assert await services.saldo_akun(session, iklan) == Decimal("2000000")
