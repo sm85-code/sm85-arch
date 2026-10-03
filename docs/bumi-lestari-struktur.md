@@ -333,3 +333,20 @@ Siklus Selasa: terima bayar penjual lain → tarik saldo toko → isi kas kecil 
   dengan pesan + tautan PDF siap kirim; pengguna tinggal menekan kirim. Tanpa nomor WA, `wa_link` membuka pemilih kontak.
 - Nomor WA disimpan di data penjual lain dan tukang/supplier (`no_wa`; 08xx, +62xx, atau 62xx dinormalkan ke 62xx).
 - Env `BUMI_LESTARI_PUBLIC_URL` menentukan URL publik backend di tautan; kosong -> host permintaan.
+
+## 13. Dashboard dan laporan; kas iklan hanya admin
+
+- **Kas iklan hanya bisa diakses admin**: akun, transaksi, transfer, dan pengisiannya disembunyikan dari owner dan
+  staf (owner/staf mendapat 403 bila mencoba, dan akun itu tidak muncul di daftar). Biaya iklan tetap dihitung
+  sebagai biaya di laba/laporan umum (hanya angka per kategori, tanpa rincian akun). **Laporan kas iklan terpisah
+  akan dikerjakan admin** (fungsi `laporan_imprest(jenis="kas_iklan")` sudah ada, belum dibuka lewat endpoint).
+- `GET /dashboard?periode=YYYY-MM` (admin/owner): saldo akun dan total kas, pemasukan/biaya/laba bulan ini,
+  jumlah order per status, omzet order bulan ini, piutang penjual lain, utang tukang/supplier yang dibayar Selasa
+  ini, saldo Dana cadangan, ringkasan kas kecil (dan kas iklan untuk admin), pratinjau bagi hasil.
+- `GET /laporan/umum?dari=&sampai=` (admin/owner): pemasukan per kategori, biaya per kategori (termasuk "Gaji
+  karyawan (cicilan)"), laba bersih, pos di luar laba (Prive, Bagi hasil), dan arus kas per akun (saldo awal,
+  masuk, keluar, transfer, saldo akhir).
+- `GET /laporan/kas-kecil?periode=YYYY-MM&saldo_fisik=` (admin/owner/staf): saldo awal/akhir, pemakaian per kategori,
+  rincian per minggu (Senin–Minggu, minggu ke-1 memuat tanggal 1), pengisian, penanda `sesuai_plafon`, dan selisih bila
+  `saldo_fisik` (uang yang dihitung) diisi.
+- Perhitungan laba dipusatkan di `laba_core.ringkasan_laba` (dipakai bagi hasil, dashboard, laporan umum).

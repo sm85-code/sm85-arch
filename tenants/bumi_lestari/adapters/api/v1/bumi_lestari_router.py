@@ -13,6 +13,7 @@ from fastapi import APIRouter, Depends, HTTPException, Request, Response, status
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from tenants.bumi_lestari.adapters.api.v1.bumi_lestari_dokumen_router import dokumen_router
+from tenants.bumi_lestari.adapters.api.v1.bumi_lestari_laporan_router import laporan_router
 from tenants.bumi_lestari.adapters.api.v1.bumi_lestari_order_router import order_router
 from tenants.bumi_lestari.adapters.api.v1.bumi_lestari_t3_router import t3_router
 from tenants.bumi_lestari.modules.bumi_lestari.application import services
@@ -53,6 +54,7 @@ bumi_lestari_router = APIRouter()
 bumi_lestari_router.include_router(order_router)
 bumi_lestari_router.include_router(t3_router)
 bumi_lestari_router.include_router(dokumen_router)
+bumi_lestari_router.include_router(laporan_router)
 
 OWNER_ONLY = ("admin", "owner")  # admin berada di atas owner: semua akses owner + kelola akun owner
 OWNER_OR_STAFF = ("admin", "owner", "staff")
@@ -288,7 +290,7 @@ async def catat_pengisian(
 @bumi_lestari_router.get("/kas-iklan/pengisian", response_model=PengisianKasKecilOut)
 async def hitung_pengisian_iklan(
     session: AsyncSession = Depends(get_db_bumi_lestari),
-    _: BlUser = Depends(require_roles_bumi_lestari(*OWNER_ONLY)),
+    _: BlUser = Depends(require_roles_bumi_lestari("admin")),  # kas iklan: hanya admin
 ):
     return await services.hitung_pengisian(session, "kas_iklan")
 
@@ -296,7 +298,7 @@ async def hitung_pengisian_iklan(
 @bumi_lestari_router.post("/kas-iklan/pengisian", response_model=TransferOut, status_code=status.HTTP_201_CREATED)
 async def catat_pengisian_iklan(
     session: AsyncSession = Depends(get_db_bumi_lestari),
-    user: BlUser = Depends(require_roles_bumi_lestari(*OWNER_ONLY)),
+    user: BlUser = Depends(require_roles_bumi_lestari("admin")),  # kas iklan: hanya admin
 ):
     return await services.catat_pengisian(session, user, "kas_iklan")
 

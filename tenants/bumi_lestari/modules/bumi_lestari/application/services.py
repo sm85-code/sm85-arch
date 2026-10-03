@@ -50,6 +50,21 @@ def _is_staff(user: BlUser) -> bool:
     return (user.role or "").strip().lower() == "staff"
 
 
+def _is_admin(user: BlUser) -> bool:
+    return (user.role or "").strip().lower() == "admin"
+
+
+def boleh_akses_akun(user: BlUser, akun: BlAkunKas) -> bool:
+    """admin: semua akun; owner: semua kecuali kas iklan; staf: hanya kas kecil."""
+    if _is_admin(user):
+        return True
+    if akun.jenis == "kas_iklan":
+        return False
+    if _is_staff(user):
+        return akun.jenis == "kas_kecil"
+    return True
+
+
 def _hari_ini() -> date:
     return datetime.now(WIB).date()
 
@@ -159,18 +174,21 @@ async def _sum(session: AsyncSession, stmt) -> Decimal:
     return Decimal(str((await session.execute(stmt)).scalar_one() or 0))
 
 
-async def saldo_akun(session: AsyncSession, akun: BlAkunKas) -> Decimal:
-    """saldo_awal + masuk - keluar + transfer masuk - transfer keluar (baris batal diabaikan)."""
+async def saldo_akun(session: AsyncSession, akun: BlAkunKas, sampai: date | None = None) -> Decimal:
+    """saldo_awal + masuk - keluar + transfer masuk - transfer keluar (baris batal diabaikan).
+    `sampai`: saldo pada akhir hari itu (kosong = saldo terkini)."""
 
     def trx(jenis: str):
-        return select(func.coalesce(func.sum(BlTransaksi.jumlah), 0)).where(
+        stmt = select(func.coalesce(func.sum(BlTransaksi.jumlah), 0)).where(
             BlTransaksi.akun_id == akun.id, BlTransaksi.jenis == jenis, BlTransaksi.dibatalkan.is_(False)
         )
+        return stmt.where(BlTransaksi.tanggal <= sampai) if sampai else stmt
 
     def trf(kolom):
-        return select(func.coalesce(func.sum(BlTransfer.jumlah), 0)).where(
+        stmt = select(func.coalesce(func.sum(BlTransfer.jumlah), 0)).where(
             kolom == akun.id, BlTransfer.dibatalkan.is_(False)
         )
+        return stmt.where(BlTransfer.tanggal <= sampai) if sampai else stmt
 
     return (
         Decimal(akun.saldo_awal)
@@ -185,7 +203,7 @@ async def list_akun(session: AsyncSession, user: BlUser) -> list[tuple[BlAkunKas
     stmt = select(BlAkunKas).where(BlAkunKas.aktif.is_(True)).order_by(BlAkunKas.created_at)
     if _is_staff(user):
         stmt = stmt.where(BlAkunKas.jenis == "kas_kecil")
-    akuns = list((await session.execute(stmt)).scalars())
+    akuns = [a for a in (await session.execute(stmt)).scalars() if boleh_akses_akun(user, a)]
     return [(a, await saldo_akun(session, a)) for a in akuns]
 
 
@@ -246,6 +264,8 @@ async def create_transaksi(session: AsyncSession, user: BlUser, payload: Transak
         raise _bad("Kategori tidak ditemukan", status.HTTP_404_NOT_FOUND)
     if (payload.jenis == "masuk") != (kategori.jenis == "pemasukan"):
         raise _bad("Jenis transaksi tidak cocok dengan jenis kategori")
+    if not boleh_akses_akun(user, akun):
+        raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="Akun ini hanya bisa diakses admin")
     if _is_staff(user) and not (akun.jenis == "kas_kecil" and payload.jenis == "keluar"):
         raise HTTPException(
             status_code=status.HTTP_403_FORBIDDEN, detail="Staf hanya boleh mencatat pengeluaran kas kecil"
@@ -280,7 +300,12 @@ async def list_transaksi(
     if _is_staff(user):
         akun_id = (await get_kas_kecil(session)).id  # staf: hanya kas kecil, parameter diabaikan
     if akun_id:
+        akun = await session.get(BlAkunKas, akun_id)
+        if akun is not None and not boleh_akses_akun(user, akun):
+            raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="Akun ini hanya bisa diakses admin")
         stmt = stmt.where(BlTransaksi.akun_id == akun_id)
+    elif not _is_admin(user):  # owner/staf tidak melihat transaksi kas iklan
+        stmt = stmt.where(BlTransaksi.akun_id.not_in(select(BlAkunKas.id).where(BlAkunKas.jenis == "kas_iklan")))
     if dari:
         stmt = stmt.where(BlTransaksi.tanggal >= dari)
     if sampai:
@@ -334,6 +359,8 @@ async def _buat_transfer(
 async def create_transfer(session: AsyncSession, user: BlUser, payload: TransferIn) -> BlTransfer:
     dari = await _akun_or_404(session, payload.dari_akun_id)
     ke = await _akun_or_404(session, payload.ke_akun_id)
+    if not (boleh_akses_akun(user, dari) and boleh_akses_akun(user, ke)):
+        raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="Akun ini hanya bisa diakses admin")
     jenis = f"pengisian_{ke.jenis}" if ke.jenis in JENIS_IMPRESET else "biasa"
     return await _buat_transfer(
         session, user, tanggal=payload.tanggal, dari=dari, ke=ke, jumlah=payload.jumlah,
