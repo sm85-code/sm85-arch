@@ -224,7 +224,7 @@ async def test_tracking_walks_the_shipment_and_order_status_forward(session, mon
     }
     monkeypatch.setattr(bs, "_request_sync", lambda m, p, b=None: riwayat)
     out = await services.lacak_pengiriman(session, pesanan.id)
-    assert out["status"] == "diterima" and out["riwayat"][0]["catatan"] == "Diterima"
+    assert out["status"] == "diterima" and out["riwayat"][0]["catatan"] == "Paket sudah diterima" and out["riwayat"][0]["catatan_asli"] == "Diterima"
     assert (await services.get_pesanan(session, pesanan.id)).status == "selesai"
 
 
@@ -307,7 +307,7 @@ async def test_cod_rates_keep_only_cod_couriers_and_split_the_fee(monkeypatch):
     monkeypatch.setattr(bs, "_rates_sync", fake)
     options = await bs.cek_ongkir(kode_pos_tujuan="40115", items=[ITEM], cod_nilai=200000)
     assert seen["cod"] == 200000
-    assert [(o.kurir, o.ongkir, o.biaya_cod) for o in options] == [("jne", "18000", "2000")]
+    assert [(o.kurir, o.ongkir, o.biaya_cod) for o in options] == [("jne", "18000", "2203")]  # fee on items + shipping + fee
 
 
 def test_cod_fields_are_sent_to_biteship(monkeypatch):
@@ -392,9 +392,9 @@ async def test_cod_order_total_carries_shipping_and_cod_fee_and_goes_through_con
     monkeypatch.setattr(bs, "_rates_sync", lambda k, i, c=0, p=None: COD_PRICING if c else PRICING)
     pesanan = await services.checkout(session, user.id, cod=True)
     out = await buyer_module.isi_alamat_pengiriman(pesanan.id, _form(), session, user)
-    assert Decimal(out["ongkir"]) == 18000 and Decimal(out["biaya_cod"]) == 2000
+    assert Decimal(out["ongkir"]) == 18000 and Decimal(out["biaya_cod"]) == 2203
     pesanan = await services.get_pesanan(session, pesanan.id)
-    assert pesanan.total == Decimal("220000")  # 200000 items + 18000 shipping + 2000 COD fee
+    assert pesanan.total == Decimal("220203")  # 200000 items + 18000 shipping + 2203 COD fee (fee covers the whole amount)
     # The courier cannot be booked before the seller confirms the order.
     with pytest.raises(HTTPException) as exc:
         await services.buat_order_biteship(session, pesanan.id)
@@ -412,7 +412,7 @@ async def test_cod_order_total_carries_shipping_and_cod_fee_and_goes_through_con
 
     monkeypatch.setattr(bs, "_request_sync", fake)
     await services.buat_order_biteship(session, pesanan.id)
-    assert sent["body"]["destination_cash_on_delivery"] == 220000
+    assert sent["body"]["destination_cash_on_delivery"] == 220203
 
 
 @pytest.mark.asyncio
@@ -512,3 +512,22 @@ async def test_webhook_ignores_unknown_orders_other_events_and_empty_bodies(sess
     for payload in ({}, {"event": "order.status"}, {"event": "order.status", "order_id": "unknown"},
                     {"event": "order.price", "order_id": "bo-1"}):
         assert (await services.sinkron_dari_webhook(session, payload))["diabaikan"] is True
+
+
+def test_cod_fee_covers_the_whole_amount_the_courier_collects():
+    # The real case: items 500000, shipping 225000, courier rate 4% (fee quoted on the items: 20000).
+    fee = bs.biaya_cod_atas_total(20000, 500000, 225000)
+    collected = 500000 + 225000 + fee
+    assert fee == 30209 and abs(collected * 0.04 - fee) < 1  # what the courier will really charge on the total
+    assert bs.biaya_cod_atas_total(0, 500000, 225000) == 0
+    assert bs.biaya_cod_atas_total(2000, 3000, 10000) == 2000  # implausible rate: keep the quote
+
+
+def test_courier_statuses_are_shown_in_indonesian_and_unknown_text_is_kept():
+    assert services.catatan_indonesia("confirmed", "Courier order is confirmed. jne has been notified") == (
+        "Pesanan dikonfirmasi, kurir diberi tahu untuk menjemput paket"
+    )
+    assert services.catatan_indonesia("delivered", "Delivered") == "Paket sudah diterima"
+    assert services.catatan_indonesia("some_new_status", "Sorting at hub") == "Sorting at hub"
+    assert services.catatan_indonesia("some_new_status", "") == "some_new_status"
+    assert set(services.LABEL_STATUS_KURIR) >= {"picked", "dropping_off", "delivered", "returned", "cancelled"}
