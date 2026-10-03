@@ -4,7 +4,7 @@ from __future__ import annotations
 import os
 from datetime import date
 
-from fastapi import APIRouter, Depends, Request, Response
+from fastapi import APIRouter, Depends, Response
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from tenants.bumi_lestari.modules.bumi_lestari.application import dokumen_services as svc
@@ -69,10 +69,10 @@ async def po_pdf(pemasok_id: str, tanggal: date | None = None, session: AsyncSes
 
 
 @dokumen_router.post("/dokumen/bagikan", response_model=BagikanOut)
-async def bagikan(payload: BagikanIn, request: Request, session: AsyncSession = _db(), user: BlUser = _guard()):
+async def bagikan(payload: BagikanIn, session: AsyncSession = _db(), user: BlUser = _guard()):
     """Tombol "Kirim ke WhatsApp": kembalikan `wa_link`; dibuka di HP -> WhatsApp pengguna terbuka
     dengan pesan + tautan PDF siap kirim ke penjual lain / tukang."""
-    base = os.getenv("BUMI_LESTARI_PUBLIC_URL") or str(request.base_url)
+    base = os.getenv("BUMI_LESTARI_PUBLIC_URL") or "https://api.ampelkuning.com"
     return await svc.bagikan_dokumen(session, user, payload, base)
 
 

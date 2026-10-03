@@ -332,7 +332,7 @@ Siklus Selasa: terima bayar penjual lain → tarik saldo toko → isi kas kecil 
   mengembalikan `wa_link` (`https://wa.me/<nomor>?text=...`). Dibuka di HP, WhatsApp pengguna terbuka ke chat penerima
   dengan pesan + tautan PDF siap kirim; pengguna tinggal menekan kirim. Tanpa nomor WA, `wa_link` membuka pemilih kontak.
 - Nomor WA disimpan di data penjual lain dan tukang/supplier (`no_wa`; 08xx, +62xx, atau 62xx dinormalkan ke 62xx).
-- Env `BUMI_LESTARI_PUBLIC_URL` menentukan URL publik backend di tautan; kosong -> host permintaan.
+- Env `BUMI_LESTARI_PUBLIC_URL` menentukan URL publik backend di tautan; opsional, kosong -> `https://api.ampelkuning.com`.
 
 ## 13. Dashboard dan laporan; kas iklan hanya admin
 
