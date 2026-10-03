@@ -26,6 +26,8 @@ from urllib.parse import urlencode
 
 from fastapi import HTTPException, status
 
+from shared.egress import proxies_for
+
 _log = logging.getLogger(__name__)
 
 SHOPEE_PARTNER_ID = os.getenv("SHOPEE_PARTNER_ID", "").strip()
@@ -128,7 +130,7 @@ async def _http_post_json(url: str, body: dict, *, timeout: float = 25.0) -> dic
     import requests
 
     def _do() -> dict:
-        resp = requests.post(url, json=body, timeout=timeout)
+        resp = requests.post(url, json=body, timeout=timeout, proxies=proxies_for("SHOPEE_PROXY_URL"))
         try:
             data = resp.json()
         except Exception as exc:  # noqa: BLE001
@@ -337,9 +339,9 @@ async def _call_shop_api(
 
     def _do() -> dict:
         if method.upper() == "GET":
-            resp = requests.get(url, timeout=timeout)
+            resp = requests.get(url, timeout=timeout, proxies=proxies_for("SHOPEE_PROXY_URL"))
         else:
-            resp = requests.post(url, json=body or {}, timeout=timeout)
+            resp = requests.post(url, json=body or {}, timeout=timeout, proxies=proxies_for("SHOPEE_PROXY_URL"))
         try:
             return resp.json()
         except Exception as exc:  # noqa: BLE001
