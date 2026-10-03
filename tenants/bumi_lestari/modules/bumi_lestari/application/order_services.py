@@ -162,10 +162,11 @@ async def set_harga_grosir(session: AsyncSession, payload: HargaGrosirIn) -> BlH
         )
     ).scalar_one_or_none()
     if row is None:
-        row = BlHargaGrosir(produk_id=payload.produk_id, pelanggan_id=payload.pelanggan_id, harga=payload.harga)
+        row = BlHargaGrosir(produk_id=payload.produk_id, pelanggan_id=payload.pelanggan_id)
         session.add(row)
-    else:
-        row.harga = payload.harga
+    row.harga = payload.harga
+    row.harga_cat_jasa = payload.harga_cat_jasa
+    row.biaya_proses = payload.biaya_proses
     await session.flush()
     return row
 
@@ -203,22 +204,31 @@ async def create_order(session: AsyncSession, payload: OrderIn) -> BlOrder:
         await _get_or_404(session, BlPelanggan, payload.pelanggan_id, "Pelanggan")
     await _cek_pemasok(session, produk, payload.pemasok_id)
 
+    # Harga: nilai eksplisit > harga grosir pelanggan (barang, cat+jasa, biaya proses) > harga katalog.
+    grosir = None
+    if payload.pelanggan_id:
+        grosir = (
+            await session.execute(
+                select(BlHargaGrosir).where(
+                    BlHargaGrosir.produk_id == produk.id, BlHargaGrosir.pelanggan_id == payload.pelanggan_id
+                )
+            )
+        ).scalar_one_or_none()
     harga = payload.harga_satuan
     if harga is None:
-        grosir = None
-        if payload.pelanggan_id:
-            grosir = (
-                await session.execute(
-                    select(BlHargaGrosir.harga).where(
-                        BlHargaGrosir.produk_id == produk.id, BlHargaGrosir.pelanggan_id == payload.pelanggan_id
-                    )
-                )
-            ).scalar_one_or_none()
-        harga = Decimal(grosir) if grosir is not None else Decimal(produk.harga_jual)
+        harga = Decimal(grosir.harga) if grosir else Decimal(produk.harga_jual)
+    harga_cat_jasa = payload.harga_cat_jasa
+    if harga_cat_jasa is None:
+        harga_cat_jasa = Decimal(grosir.harga_cat_jasa) if grosir else Decimal("0")
+    biaya_proses = payload.biaya_proses
+    if biaya_proses is None:
+        biaya_proses = Decimal(grosir.biaya_proses) if grosir else Decimal("0")
     biaya = payload.biaya_pokok if payload.biaya_pokok is not None else Decimal(produk.biaya_pokok_default) * payload.qty
     butuh_cat = produk.jenis_produk == "kayu" if payload.butuh_cat is None else payload.butuh_cat
     if produk.jenis_produk == "non_kayu":
         butuh_cat = False
+    if not butuh_cat:
+        harga_cat_jasa = Decimal("0")  # order polos: tidak ada komponen cat
 
     order = BlOrder(
         no_order=payload.no_order.strip(),
@@ -229,6 +239,9 @@ async def create_order(session: AsyncSession, payload: OrderIn) -> BlOrder:
         produk_id=produk.id,
         qty=payload.qty,
         harga_satuan=harga,
+        harga_cat_jasa=harga_cat_jasa,
+        biaya_proses=biaya_proses,
+        warna=payload.warna.strip(),
         potongan_marketplace=payload.potongan_marketplace,
         pemasok_id=payload.pemasok_id,
         biaya_pokok=biaya,
@@ -291,6 +304,8 @@ async def update_order(session: AsyncSession, order_id: str, payload: OrderPatch
         if nilai is None and kolom != "pemasok_id":
             continue
         setattr(order, kolom, nilai.strip() if isinstance(nilai, str) else nilai)
+    if not order.butuh_cat:
+        order.harga_cat_jasa = Decimal("0")  # polos: tidak ada komponen cat
     await session.flush()
     return order
 

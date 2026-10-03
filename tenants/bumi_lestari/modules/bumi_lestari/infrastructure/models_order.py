@@ -88,7 +88,10 @@ class BlHargaGrosir(BumiLestariBase):
     id: Mapped[str] = mapped_column(String(64), primary_key=True, default=_uuid)
     produk_id: Mapped[str] = mapped_column(ForeignKey("bl_produk.id"), nullable=False)
     pelanggan_id: Mapped[str] = mapped_column(ForeignKey("bl_pelanggan.id"), nullable=False)
-    harga: Mapped[Decimal] = mapped_column(Numeric(14, 2), nullable=False)
+    # Tiga komponen yang dibayar penjual lain: barang, cat + jasa (termasuk packing), biaya proses pesanan.
+    harga: Mapped[Decimal] = mapped_column(Numeric(14, 2), nullable=False)  # barang, per unit
+    harga_cat_jasa: Mapped[Decimal] = mapped_column(Numeric(14, 2), nullable=False, default=Decimal("0"))  # per unit
+    biaya_proses: Mapped[Decimal] = mapped_column(Numeric(14, 2), nullable=False, default=Decimal("0"))  # per order
 
 
 class BlOrder(BumiLestariBase):
@@ -102,7 +105,12 @@ class BlOrder(BumiLestariBase):
     nama_pembeli: Mapped[str] = mapped_column(String(255), nullable=False, default="")
     produk_id: Mapped[str] = mapped_column(ForeignKey("bl_produk.id"), nullable=False)
     qty: Mapped[int] = mapped_column(Integer, nullable=False, default=1)
-    harga_satuan: Mapped[Decimal] = mapped_column(Numeric(14, 2), nullable=False)
+    harga_satuan: Mapped[Decimal] = mapped_column(Numeric(14, 2), nullable=False)  # barang, per unit
+    # Hanya terisi untuk order reseller yang dicat; 0 untuk order polos dan saluran lain (harga all-in).
+    harga_cat_jasa: Mapped[Decimal] = mapped_column(Numeric(14, 2), nullable=False, default=Decimal("0"))  # per unit
+    biaya_proses: Mapped[Decimal] = mapped_column(Numeric(14, 2), nullable=False, default=Decimal("0"))  # per order
+    # Warna cat (bisa custom). Tidak memengaruhi harga.
+    warna: Mapped[str] = mapped_column(String(128), nullable=False, default="")
     potongan_marketplace: Mapped[Decimal] = mapped_column(Numeric(14, 2), nullable=False, default=Decimal("0"))
     pemasok_id: Mapped[Optional[str]] = mapped_column(ForeignKey("bl_pemasok.id"), nullable=True)
     biaya_pokok: Mapped[Decimal] = mapped_column(Numeric(14, 2), nullable=False, default=Decimal("0"))

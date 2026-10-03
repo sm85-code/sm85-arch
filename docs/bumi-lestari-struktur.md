@@ -68,6 +68,7 @@ Cara kerja:
 
 ### Siklus hari Selasa (urutan tetap)
 
+0. **Terima pembayaran penjual lain (reseller)** — mereka membayar tiap Selasa; tercatat sebagai pemasukan "Penjualan reseller" dan melunasi piutang (T3).
 1. **Tarik saldo Shopee → kas utama** (`bl_transfer`, akun "Saldo Shopee" → "Kas utama").
 2. **Isi kembali kas kecil** dari kas utama sebesar plafon − saldo kas kecil. Hanya bisa
    dilakukan setelah langkah 1 selesai bila saldo kas utama tidak cukup (sistem memperingatkan).
@@ -122,6 +123,17 @@ Produk kayu dari tukang kayu dipakai untuk **dua tujuan**: dijual lewat saluran 
 produksi yang sama (pesan tukang → diambil → dicat → serah/kirim); bedanya hanya harga
 (grosir) dan cara bayar (di muka atau tempo → piutang), dan laba per order dihitung dari
 harga grosir itu dikurangi biaya tukang.
+
+**Harga untuk penjual lain = 3 komponen** (`bl_harga_grosir` per produk × pelanggan):
+1. **barang** (`harga`, per unit),
+2. **cat dan jasa, termasuk packing** (`harga_cat_jasa`, per unit; **0 untuk order polos**),
+3. **biaya proses pesanan** (`biaya_proses`, per order).
+
+Total order = (barang + cat/jasa) × qty + biaya proses. Order polos (tanpa cat) kadang ada:
+`butuh_cat = false` → komponen cat/jasa nol dan langkah pengecatan dilewati. Warna cat berbeda-beda
+dan kadang custom, tetapi **harga sama**, jadi warna hanya catatan teks (`warna`) di order.
+Penjual lain **membayar hari Selasa** (piutang reseller dilunasi di siklus Selasa, bersama
+penarikan saldo toko dan pembayaran tukang).
 
 Katalog produk (SKU dan harga yang sudah ada) dipakai bersama semua saluran; harga bisa
 dioverride per saluran atau per reseller.

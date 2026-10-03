@@ -140,3 +140,34 @@ async def test_cancel_and_list_filters(session, data):
     with pytest.raises(HTTPException) as exc:
         await svc.ubah_status_order(session, a.id, OrderStatusIn(status="dipesan"))
     assert exc.value.status_code == 409
+
+
+@pytest.mark.asyncio
+async def test_reseller_three_price_components_polos_and_color(session, data):
+    await svc.set_harga_grosir(
+        session,
+        HargaGrosirIn(
+            produk_id=data.partisi.id, pelanggan_id=data.rina.id, harga=Decimal("600000"),
+            harga_cat_jasa=Decimal("100000"), biaya_proses=Decimal("15000"),
+        ),
+    )
+
+    def order(**kw):
+        return OrderIn(
+            saluran_id=data.reseller_saluran.id, pelanggan_id=data.rina.id, produk_id=data.partisi.id,
+            pemasok_id=data.tukang.id, **kw,
+        )
+
+    dicat = await svc.create_order(session, order(qty=2, warna="Custom: hijau sage"))
+    out = OrderOut.model_validate(dicat)
+    assert dicat.warna == "Custom: hijau sage"
+    assert (dicat.harga_satuan, dicat.harga_cat_jasa, dicat.biaya_proses) == (600000, 100000, 15000)
+    assert out.total_penjualan == Decimal("1415000")  # (600rb + 100rb) x 2 + 15rb
+    assert out.laba_kotor == Decimal("415000")  # - biaya pokok 2 x 500rb
+
+    polos = await svc.create_order(session, order(qty=2, butuh_cat=False))
+    assert polos.harga_cat_jasa == 0 and polos.butuh_cat is False
+    assert OrderOut.model_validate(polos).total_penjualan == Decimal("1215000")  # 600rb x 2 + 15rb
+
+    await svc.update_order(session, dicat.id, OrderPatch(butuh_cat=False))  # jadi polos -> cat/jasa nol
+    assert dicat.harga_cat_jasa == 0

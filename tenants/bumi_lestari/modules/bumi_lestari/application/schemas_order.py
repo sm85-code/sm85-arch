@@ -74,9 +74,13 @@ class PelangganOut(PelangganIn):
 
 
 class HargaGrosirIn(BaseModel):
+    """Tiga komponen harga untuk penjual lain: barang, cat + jasa (termasuk packing), biaya proses."""
+
     produk_id: str
     pelanggan_id: str
     harga: Decimal = Field(gt=0, max_digits=14, decimal_places=2)
+    harga_cat_jasa: Decimal = Field(default=Decimal("0"), ge=0, max_digits=14, decimal_places=2)
+    biaya_proses: Decimal = Field(default=Decimal("0"), ge=0, max_digits=14, decimal_places=2)
 
 
 class HargaGrosirOut(HargaGrosirIn):
@@ -94,6 +98,9 @@ class OrderIn(BaseModel):
     qty: int = Field(default=1, ge=1, le=10000)
     # Kosong -> harga grosir pelanggan (bila ada) -> harga jual katalog.
     harga_satuan: Optional[Decimal] = Field(default=None, ge=0, max_digits=14, decimal_places=2)
+    harga_cat_jasa: Optional[Decimal] = Field(default=None, ge=0, max_digits=14, decimal_places=2)
+    biaya_proses: Optional[Decimal] = Field(default=None, ge=0, max_digits=14, decimal_places=2)
+    warna: str = Field(default="", max_length=128)
     potongan_marketplace: Decimal = Field(default=Decimal("0"), ge=0, max_digits=14, decimal_places=2)
     pemasok_id: Optional[str] = None
     # Kosong -> biaya pokok default katalog x qty.
@@ -105,6 +112,9 @@ class OrderIn(BaseModel):
 class OrderPatch(BaseModel):
     nama_pembeli: Optional[str] = Field(default=None, max_length=255)
     harga_satuan: Optional[Decimal] = Field(default=None, ge=0, max_digits=14, decimal_places=2)
+    harga_cat_jasa: Optional[Decimal] = Field(default=None, ge=0, max_digits=14, decimal_places=2)
+    biaya_proses: Optional[Decimal] = Field(default=None, ge=0, max_digits=14, decimal_places=2)
+    warna: Optional[str] = Field(default=None, max_length=128)
     potongan_marketplace: Optional[Decimal] = Field(default=None, ge=0, max_digits=14, decimal_places=2)
     pemasok_id: Optional[str] = None
     biaya_pokok: Optional[Decimal] = Field(default=None, ge=0, max_digits=14, decimal_places=2)
@@ -127,6 +137,9 @@ class OrderOut(BaseModel):
     produk_id: str
     qty: int
     harga_satuan: Decimal
+    harga_cat_jasa: Decimal
+    biaya_proses: Decimal
+    warna: str
     potongan_marketplace: Decimal
     pemasok_id: Optional[str]
     biaya_pokok: Decimal
@@ -143,9 +156,10 @@ class OrderOut(BaseModel):
     @computed_field
     @property
     def total_penjualan(self) -> Decimal:
-        return self.harga_satuan * self.qty
+        # (barang + cat/jasa) per unit x qty + biaya proses per order; cat/jasa = 0 untuk order polos.
+        return (self.harga_satuan + self.harga_cat_jasa) * self.qty + self.biaya_proses
 
     @computed_field
     @property
     def laba_kotor(self) -> Decimal:
-        return self.harga_satuan * self.qty - self.potongan_marketplace - self.biaya_pokok
+        return self.total_penjualan - self.potongan_marketplace - self.biaya_pokok
