@@ -1,0 +1,65 @@
+# Integrasi: Bumi Lestari sebagai rekap keuangan `store` dan `marketplace_erp`
+
+Status: **dirancang, belum dibangun.** Fase 1 hanya menyiapkan kolom dan titik masuk supaya sinkronisasi nanti
+bisa idempoten dan tidak menduplikasi logika uang.
+
+## Prinsip
+
+1. **Bumi Lestari tetap sumber kebenaran keuangan.** Tenant lain mengirim fakta (order, pencairan, produk);
+   aturan uang (draf/kirim, kategori, kunci, tutup buku) tetap dijalankan oleh service Bumi Lestari.
+2. **Idempoten lewat referensi sumber.** Setiap baris hasil sinkronisasi menyimpan `sumber_sistem` + `sumber_ref`
+   (unik bersama; NULL untuk entri manual). Job sinkronisasi melakukan *upsert* berdasarkan pasangan ini, jadi
+   menjalankan ulang job tidak membuat baris ganda.
+3. **Lewat service, bukan tulis tabel langsung.** Job memanggil fungsi yang sama dengan API, dengan pengguna
+   sistem (mis. `BlUser(role="admin")` khusus sinkronisasi), sehingga validasi dan log audit tetap berjalan.
+4. **Uang dari sinkronisasi masuk sebagai draf.** Admin tetap menekan "Kirim ke laporan keuangan"
+   (spesifikasi 8.14), kecuali diputuskan lain.
+
+## Kolom referensi sumber (Fase 1)
+
+| Tabel | Kolom | Contoh nilai |
+|---|---|---|
+| `bl_order` | `sumber_sistem`, `sumber_ref` (indeks unik `uq_bl_order_sumber`) | `marketplace_erp` + `mpe_item_pesanan:<id>`; `store` + `store_item_pesanan:<id>` |
+| `bl_produk` | `sumber_sistem`, `sumber_ref` (`uq_bl_produk_sumber`) | `marketplace_erp` + `mpe_produk:<id>`; pencocokan utama tetap lewat `sku` (= `mpe_produk.sku_induk`) |
+| `bl_transaksi` | `sumber_sistem`, `sumber_ref` (`uq_bl_transaksi_sumber`) | `marketplace_erp` + `mpe_settlement:<id>`; `store` + `ipaymu:<gateway_ref>` |
+| (Fase 2) `bl_pencairan_baris` | sama | satu baris per order per pencairan (`<platform>:<order_sn>:<payout_id>`) |
+
+Catatan: `bl_order` satu baris = satu barang. Pesanan marketplace berisi beberapa barang menjadi beberapa baris
+dengan `no_order` sama; karena itu `sumber_ref` order memakai id **item** pesanan, bukan id pesanan.
+
+## Titik integrasi
+
+### marketplace_erp → Bumi Lestari
+
+| Data asal | Model asal | Masuk ke | Fungsi Bumi Lestari |
+|---|---|---|---|
+| Pesanan Shopee/TikTok (per item) | `mpe_pesanan` (`platform`, `id_eksternal`, `status`, `tanggal_kirim`) + `mpe_item_pesanan` | `bl_order` (saluran jenis `marketplace`, `no_order` = `id_eksternal`) | `order_services.create_order` / `update_order` / `ubah_status_order` (status kirim → `dikirim`, `tgl_dikirim`) |
+| Produk | `mpe_produk` (`sku_induk`) | `bl_produk` | `order_services.create_produk` / `update_produk` |
+| Pencairan / settlement | `mpe_settlement` (`gross_sales`, `fee_platform`, `fee_payment`, `ongkir_subsidi`, `penalti`, `net`) | Fase 2: `bl_pencairan` + baris; pemasukan "Penjualan marketplace" + "Biaya marketplace" per jenis potongan ke akun `SALDO_<PLATFORM>` | Fase 2: mesin impor penghasilan (format per marketplace) — sinkronisasi memakai mesin yang sama dengan unggah Excel |
+| Iklan | `mpe_iklan_campaign`, `mpe_iklan_metrik_harian` | Fase 2: laporan iklan (bukan uang; uang iklan tetap dari Kas iklan) | — |
+
+### store (toko web) → Bumi Lestari
+
+| Data asal | Model asal | Masuk ke | Fungsi |
+|---|---|---|---|
+| Pesanan pembeli | `store_pesanan` (`status`, `total`, `gateway_ref`) + `store_item_pesanan` | `bl_order` (saluran jenis `web`) | `order_services.create_order` |
+| Pembayaran iPaymu yang cair | `store_pesanan.gateway_ref` | Fase 2: pencairan iPaymu ke `SALDO_IPAYMU`, kategori "Penjualan toko web" | mesin impor yang sama (format iPaymu) |
+| Produk | `store_produk` | `bl_produk` (cocokkan lewat SKU) | `order_services.create_produk` |
+
+## Service yang bisa dipanggil job sinkronisasi
+
+Semua menerima `(session, user, ...)` dan tidak bergantung pada HTTP:
+
+- `order_services.create_order`, `update_order`, `ubah_status_order`, `status_bayar_order`
+- `services.create_transaksi` (aturan kategori berlaku; kategori sistem hanya lewat service otomatis)
+- `pembayaran_services.buat_pembayaran_pemasok`, `buat_penerimaan_reseller`, `tagihan_order`,
+  `order_reseller_belum_dibayar`
+- `kiriman_services.ringkasan_draf`, `kirim`, `kirim_semua`, `batal_kiriman`
+- `audit_core.catat_audit`, `audit_core.bulan_tertutup` (tutup buku Fase 2)
+
+## Yang perlu diputuskan sebelum membangun sinkronisasi
+
+- Pemetaan status `mpe_pesanan.status` / `store_pesanan.status` → alur status `bl_order`.
+- Saluran dan pemasok bawaan untuk order hasil sinkronisasi (tukang belum diketahui saat order masuk).
+- Pencairan: sinkron dari API platform atau tetap unggah file (spesifikasi 8.3).
+- Jadwal job (mis. tiap jam) dan pengguna sistem yang tercatat di log audit.

@@ -171,7 +171,7 @@ async def batalkan_sisihan(session: AsyncSession, sisihan_id: str, alasan: str) 
     if row is None:
         raise _bad("Sisihan tidak ditemukan", status.HTTP_404_NOT_FOUND)
     _batalkan(row, alasan)
-    await batalkan_transfer(session, row.transfer_id, alasan)
+    await batalkan_transfer(session, row.transfer_id, alasan, dari_halaman_asal=True)
     await batalkan_provisi_sumber(session, REF_SISIHAN, row.id, alasan)
     await session.flush()
     return row

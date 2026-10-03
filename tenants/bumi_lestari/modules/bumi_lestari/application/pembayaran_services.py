@@ -12,6 +12,7 @@ from fastapi import HTTPException, status
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from tenants.bumi_lestari.modules.bumi_lestari.application.audit_core import catat_audit
 from tenants.bumi_lestari.modules.bumi_lestari.application.laba_core import KATEGORI_BAGI_HASIL, ringkasan_laba
 from tenants.bumi_lestari.modules.bumi_lestari.application.provisi_core import (
     batalkan_provisi_sumber,
@@ -37,11 +38,14 @@ from tenants.bumi_lestari.modules.bumi_lestari.application.services import (
     _batalkan,
     _hari_ini,
     get_proporsi,
+    pastikan_bulan_terbuka,
     saldo_akun,
 )
 from tenants.bumi_lestari.modules.bumi_lestari.infrastructure.models import (
     KODE_DANA_CADANGAN,
     KODE_KAS_UTAMA,
+    STATUS_DRAF,
+    STATUS_TERKIRIM,
     BlAkunKas,
     BlKategori,
     BlTransaksi,
@@ -85,7 +89,7 @@ def _bad(detail: str, code: int = status.HTTP_400_BAD_REQUEST) -> HTTPException:
 async def _kategori(session: AsyncSession, nama: str) -> BlKategori:
     kat = (await session.execute(select(BlKategori).where(BlKategori.nama == nama))).scalar_one_or_none()
     if kat is None:
-        raise _bad(f"Kategori '{nama}' belum ada (jalankan seed-now)", status.HTTP_409_CONFLICT)
+        raise _bad(f"Kategori '{nama}' belum ada. Aplikasi belum siap dipakai, hubungi admin.", status.HTTP_409_CONFLICT)
     return kat
 
 
@@ -100,12 +104,12 @@ async def _akun_bayar(session: AsyncSession, akun_id: str | None) -> BlAkunKas:
 
 async def _transaksi_otomatis(
     session: AsyncSession, user: BlUser, *, tanggal: date, akun: BlAkunKas, kategori: str, jenis: str,
-    jumlah: Decimal, keterangan: str, ref_jenis: str, ref_id: str,
+    jumlah: Decimal, keterangan: str, ref_jenis: str, ref_id: str, status_kirim: str = STATUS_TERKIRIM,
 ) -> BlTransaksi:
     kat = await _kategori(session, kategori)
     trx = BlTransaksi(
         tanggal=tanggal, akun_id=akun.id, kategori_id=kat.id, jenis=jenis, jumlah=jumlah,
-        keterangan=keterangan, dibuat_oleh=user.id, ref_jenis=ref_jenis, ref_id=ref_id,
+        keterangan=keterangan, dibuat_oleh=user.id, ref_jenis=ref_jenis, ref_id=ref_id, status_kirim=status_kirim,
     )
     session.add(trx)
     await session.flush()
@@ -113,8 +117,14 @@ async def _transaksi_otomatis(
 
 
 async def _pastikan_saldo(session: AsyncSession, akun: BlAkunKas, jumlah: Decimal) -> None:
-    if await saldo_akun(session, akun) < jumlah:
+    if await saldo_akun(session, akun, termasuk_draf=True) < jumlah:  # uang fisik, termasuk draf
         raise _bad(f"Saldo {akun.nama} tidak cukup untuk Rp {jumlah:,.0f}")
+
+
+def _tolak_bila_terkirim(row) -> None:
+    """Entri sumber yang sudah dikirim ke laporan keuangan terkunci (spesifikasi AB-KR-4)."""
+    if row.status_kirim == STATUS_TERKIRIM and row.kiriman_id:
+        raise _bad("Sudah dikirim ke laporan keuangan; batalkan kirimannya dulu", status.HTTP_409_CONFLICT)
 
 
 async def _batalkan_transaksi_ref(session: AsyncSession, ref_jenis: str, ref_id: str, alasan: str) -> None:
@@ -134,9 +144,37 @@ def selasa_acuan(tanggal: date) -> date:
     return tanggal - timedelta(days=(tanggal.weekday() - 1) % 7)
 
 
-def total_order(order: BlOrder) -> Decimal:
-    out = OrderOut.model_validate(order)
-    return out.total_penjualan - Decimal(order.potongan_marketplace)
+def tagihan_order(order: BlOrder) -> Decimal:
+    """Satu rumus tagihan order (dipakai piutang, invoice, dan penerimaan penjual lain):
+    (barang + cat/jasa + packing) x qty + biaya proses. Potongan marketplace tidak berlaku untuk penjual lain."""
+    return OrderOut.model_validate(order).total_penjualan
+
+
+
+def minggu_tagihan(selasa: date) -> tuple[date, date]:
+    """Senin-Sabtu minggu lalu untuk Selasa acuan: periode kirim yang ditagih ke penjual lain."""
+    return selasa - timedelta(days=8), selasa - timedelta(days=3)
+
+
+async def order_reseller_belum_dibayar(
+    session: AsyncSession, *, pelanggan_id: str | None = None, sampai_kirim: date | None = None
+) -> list[tuple[BlOrder, BlPelanggan]]:
+    """Order penjual lain yang sudah DIKIRIM (tgl_dikirim) dan belum masuk penerimaan aktif (draf/terkirim).
+
+    Satu query bersama untuk piutang (tanpa batas) dan invoice (sampai Sabtu minggu lalu)."""
+    dibayar = await order_sudah_dibayar_reseller(session)
+    stmt = (
+        select(BlOrder, BlPelanggan)
+        .join(BlSaluran, BlSaluran.id == BlOrder.saluran_id)
+        .join(BlPelanggan, BlPelanggan.id == BlOrder.pelanggan_id)
+        .where(BlSaluran.jenis == "reseller", BlOrder.status != "batal", BlOrder.tgl_dikirim.is_not(None))
+        .order_by(BlPelanggan.nama, BlOrder.tgl_dikirim, BlOrder.tanggal_order)
+    )
+    if pelanggan_id:
+        stmt = stmt.where(BlOrder.pelanggan_id == pelanggan_id)
+    if sampai_kirim:
+        stmt = stmt.where(BlOrder.tgl_dikirim <= sampai_kirim)
+    return [(o, p) for o, p in (await session.execute(stmt)).all() if o.id not in dibayar]
 
 
 # --- Pembayaran pemasok (tukang kayu + supplier), tiap Selasa -------------------------------
@@ -151,11 +189,13 @@ async def order_sudah_dibayar_pemasok(session: AsyncSession) -> set[str]:
     return set((await session.execute(stmt)).scalars())
 
 
-async def _pembayaran_selasa_aktif(session: AsyncSession, selasa: date) -> BlPembayaranPemasok | None:
-    stmt = select(BlPembayaranPemasok).where(
-        BlPembayaranPemasok.selasa == selasa, BlPembayaranPemasok.dibatalkan.is_(False)
+async def _pembayaran_selasa_aktif(session: AsyncSession, selasa: date) -> list[BlPembayaranPemasok]:
+    stmt = (
+        select(BlPembayaranPemasok)
+        .where(BlPembayaranPemasok.selasa == selasa, BlPembayaranPemasok.dibatalkan.is_(False))
+        .order_by(BlPembayaranPemasok.created_at)
     )
-    return (await session.execute(stmt)).scalars().first()
+    return list((await session.execute(stmt)).scalars())
 
 
 async def siap_bayar_pemasok(session: AsyncSession, tanggal: date | None = None) -> SiapBayarOut:
@@ -205,20 +245,23 @@ async def siap_bayar_pemasok(session: AsyncSession, tanggal: date | None = None)
         total += jumlah
     existing = await _pembayaran_selasa_aktif(session, selasa)
     return SiapBayarOut(
-        selasa=selasa, batas_diambil=batas, sudah_dicatat_id=existing.id if existing else None,
-        total=total, pemasok=list(per_pemasok.values()),
+        selasa=selasa, batas_diambil=batas, sudah_dicatat_id=existing[-1].id if existing else None,
+        pembayaran_ids=[p.id for p in existing], total=total, pemasok=list(per_pemasok.values()),
     )
 
 
 async def buat_pembayaran_pemasok(
     session: AsyncSession, user: BlUser, payload: PembayaranPemasokIn
 ) -> BlPembayaranPemasok:
-    """Tombol "Kirim ke laporan": satu pembayaran per Selasa -> SATU transaksi keluar bertotal."""
+    """Catat pembayaran tukang/supplier (draf) -> SATU transaksi keluar bertotal yang masuk laporan saat
+    "Kirim ke laporan keuangan". Boleh lebih dari satu pembayaran per Selasa (mis. per tukang)."""
     tanggal = payload.tanggal or _hari_ini()
+    await pastikan_bulan_terbuka(session, tanggal)
     siap = await siap_bayar_pemasok(session, tanggal)
-    if siap.sudah_dicatat_id:
-        raise _bad("Pembayaran untuk Selasa ini sudah dicatat (batalkan dulu bila ingin mengulang)", 409)
-    semua = {item.order_id: item for grup in siap.pemasok for item in grup.items}
+    semua = {
+        item.order_id: item for grup in siap.pemasok for item in grup.items
+        if payload.pemasok_id is None or grup.pemasok_id == payload.pemasok_id
+    }
     if payload.order_ids is not None:
         tidak_siap = [oid for oid in payload.order_ids if oid not in semua]
         if tidak_siap:
@@ -231,7 +274,7 @@ async def buat_pembayaran_pemasok(
     await _pastikan_saldo(session, akun, total)
 
     pembayaran = BlPembayaranPemasok(
-        selasa=siap.selasa, tanggal=tanggal, akun_id=akun.id, total=total, dibuat_oleh=user.id
+        selasa=siap.selasa, tanggal=tanggal, akun_id=akun.id, total=total, dibuat_oleh=user.id, status_kirim=STATUS_DRAF
     )
     session.add(pembayaran)
     await session.flush()
@@ -245,14 +288,14 @@ async def buat_pembayaran_pemasok(
     await _transaksi_otomatis(
         session, user, tanggal=tanggal, akun=akun, kategori=KATEGORI_PRODUKSI, jenis="keluar", jumlah=total,
         keterangan=f"Pembayaran pemasok Selasa {siap.selasa:%d-%m-%Y} ({len(semua)} order)",
-        ref_jenis=REF_PEMBAYARAN_PEMASOK, ref_id=pembayaran.id,
+        ref_jenis=REF_PEMBAYARAN_PEMASOK, ref_id=pembayaran.id, status_kirim=STATUS_DRAF,
     )
     await session.flush()
     return pembayaran
 
 
 async def list_pembayaran_pemasok(session: AsyncSession) -> list[BlPembayaranPemasok]:
-    stmt = select(BlPembayaranPemasok).order_by(BlPembayaranPemasok.selasa.desc())
+    stmt = select(BlPembayaranPemasok).order_by(BlPembayaranPemasok.selasa.desc(), BlPembayaranPemasok.created_at.desc())
     return list((await session.execute(stmt)).scalars())
 
 
@@ -284,7 +327,7 @@ async def detail_pembayaran_pemasok(session: AsyncSession, pembayaran_id: str) -
     ).scalars().first()
     return PembayaranPemasokDetailOut(
         id=p.id, selasa=p.selasa, tanggal=p.tanggal, akun_id=p.akun_id, total=p.total, dibatalkan=p.dibatalkan,
-        transaksi_id=trx_id, total_qty=sum(i.qty for i in items), items=items,
+        status_kirim=p.status_kirim, kiriman_id=p.kiriman_id, transaksi_id=trx_id, total_qty=sum(i.qty for i in items), items=items,
     )
 
 
@@ -292,8 +335,10 @@ async def batalkan_pembayaran_pemasok(session: AsyncSession, pembayaran_id: str,
     p = await session.get(BlPembayaranPemasok, pembayaran_id)
     if p is None:
         raise _bad("Pembayaran tidak ditemukan", status.HTTP_404_NOT_FOUND)
+    _tolak_bila_terkirim(p)
     _batalkan(p, alasan)
     await _batalkan_transaksi_ref(session, REF_PEMBAYARAN_PEMASOK, p.id, alasan)
+    await catat_audit(session, None, "batal", "pembayaran_pemasok", p.id, sebelum={"total": p.total}, alasan=alasan)
     await session.flush()
     return p
 
@@ -311,27 +356,20 @@ async def order_sudah_dibayar_reseller(session: AsyncSession) -> set[str]:
 
 
 async def list_piutang_reseller(session: AsyncSession, pelanggan_id: str | None = None) -> list[PiutangPelangganOut]:
-    """Order reseller yang barangnya sudah jadi dan diambil dari tukang (tgl_diambil) dan belum dibayar."""
-    dibayar = await order_sudah_dibayar_reseller(session)
-    stmt = (
-        select(BlOrder, BlPelanggan)
-        .join(BlSaluran, BlSaluran.id == BlOrder.saluran_id)
-        .join(BlPelanggan, BlPelanggan.id == BlOrder.pelanggan_id)
-        .where(BlSaluran.jenis == "reseller", BlOrder.status != "batal", BlOrder.tgl_diambil.is_not(None))
-        .order_by(BlPelanggan.nama, BlOrder.tanggal_order)
-    )
-    if pelanggan_id:
-        stmt = stmt.where(BlOrder.pelanggan_id == pelanggan_id)
+    """Semua order penjual lain yang sudah dikirim (tgl_dikirim) dan belum dibayar.
+    `terlambat` = dikirim sebelum minggu tagihan Selasa ini (seharusnya sudah ditagih)."""
+    awal_minggu, _ = minggu_tagihan(selasa_acuan(_hari_ini()))
     hasil: dict[str, PiutangPelangganOut] = {}
-    for order, pelanggan in (await session.execute(stmt)).all():
-        if order.id in dibayar:
-            continue
+    for order, pelanggan in await order_reseller_belum_dibayar(session, pelanggan_id=pelanggan_id):
         grup = hasil.setdefault(
             pelanggan.id, PiutangPelangganOut(pelanggan_id=pelanggan.id, nama=pelanggan.nama, subtotal=Decimal("0"), items=[])
         )
-        jumlah = total_order(order)
+        jumlah = tagihan_order(order)
         grup.items.append(
-            PiutangItemOut(order_id=order.id, no_order=order.no_order, tanggal_order=order.tanggal_order, jumlah=jumlah)
+            PiutangItemOut(
+                order_id=order.id, no_order=order.no_order, tanggal_order=order.tanggal_order,
+                tgl_dikirim=order.tgl_dikirim, jumlah=jumlah, terlambat=order.tgl_dikirim < awal_minggu,
+            )
         )
         grup.subtotal += jumlah
     return list(hasil.values())
@@ -354,8 +392,10 @@ async def buat_penerimaan_reseller(
     total = sum((i.jumlah for i in semua.values()), Decimal("0"))
     akun = await _akun_bayar(session, payload.akun_id)
     tanggal = payload.tanggal or _hari_ini()
+    await pastikan_bulan_terbuka(session, tanggal)
     penerimaan = BlPenerimaanReseller(
-        tanggal=tanggal, pelanggan_id=payload.pelanggan_id, akun_id=akun.id, total=total, dibuat_oleh=user.id
+        tanggal=tanggal, pelanggan_id=payload.pelanggan_id, akun_id=akun.id, total=total, dibuat_oleh=user.id,
+        status_kirim=STATUS_DRAF,
     )
     session.add(penerimaan)
     await session.flush()
@@ -365,7 +405,7 @@ async def buat_penerimaan_reseller(
     await _transaksi_otomatis(
         session, user, tanggal=tanggal, akun=akun, kategori=KATEGORI_RESELLER, jenis="masuk", jumlah=total,
         keterangan=f"Pembayaran {pelanggan.nama} ({len(semua)} order)",
-        ref_jenis=REF_PENERIMAAN_RESELLER, ref_id=penerimaan.id,
+        ref_jenis=REF_PENERIMAAN_RESELLER, ref_id=penerimaan.id, status_kirim=STATUS_DRAF,
     )
     await session.flush()
     return penerimaan
@@ -380,7 +420,9 @@ async def batalkan_penerimaan_reseller(session: AsyncSession, penerimaan_id: str
     p = await session.get(BlPenerimaanReseller, penerimaan_id)
     if p is None:
         raise _bad("Penerimaan tidak ditemukan", status.HTTP_404_NOT_FOUND)
+    _tolak_bila_terkirim(p)
     _batalkan(p, alasan)
+    await catat_audit(session, None, "batal", "penerimaan_reseller", p.id, sebelum={"total": p.total}, alasan=alasan)
     await _batalkan_transaksi_ref(session, REF_PENERIMAAN_RESELLER, p.id, alasan)
     await session.flush()
     return p
@@ -450,6 +492,7 @@ async def bayar_gaji(session: AsyncSession, user: BlUser, periode: str, tanggal:
     akun = await _akun_by_kode(session, KODE_DANA_CADANGAN)
     await _pastikan_saldo(session, akun, total)
     tanggal = tanggal or _hari_ini()
+    await pastikan_bulan_terbuka(session, tanggal)
     nama = {k.id: k.nama for k in (await session.execute(select(BlKaryawan))).scalars()}
     for g in belum:
         await sesuaikan(
@@ -516,7 +559,15 @@ async def _bagi_hasil_aktif(session: AsyncSession, periode: str) -> BlBagiHasil 
     return (await session.execute(stmt)).scalars().first()
 
 
+def periode_sudah_berakhir(periode: str, hari_ini: date | None = None) -> bool:
+    """Sementara (sebelum tutup buku Fase 2): bulan dianggap tertutup bila sudah berakhir."""
+    _, akhir = _rentang_periode(periode)
+    return akhir < (hari_ini or _hari_ini())
+
+
 async def simpan_bagi_hasil(session: AsyncSession, user: BlUser, periode: str) -> BlBagiHasil:
+    if not periode_sudah_berakhir(periode):
+        raise _bad("Bagi hasil hanya untuk bulan yang sudah berakhir (tutup buku)", status.HTTP_409_CONFLICT)
     if await _bagi_hasil_aktif(session, periode):
         raise _bad("Bagi hasil periode ini sudah disimpan (batalkan dulu bila ingin menghitung ulang)", 409)
     h = await hitung_bagi_hasil(session, periode)
@@ -545,6 +596,7 @@ async def bayar_bagi_hasil(session: AsyncSession, user: BlUser, bagi_hasil_id: s
     akun = await _akun_by_kode(session, KODE_KAS_UTAMA)
     await _pastikan_saldo(session, akun, total)
     tanggal = tanggal or _hari_ini()
+    await pastikan_bulan_terbuka(session, tanggal)
     for peran, jumlah in (("admin", row.bagian_admin), ("owner", row.bagian_owner)):
         if Decimal(jumlah) > 0:
             await _transaksi_otomatis(

@@ -4,7 +4,9 @@ from datetime import date, datetime
 from decimal import Decimal
 from typing import Optional
 
-from pydantic import BaseModel, ConfigDict, EmailStr, Field, field_validator
+from pydantic import BaseModel, ConfigDict, EmailStr, Field, computed_field, field_validator
+
+from tenants.bumi_lestari.modules.bumi_lestari.application import kategori_core
 
 PASSWORD_MIN_LENGTH = 8
 PASSWORD_MAX_BYTES = 72  # bcrypt only reads the first 72 bytes
@@ -109,7 +111,8 @@ class AkunKasOut(BaseModel):
     saldo_awal: Decimal
     plafon: Optional[Decimal] = None
     aktif: bool
-    saldo: Decimal
+    saldo: Decimal  # saldo resmi (hanya entri terkirim)
+    saldo_setelah_draf: Optional[Decimal] = None  # saldo fisik: termasuk draf yang belum dikirim
     model_config = ConfigDict(from_attributes=True)
 
 
@@ -125,6 +128,31 @@ class KategoriOut(BaseModel):
     aktif: bool
     model_config = ConfigDict(from_attributes=True)
 
+    @computed_field
+    @property
+    def sistem(self) -> bool:  # hanya dari proses otomatis; ditolak pada entri manual
+        return kategori_core.is_sistem(self.nama)
+
+    @computed_field
+    @property
+    def untuk_staf(self) -> bool:
+        return kategori_core.untuk_staf(self.nama)
+
+    @computed_field
+    @property
+    def khusus_admin(self) -> bool:
+        return self.nama in kategori_core.KATEGORI_KHUSUS_ADMIN
+
+    @computed_field
+    @property
+    def masuk_laba(self) -> bool:
+        return kategori_core.masuk_laba(self.nama)
+
+    @computed_field
+    @property
+    def grup(self) -> str:
+        return kategori_core.grup(self.nama, self.jenis)
+
 
 class TransaksiIn(BaseModel):
     tanggal: Optional[date] = None
@@ -133,6 +161,8 @@ class TransaksiIn(BaseModel):
     jenis: str
     jumlah: Decimal = Field(gt=0, max_digits=14, decimal_places=2)
     keterangan: str = Field(default="", max_length=1000)
+    # Setoran modal kedua dan seterusnya wajib dikonfirmasi eksplisit oleh admin (spesifikasi 8.12).
+    konfirmasi_setoran_modal_kedua: bool = False
 
 
 class TransaksiOut(BaseModel):
@@ -146,6 +176,8 @@ class TransaksiOut(BaseModel):
     dibuat_oleh: str
     ref_jenis: Optional[str] = None  # sumber otomatis (pembayaran_pemasok, penerimaan_reseller, gaji, bagi_hasil)
     ref_id: Optional[str] = None
+    status_kirim: str = "terkirim"  # draf = belum masuk laporan keuangan
+    kiriman_id: Optional[str] = None
     dibatalkan: bool
     alasan_batal: Optional[str] = None
     created_at: datetime

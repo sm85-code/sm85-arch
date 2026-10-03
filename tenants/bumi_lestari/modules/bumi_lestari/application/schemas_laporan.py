@@ -6,6 +6,8 @@ from typing import Optional
 
 from pydantic import BaseModel
 
+from tenants.bumi_lestari.modules.bumi_lestari.application.schemas_kiriman import DrafSumberOut
+
 
 class BarisKategoriOut(BaseModel):
     kategori: str
@@ -38,6 +40,8 @@ class LaporanUmumOut(BaseModel):
     arus_kas: list[ArusAkunOut]
     total_kas_awal: Decimal
     total_kas_akhir: Decimal
+    # Draf yang belum dikirim ke laporan keuangan (tidak dihitung di atas), per sumber.
+    draf_belum_dikirim: list[DrafSumberOut] = []
 
 
 class TransaksiLaporanOut(BaseModel):
@@ -81,6 +85,7 @@ class LaporanImprestOut(BaseModel):
     saldo_fisik: Optional[Decimal] = None
     selisih: Optional[Decimal] = None  # saldo_fisik - saldo_akhir
     status_selisih: Optional[str] = None  # sesuai | lebih | kurang
+    total_draf_belum_dikirim: Decimal = Decimal("0")  # pengeluaran draf bulan ini (belum masuk laporan)
 
 
 class AkunSaldoOut(BaseModel):
@@ -106,7 +111,8 @@ class DashboardOut(BaseModel):
     pemasukan_bulan_ini: Decimal
     biaya_bulan_ini: Decimal
     laba_bulan_ini: Decimal
-    order_per_status: dict[str, int]
+    order_per_status: dict[str, int]  # order bulan ini (tanggal_order dalam periode) per status
+    order_aktif_per_status: dict[str, int] = {}  # semua order yang masih berjalan (belum selesai/batal)
     order_bulan_ini: int
     omzet_order_bulan_ini: Decimal
     piutang_penjual_lain: Decimal  # tagihan penjual lain yang belum dibayar
@@ -116,3 +122,6 @@ class DashboardOut(BaseModel):
     kas_iklan: Optional[ImprestRingkasOut] = None  # hanya admin
     bagian_admin_pratinjau: Optional[Decimal] = None
     bagian_owner_pratinjau: Optional[Decimal] = None
+    tagihan_penjual_lain_minggu_ini: Decimal = Decimal("0")  # kirim s.d. Sabtu lalu, belum dibayar
+    belum_cair_sementara: Decimal = Decimal("0")  # order marketplace berstatus dikirim (sementara, sebelum Fase 2)
+    draf_belum_dikirim: list[DrafSumberOut] = []  # hanya sumber yang punya draf

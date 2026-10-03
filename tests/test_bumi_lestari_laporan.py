@@ -10,7 +10,7 @@ from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker, create_asyn
 
 from tenants.bumi_lestari.modules.bumi_lestari.application import laporan_services as lap
 from tenants.bumi_lestari.modules.bumi_lestari.application import provisi_services as ps
-from tenants.bumi_lestari.modules.bumi_lestari.application import services, pembayaran_services as pembayaran
+from tenants.bumi_lestari.modules.bumi_lestari.application import kiriman_services, services, pembayaran_services as pembayaran
 from tenants.bumi_lestari.modules.bumi_lestari.application.schemas import TransaksiIn, TransferIn
 from tenants.bumi_lestari.modules.bumi_lestari.application.schemas_pembayaran import KaryawanIn
 from tenants.bumi_lestari.modules.bumi_lestari.infrastructure import models_pembayaran  # noqa: F401
@@ -67,7 +67,7 @@ async def _trf(c, user, dari, ke, jumlah, tanggal):
 
 async def _skenario_september(c):
     """September 2026 (1 Sep = Selasa). Kas kecil: isi awal 3jt, dipakai, digenapkan tiap Selasa."""
-    await _trx(c, c.admin, "KAS_UTAMA", "Penjualan marketplace", "masuk", "10000000", date(2026, 9, 2))
+    await _trx(c, c.admin, "KAS_UTAMA", "Pemasukan lain", "masuk", "10000000", date(2026, 9, 2))
     await _trf(c, c.owner, "KAS_UTAMA", "KAS_KECIL", "3000000", date(2026, 9, 1))
     await _trx(c, c.staf, "KAS_KECIL", "Operasional", "keluar", "300000", date(2026, 9, 3))
     await _trf(c, c.owner, "KAS_UTAMA", "KAS_KECIL", "300000", date(2026, 9, 8))
@@ -78,11 +78,13 @@ async def _skenario_september(c):
     # Kas iklan (admin): isi 2jt, pakai 400rb
     await _trf(c, c.admin, "KAS_UTAMA", "KAS_IKLAN", "2000000", date(2026, 9, 1))
     await _trx(c, c.admin, "KAS_IKLAN", "Biaya iklan", "keluar", "400000", date(2026, 9, 5))
-    await _trx(c, c.owner, "KAS_UTAMA", "Prive", "keluar", "100000", date(2026, 9, 12))
+    await _trx(c, c.admin, "KAS_UTAMA", "Prive", "keluar", "100000", date(2026, 9, 12))
     # Gaji 2jt dicicil: 2 cicilan (500rb) pada Selasa 1 & 8 Sep
     await pembayaran.create_karyawan(c.s, KaryawanIn(nama="Sari", peran="kas_kecil_packing", gaji_bulanan=Decimal("2000000")))
     await ps.catat_sisihan(c.s, c.owner, date(2026, 9, 1))
     await ps.catat_sisihan(c.s, c.owner, date(2026, 9, 8))
+    # Kas kecil & kas iklan masuk laporan setelah "Kirim ke laporan keuangan" (langkah akhir Tutup Kas Mingguan).
+    await kiriman_services.kirim_semua(c.s, c.admin)
 
 
 @pytest.mark.asyncio

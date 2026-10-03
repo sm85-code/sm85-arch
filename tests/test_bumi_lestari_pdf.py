@@ -54,7 +54,7 @@ async def ctx():
         o = await osvc.create_order(
             s, OrderIn(saluran_id=res.id, pelanggan_id=c.rina.id, produk_id=produk.id, pemasok_id=c.tukang.id, no_order="260922PJ9B35EN", biaya_pokok=Decimal("500000"))
         )
-        for st in ("dikerjakan", "diambil"):
+        for st in ("dikerjakan", "diambil", "dicat", "dikirim"):  # invoice mengikuti tanggal kirim
             await osvc.ubah_status_order(s, o.id, OrderStatusIn(status=st, tanggal=date(2026, 9, 26)))
         yield c
     await engine.dispose()

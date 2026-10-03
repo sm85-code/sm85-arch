@@ -15,7 +15,9 @@ BUMI_LESTARI_COOKIE_NAME = "bumi_lestari_token"
 
 
 def issue_bumi_lestari_token(user: BlUser) -> str:
-    return create_access_token(subject=user.id, role=user.role, session_version=0, tenant=JWT_TENANT_BUMI_LESTARI)
+    return create_access_token(
+        subject=user.id, role=user.role, session_version=int(user.session_version or 0), tenant=JWT_TENANT_BUMI_LESTARI
+    )
 
 
 def set_bumi_lestari_cookie(response: Response, token: str) -> None:
@@ -54,6 +56,10 @@ async def get_current_user_bumi_lestari(
     user = await session.get(BlUser, user_id) if user_id else None
     if not user or not user.aktif:
         raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="Sesi tidak valid")
+    # Token dicabut (ganti password, reset, ganti role, nonaktif, keluar dari semua perangkat).
+    # Token lama tanpa "sv" dianggap versi 0, jadi sesi yang ada tetap berlaku sampai versi pengguna naik.
+    if int(payload.get("sv") or 0) != int(user.session_version or 0):
+        raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="Sesi berakhir, silakan login lagi")
     return user
 
 

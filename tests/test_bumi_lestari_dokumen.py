@@ -105,11 +105,11 @@ async def test_invoice_matches_sample_and_company_name_switches_to_pt(session):
         o = await osvc.create_order(
             session, OrderIn(saluran_id=saluran.id, pelanggan_id=mandalawangi.id, produk_id=produk.id, pemasok_id=tukang.id)
         )
-        for s in ("dikerjakan", "diambil"):  # tanggal invoice = tanggal barang jadi & diambil dari tukang
-            await osvc.ubah_status_order(session, o.id, OrderStatusIn(status=s, tanggal=tgl))
-        # dicat & dikirim belakangan (tanggal lain) tidak mengubah tanggal invoice
-        for s in ("dicat", "dikirim"):
-            await osvc.ubah_status_order(session, o.id, OrderStatusIn(status=s, tanggal=date(2026, 9, 28)))
+        # diambil & dicat lebih awal (tanggal lain) tidak menentukan invoice
+        for s in ("dikerjakan", "diambil", "dicat"):
+            await osvc.ubah_status_order(session, o.id, OrderStatusIn(status=s, tanggal=date(2026, 9, 19)))
+        # tanggal invoice = tanggal KIRIM, Senin-Sabtu minggu lalu (spesifikasi 1.4)
+        await osvc.ubah_status_order(session, o.id, OrderStatusIn(status="dikirim", tanggal=tgl))
 
     (inv,) = await dok.invoice_reseller(session, SELASA)
     assert inv.nomor == "INV/MG.4-002/IX/2026" and inv.minggu.label == "Minggu ke-4 September"

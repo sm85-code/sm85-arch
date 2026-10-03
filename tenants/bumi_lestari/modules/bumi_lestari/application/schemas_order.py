@@ -152,6 +152,7 @@ class OrderIn(BaseModel):
 
 
 class OrderPatch(BaseModel):
+    no_order: Optional[str] = Field(default=None, max_length=128)
     nama_pembeli: Optional[str] = Field(default=None, max_length=255)
     harga_satuan: Optional[Decimal] = Field(default=None, ge=0, max_digits=14, decimal_places=2)
     harga_cat_jasa: Optional[Decimal] = Field(default=None, ge=0, max_digits=14, decimal_places=2)
@@ -197,7 +198,15 @@ class OrderOut(BaseModel):
     tgl_dikirim: Optional[date]
     tgl_selesai: Optional[date]
     catatan: str
+    # Badge pembayaran (draf maupun terkirim); order yang sudah dibayar terkunci untuk perubahan harga/batal.
+    dibayar_tukang: bool = False
+    dibayar_penjual_lain: bool = False
     model_config = ConfigDict(from_attributes=True)
+
+    @computed_field
+    @property
+    def terkunci(self) -> bool:
+        return self.dibayar_tukang or self.dibayar_penjual_lain
 
     @computed_field
     @property

@@ -25,16 +25,16 @@ from tenants.bumi_lestari.modules.bumi_lestari.application.schemas_dokumen impor
 )
 from tenants.bumi_lestari.modules.bumi_lestari.application.services import _hari_ini, get_profil, nama_usaha_pada
 from tenants.bumi_lestari.modules.bumi_lestari.application.pembayaran_services import (
-    order_sudah_dibayar_reseller,
+    order_reseller_belum_dibayar,
     selasa_acuan,
     siap_bayar_pemasok,
+    tagihan_order,
 )
 from tenants.bumi_lestari.modules.bumi_lestari.infrastructure.models_order import (
     BlOrder,
     BlPelanggan,
     BlPemasok,
     BlProduk,
-    BlSaluran,
 )
 from tenants.bumi_lestari.modules.bumi_lestari.infrastructure.models import BlUser
 from tenants.bumi_lestari.modules.bumi_lestari.infrastructure.models_pembayaran import (
@@ -147,42 +147,27 @@ async def po_dari_pembayaran(session: AsyncSession, pembayaran_id: str) -> list[
 async def invoice_reseller(
     session: AsyncSession, tanggal: date | None = None, pelanggan_id: str | None = None
 ) -> list[InvoiceOut]:
-    """Invoice mingguan per penjual lain: order reseller yang barangnya jadi dan sudah diambil dari tukang
-    (tgl_diambil, sama dengan "Tanggal Selesai" di PO) s.d. Sabtu sebelum Selasa acuan dan belum dibayar.
-    Seluruh prosesnya (ambil, cat, tempel resi, kirim) dikerjakan UMKM; penjual lain hanya mengirim resi.
-    Tgl. invoice = Sabtu minggu lalu (akhir periode), jatuh tempo = Selasa minggu ini."""
+    """Invoice mingguan per penjual lain: order reseller yang sudah DIKIRIM (tgl_dikirim) Senin-Sabtu minggu
+    lalu dan belum dibayar; kiriman minggu-minggu sebelumnya yang belum dibayar ikut, ditandai `terlambat`.
+    Memakai query & rumus tagihan yang sama dengan piutang (pembayaran_services.order_reseller_belum_dibayar,
+    tagihan_order). Tgl. invoice = Sabtu minggu lalu (akhir periode), jatuh tempo = Selasa minggu ini."""
     selasa = selasa_acuan(tanggal or _hari_ini())
     minggu, _, _ = info_minggu(selasa)
-    dibayar = await order_sudah_dibayar_reseller(session)
-    stmt = (
-        select(BlOrder, BlProduk, BlPelanggan)
-        .join(BlSaluran, BlSaluran.id == BlOrder.saluran_id)
-        .join(BlProduk, BlProduk.id == BlOrder.produk_id)
-        .join(BlPelanggan, BlPelanggan.id == BlOrder.pelanggan_id)
-        .where(
-            BlSaluran.jenis == "reseller",
-            BlOrder.status != "batal",
-            BlOrder.tgl_diambil.is_not(None),
-            BlOrder.tgl_diambil <= minggu.periode_akhir,
-        )
-        .order_by(BlPelanggan.nama, BlOrder.tgl_diambil, BlOrder.no_order)
-    )
-    if pelanggan_id:
-        stmt = stmt.where(BlOrder.pelanggan_id == pelanggan_id)
     per_pelanggan: dict[str, tuple[BlPelanggan, list[InvoiceItemOut]]] = {}
-    for order, produk, pelanggan in (await session.execute(stmt)).all():
-        if order.id in dibayar:
-            continue
+    rows = await order_reseller_belum_dibayar(session, pelanggan_id=pelanggan_id, sampai_kirim=minggu.periode_akhir)
+    for order, pelanggan in rows:
+        produk = await session.get(BlProduk, order.produk_id)
         qty = order.qty
         barang = Decimal(order.harga_satuan) * qty
         jasa = (Decimal(order.harga_cat_jasa) + Decimal(order.harga_packing)) * qty
         proses = Decimal(order.biaya_proses)
+        total = tagihan_order(order)
         per_pelanggan.setdefault(pelanggan.id, (pelanggan, []))[1].append(
             InvoiceItemOut(
-                order_id=order.id, tanggal=order.tgl_diambil, hari=HARI[order.tgl_diambil.weekday()],
+                order_id=order.id, tanggal=order.tgl_dikirim, hari=HARI[order.tgl_dikirim.weekday()],
                 nama_barang=produk.nama, ukuran=produk.ukuran, qty=qty, harga_barang=barang,
-                biaya_jasa_pengecatan=jasa, biaya_proses=proses, total=barang + jasa + proses,
-                terlambat=order.tgl_diambil < minggu.periode_awal,
+                biaya_jasa_pengecatan=jasa, biaya_proses=proses, total=total,
+                terlambat=order.tgl_dikirim < minggu.periode_awal,
             )
         )
     profil = await get_profil(session)

@@ -1,4 +1,5 @@
 """bumi_lestari T3/T4: pembayaran Selasa, penerimaan reseller, gaji, bagi hasil, kelola pengguna."""
+import uuid
 from datetime import date
 from decimal import Decimal
 
@@ -9,7 +10,7 @@ from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker, create_async_engine
 
 from tenants.bumi_lestari.modules.bumi_lestari.application import order_services as osvc
-from tenants.bumi_lestari.modules.bumi_lestari.application import services, pembayaran_services as pembayaran
+from tenants.bumi_lestari.modules.bumi_lestari.application import kiriman_services, services, pembayaran_services as pembayaran
 from tenants.bumi_lestari.modules.bumi_lestari.application.schemas import (
     ResetPasswordIn,
     TransaksiIn,
@@ -89,7 +90,7 @@ async def ctx(session):
     return c
 
 
-async def _kas_masuk(session, ctx, jumlah, kategori="Penjualan marketplace", tanggal=None):
+async def _kas_masuk(session, ctx, jumlah, kategori="Pemasukan lain", tanggal=None):
     kat = (await session.execute(select(BlKategori).where(BlKategori.nama == kategori))).scalar_one()
     return await services.create_transaksi(
         session, ctx.admin,
@@ -98,6 +99,7 @@ async def _kas_masuk(session, ctx, jumlah, kategori="Penjualan marketplace", tan
 
 
 async def _order_diambil(session, produk, pemasok, tgl, *, qty=1, biaya=None, saluran=None, no=""):
+    no = no or f"SHP-{uuid.uuid4().hex[:8]}"  # order marketplace wajib nomor pesanan
     o = await osvc.create_order(
         session,
         OrderIn(saluran_id=(saluran or await _shopee(session)).id, produk_id=produk.id, qty=qty, pemasok_id=pemasok.id, butuh_cat=False, no_order=no, biaya_pokok=biaya),
@@ -141,18 +143,27 @@ async def test_pembayaran_pemasok_is_one_transaction_with_item_detail(session, c
     assert len(trxs) == 1 and trxs[0].jumlah == Decimal("1680000") and trxs[0].jenis == "keluar"  # angkanya 1
     detail = await pembayaran.detail_pembayaran_pemasok(session, p.id)
     assert detail.total_qty == 6 and len(detail.items) == 3  # isinya: daftar barang
-    assert detail.transaksi_id == trxs[0].id
+    assert detail.transaksi_id == trxs[0].id and detail.status_kirim == "draf"
+    # Draf: saldo resmi belum berubah, uang fisik sudah keluar.
+    assert await services.saldo_akun(session, ctx.kas) == Decimal("5000000")
+    assert await services.saldo_akun(session, ctx.kas, termasuk_draf=True) == Decimal("5000000") - Decimal("1680000")
+    krm = await kiriman_services.kirim(session, ctx.admin, "pembayaran_pemasok")
     assert await services.saldo_akun(session, ctx.kas) == Decimal("5000000") - Decimal("1680000")
 
-    with pytest.raises(HTTPException) as exc:  # 1 kali tiap Selasa
+    with pytest.raises(HTTPException) as exc:  # semua order Selasa ini sudah dibayar
         await pembayaran.buat_pembayaran_pemasok(session, ctx.admin, PembayaranPemasokIn(tanggal=SELASA))
-    assert exc.value.status_code == 409
+    assert exc.value.status_code == 400
 
     depan = await pembayaran.siap_bayar_pemasok(session, date(2025, 6, 17))
     assert {i.order_id for g in depan.pemasok for i in g.items} == {d.id, e.id}
 
+    with pytest.raises(HTTPException) as exc:  # terkirim: terkunci
+        await pembayaran.batalkan_pembayaran_pemasok(session, p.id, "salah")
+    assert exc.value.status_code == 409
+    await kiriman_services.batal_kiriman(session, ctx.admin, krm.id, "salah tukang")
     await pembayaran.batalkan_pembayaran_pemasok(session, p.id, "salah")
     assert await services.saldo_akun(session, ctx.kas) == Decimal("5000000")
+    assert await services.saldo_akun(session, ctx.kas, termasuk_draf=True) == Decimal("5000000")
     assert (await pembayaran.siap_bayar_pemasok(session, SELASA)).total == Decimal("1680000")  # bisa diulang
 
 
@@ -179,16 +190,18 @@ async def test_reseller_piutang_and_payment(session, ctx):
     o = await osvc.create_order(
         session, OrderIn(saluran_id=ctx.res_saluran.id, pelanggan_id=ctx.rina.id, produk_id=ctx.partisi.id, qty=2, pemasok_id=ctx.tukang.id, butuh_cat=False)
     )
-    assert await pembayaran.list_piutang_reseller(session) == []  # barang belum jadi/diambil dari tukang
-    for s in ("dikerjakan", "diambil"):  # diambil = barang jadi -> sudah bisa ditagih, walau belum dicat/dikirim
+    for s in ("dikerjakan", "diambil"):
         await osvc.ubah_status_order(session, o.id, OrderStatusIn(status=s))
+    assert await pembayaran.list_piutang_reseller(session) == []  # belum dikirim: belum ditagih (spesifikasi 1.4)
+    await osvc.ubah_status_order(session, o.id, OrderStatusIn(status="dikirim"))
     piutang = await pembayaran.list_piutang_reseller(session)
     assert piutang[0].subtotal == Decimal("1250000")  # (600rb + 20rb) x 2 + 10rb
 
     pen = await pembayaran.buat_penerimaan_reseller(session, ctx.admin, PenerimaanResellerIn(pelanggan_id=ctx.rina.id))
     assert pen.total == Decimal("1250000")
     assert await pembayaran.list_piutang_reseller(session) == []
-    assert await services.saldo_akun(session, ctx.kas) == Decimal("1250000")
+    assert await services.saldo_akun(session, ctx.kas) == 0  # draf
+    assert await services.saldo_akun(session, ctx.kas, termasuk_draf=True) == Decimal("1250000")
     with pytest.raises(HTTPException):
         await pembayaran.buat_penerimaan_reseller(session, ctx.admin, PenerimaanResellerIn(pelanggan_id=ctx.rina.id))
     await pembayaran.batalkan_penerimaan_reseller(session, pen.id, "salah catat")
