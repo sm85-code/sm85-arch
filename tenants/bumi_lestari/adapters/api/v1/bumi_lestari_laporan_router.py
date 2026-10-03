@@ -8,7 +8,14 @@ from decimal import Decimal
 from fastapi import APIRouter, Depends, Query
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from tenants.bumi_lestari.modules.bumi_lestari.application import laporan_keuangan as keu
 from tenants.bumi_lestari.modules.bumi_lestari.application import laporan_services as svc
+from tenants.bumi_lestari.modules.bumi_lestari.application.schemas_keuangan import (
+    HppMarginOut,
+    LabaRugiOut,
+    NeracaOut,
+    RingkasanOwnerOut,
+)
 from tenants.bumi_lestari.modules.bumi_lestari.application.schemas_laporan import (
     BelumCairOut,
     DashboardOut,
@@ -61,3 +68,33 @@ async def laporan_kas_kecil(
 ):
     """Laporan kas kecil bulanan + rincian mingguan; `saldo_fisik` (uang yang dihitung) menandai selisih."""
     return await svc.laporan_imprest(session, "kas_kecil", periode, saldo_fisik)
+
+
+PERIODE_WAJIB = Query(pattern=r"^\d{4}-(0[1-9]|1[0-2])$", description="YYYY-MM")
+_pemilik = Depends(require_roles_bumi_lestari("admin", "owner"))
+
+
+@laporan_router.get("/laporan/laba-rugi", response_model=LabaRugiOut)
+async def laporan_laba_rugi(periode: str = PERIODE_WAJIB, session: AsyncSession = Depends(get_db_bumi_lestari), _: BlUser = _pemilik):
+    """Laba rugi bulanan (spesifikasi 9.1): penjualan & biaya marketplace per saluran, HPP, laba kotor, margin, laba bersih."""
+    return await keu.laba_rugi(session, periode)
+
+
+@laporan_router.get("/laporan/neraca", response_model=NeracaOut)
+async def laporan_neraca(
+    per_tanggal: date | None = None, session: AsyncSession = Depends(get_db_bumi_lestari), _: BlUser = _pemilik,
+):
+    """Neraca sederhana (9.2) dengan pemeriksaan selisih."""
+    return await keu.neraca(session, per_tanggal)
+
+
+@laporan_router.get("/laporan/hpp-margin", response_model=HppMarginOut)
+async def laporan_hpp_margin(periode: str = PERIODE_WAJIB, session: AsyncSession = Depends(get_db_bumi_lestari), _: BlUser = _pemilik):
+    """HPP & margin per produk dan per saluran (9.3), dicocokkan per order yang penjualannya diakui di bulan itu."""
+    return await keu.hpp_margin(session, periode)
+
+
+@laporan_router.get("/laporan/ringkasan-owner", response_model=RingkasanOwnerOut)
+async def laporan_ringkasan_owner(session: AsyncSession = Depends(get_db_bumi_lestari), _: BlUser = _pemilik):
+    """Ringkasan Owner (9.7): laba rugi bulan terakhir yang ditutup + tren, neraca ringkas, posisi modal, bagi hasil."""
+    return await keu.ringkasan_owner(session)
