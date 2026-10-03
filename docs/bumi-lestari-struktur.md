@@ -305,26 +305,20 @@ plafon dengan transfer dari kas utama (`GET/POST /kas-iklan/pengisian`). Hanya a
 kas iklan; staf kas kecil tidak. Siklus Selasa: terima bayar reseller → tarik saldo toko → isi kas kecil →
 **isi kas iklan** → bayar tukang/supplier.
 
-## 11. Gaji dan langganan dicicil 4 minggu (Dana cadangan)
+## 11. Gaji dicicil 4 minggu (Dana cadangan); langganan dibayar langsung
 
-Gaji dibayar bulanan (tanggal 1 bulan berikutnya), tetapi **di laporan keuangan dicicil 4 minggu** supaya uangnya
-tersedia di akhir bulan dan bisa dibayar di awal bulan. Hal yang sama berlaku untuk **langganan bulanan**: listrik,
-air, wifi, kebersihan, iuran BUMDES, langganan Komplace (daftar bisa ditambah; nominal diisi di halaman Langganan,
-nilai awal 0 = belum disisihkan).
-
+**Gaji** dibayar bulanan (tanggal 1 bulan berikutnya), tetapi **di laporan keuangan dicicil 4 minggu** supaya uangnya
+tersedia di akhir bulan dan bisa dibayar di awal bulan.
 - Akun **Dana cadangan** (`DANA_CADANGAN`) menampung uang yang disisihkan.
-- **Tiap Selasa (Selasa ke-1 sampai ke-4 bulan itu)** tombol *Sisihkan*: `GET /sisihan/hitung` (pratinjau) lalu
-  `POST /sisihan`. Sistem mentransfer 1/4 gaji + 1/4 langganan dari kas utama ke Dana cadangan **dan** mencatat
-  1/4 itu sebagai beban minggu itu di laporan. Cicilan ke-4 menampung sisa pembulatan. Selasa ke-5 tidak ada cicilan.
-- **Awal bulan berikutnya**: `POST /gaji/bayar` dan `POST /tagihan/bayar` membayar dari Dana cadangan. Pembayaran
-  hanya menyesuaikan selisih (mis. listrik lebih mahal dari perkiraan, diakui sebagai beban saat dibayar) dan
-  **tidak dihitung dua kali** sebagai biaya. Kalau Dana cadangan kurang, transfer dulu dari kas utama.
-- Siklus Selasa: terima bayar reseller → tarik saldo toko → isi kas kecil → isi kas iklan →
-  **sisihkan dana gaji & langganan** → bayar tukang/supplier.
-- Semua bisa dibatalkan (transfer, beban, dan transaksi ikut dibatalkan).
+- **Tiap Selasa ke-1 sampai ke-4 bulan itu** tombol *Sisihkan*: `GET /sisihan/hitung` (pratinjau) lalu `POST /sisihan`.
+  Sistem mentransfer 1/4 gaji dari kas utama ke Dana cadangan **dan** mencatat 1/4 itu sebagai beban minggu itu di
+  laporan. Cicilan ke-4 menampung sisa pembulatan. **Selasa ke-5 tidak ada cicilan.**
+- **Awal bulan berikutnya** `POST /gaji/bayar` membayar dari Dana cadangan. Pembayaran hanya menyesuaikan selisih
+  (mis. gaji naik) dan **tidak dihitung dua kali** sebagai biaya. Kalau Dana cadangan kurang, transfer dulu dari kas utama.
 
-**Catatan proses penjual lain:** seluruh pengerjaan dilakukan UMKM (ambil dari tukang → cat oleh karyawan → tempel
-resi → kirim); penjual lain hanya mengirim resi ke UMKM (resi menjadi tanggung jawab penjual lain, tidak dicatat
-di sistem). Karena itu order sudah
-**bisa ditagih sejak barang jadi dan diambil dari tukang** (`tgl_diambil`), tidak menunggu dicat atau dikirim.
-Satu order = satu baris (di PO dan invoice, jumlah order = jumlah baris).
+**Langganan** (listrik, air, wifi, kebersihan, iuran BUMDES, langganan Komplace; daftar bisa ditambah) **tidak dicicil**:
+dibayar langsung saat tagihan datang (biasanya minggu ke-4) lewat `POST /tagihan/bayar`, default dari kas utama,
+dan bebannya diakui saat dibayar. `jumlah_bulanan` hanya perkiraan untuk mengisi formulir.
+
+Siklus Selasa: terima bayar penjual lain → tarik saldo toko → isi kas kecil → isi kas iklan →
+**sisihkan dana gaji** → bayar tukang/supplier. Semua bisa dibatalkan.

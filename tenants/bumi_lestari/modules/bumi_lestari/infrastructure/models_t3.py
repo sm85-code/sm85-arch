@@ -132,7 +132,8 @@ class BlBagiHasil(_Batal, BumiLestariBase):
 
 
 class BlLangganan(BumiLestariBase):
-    """Langganan/utilitas bulanan: listrik, air, wifi, kebersihan, iuran BUMDES, langganan Komplace, dst."""
+    """Daftar langganan/utilitas: listrik, air, wifi, kebersihan, iuran BUMDES, langganan Komplace, dst.
+    `jumlah_bulanan` hanya perkiraan untuk mengisi otomatis formulir bayar."""
 
     __tablename__ = "bl_langganan"
 
@@ -143,7 +144,7 @@ class BlLangganan(BumiLestariBase):
 
 
 class BlSisihan(_Batal, BumiLestariBase):
-    """Cicilan mingguan (tiap Selasa, 4 kali per bulan) gaji & langganan ke Dana cadangan."""
+    """Cicilan mingguan (tiap Selasa, 4 kali per bulan) gaji ke Dana cadangan."""
 
     __tablename__ = "bl_sisihan"
 
@@ -167,16 +168,16 @@ class BlProvisi(_Batal, BumiLestariBase):
     tanggal: Mapped[date] = mapped_column(Date, nullable=False, index=True)
     periode: Mapped[str] = mapped_column(String(7), nullable=False, index=True)
     minggu_ke: Mapped[int] = mapped_column(Integer, nullable=False)
-    jenis: Mapped[str] = mapped_column(String(16), nullable=False)  # gaji | langganan
+    jenis: Mapped[str] = mapped_column(String(16), nullable=False)  # gaji
     karyawan_id: Mapped[Optional[str]] = mapped_column(ForeignKey("bl_karyawan.id"), nullable=True, index=True)
-    langganan_id: Mapped[Optional[str]] = mapped_column(ForeignKey("bl_langganan.id"), nullable=True, index=True)
     jumlah: Mapped[Decimal] = mapped_column(Numeric(14, 2), nullable=False)
-    sumber_jenis: Mapped[str] = mapped_column(String(16), nullable=False, index=True)  # sisihan | gaji | tagihan
+    sumber_jenis: Mapped[str] = mapped_column(String(16), nullable=False, index=True)  # sisihan | gaji
     sumber_id: Mapped[str] = mapped_column(String(64), nullable=False, index=True)
 
 
 class BlTagihan(_Batal, BumiLestariBase):
-    """Tagihan langganan sebulan yang sudah dibayar (dari Dana cadangan, awal bulan berikutnya)."""
+    """Tagihan langganan yang sudah dibayar. Dibayar langsung saat tagihan datang (kebanyakan minggu ke-4);
+    beban diakui saat dibayar, tidak dicicil."""
 
     __tablename__ = "bl_tagihan"
 

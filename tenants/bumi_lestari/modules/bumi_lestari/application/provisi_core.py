@@ -11,32 +11,26 @@ from tenants.bumi_lestari.modules.bumi_lestari.application.services import _bata
 from tenants.bumi_lestari.modules.bumi_lestari.infrastructure.models_t3 import BlProvisi
 
 
-async def terkumpul(
-    session: AsyncSession, periode: str, *, jenis: str, karyawan_id: str | None = None, langganan_id: str | None = None
-) -> Decimal:
+async def terkumpul(session: AsyncSession, periode: str, *, jenis: str, karyawan_id: str | None = None) -> Decimal:
     stmt = select(func.coalesce(func.sum(BlProvisi.jumlah), 0)).where(
         BlProvisi.periode == periode, BlProvisi.jenis == jenis, BlProvisi.dibatalkan.is_(False)
     )
     if karyawan_id:
         stmt = stmt.where(BlProvisi.karyawan_id == karyawan_id)
-    if langganan_id:
-        stmt = stmt.where(BlProvisi.langganan_id == langganan_id)
     return Decimal(str((await session.execute(stmt)).scalar_one() or 0))
 
 
 async def sesuaikan(
     session: AsyncSession, *, tanggal: date, periode: str, jenis: str, target: Decimal, sumber_jenis: str,
-    sumber_id: str, karyawan_id: str | None = None, langganan_id: str | None = None,
+    sumber_id: str, karyawan_id: str | None = None,
 ) -> None:
     """Saat dibayar: buat baris penyesuaian agar total beban bulan itu = jumlah yang dibayar (bisa + atau -)."""
-    selisih = Decimal(target) - await terkumpul(
-        session, periode, jenis=jenis, karyawan_id=karyawan_id, langganan_id=langganan_id
-    )
+    selisih = Decimal(target) - await terkumpul(session, periode, jenis=jenis, karyawan_id=karyawan_id)
     if selisih != 0:
         session.add(
             BlProvisi(
                 tanggal=tanggal, periode=periode, minggu_ke=0, jenis=jenis, karyawan_id=karyawan_id,
-                langganan_id=langganan_id, jumlah=selisih, sumber_jenis=sumber_jenis, sumber_id=sumber_id,
+                jumlah=selisih, sumber_jenis=sumber_jenis, sumber_id=sumber_id,
             )
         )
         await session.flush()

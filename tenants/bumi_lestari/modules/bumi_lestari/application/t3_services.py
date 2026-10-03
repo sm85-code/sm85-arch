@@ -60,7 +60,6 @@ from tenants.bumi_lestari.modules.bumi_lestari.infrastructure.models_t3 import (
     REF_GAJI,
     REF_PEMBAYARAN_PEMASOK,
     REF_PENERIMAAN_RESELLER,
-    REF_TAGIHAN,
     BlBagiHasil,
     BlGaji,
     BlKaryawan,
@@ -515,9 +514,9 @@ async def hitung_bagi_hasil(session: AsyncSession, periode: str) -> BagiHasilOut
         return Decimal(str((await session.execute(stmt)).scalar_one() or 0))
 
     pemasukan = await jumlah("masuk")
-    # Gaji & tagihan langganan dibayar dari Dana cadangan: bebannya sudah diakui lewat cicilan mingguan
-    # (BlProvisi), jadi transaksi pembayarannya dikecualikan agar tidak dihitung dua kali.
-    pengeluaran = await jumlah("keluar", kecuali=KATEGORI_BUKAN_BIAYA, kecuali_ref=(REF_GAJI, REF_TAGIHAN))
+    # Gaji dibayar dari Dana cadangan: bebannya sudah diakui lewat cicilan mingguan (BlProvisi), jadi transaksi
+    # pembayarannya dikecualikan agar tidak dihitung dua kali. Langganan dibayar langsung, bebannya diakui di sini.
+    pengeluaran = await jumlah("keluar", kecuali=KATEGORI_BUKAN_BIAYA, kecuali_ref=(REF_GAJI,))
     pengeluaran += await beban_provisi(session, awal, akhir)
     laba = pemasukan - pengeluaran
     proporsi = {p.penerima: Decimal(p.persen) for p in await get_proporsi(session)}

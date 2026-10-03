@@ -198,7 +198,7 @@ class SisihanIn(BaseModel):
 
 
 class SisihanItemOut(BaseModel):
-    jenis: str  # gaji | langganan
+    jenis: str  # gaji
     nama: str
     jumlah: Decimal
 
@@ -233,6 +233,7 @@ class TagihanItemIn(BaseModel):
 class TagihanBayarIn(BaseModel):
     periode: str = Periode
     tanggal: Optional[date] = None
+    akun_id: Optional[str] = None  # kosong -> Kas utama
     items: Optional[list[TagihanItemIn]] = None  # kosong -> semua langganan aktif sebesar jumlah_bulanan
 
 

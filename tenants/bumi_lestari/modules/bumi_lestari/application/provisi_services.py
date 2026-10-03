@@ -1,8 +1,8 @@
-"""Gaji & langganan: dicicil 4 minggu (tiap Selasa) ke Dana cadangan, dibayar awal bulan berikutnya.
+"""Gaji dicicil 4 minggu (tiap Selasa) ke Dana cadangan, dibayar awal bulan berikutnya.
 
-Di laporan keuangan beban diakui mingguan (BlProvisi, 1/4 per Selasa); uangnya disisihkan lewat transfer
-kas utama -> Dana cadangan. Pembayaran di awal bulan keluar dari Dana cadangan dan hanya menyesuaikan selisih
-antara cicilan dan tagihan/gaji sebenarnya.
+Di laporan keuangan beban gaji diakui mingguan (BlProvisi, 1/4 per Selasa); uangnya disisihkan lewat transfer
+kas utama -> Dana cadangan. Pembayaran gaji di awal bulan keluar dari Dana cadangan dan hanya menyesuaikan selisih.
+Langganan (listrik, air, wifi, ...) TIDAK dicicil: dibayar langsung saat tagihan datang, bebannya diakui saat itu.
 """
 from __future__ import annotations
 
@@ -15,7 +15,6 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from tenants.bumi_lestari.modules.bumi_lestari.application.provisi_core import (
     batalkan_provisi_sumber,
-    sesuaikan,
 )
 from tenants.bumi_lestari.modules.bumi_lestari.application.schemas_t3 import (
     LanggananIn,
@@ -35,6 +34,7 @@ from tenants.bumi_lestari.modules.bumi_lestari.application.services import (
 )
 from tenants.bumi_lestari.modules.bumi_lestari.application.t3_services import (
     KATEGORI_TAGIHAN,
+    _akun_bayar,
     _batalkan_transaksi_ref,
     _transaksi_otomatis,
     list_karyawan,
@@ -122,9 +122,6 @@ async def hitung_sisihan(session: AsyncSession, tanggal: date | None = None) -> 
         for k in await list_karyawan(session):
             if Decimal(k.gaji_bulanan) > 0:
                 items.append(SisihanItemOut(jenis="gaji", nama=k.nama, jumlah=cicilan(k.gaji_bulanan, minggu_ke)))
-        for lg in await list_langganan(session):
-            if Decimal(lg.jumlah_bulanan) > 0:
-                items.append(SisihanItemOut(jenis="langganan", nama=lg.nama, jumlah=cicilan(lg.jumlah_bulanan, minggu_ke)))
     total = sum((i.jumlah for i in items), Decimal("0"))
     saldo_utama = await saldo_akun(session, await _akun_by_kode(session, KODE_KAS_UTAMA))
     existing = await _sisihan_aktif(session, periode, minggu_ke)
@@ -139,12 +136,12 @@ async def catat_sisihan(session: AsyncSession, user: BlUser, tanggal: date | Non
     if info.sudah_dicatat_id:
         raise _bad("Sisihan Selasa ini sudah dicatat (batalkan dulu bila ingin mengulang)", status.HTTP_409_CONFLICT)
     if not info.items:
-        raise _bad(info.catatan or "Tidak ada gaji/langganan yang perlu disisihkan")
+        raise _bad(info.catatan or "Tidak ada gaji yang perlu disisihkan")
     kas_utama = await _akun_by_kode(session, KODE_KAS_UTAMA)
     dana = await _akun_by_kode(session, KODE_DANA_CADANGAN)
     transfer = await _buat_transfer(
         session, user, tanggal=info.selasa, dari=kas_utama, ke=dana, jumlah=info.total, jenis="sisihan_dana",
-        keterangan=f"Sisihan gaji & langganan {info.periode} minggu ke-{info.minggu_ke}",
+        keterangan=f"Sisihan gaji {info.periode} minggu ke-{info.minggu_ke}",
     )
     row = BlSisihan(
         selasa=info.selasa, periode=info.periode, minggu_ke=info.minggu_ke, total=info.total,
@@ -158,15 +155,6 @@ async def catat_sisihan(session: AsyncSession, user: BlUser, tanggal: date | Non
                 BlProvisi(
                     tanggal=info.selasa, periode=info.periode, minggu_ke=info.minggu_ke, jenis="gaji",
                     karyawan_id=k.id, jumlah=cicilan(k.gaji_bulanan, info.minggu_ke), sumber_jenis=REF_SISIHAN,
-                    sumber_id=row.id,
-                )
-            )
-    for lg in await list_langganan(session):
-        if Decimal(lg.jumlah_bulanan) > 0:
-            session.add(
-                BlProvisi(
-                    tanggal=info.selasa, periode=info.periode, minggu_ke=info.minggu_ke, jenis="langganan",
-                    langganan_id=lg.id, jumlah=cicilan(lg.jumlah_bulanan, info.minggu_ke), sumber_jenis=REF_SISIHAN,
                     sumber_id=row.id,
                 )
             )
@@ -193,6 +181,7 @@ async def batalkan_sisihan(session: AsyncSession, sisihan_id: str, alasan: str) 
 
 
 async def bayar_tagihan(session: AsyncSession, user: BlUser, payload: TagihanBayarIn) -> list[BlTagihan]:
+    """Bayar langganan langsung (default dari kas utama); beban diakui saat dibayar."""
     langganan = {lg.id: lg for lg in await list_langganan(session)}
     if payload.items is None:
         daftar = [(lg.id, Decimal(lg.jumlah_bulanan)) for lg in langganan.values() if Decimal(lg.jumlah_bulanan) > 0]
@@ -213,21 +202,17 @@ async def bayar_tagihan(session: AsyncSession, user: BlUser, payload: TagihanBay
         if lid in sudah:
             raise _bad(f"Tagihan {langganan[lid].nama} periode {payload.periode} sudah dibayar", status.HTTP_409_CONFLICT)
     total = sum((jumlah for _, jumlah in daftar), Decimal("0"))
-    dana = await _akun_by_kode(session, KODE_DANA_CADANGAN)
-    await _pastikan_saldo_cukup(session, dana, total)
+    akun = await _akun_bayar(session, payload.akun_id)
+    await _pastikan_saldo_cukup(session, akun, total)
     tanggal = payload.tanggal or _hari_ini()
     hasil = []
     for lid, jumlah in daftar:
         row = BlTagihan(periode=payload.periode, langganan_id=lid, jumlah=jumlah, tanggal_bayar=tanggal, dibayar_oleh=user.id)
         session.add(row)
         await session.flush()
-        await sesuaikan(
-            session, tanggal=tanggal, periode=payload.periode, jenis="langganan", target=jumlah,
-            langganan_id=lid, sumber_jenis=REF_TAGIHAN, sumber_id=row.id,
-        )
         if jumlah > 0:
             await _transaksi_otomatis(
-                session, user, tanggal=tanggal, akun=dana, kategori=KATEGORI_TAGIHAN, jenis="keluar", jumlah=jumlah,
+                session, user, tanggal=tanggal, akun=akun, kategori=KATEGORI_TAGIHAN, jenis="keluar", jumlah=jumlah,
                 keterangan=f"{langganan[lid].nama} {payload.periode}", ref_jenis=REF_TAGIHAN, ref_id=row.id,
             )
         hasil.append(row)
@@ -246,6 +231,5 @@ async def batalkan_tagihan(session: AsyncSession, tagihan_id: str, alasan: str) 
         raise _bad("Tagihan tidak ditemukan", status.HTTP_404_NOT_FOUND)
     _batalkan(row, alasan)
     await _batalkan_transaksi_ref(session, REF_TAGIHAN, row.id, alasan)
-    await batalkan_provisi_sumber(session, REF_TAGIHAN, row.id, alasan)
     await session.flush()
     return row
