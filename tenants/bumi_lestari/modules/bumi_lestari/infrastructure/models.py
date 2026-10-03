@@ -47,6 +47,7 @@ class BlUser(BumiLestariBase):
     password_hash: Mapped[str] = mapped_column(String(255), nullable=False)
     role: Mapped[str] = mapped_column(String(32), nullable=False, default="staff")
     must_change_password: Mapped[bool] = mapped_column(Boolean, nullable=False, default=False)
+    aktif: Mapped[bool] = mapped_column(Boolean, nullable=False, default=True)
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=_utcnow)
 
 
@@ -84,6 +85,10 @@ class BlTransaksi(BumiLestariBase):
     jumlah: Mapped[Decimal] = mapped_column(Numeric(14, 2), nullable=False)
     keterangan: Mapped[str] = mapped_column(Text, nullable=False, default="")
     dibuat_oleh: Mapped[str] = mapped_column(String(64), nullable=False)
+    # Transaksi yang dibuat otomatis oleh pembayaran/penerimaan/gaji/bagi hasil menunjuk ke sumbernya,
+    # supaya pembatalan sumber ikut membatalkan transaksinya.
+    ref_jenis: Mapped[Optional[str]] = mapped_column(String(32), nullable=True, index=True)
+    ref_id: Mapped[Optional[str]] = mapped_column(String(64), nullable=True, index=True)
     dibatalkan: Mapped[bool] = mapped_column(Boolean, nullable=False, default=False)
     dibatalkan_at: Mapped[Optional[datetime]] = mapped_column(DateTime(timezone=True), nullable=True)
     alasan_batal: Mapped[Optional[str]] = mapped_column(Text, nullable=True)

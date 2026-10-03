@@ -63,7 +63,6 @@ class SaluranOut(SaluranIn):
 class PelangganIn(BaseModel):
     nama: str = Field(min_length=1, max_length=255)
     kontak: str = Field(default="", max_length=255)
-    tempo_hari: int = Field(default=0, ge=0, le=365)
     catatan: str = Field(default="", max_length=1000)
 
 

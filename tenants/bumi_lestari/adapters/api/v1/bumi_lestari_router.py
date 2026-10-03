@@ -13,6 +13,7 @@ from fastapi import APIRouter, Depends, HTTPException, Request, Response, status
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from tenants.bumi_lestari.adapters.api.v1.bumi_lestari_order_router import order_router
+from tenants.bumi_lestari.adapters.api.v1.bumi_lestari_t3_router import t3_router
 from tenants.bumi_lestari.modules.bumi_lestari.application import services
 from tenants.bumi_lestari.modules.bumi_lestari.application.schemas import (
     AkunKasIn,
@@ -25,6 +26,7 @@ from tenants.bumi_lestari.modules.bumi_lestari.application.schemas import (
     PengisianKasKecilOut,
     ProfilIn,
     ProfilOut,
+    ResetPasswordIn,
     ProporsiIn,
     ProporsiItemOut,
     TransaksiIn,
@@ -33,6 +35,7 @@ from tenants.bumi_lestari.modules.bumi_lestari.application.schemas import (
     TransferOut,
     UserCreateIn,
     UserOut,
+    UserPatchIn,
 )
 from tenants.bumi_lestari.modules.bumi_lestari.infrastructure.auth import (
     clear_bumi_lestari_cookie,
@@ -47,6 +50,7 @@ from tenants.bumi_lestari.modules.bumi_lestari.infrastructure.seeder import seed
 
 bumi_lestari_router = APIRouter()
 bumi_lestari_router.include_router(order_router)
+bumi_lestari_router.include_router(t3_router)
 
 OWNER_ONLY = ("admin", "owner")  # admin berada di atas owner: semua akses owner + kelola akun owner
 OWNER_OR_STAFF = ("admin", "owner", "staff")
@@ -141,6 +145,26 @@ async def create_user(
     actor: BlUser = Depends(require_roles_bumi_lestari(*OWNER_ONLY)),
 ):
     return await services.create_user(session, actor, payload)
+
+
+@bumi_lestari_router.patch("/users/{user_id}", response_model=UserOut)
+async def update_user(
+    user_id: str,
+    payload: UserPatchIn,
+    session: AsyncSession = Depends(get_db_bumi_lestari),
+    actor: BlUser = Depends(require_roles_bumi_lestari("admin")),
+):
+    return await services.update_user(session, actor, user_id, payload)
+
+
+@bumi_lestari_router.post("/users/{user_id}/reset-password", response_model=UserOut)
+async def reset_user_password(
+    user_id: str,
+    payload: ResetPasswordIn,
+    session: AsyncSession = Depends(get_db_bumi_lestari),
+    _: BlUser = Depends(require_roles_bumi_lestari("admin")),
+):
+    return await services.reset_password(session, user_id, payload)
 
 
 # --- Akun kas ------------------------------------------------------------------
@@ -283,7 +307,7 @@ async def get_profil(
 async def update_profil(
     payload: ProfilIn,
     session: AsyncSession = Depends(get_db_bumi_lestari),
-    _: BlUser = Depends(require_roles_bumi_lestari(*OWNER_ONLY)),
+    _: BlUser = Depends(require_roles_bumi_lestari("admin")),
 ):
     await services.update_profil(session, payload)
     return await _profil_out(session)

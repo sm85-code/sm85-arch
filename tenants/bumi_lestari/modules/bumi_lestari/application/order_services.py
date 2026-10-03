@@ -144,7 +144,7 @@ async def list_pelanggan(session: AsyncSession) -> list[BlPelanggan]:
 
 async def create_pelanggan(session: AsyncSession, payload: PelangganIn) -> BlPelanggan:
     pelanggan = BlPelanggan(
-        nama=payload.nama.strip(), kontak=payload.kontak.strip(), tempo_hari=payload.tempo_hari,
+        nama=payload.nama.strip(), kontak=payload.kontak.strip(),
         catatan=payload.catatan.strip(),
     )
     session.add(pelanggan)

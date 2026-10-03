@@ -15,6 +15,7 @@ from shared.security import hash_password
 from tenants.bumi_lestari.modules.bumi_lestari.infrastructure import database as bl_database
 from tenants.bumi_lestari.modules.bumi_lestari.infrastructure.database import BumiLestariBase
 from tenants.bumi_lestari.modules.bumi_lestari.infrastructure.models_order import BlSaluran
+from tenants.bumi_lestari.modules.bumi_lestari.infrastructure import models_t3  # noqa: F401  (register tables)
 from tenants.bumi_lestari.modules.bumi_lestari.infrastructure.models import (
     KODE_KAS_KECIL,
     KODE_KAS_UTAMA,
@@ -40,7 +41,9 @@ DEFAULT_KATEGORI = (
     ("Penjualan toko web", "pemasukan"),
     ("Penjualan reseller", "pemasukan"),
     ("Pemasukan lain", "pemasukan"),
-    ("Biaya produksi (tukang)", "pengeluaran"),
+    ("Biaya produksi / pembelian barang", "pengeluaran"),
+    ("Gaji karyawan", "pengeluaran"),
+    ("Bagi hasil", "pengeluaran"),
     ("Transport", "pengeluaran"),
     ("Packing", "pengeluaran"),
     ("Operasional", "pengeluaran"),

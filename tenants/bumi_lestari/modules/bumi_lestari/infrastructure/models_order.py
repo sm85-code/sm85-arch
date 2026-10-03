@@ -77,7 +77,6 @@ class BlPelanggan(BumiLestariBase):
     id: Mapped[str] = mapped_column(String(64), primary_key=True, default=_uuid)
     nama: Mapped[str] = mapped_column(String(255), nullable=False)
     kontak: Mapped[str] = mapped_column(String(255), nullable=False, default="")
-    tempo_hari: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
     catatan: Mapped[str] = mapped_column(Text, nullable=False, default="")
     aktif: Mapped[bool] = mapped_column(Boolean, nullable=False, default=True)
 

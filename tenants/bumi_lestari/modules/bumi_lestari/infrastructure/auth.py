@@ -52,7 +52,7 @@ async def get_current_user_bumi_lestari(
     payload = decode_access_token(_token_from_request(request), expected_tenant=JWT_TENANT_BUMI_LESTARI)
     user_id = payload.get("sub")
     user = await session.get(BlUser, user_id) if user_id else None
-    if not user:
+    if not user or not user.aktif:
         raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="Sesi tidak valid")
     return user
 

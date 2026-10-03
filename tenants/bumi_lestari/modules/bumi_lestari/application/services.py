@@ -16,10 +16,12 @@ from tenants.bumi_lestari.modules.bumi_lestari.application.schemas import (
     KategoriIn,
     ProfilIn,
     ProporsiIn,
+    ResetPasswordIn,
     LoginIn,
     TransaksiIn,
     TransferIn,
     UserCreateIn,
+    UserPatchIn,
 )
 from tenants.bumi_lestari.modules.bumi_lestari.infrastructure.models import (
     JENIS_AKUN,
@@ -58,6 +60,8 @@ async def authenticate_user(session: AsyncSession, payload: LoginIn) -> BlUser:
     user = (await session.execute(select(BlUser).where(BlUser.email == payload.email))).scalar_one_or_none()
     if not user or not verify_password(payload.password, user.password_hash):
         raise _bad("Email atau password salah", status.HTTP_401_UNAUTHORIZED)
+    if not user.aktif:
+        raise _bad("Akun dinonaktifkan", status.HTTP_403_FORBIDDEN)
     return user
 
 
@@ -76,6 +80,35 @@ async def create_user(session: AsyncSession, actor: BlUser, payload: UserCreateI
         must_change_password=True,
     )
     session.add(user)
+    await session.flush()
+    return user
+
+
+async def update_user(session: AsyncSession, actor: BlUser, user_id: str, payload: UserPatchIn) -> BlUser:
+    """Admin mengubah nama/email/role/aktif pengguna lain. Tidak boleh mengubah role atau menonaktifkan diri sendiri."""
+    user = await session.get(BlUser, user_id)
+    if user is None:
+        raise _bad("Pengguna tidak ditemukan", status.HTTP_404_NOT_FOUND)
+    data = payload.model_dump(exclude_unset=True)
+    if user.id == actor.id and (data.get("role", user.role) != user.role or data.get("aktif") is False):
+        raise _bad("Admin tidak bisa mengubah role atau menonaktifkan akunnya sendiri")
+    if "email" in data and data["email"] != user.email:
+        if (await session.execute(select(BlUser.id).where(BlUser.email == data["email"]))).first():
+            raise _bad("Email sudah terdaftar", status.HTTP_409_CONFLICT)
+    for kolom, nilai in data.items():
+        if nilai is not None:
+            setattr(user, kolom, nilai.strip() if isinstance(nilai, str) else nilai)
+    await session.flush()
+    return user
+
+
+async def reset_password(session: AsyncSession, user_id: str, payload: ResetPasswordIn) -> BlUser:
+    """Admin menyetel password baru untuk pengguna lain; pengguna wajib menggantinya saat login."""
+    user = await session.get(BlUser, user_id)
+    if user is None:
+        raise _bad("Pengguna tidak ditemukan", status.HTTP_404_NOT_FOUND)
+    user.password_hash = hash_password(payload.new_password)
+    user.must_change_password = True
     await session.flush()
     return user
 

@@ -63,7 +63,34 @@ class UserOut(BaseModel):
     email: str
     role: str
     must_change_password: bool = False
+    aktif: bool = True
     model_config = ConfigDict(from_attributes=True)
+
+
+class UserPatchIn(BaseModel):
+    nama: Optional[str] = Field(default=None, min_length=1, max_length=255)
+    email: Optional[EmailStr] = None
+    role: Optional[str] = None
+    aktif: Optional[bool] = None
+
+    @field_validator("role")
+    @classmethod
+    def _role_ok(cls, value: Optional[str]) -> Optional[str]:
+        if value is None:
+            return value
+        role = value.strip().lower()
+        if role not in USER_ROLES:
+            raise ValueError(f"Role harus salah satu dari: {', '.join(USER_ROLES)}")
+        return role
+
+
+class ResetPasswordIn(BaseModel):
+    new_password: str
+
+    @field_validator("new_password")
+    @classmethod
+    def _password_ok(cls, value: str) -> str:
+        return _validate_new_password(value)
 
 
 class AkunKasIn(BaseModel):
@@ -117,6 +144,8 @@ class TransaksiOut(BaseModel):
     jumlah: Decimal
     keterangan: str
     dibuat_oleh: str
+    ref_jenis: Optional[str] = None  # sumber otomatis (pembayaran_pemasok, penerimaan_reseller, gaji, bagi_hasil)
+    ref_id: Optional[str] = None
     dibatalkan: bool
     alasan_batal: Optional[str] = None
     created_at: datetime

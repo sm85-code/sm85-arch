@@ -48,7 +48,7 @@ async def data(session):
     d.supplier = await svc.create_pemasok(session, PemasokIn(nama="Toko Lampu", jenis="supplier"))
     d.shopee = await svc.create_saluran(session, SaluranIn(nama="Shopee", jenis="marketplace"))
     d.reseller_saluran = await svc.create_saluran(session, SaluranIn(nama="Reseller", jenis="reseller"))
-    d.rina = await svc.create_pelanggan(session, PelangganIn(nama="Toko Rina", tempo_hari=14))
+    d.rina = await svc.create_pelanggan(session, PelangganIn(nama="Toko Rina"))
     return d
 
 

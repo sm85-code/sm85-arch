@@ -243,3 +243,33 @@ Dampak ke desain order dan katalog:
 - **T3** — utang, batch bayar Selasa, integrasi order → transaksi.
 - **T4** — gaji karyawan tetap, bagi hasil 40/60, dashboard, laporan laba-rugi/arus kas, ekspor.
 - **T5** — (opsional) tautan `marketplace_erp`, pengingat Selasa.
+
+## 8. Aturan yang sudah dikodekan (T3/T4)
+
+**Pembayaran tukang kayu dan supplier (tiap Selasa)**
+- Halaman "pesanan ke tukang" memakai `GET /pembayaran-pemasok/siap`: order yang sudah **selesai dikerjakan dan
+  diambil karyawan Senin–Sabtu minggu sebelumnya** dan belum dibayar. Diambil Minggu atau Senin–Selasa ini
+  → Selasa berikutnya. Order yang terlewat tetap muncul, ditandai `terlambat`.
+- Tombol **"Kirim ke laporan"** (`POST /pembayaran-pemasok`): dicatat **1 kali tiap Selasa**. Di laporan
+  keuangan muncul sebagai **1 transaksi bertotal** (kategori "Biaya produksi / pembelian barang"); rincian per
+  order/barang (jumlah, pemasok) ada di `GET /pembayaran-pemasok/{id}`. Dibatalkan = transaksi ikut batal.
+- Tukang kayu dan supplier dibayar bersamaan di Selasa yang sama; dibayar dari kas utama (saldo harus cukup).
+
+**Penjual lain (reseller):** order dikirim/selesai = piutang (`GET /piutang-reseller`); pembayaran dicatat dengan
+`POST /penerimaan-reseller` (pemasukan "Penjualan reseller"). Kolom "tempo hari" dihapus (mereka bayar tiap Selasa).
+
+**Marketplace:** pemasukan dicatat sendiri saat dana cair (transaksi masuk ke akun Saldo Shopee), penarikan ke
+kas utama dicatat sendiri sebagai transfer. Tidak ada pencatatan otomatis dari status order.
+
+**Gaji:** `POST /gaji/siapkan` membuat gaji bulan itu untuk karyawan aktif; `POST /gaji/bayar` membayar semuanya
+(tanggal 1 bulan berikutnya = `jatuh_tempo`), satu transaksi "Gaji karyawan" per karyawan, dari kas utama.
+
+**Bagi hasil:** `GET /bagi-hasil/hitung?periode=YYYY-MM` (pratinjau), `POST /bagi-hasil` (simpan, snapshot proporsi),
+`POST /bagi-hasil/{id}/bayar` (ditarik tunai dari kas utama, tidak ditahan). Laba ≤ 0 → bagian 0, tidak ada pembayaran.
+
+**Kewenangan admin (selain owner):** mengubah profil UMKM (termasuk biaya proses dan proporsi bagi hasil),
+mengubah pengguna (`PATCH /users/{id}`: nama, email, role, aktif), dan mengatur ulang password pengguna lain
+(`POST /users/{id}/reset-password`, pengguna wajib menggantinya saat login). Owner hanya boleh melihat profil.
+
+**Bagan akun (COA):** tidak perlu disiapkan. Akun kas + kategori yang di-seed berfungsi sebagai bagan akun
+sederhana; kategori baru ditambah dari halaman Master.
