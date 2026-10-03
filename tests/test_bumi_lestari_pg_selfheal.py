@@ -51,11 +51,11 @@ async def test_self_heal_adds_fase1_columns_with_safe_defaults():
             for tabel, kolom in _KOLOM_BARU.items():
                 for k in kolom:
                     await conn.execute(text(f"ALTER TABLE {tabel} DROP COLUMN {k}"))
-            await conn.execute(text("INSERT INTO bl_akun_kas (id, kode, nama, jenis, saldo_awal, aktif) VALUES ('a1','KAS','Kas','kas',0,true)"))
+            await conn.execute(text("INSERT INTO bl_akun_kas (id, kode, nama, jenis, saldo_awal, aktif, created_at) VALUES ('a1','KAS','Kas','kas',0,true,now())"))
             await conn.execute(text("INSERT INTO bl_kategori (id, nama, jenis, aktif) VALUES ('k1','Pemasukan lain','pemasukan',true)"))
             await conn.execute(text(
-                "INSERT INTO bl_transaksi (id, tanggal, akun_id, kategori_id, jenis, jumlah, keterangan, dibuat_oleh, dibatalkan) "
-                "VALUES ('t1', '2026-09-01', 'a1', 'k1', 'masuk', 1000, '', 'u', false)"
+                "INSERT INTO bl_transaksi (id, tanggal, akun_id, kategori_id, jenis, jumlah, keterangan, dibuat_oleh, dibatalkan, "
+                "created_at) VALUES ('t1', '2026-09-01', 'a1', 'k1', 'masuk', 1000, '', 'u', false, now())"
             ))
             await seeder._self_heal_columns(conn)
             await seeder._self_heal_columns(conn)  # idempoten
