@@ -299,6 +299,7 @@ async def cek_ongkir(
         kode_pos_tujuan=payload.kode_pos_tujuan,
         items=await services.item_kirim_keranjang(session, user.id),
         cod_nilai=cod_nilai,
+        pengaturan=await services.pengaturan_kirim(session),
     )
     return [asdict(o) for o in options]
 
@@ -319,6 +320,7 @@ async def isi_alamat_pengiriman(
             kode_pos_tujuan=payload.kode_pos_tujuan,
             items=await services.item_kirim_pesanan(session, pesanan),
             cod_nilai=int(sum((it.subtotal for it in pesanan.items), Decimal("0"))) if cod else 0,
+            pengaturan=await services.pengaturan_kirim(session),
         )
         pilihan = next((o for o in options if o.kurir == payload.kurir.lower() and o.layanan == payload.layanan), None)
         if pilihan is None:

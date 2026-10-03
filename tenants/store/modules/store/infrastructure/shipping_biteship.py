@@ -40,6 +40,17 @@ class BiteshipNotReady(HTTPException):
 
 
 @dataclass
+class PengaturanKirim:
+    """Settings chosen in the admin; an empty value means "use the environment / built-in default"."""
+
+    kurir: str = ""  # comma separated Biteship courier codes
+    asal_nama: str = ""
+    asal_telepon: str = ""
+    asal_alamat: str = ""
+    asal_kode_pos: str = ""
+
+
+@dataclass
 class ItemKirim:
     nama: str
     nilai: int  # unit price in rupiah
@@ -115,11 +126,22 @@ def _cod_type() -> str:
     return nilai if nilai in ("3_days", "5_days", "7_days") else "7_days"
 
 
-def _rates_sync(kode_pos_tujuan: str, items: list[ItemKirim], cod_nilai: int = 0) -> dict[str, Any]:
+def _kurir_aktif(p: PengaturanKirim | None) -> str:
+    return (p.kurir if p and p.kurir else "") or os.getenv("BITESHIP_COURIERS", "").strip() or _DEFAULT_COURIERS
+
+
+def _kode_pos_asal(p: PengaturanKirim | None) -> int:
+    nilai = (p.asal_kode_pos if p and p.asal_kode_pos else "") or os.getenv("BITESHIP_ORIGIN_POSTAL", "").strip()
+    return int(nilai or _DEFAULT_ORIGIN_POSTAL)
+
+
+def _rates_sync(
+    kode_pos_tujuan: str, items: list[ItemKirim], cod_nilai: int = 0, pengaturan: PengaturanKirim | None = None
+) -> dict[str, Any]:
     body: dict[str, Any] = {
-        "origin_postal_code": int(os.getenv("BITESHIP_ORIGIN_POSTAL", _DEFAULT_ORIGIN_POSTAL).strip() or _DEFAULT_ORIGIN_POSTAL),
+        "origin_postal_code": _kode_pos_asal(pengaturan),
         "destination_postal_code": int(kode_pos_tujuan),
-        "couriers": os.getenv("BITESHIP_COURIERS", _DEFAULT_COURIERS).strip() or _DEFAULT_COURIERS,
+        "couriers": _kurir_aktif(pengaturan),
         "items": [_item_payload(i) for i in items],
     }
     if cod_nilai > 0:
@@ -151,7 +173,9 @@ def _rates_sync(kode_pos_tujuan: str, items: list[ItemKirim], cod_nilai: int = 0
     return data
 
 
-async def cek_ongkir(*, kode_pos_tujuan: str, items: list[ItemKirim], cod_nilai: int = 0) -> list[OngkirOption]:
+async def cek_ongkir(
+    *, kode_pos_tujuan: str, items: list[ItemKirim], cod_nilai: int = 0, pengaturan: PengaturanKirim | None = None
+) -> list[OngkirOption]:
     """Rates for the items. With ``cod_nilai`` only the couriers that can collect that amount on delivery are
     returned, and each option carries the COD fee (``biaya_cod``) apart from the shipping fee (``ongkir``)."""
     if not aktif():
@@ -160,7 +184,7 @@ async def cek_ongkir(*, kode_pos_tujuan: str, items: list[ItemKirim], cod_nilai:
         raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Tidak ada barang untuk dikirim")
     if not kode_pos_tujuan.isdigit() or len(kode_pos_tujuan) != 5:
         raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Kode pos alamat tujuan harus 5 angka")
-    data = await asyncio.to_thread(_rates_sync, kode_pos_tujuan, items, cod_nilai)
+    data = await asyncio.to_thread(_rates_sync, kode_pos_tujuan, items, cod_nilai, pengaturan)
 
     options: list[OngkirOption] = []
     for row in data.get("pricing") or []:
@@ -222,15 +246,19 @@ def _request_sync(method: str, path: str, body: dict[str, Any] | None = None) ->
     return data
 
 
-def _lokasi_asal() -> dict[str, Any]:
+def _lokasi_asal(p: PengaturanKirim | None = None) -> dict[str, Any]:
+    def pilih(nilai: str | None, env: str, bawaan: str) -> str:
+        return (nilai or "").strip() or os.getenv(env, "").strip() or bawaan
+
     return {
-        "origin_contact_name": os.getenv("BITESHIP_ORIGIN_NAME", "AmpelKuning").strip() or "AmpelKuning",
-        "origin_contact_phone": os.getenv("BITESHIP_ORIGIN_PHONE", "081313511101").strip(),
-        "origin_address": os.getenv(
+        "origin_contact_name": pilih(p.asal_nama if p else None, "BITESHIP_ORIGIN_NAME", "AmpelKuning"),
+        "origin_contact_phone": pilih(p.asal_telepon if p else None, "BITESHIP_ORIGIN_PHONE", "081313511101"),
+        "origin_address": pilih(
+            p.asal_alamat if p else None,
             "BITESHIP_ORIGIN_ADDRESS",
             "Jl. Ampelkuning, Dusun Padasuka RT 003 RW 019, Desa Wonoharjo, Kec. Pangandaran, Kab. Pangandaran, Jawa Barat",
-        ).strip(),
-        "origin_postal_code": int(os.getenv("BITESHIP_ORIGIN_POSTAL", _DEFAULT_ORIGIN_POSTAL).strip() or _DEFAULT_ORIGIN_POSTAL),
+        ),
+        "origin_postal_code": _kode_pos_asal(p),
     }
 
 
@@ -245,6 +273,7 @@ async def buat_order(
     items: list[ItemKirim],
     catatan: str = "",
     cod_nilai: int = 0,
+    pengaturan: PengaturanKirim | None = None,
 ) -> OrderBiteship:
     """Book the parcel with the courier (a testing key only simulates it: no courier comes)."""
     if not aktif():
@@ -252,7 +281,7 @@ async def buat_order(
     if not kode_pos_tujuan.isdigit() or len(kode_pos_tujuan) != 5:
         raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Kode pos alamat tujuan harus 5 angka")
     body: dict[str, Any] = {
-        **_lokasi_asal(),
+        **_lokasi_asal(pengaturan),
         "destination_contact_name": nama_penerima,
         "destination_contact_phone": telepon_penerima,
         "destination_address": alamat_tujuan,

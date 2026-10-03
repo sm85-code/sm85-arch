@@ -16,6 +16,7 @@ from tenants.store.modules.store.application.schemas import (
     AlamatPatch,
     KategoriIn,
     PengaturanPatch,
+    PengaturanPengirimanPatch,
     PengirimanIn,
     ProdukIn,
     MAKS_FOTO_PRODUK,
@@ -29,7 +30,7 @@ if TYPE_CHECKING:
     from tenants.store.modules.store.application.schemas import StaffIn, StaffPatch
 from tenants.store.modules.store.application.slug import slugify, with_suffix
 from tenants.store.modules.store.infrastructure.media_storage import media_url
-from tenants.store.modules.store.infrastructure.shipping_biteship import ItemKirim, berat_default
+from tenants.store.modules.store.infrastructure.shipping_biteship import ItemKirim, PengaturanKirim, berat_default
 from tenants.store.modules.store.infrastructure.shipping_biteship import aktif as shipping_aktif
 from tenants.store.modules.store.infrastructure.shipping_biteship import buat_order as buat_order_kurir
 from tenants.store.modules.store.infrastructure.shipping_biteship import cek_ongkir as cek_ongkir_kurir
@@ -944,6 +945,7 @@ async def buat_order_biteship(session: AsyncSession, pesanan_id: str) -> Pengiri
         items=await item_kirim_pesanan(session, pesanan),
         catatan=f"Pesanan {pesanan.id[:8]}",
         cod_nilai=int(pesanan.total) if pesanan.metode_pembayaran == "cod" else 0,
+        pengaturan=await pengaturan_kirim(session),
     )
     pengiriman.biteship_order_id = order.order_id
     pengiriman.biteship_tracking_id = order.tracking_id or None
@@ -972,6 +974,7 @@ async def opsi_kurir_pesanan(session: AsyncSession, pesanan_id: str) -> list:
         kode_pos_tujuan=pengiriman.kode_pos_tujuan,
         items=await item_kirim_pesanan(session, pesanan),
         cod_nilai=int(pesanan.total) if pesanan.metode_pembayaran == "cod" else 0,
+        pengaturan=await pengaturan_kirim(session),
     )
 
 
@@ -1358,6 +1361,11 @@ def pesan_out(pesan: PesanChatStore) -> dict:
 def pengaturan_out(pengaturan: PengaturanStore) -> dict:
     return {
         "metode_proses_pesanan": pengaturan.metode_proses_pesanan,
+        "kurir_aktif": [k for k in pengaturan.kurir_aktif.split(",") if k],
+        "asal_nama": pengaturan.asal_nama,
+        "asal_telepon": pengaturan.asal_telepon,
+        "asal_alamat": pengaturan.asal_alamat,
+        "asal_kode_pos": pengaturan.asal_kode_pos,
         "updated_at": pengaturan.updated_at.isoformat(),
     }
 
@@ -1368,6 +1376,24 @@ async def get_or_create_pengaturan(session: AsyncSession) -> PengaturanStore:
         pengaturan = PengaturanStore(id=PengaturanStore.SINGLETON_ID)
         session.add(pengaturan)
         await session.flush()
+    return pengaturan
+
+
+async def pengaturan_kirim(session: AsyncSession) -> PengaturanKirim:
+    p = await get_or_create_pengaturan(session)
+    return PengaturanKirim(
+        kurir=p.kurir_aktif, asal_nama=p.asal_nama, asal_telepon=p.asal_telepon, asal_alamat=p.asal_alamat, asal_kode_pos=p.asal_kode_pos
+    )
+
+
+async def update_pengaturan_pengiriman(session: AsyncSession, payload: PengaturanPengirimanPatch) -> PengaturanStore:
+    pengaturan = await get_or_create_pengaturan(session)
+    pengaturan.kurir_aktif = ",".join(payload.kurir_aktif)
+    pengaturan.asal_nama = payload.asal_nama.strip()
+    pengaturan.asal_telepon = payload.asal_telepon
+    pengaturan.asal_alamat = payload.asal_alamat.strip()
+    pengaturan.asal_kode_pos = payload.asal_kode_pos
+    await session.flush()
     return pengaturan
 
 
