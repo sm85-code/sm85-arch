@@ -50,6 +50,18 @@ class PemasokIn(BaseModel):
     catatan: str = Field(default="", max_length=1000)
 
 
+class PemasokPatch(BaseModel):
+    nama: Optional[str] = Field(default=None, min_length=1, max_length=255)
+    kode: Optional[str] = Field(default=None, min_length=1, max_length=16)
+    kontak: Optional[str] = Field(default=None, max_length=255)
+    no_wa: Optional[str] = Field(default=None, max_length=32)
+    nama_bank: Optional[str] = Field(default=None, max_length=64)
+    no_rekening: Optional[str] = Field(default=None, max_length=64)
+    atas_nama: Optional[str] = Field(default=None, max_length=255)
+    catatan: Optional[str] = Field(default=None, max_length=1000)
+    aktif: Optional[bool] = None
+
+
 class PemasokOut(PemasokIn):
     id: str
     aktif: bool
@@ -60,6 +72,12 @@ class SaluranIn(BaseModel):
     nama: str = Field(min_length=1, max_length=128)
     jenis: str
     akun_id: Optional[str] = None
+
+
+class SaluranPatch(BaseModel):
+    nama: Optional[str] = Field(default=None, min_length=1, max_length=128)
+    akun_id: Optional[str] = None
+    aktif: Optional[bool] = None
 
 
 class SaluranOut(SaluranIn):
@@ -75,6 +93,16 @@ class PelangganIn(BaseModel):
     kontak: str = Field(default="", max_length=255)
     no_wa: str = Field(default="", max_length=32)
     catatan: str = Field(default="", max_length=1000)
+
+
+class PelangganPatch(BaseModel):
+    nama: Optional[str] = Field(default=None, min_length=1, max_length=255)
+    kode: Optional[str] = Field(default=None, min_length=1, max_length=16)
+    alamat: Optional[str] = Field(default=None, max_length=1000)
+    kontak: Optional[str] = Field(default=None, max_length=255)
+    no_wa: Optional[str] = Field(default=None, max_length=32)
+    catatan: Optional[str] = Field(default=None, max_length=1000)
+    aktif: Optional[bool] = None
 
 
 class PelangganOut(PelangganIn):

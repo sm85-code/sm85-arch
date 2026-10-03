@@ -350,3 +350,8 @@ Siklus Selasa: terima bayar penjual lain → tarik saldo toko → isi kas kecil 
   rincian per minggu (Senin–Minggu, minggu ke-1 memuat tanggal 1), pengisian, penanda `sesuai_plafon`, dan selisih bila
   `saldo_fisik` (uang yang dihitung) diisi.
 - Perhitungan laba dipusatkan di `laba_core.ringkasan_laba` (dipakai bagi hasil, dashboard, laporan umum).
+
+## 14. Ubah data master (PATCH)
+
+`PATCH /pemasok/{id}`, `PATCH /pelanggan/{id}`, `PATCH /saluran/{id}` mengubah sebagian kolom (termasuk `aktif=false`
+untuk menonaktifkan). Kode PO tukang/supplier (sejenis) dan kode invoice penjual lain tidak boleh kembar (409).

@@ -14,10 +14,13 @@ from tenants.bumi_lestari.modules.bumi_lestari.application.schemas_order import 
     OrderPatch,
     OrderStatusIn,
     PelangganIn,
+    PelangganPatch,
     PemasokIn,
+    PemasokPatch,
     ProdukIn,
     ProdukPatch,
     SaluranIn,
+    SaluranPatch,
 )
 from tenants.bumi_lestari.modules.bumi_lestari.application.services import _hari_ini, get_profil
 from tenants.bumi_lestari.modules.bumi_lestari.infrastructure.models import BlAkunKas
@@ -127,6 +130,54 @@ async def create_pemasok(session: AsyncSession, payload: PemasokIn) -> BlPemasok
     session.add(pemasok)
     await session.flush()
     return pemasok
+
+
+async def _ubah(session: AsyncSession, model, row_id: str, payload, label: str, *, kode_unik: bool = False):
+    """PATCH generik: hanya kolom yang dikirim yang diubah; teks di-strip; kode/nama harus tetap unik."""
+    row = await session.get(model, row_id)
+    if row is None:
+        raise _bad(f"{label} tidak ditemukan", status.HTTP_404_NOT_FOUND)
+    data = payload.model_dump(exclude_unset=True)
+    for kolom, nilai in data.items():
+        if nilai is None and kolom != "akun_id":
+            continue
+        nilai = nilai.strip() if isinstance(nilai, str) else nilai
+        if kolom in ("kode", "nama") and kode_unik and nilai != getattr(row, kolom):
+            await _pastikan_unik(session, model, getattr(model, kolom), nilai, kolom.capitalize())
+        setattr(row, kolom, nilai)
+    await session.flush()
+    return row
+
+
+async def update_pemasok(session: AsyncSession, pemasok_id: str, payload: PemasokPatch) -> BlPemasok:
+    pemasok = await session.get(BlPemasok, pemasok_id)
+    if pemasok is None:
+        raise _bad("Pemasok tidak ditemukan", status.HTTP_404_NOT_FOUND)
+    kode = payload.kode
+    if kode is not None and kode.strip() != pemasok.kode:  # kode PO tidak boleh kembar di antara pemasok sejenis
+        dobel = await session.execute(
+            select(BlPemasok.id).where(BlPemasok.kode == kode.strip(), BlPemasok.jenis == pemasok.jenis)
+        )
+        if dobel.first():
+            raise _bad("Kode sudah dipakai pemasok lain", status.HTTP_409_CONFLICT)
+    return await _ubah(session, BlPemasok, pemasok_id, payload, "Pemasok")
+
+
+async def update_pelanggan(session: AsyncSession, pelanggan_id: str, payload: PelangganPatch) -> BlPelanggan:
+    pelanggan = await session.get(BlPelanggan, pelanggan_id)
+    if pelanggan is None:
+        raise _bad("Pelanggan tidak ditemukan", status.HTTP_404_NOT_FOUND)
+    kode = payload.kode
+    if kode is not None and kode.strip() != pelanggan.kode:
+        if (await session.execute(select(BlPelanggan.id).where(BlPelanggan.kode == kode.strip()))).first():
+            raise _bad("Kode sudah dipakai pelanggan lain", status.HTTP_409_CONFLICT)
+    return await _ubah(session, BlPelanggan, pelanggan_id, payload, "Pelanggan")
+
+
+async def update_saluran(session: AsyncSession, saluran_id: str, payload: SaluranPatch) -> BlSaluran:
+    if payload.akun_id and await session.get(BlAkunKas, payload.akun_id) is None:
+        raise _bad("Akun kas tidak ditemukan", status.HTTP_404_NOT_FOUND)
+    return await _ubah(session, BlSaluran, saluran_id, payload, "Saluran", kode_unik=True)
 
 
 async def list_saluran(session: AsyncSession) -> list[BlSaluran]:
