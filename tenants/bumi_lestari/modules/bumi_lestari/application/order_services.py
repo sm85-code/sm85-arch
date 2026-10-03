@@ -22,6 +22,7 @@ from tenants.bumi_lestari.modules.bumi_lestari.application.schemas_order import 
 from tenants.bumi_lestari.modules.bumi_lestari.application.services import _hari_ini
 from tenants.bumi_lestari.modules.bumi_lestari.infrastructure.models import BlAkunKas
 from tenants.bumi_lestari.modules.bumi_lestari.infrastructure.models_order import (
+    JENIS_PACKING,
     JENIS_PEMASOK,
     JENIS_PRODUK,
     JENIS_SALURAN,
@@ -166,6 +167,8 @@ async def set_harga_grosir(session: AsyncSession, payload: HargaGrosirIn) -> BlH
         session.add(row)
     row.harga = payload.harga
     row.harga_cat_jasa = payload.harga_cat_jasa
+    row.harga_packing_biasa = payload.harga_packing_biasa
+    row.harga_packing_kayu = payload.harga_packing_kayu
     row.biaya_proses = payload.biaya_proses
     await session.flush()
     return row
@@ -195,6 +198,17 @@ async def _cek_pemasok(session: AsyncSession, produk: BlProduk, pemasok_id: str 
         raise _bad(f"Produk {produk.jenis_produk} harus dipasok oleh {_PEMASOK_UNTUK[produk.jenis_produk]}")
 
 
+def _cek_jenis_packing(jenis: str) -> None:
+    if jenis not in JENIS_PACKING:
+        raise _bad(f"Jenis packing harus salah satu dari: {', '.join(JENIS_PACKING)}")
+
+
+def _harga_packing_grosir(grosir: BlHargaGrosir | None, jenis: str) -> Decimal:
+    if grosir is None:
+        return Decimal("0")
+    return Decimal(grosir.harga_packing_kayu if jenis == "kayu" else grosir.harga_packing_biasa)
+
+
 async def create_order(session: AsyncSession, payload: OrderIn) -> BlOrder:
     produk = await _get_or_404(session, BlProduk, payload.produk_id, "Produk")
     saluran = await _get_or_404(session, BlSaluran, payload.saluran_id, "Saluran")
@@ -220,6 +234,10 @@ async def create_order(session: AsyncSession, payload: OrderIn) -> BlOrder:
     harga_cat_jasa = payload.harga_cat_jasa
     if harga_cat_jasa is None:
         harga_cat_jasa = Decimal(grosir.harga_cat_jasa) if grosir else Decimal("0")
+    _cek_jenis_packing(payload.jenis_packing)
+    harga_packing = payload.harga_packing
+    if harga_packing is None:
+        harga_packing = _harga_packing_grosir(grosir, payload.jenis_packing)
     biaya_proses = payload.biaya_proses
     if biaya_proses is None:
         biaya_proses = Decimal(grosir.biaya_proses) if grosir else Decimal("0")
@@ -240,6 +258,8 @@ async def create_order(session: AsyncSession, payload: OrderIn) -> BlOrder:
         qty=payload.qty,
         harga_satuan=harga,
         harga_cat_jasa=harga_cat_jasa,
+        jenis_packing=payload.jenis_packing,
+        harga_packing=harga_packing,
         biaya_proses=biaya_proses,
         warna=payload.warna.strip(),
         potongan_marketplace=payload.potongan_marketplace,
@@ -300,6 +320,18 @@ async def update_order(session: AsyncSession, order_id: str, payload: OrderPatch
             raise _bad("Produk non kayu tidak dicat")
         if order.status in ("dicat", "dikirim"):
             raise _bad("Status order sudah melewati langkah pengecatan")
+    if data.get("jenis_packing") is not None:
+        _cek_jenis_packing(data["jenis_packing"])
+        if "harga_packing" not in data and order.pelanggan_id:
+            # Ganti jenis packing tanpa harga eksplisit -> ambil harga grosir jenis baru.
+            grosir = (
+                await session.execute(
+                    select(BlHargaGrosir).where(
+                        BlHargaGrosir.produk_id == order.produk_id, BlHargaGrosir.pelanggan_id == order.pelanggan_id
+                    )
+                )
+            ).scalar_one_or_none()
+            order.harga_packing = _harga_packing_grosir(grosir, data["jenis_packing"])
     for kolom, nilai in data.items():
         if nilai is None and kolom != "pemasok_id":
             continue

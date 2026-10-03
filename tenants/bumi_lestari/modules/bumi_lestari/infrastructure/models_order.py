@@ -26,6 +26,7 @@ def _utcnow() -> datetime:
 
 
 JENIS_PRODUK = ("kayu", "non_kayu")
+JENIS_PACKING = ("biasa", "kayu")
 JENIS_PEMASOK = ("tukang_kayu", "supplier")
 JENIS_SALURAN = ("marketplace", "web", "reseller")
 STATUS_ORDER_KAYU = ("dipesan", "dikerjakan", "diambil", "dicat", "dikirim", "selesai")
@@ -88,10 +89,12 @@ class BlHargaGrosir(BumiLestariBase):
     id: Mapped[str] = mapped_column(String(64), primary_key=True, default=_uuid)
     produk_id: Mapped[str] = mapped_column(ForeignKey("bl_produk.id"), nullable=False)
     pelanggan_id: Mapped[str] = mapped_column(ForeignKey("bl_pelanggan.id"), nullable=False)
-    # Tiga komponen yang dibayar penjual lain, semuanya per unit: barang, cat + jasa (termasuk packing),
-    # biaya proses pesanan (tergantung ukuran barang, jadi melekat ke produk).
+    # Empat komponen yang dibayar penjual lain, semuanya per unit: barang, cat + jasa, packing
+    # (biasa atau kayu), biaya proses pesanan (tergantung ukuran barang, jadi melekat ke produk).
     harga: Mapped[Decimal] = mapped_column(Numeric(14, 2), nullable=False)  # barang, per unit
     harga_cat_jasa: Mapped[Decimal] = mapped_column(Numeric(14, 2), nullable=False, default=Decimal("0"))  # per unit
+    harga_packing_biasa: Mapped[Decimal] = mapped_column(Numeric(14, 2), nullable=False, default=Decimal("0"))
+    harga_packing_kayu: Mapped[Decimal] = mapped_column(Numeric(14, 2), nullable=False, default=Decimal("0"))
     biaya_proses: Mapped[Decimal] = mapped_column(Numeric(14, 2), nullable=False, default=Decimal("0"))  # per unit (tergantung ukuran barang)
 
 
@@ -109,6 +112,9 @@ class BlOrder(BumiLestariBase):
     harga_satuan: Mapped[Decimal] = mapped_column(Numeric(14, 2), nullable=False)  # barang, per unit
     # Hanya terisi untuk order reseller yang dicat; 0 untuk order polos dan saluran lain (harga all-in).
     harga_cat_jasa: Mapped[Decimal] = mapped_column(Numeric(14, 2), nullable=False, default=Decimal("0"))  # per unit
+    # Packing tetap dibayar walau polos: jenis "biasa" atau "kayu" (harga berbeda), per unit.
+    jenis_packing: Mapped[str] = mapped_column(String(16), nullable=False, default="biasa")
+    harga_packing: Mapped[Decimal] = mapped_column(Numeric(14, 2), nullable=False, default=Decimal("0"))
     biaya_proses: Mapped[Decimal] = mapped_column(Numeric(14, 2), nullable=False, default=Decimal("0"))  # per order
     # Warna cat (bisa custom). Tidak memengaruhi harga.
     warna: Mapped[str] = mapped_column(String(128), nullable=False, default="")

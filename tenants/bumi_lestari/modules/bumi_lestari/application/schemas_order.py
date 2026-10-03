@@ -74,13 +74,15 @@ class PelangganOut(PelangganIn):
 
 
 class HargaGrosirIn(BaseModel):
-    """Tiga komponen harga per unit untuk penjual lain: barang, cat + jasa (termasuk packing), biaya proses
-    (biaya proses tergantung ukuran barang)."""
+    """Empat komponen harga per unit untuk penjual lain: barang, cat + jasa, packing (biasa/kayu),
+    biaya proses (tergantung ukuran barang)."""
 
     produk_id: str
     pelanggan_id: str
     harga: Decimal = Field(gt=0, max_digits=14, decimal_places=2)
     harga_cat_jasa: Decimal = Field(default=Decimal("0"), ge=0, max_digits=14, decimal_places=2)
+    harga_packing_biasa: Decimal = Field(default=Decimal("0"), ge=0, max_digits=14, decimal_places=2)
+    harga_packing_kayu: Decimal = Field(default=Decimal("0"), ge=0, max_digits=14, decimal_places=2)
     biaya_proses: Decimal = Field(default=Decimal("0"), ge=0, max_digits=14, decimal_places=2)
 
 
@@ -100,6 +102,8 @@ class OrderIn(BaseModel):
     # Kosong -> harga grosir pelanggan (bila ada) -> harga jual katalog.
     harga_satuan: Optional[Decimal] = Field(default=None, ge=0, max_digits=14, decimal_places=2)
     harga_cat_jasa: Optional[Decimal] = Field(default=None, ge=0, max_digits=14, decimal_places=2)
+    jenis_packing: str = "biasa"
+    harga_packing: Optional[Decimal] = Field(default=None, ge=0, max_digits=14, decimal_places=2)
     biaya_proses: Optional[Decimal] = Field(default=None, ge=0, max_digits=14, decimal_places=2)
     warna: str = Field(default="", max_length=128)
     potongan_marketplace: Decimal = Field(default=Decimal("0"), ge=0, max_digits=14, decimal_places=2)
@@ -114,6 +118,8 @@ class OrderPatch(BaseModel):
     nama_pembeli: Optional[str] = Field(default=None, max_length=255)
     harga_satuan: Optional[Decimal] = Field(default=None, ge=0, max_digits=14, decimal_places=2)
     harga_cat_jasa: Optional[Decimal] = Field(default=None, ge=0, max_digits=14, decimal_places=2)
+    jenis_packing: Optional[str] = None
+    harga_packing: Optional[Decimal] = Field(default=None, ge=0, max_digits=14, decimal_places=2)
     biaya_proses: Optional[Decimal] = Field(default=None, ge=0, max_digits=14, decimal_places=2)
     warna: Optional[str] = Field(default=None, max_length=128)
     potongan_marketplace: Optional[Decimal] = Field(default=None, ge=0, max_digits=14, decimal_places=2)
@@ -139,6 +145,8 @@ class OrderOut(BaseModel):
     qty: int
     harga_satuan: Decimal
     harga_cat_jasa: Decimal
+    jenis_packing: str
+    harga_packing: Decimal
     biaya_proses: Decimal
     warna: str
     potongan_marketplace: Decimal
@@ -157,8 +165,9 @@ class OrderOut(BaseModel):
     @computed_field
     @property
     def total_penjualan(self) -> Decimal:
-        # (barang + cat/jasa + biaya proses) per unit x qty; cat/jasa = 0 untuk order polos.
-        return (self.harga_satuan + self.harga_cat_jasa + self.biaya_proses) * self.qty
+        # (barang + cat/jasa + packing + biaya proses) per unit x qty. Order polos: cat/jasa = 0,
+        # tetapi packing tetap dibayar.
+        return (self.harga_satuan + self.harga_cat_jasa + self.harga_packing + self.biaya_proses) * self.qty
 
     @computed_field
     @property

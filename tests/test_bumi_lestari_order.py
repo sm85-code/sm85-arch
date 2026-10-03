@@ -149,6 +149,7 @@ async def test_reseller_three_price_components_polos_and_color(session, data):
         HargaGrosirIn(
             produk_id=data.partisi.id, pelanggan_id=data.rina.id, harga=Decimal("600000"),
             harga_cat_jasa=Decimal("100000"), biaya_proses=Decimal("15000"),
+            harga_packing_biasa=Decimal("20000"), harga_packing_kayu=Decimal("50000"),
         ),
     )
 
@@ -161,13 +162,24 @@ async def test_reseller_three_price_components_polos_and_color(session, data):
     dicat = await svc.create_order(session, order(qty=2, warna="Custom: hijau sage"))
     out = OrderOut.model_validate(dicat)
     assert dicat.warna == "Custom: hijau sage"
-    assert (dicat.harga_satuan, dicat.harga_cat_jasa, dicat.biaya_proses) == (600000, 100000, 15000)
-    assert out.total_penjualan == Decimal("1430000")  # (600rb + 100rb + 15rb) x 2
-    assert out.laba_kotor == Decimal("430000")  # - biaya pokok 2 x 500rb
+    assert (dicat.harga_satuan, dicat.harga_cat_jasa, dicat.harga_packing, dicat.biaya_proses) == (
+        600000, 100000, 20000, 15000,
+    )
+    assert out.total_penjualan == Decimal("1470000")  # (600rb + 100rb + packing biasa 20rb + 15rb) x 2
+    assert out.laba_kotor == Decimal("470000")  # - biaya pokok 2 x 500rb
 
     polos = await svc.create_order(session, order(qty=2, butuh_cat=False))
     assert polos.harga_cat_jasa == 0 and polos.butuh_cat is False
-    assert OrderOut.model_validate(polos).total_penjualan == Decimal("1230000")  # (600rb + 15rb) x 2
+    assert polos.harga_packing == 20000  # polos tetap bayar packing
+    assert OrderOut.model_validate(polos).total_penjualan == Decimal("1270000")  # (600rb + 20rb + 15rb) x 2
+
+    kayu = await svc.create_order(session, order(qty=1, butuh_cat=False, jenis_packing="kayu"))
+    assert kayu.harga_packing == 50000
+    assert OrderOut.model_validate(kayu).total_penjualan == Decimal("665000")  # 600rb + 50rb + 15rb
+    await svc.update_order(session, kayu.id, OrderPatch(jenis_packing="biasa"))
+    assert kayu.harga_packing == 20000
+    with pytest.raises(HTTPException):
+        await svc.update_order(session, kayu.id, OrderPatch(jenis_packing="peti"))
 
     await svc.update_order(session, dicat.id, OrderPatch(butuh_cat=False))  # jadi polos -> cat/jasa nol
-    assert dicat.harga_cat_jasa == 0
+    assert dicat.harga_cat_jasa == 0 and dicat.harga_packing == 20000
