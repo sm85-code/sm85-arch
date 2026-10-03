@@ -7,6 +7,7 @@ Mounted in main.py at /api/store/admin. Every route except /auth/login,
 from __future__ import annotations
 
 import os
+from dataclasses import asdict
 import secrets as pysecrets
 from datetime import date
 
@@ -19,6 +20,7 @@ from tenants.store.modules.store.application.schemas import (
     KategoriIn,
     LoginRequest,
     PengaturanPatch,
+    KurirIn,
     PengirimanIn,
     PesanChatIn,
     ProdukIn,
@@ -264,6 +266,23 @@ async def get_pengiriman(
     pesanan_id: str, session: AsyncSession = Depends(get_db_store), _user: AdminStore = Depends(admin_only)
 ):
     return services.pengiriman_out(await services.get_pengiriman(session, pesanan_id))
+
+
+@store_admin_router.get("/pesanan/{pesanan_id}/pengiriman/opsi-kurir")
+async def opsi_kurir(
+    pesanan_id: str, session: AsyncSession = Depends(get_db_store), _user: AdminStore = Depends(admin_only)
+):
+    return [asdict(o) for o in await services.opsi_kurir_pesanan(session, pesanan_id)]
+
+
+@store_admin_router.put("/pesanan/{pesanan_id}/pengiriman/kurir")
+async def ganti_kurir(
+    pesanan_id: str,
+    payload: KurirIn,
+    session: AsyncSession = Depends(get_db_store),
+    _user: AdminStore = Depends(admin_only),
+):
+    return services.pengiriman_out(await services.ganti_kurir(session, pesanan_id, payload.kurir, payload.layanan))
 
 
 @store_admin_router.post("/pesanan/{pesanan_id}/pengiriman/biteship")

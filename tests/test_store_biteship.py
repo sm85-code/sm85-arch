@@ -243,3 +243,45 @@ async def test_admin_can_still_add_shipping_to_a_paid_order_without_changing_the
     await session.flush()
     await services.buat_pengiriman_lokal(session, pesanan.id, _form(ongkir=Decimal("18000")))
     assert (await services.get_pesanan(session, pesanan.id)).total == Decimal("200000")
+
+
+@pytest.mark.asyncio
+async def test_seller_can_switch_courier_before_booking_and_the_paid_shipping_stays(session, monkeypatch):
+    _user, pesanan = await _dengan_pengiriman(session)
+    monkeypatch.setattr(bs, "_rates_sync", lambda k, i: PRICING)
+    opsi = await services.opsi_kurir_pesanan(session, pesanan.id)
+    assert {(o.kurir, o.layanan) for o in opsi} == {("jne", "reg"), ("jnt", "ez")}
+    out = await services.ganti_kurir(session, pesanan.id, "JNT", "ez")
+    assert (out.kurir, out.layanan, out.layanan_nama) == ("jnt", "ez", "EZ")
+    assert out.ongkir == Decimal("18000")
+    assert (await services.get_pesanan(session, pesanan.id)).total == Decimal("218000")  # items + shipping paid
+    with pytest.raises(HTTPException) as exc:
+        await services.ganti_kurir(session, pesanan.id, "jne", "nope")
+    assert exc.value.status_code == 400
+
+
+@pytest.mark.asyncio
+async def test_courier_can_be_switched_after_a_failed_booking_but_not_a_working_one(session, monkeypatch):
+    _user, pesanan = await _dengan_pengiriman(session)
+    monkeypatch.setattr(bs, "_request_sync", lambda m, p, b=None: ORDER_OK)
+    monkeypatch.setattr(bs, "_rates_sync", lambda k, i: PRICING)
+    await services.buat_order_biteship(session, pesanan.id)
+    with pytest.raises(HTTPException) as exc:
+        await services.ganti_kurir(session, pesanan.id, "jnt", "ez")
+    assert exc.value.status_code == 409
+    pengiriman = await services.get_pengiriman(session, pesanan.id)
+    pengiriman.status = "bermasalah"
+    await session.flush()
+    out = await services.ganti_kurir(session, pesanan.id, "jnt", "ez")
+    assert out.biteship_order_id is None and out.status == "menunggu_pickup" and out.kurir == "jnt"
+    rebooked = await services.buat_order_biteship(session, pesanan.id)
+    assert rebooked.biteship_order_id == "bo-1"
+
+
+@pytest.mark.asyncio
+async def test_switching_courier_needs_a_paid_order(session, monkeypatch):
+    _user, pesanan = await _dengan_pengiriman(session, status="menunggu_pembayaran")
+    monkeypatch.setattr(bs, "_rates_sync", lambda k, i: PRICING)
+    with pytest.raises(HTTPException) as exc:
+        await services.opsi_kurir_pesanan(session, pesanan.id)
+    assert exc.value.status_code == 409
