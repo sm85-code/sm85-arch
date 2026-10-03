@@ -46,11 +46,13 @@ from tenants.bumi_lestari.modules.bumi_lestari.application.pembayaran_services i
 from tenants.bumi_lestari.modules.bumi_lestari.infrastructure.models import (
     KODE_DANA_CADANGAN,
     STATUS_DRAF,
+    STATUS_DITUTUP,
     STATUS_TERKIRIM,
     BlAkunKas,
     BlKategori,
     BlTransaksi,
     BlTransfer,
+    BlTutupBuku,
     BlUser,
 )
 from tenants.bumi_lestari.modules.bumi_lestari.infrastructure.models_order import BlOrder, BlSaluran
@@ -68,12 +70,52 @@ async def _jumlah(session: AsyncSession, model, kolom_jumlah, *kondisi) -> Decim
 # --- Laporan umum ---------------------------------------------------------------------------
 
 
-async def laporan_umum(session: AsyncSession, user: BlUser, dari: date | None, sampai: date | None) -> LaporanUmumOut:
+async def belum_cair_sementara(session: AsyncSession) -> Decimal:
+    """Order marketplace berstatus dikirim (belum cair) -- perkiraan sementara sampai tabel pencairan (Fase 2.4)."""
+    dikirim_mp = (
+        await session.execute(
+            select(BlOrder)
+            .join(BlSaluran, BlSaluran.id == BlOrder.saluran_id)
+            .where(BlSaluran.jenis == "marketplace", BlOrder.status == "dikirim")
+        )
+    ).scalars().all()
+    return sum(
+        (OrderOut.model_validate(o).total_penjualan - Decimal(o.potongan_marketplace) for o in dikirim_mp), Decimal("0")
+    )
+
+
+async def _laporan_dari_snapshot(session: AsyncSession, user: BlUser, dari: date, sampai: date) -> LaporanUmumOut | None:
+    """Bulan yang sudah tutup buku: angka dari snapshot agar tetap sama selamanya (KP-TB-3)."""
+    if dari.day != 1 or (sampai + timedelta(days=1)).day != 1 or (dari.year, dari.month) != (sampai.year, sampai.month):
+        return None
+    row = (
+        await session.execute(
+            select(BlTutupBuku).where(BlTutupBuku.periode == f"{dari:%Y-%m}", BlTutupBuku.status == STATUS_DITUTUP)
+        )
+    ).scalar_one_or_none()
+    if row is None or not row.snapshot.get("laporan_umum"):
+        return None
+    out = LaporanUmumOut.model_validate(row.snapshot["laporan_umum"])
+    akun = {a.id: a for a in (await session.execute(select(BlAkunKas))).scalars()}
+    out.arus_kas = [a for a in out.arus_kas if a.akun_id in akun and boleh_akses_akun(user, akun[a.akun_id])]
+    out.total_kas_awal = sum((a.saldo_awal for a in out.arus_kas), Decimal("0"))
+    out.total_kas_akhir = sum((a.saldo_akhir for a in out.arus_kas), Decimal("0"))
+    out.draf_belum_dikirim = []
+    out.dari_snapshot = True
+    out.ditutup_pada = row.ditutup_pada
+    return out
+
+
+async def laporan_umum(
+    session: AsyncSession, user: BlUser, dari: date | None, sampai: date | None, *, pakai_snapshot: bool = True
+) -> LaporanUmumOut:
     hari_ini = _hari_ini()
     dari = dari or hari_ini.replace(day=1)
     sampai = sampai or hari_ini
     if sampai < dari:
         raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Tanggal akhir lebih awal dari tanggal awal")
+    if pakai_snapshot and (snap := await _laporan_dari_snapshot(session, user, dari, sampai)) is not None:
+        return snap
     ringkas = await ringkasan_laba(session, dari, sampai)
 
     arus: list[ArusAkunOut] = []
@@ -243,16 +285,7 @@ async def dashboard(session: AsyncSession, user: BlUser, periode: str | None = N
     tagihan_minggu = sum(
         (tagihan_order(o) for o, _p in await order_reseller_belum_dibayar(session, sampai_kirim=sabtu_lalu)), Decimal("0")
     )
-    dikirim_mp = (
-        await session.execute(
-            select(BlOrder)
-            .join(BlSaluran, BlSaluran.id == BlOrder.saluran_id)
-            .where(BlSaluran.jenis == "marketplace", BlOrder.status == "dikirim")
-        )
-    ).scalars().all()
-    belum_cair = sum(
-        (OrderOut.model_validate(o).total_penjualan - Decimal(o.potongan_marketplace) for o in dikirim_mp), Decimal("0")
-    )
+    belum_cair = await belum_cair_sementara(session)
     draf = [d for d in await ringkasan_draf(session, user, rinci=False) if d.jumlah_entri]
 
     kas_iklan = await _ringkas_imprest(session, "kas_iklan") if _is_admin(user) else None

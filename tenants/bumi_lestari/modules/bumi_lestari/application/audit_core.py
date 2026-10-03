@@ -5,9 +5,32 @@ from datetime import date
 from decimal import Decimal
 from typing import Any
 
+from fastapi import HTTPException, status
+from sqlalchemy import event, inspect, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from tenants.bumi_lestari.modules.bumi_lestari.infrastructure.models import BlAuditLog
+from tenants.bumi_lestari.modules.bumi_lestari.infrastructure.models import (
+    STATUS_DITUTUP,
+    BlAuditLog,
+    BlTransaksi,
+    BlTransfer,
+    BlTutupBuku,
+)
+
+_BULAN = ("Januari", "Februari", "Maret", "April", "Mei", "Juni", "Juli", "Agustus", "September", "Oktober",
+          "November", "Desember")
+
+
+def periode_dari(tanggal: date) -> str:
+    return f"{tanggal.year}-{tanggal.month:02d}"
+
+
+def nama_bulan(periode: str) -> str:
+    return f"{_BULAN[int(periode[5:7]) - 1]} {periode[:4]}"
+
+
+def pesan_bulan_tertutup(periode: str) -> str:
+    return f"Bulan {nama_bulan(periode)} sudah tutup buku; catat sebagai koreksi di bulan berjalan"
 
 
 def _json(nilai: Any) -> Any:
@@ -34,7 +57,42 @@ async def catat_audit(
     )
 
 
+async def periode_tertutup(session: AsyncSession, periode: str) -> bool:
+    stmt = select(BlTutupBuku.id).where(BlTutupBuku.periode == periode, BlTutupBuku.status == STATUS_DITUTUP)
+    return (await session.execute(stmt)).first() is not None
+
+
 async def bulan_tertutup(session: AsyncSession, tanggal: date) -> bool:
-    """Apakah bulan `tanggal` sudah tutup buku. Tutup buku dibangun di Fase 2; sampai saat itu belum ada
-    bulan yang tertutup. Semua aturan "tidak boleh di bulan tertutup" sudah memanggil fungsi ini."""
-    return False
+    """Apakah bulan `tanggal` sudah tutup buku (spesifikasi AB-TB-4)."""
+    return await periode_tertutup(session, periode_dari(tanggal))
+
+
+# --- Pengaman terakhir: tidak ada transaksi/transfer bertanggal di bulan tertutup --------------------------
+# Semua uang (manual, pembayaran, penerimaan, gaji, tagihan, sisihan, isi ulang, kiriman, pembatalan) akhirnya
+# menulis bl_transaksi atau bl_transfer, jadi penjagaan di tingkat mapper menutup semua endpoint tulis sekaligus.
+# Service tetap memanggil `pastikan_bulan_terbuka` lebih awal agar pesannya jelas sebelum ada perubahan.
+
+
+def _tanggal_tersentuh(target) -> set[date]:
+    hasil = {target.tanggal} if target.tanggal else set()
+    hist = inspect(target).attrs.tanggal.history
+    hasil.update(d for d in (hist.deleted or ()) if d)
+    return hasil
+
+
+def _jaga_periode(connection, target, *, ubah: bool) -> None:
+    if ubah and not inspect(target).modified:
+        return
+    periode = {periode_dari(d) for d in _tanggal_tersentuh(target)}
+    if not periode:
+        return
+    row = connection.execute(
+        select(BlTutupBuku.periode).where(BlTutupBuku.periode.in_(periode), BlTutupBuku.status == STATUS_DITUTUP)
+    ).first()
+    if row is not None:
+        raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail=pesan_bulan_tertutup(row[0]))
+
+
+for _model in (BlTransaksi, BlTransfer):
+    event.listen(_model, "before_insert", lambda m, c, t: _jaga_periode(c, t, ubah=False))
+    event.listen(_model, "before_update", lambda m, c, t: _jaga_periode(c, t, ubah=True))

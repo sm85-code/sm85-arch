@@ -11,7 +11,13 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from shared.security import hash_password, verify_password
 from tenants.bumi_lestari.modules.bumi_lestari.application import kategori_core
-from tenants.bumi_lestari.modules.bumi_lestari.application.audit_core import bulan_tertutup, catat_audit
+from tenants.bumi_lestari.modules.bumi_lestari.application.audit_core import (
+    bulan_tertutup,
+    catat_audit,
+    periode_dari,
+    periode_tertutup,
+    pesan_bulan_tertutup,
+)
 from tenants.bumi_lestari.modules.bumi_lestari.application.schemas import (
     AkunKasIn,
     ChangePasswordIn,
@@ -283,7 +289,7 @@ async def _pastikan_saldo_cukup(session: AsyncSession, akun: BlAkunKas, jumlah: 
 
 async def pastikan_bulan_terbuka(session: AsyncSession, tanggal: date) -> None:
     if await bulan_tertutup(session, tanggal):
-        raise _bad(f"Bulan {tanggal:%m-%Y} sudah tutup buku; catat sebagai koreksi di bulan berjalan", 409)
+        raise _bad(pesan_bulan_tertutup(periode_dari(tanggal)), 409)
 
 
 def status_awal_transaksi(akun: BlAkunKas) -> str:
@@ -348,6 +354,9 @@ async def create_transaksi(session: AsyncSession, user: BlUser, payload: Transak
     await _cek_kategori_manual(session, user, akun, kategori, payload)
     tanggal = payload.tanggal or _hari_ini()
     await pastikan_bulan_terbuka(session, tanggal)
+    if payload.koreksi_periode is not None:
+        if payload.koreksi_periode >= periode_dari(tanggal) or not await periode_tertutup(session, payload.koreksi_periode):
+            raise _bad("Koreksi bulan lalu hanya untuk bulan yang sudah tutup buku, dicatat di bulan berjalan", 422)
     # Akun imprest (kas kecil, kas iklan) berplafon: tidak boleh minus.
     if akun.jenis in JENIS_IMPRESET and payload.jenis == "keluar":
         await _pastikan_saldo_cukup(session, akun, payload.jumlah)
@@ -360,6 +369,7 @@ async def create_transaksi(session: AsyncSession, user: BlUser, payload: Transak
         keterangan=payload.keterangan.strip(),
         dibuat_oleh=user.id,
         status_kirim=status_awal_transaksi(akun),
+        koreksi_periode=payload.koreksi_periode,
     )
     session.add(trx)
     await session.flush()

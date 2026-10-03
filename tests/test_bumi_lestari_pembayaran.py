@@ -11,6 +11,7 @@ from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker, create_asyn
 
 from tenants.bumi_lestari.modules.bumi_lestari.application import order_services as osvc
 from tenants.bumi_lestari.modules.bumi_lestari.application import kiriman_services, services, pembayaran_services as pembayaran
+from tenants.bumi_lestari.modules.bumi_lestari.application import tutup_buku_services as tb
 from tenants.bumi_lestari.modules.bumi_lestari.application.schemas import (
     ResetPasswordIn,
     TransaksiIn,
@@ -241,6 +242,15 @@ async def test_gaji_monthly_paid_next_month_first_from_dana_cadangan(session, ct
     assert dibayar[0].tanggal_bayar is None
 
 
+async def _tutup_paksa(session, user, periode: str) -> None:
+    """Tutup buku tanpa daftar kesiapan (fokus tes ini bagi hasil)."""
+    from tenants.bumi_lestari.modules.bumi_lestari.infrastructure.models import BlTutupBuku
+
+    awal, akhir = pembayaran._rentang_periode(periode)
+    session.add(BlTutupBuku(periode=periode, ditutup_oleh=user.id, snapshot=await tb._snapshot(session, user, periode, awal, akhir)))
+    await session.flush()
+
+
 @pytest.mark.asyncio
 async def test_bagi_hasil_profit_loss_and_payment(session, ctx):
     await _kas_masuk(session, ctx, "10000000", tanggal=date(2025, 6, 5))
@@ -253,7 +263,13 @@ async def test_bagi_hasil_profit_loss_and_payment(session, ctx):
         )
     h = await pembayaran.hitung_bagi_hasil(session, "2025-06")
     assert (h.laba_bersih, h.bagian_admin, h.bagian_owner) == (Decimal("6000000"), Decimal("2400000"), Decimal("3600000"))
+    assert h.final is False
+    with pytest.raises(HTTPException) as exc:  # belum tutup buku (KP-BH-1)
+        await pembayaran.simpan_bagi_hasil(session, ctx.admin, "2025-06")
+    assert exc.value.status_code == 409
 
+    await _tutup_paksa(session, ctx.admin, "2025-06")
+    assert (await pembayaran.hitung_bagi_hasil(session, "2025-06")).final is True
     row = await pembayaran.simpan_bagi_hasil(session, ctx.admin, "2025-06")
     with pytest.raises(HTTPException) as exc:
         await pembayaran.simpan_bagi_hasil(session, ctx.admin, "2025-06")
@@ -265,7 +281,8 @@ async def test_bagi_hasil_profit_loss_and_payment(session, ctx):
     with pytest.raises(HTTPException):
         await pembayaran.bayar_bagi_hasil(session, ctx.admin, row.id, None)
 
-    rugi = await pembayaran.simpan_bagi_hasil(session, ctx.admin, "2025-07")  # bulan kosong: laba 0
+    await _tutup_paksa(session, ctx.admin, "2025-08")
+    rugi = await pembayaran.simpan_bagi_hasil(session, ctx.admin, "2025-08")  # bulan kosong: laba 0
     assert (rugi.bagian_admin, rugi.bagian_owner) == (0, 0)
     with pytest.raises(HTTPException):
         await pembayaran.bayar_bagi_hasil(session, ctx.admin, rugi.id, None)

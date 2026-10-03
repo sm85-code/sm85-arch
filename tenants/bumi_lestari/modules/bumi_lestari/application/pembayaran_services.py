@@ -44,11 +44,13 @@ from tenants.bumi_lestari.modules.bumi_lestari.application.services import (
 from tenants.bumi_lestari.modules.bumi_lestari.infrastructure.models import (
     KODE_DANA_CADANGAN,
     KODE_KAS_UTAMA,
+    STATUS_DITUTUP,
     STATUS_DRAF,
     STATUS_TERKIRIM,
     BlAkunKas,
     BlKategori,
     BlTransaksi,
+    BlTutupBuku,
     BlUser,
 )
 from tenants.bumi_lestari.modules.bumi_lestari.infrastructure.models_order import (
@@ -534,12 +536,27 @@ def _rentang_periode(periode: str) -> tuple[date, date]:
     return awal, berikut - timedelta(days=1)
 
 
+async def _snapshot_tutup_buku(session: AsyncSession, periode: str) -> dict | None:
+    row = (
+        await session.execute(
+            select(BlTutupBuku).where(BlTutupBuku.periode == periode, BlTutupBuku.status == STATUS_DITUTUP)
+        )
+    ).scalar_one_or_none()
+    return row.snapshot if row is not None else None
+
+
 async def hitung_bagi_hasil(session: AsyncSession, periode: str) -> BagiHasilOut:
-    """Laba bersih = pemasukan - pengeluaran periode (basis kas). Transfer, Prive, Bagi hasil tidak dihitung."""
-    awal, akhir = _rentang_periode(periode)
-    ringkas = await ringkasan_laba(session, awal, akhir)
-    pemasukan, pengeluaran = ringkas.total_pemasukan, ringkas.total_biaya
-    laba = ringkas.laba
+    """Laba bersih = pemasukan - pengeluaran periode (basis kas). Transfer, Prive, Bagi hasil tidak dihitung.
+    Bulan yang sudah tutup buku memakai laba bersih TERKUNCI dari snapshot (AB-BH-2, `final=True`);
+    bulan lain hanya pratinjau (`final=False`)."""
+    snap = await _snapshot_tutup_buku(session, periode)
+    if snap and snap.get("laba_rugi"):
+        lr = snap["laba_rugi"]
+        pemasukan, pengeluaran, laba = (Decimal(str(lr[k])) for k in ("total_pemasukan", "total_biaya", "laba_bersih"))
+    else:
+        awal, akhir = _rentang_periode(periode)
+        ringkas = await ringkasan_laba(session, awal, akhir)
+        pemasukan, pengeluaran, laba = ringkas.total_pemasukan, ringkas.total_biaya, ringkas.laba
     proporsi = {p.penerima: Decimal(p.persen) for p in await get_proporsi(session)}
     if set(proporsi) != {"admin", "owner"}:
         raise _bad("Proporsi bagi hasil belum diatur (jalankan seed-now atau atur di profil UMKM)", 409)
@@ -551,6 +568,7 @@ async def hitung_bagi_hasil(session: AsyncSession, periode: str) -> BagiHasilOut
     return BagiHasilOut(
         periode=periode, pemasukan=pemasukan, pengeluaran=pengeluaran, laba_bersih=laba,
         persen_admin=proporsi["admin"], persen_owner=proporsi["owner"], bagian_admin=admin, bagian_owner=owner,
+        final=snap is not None,
     )
 
 
@@ -559,15 +577,12 @@ async def _bagi_hasil_aktif(session: AsyncSession, periode: str) -> BlBagiHasil 
     return (await session.execute(stmt)).scalars().first()
 
 
-def periode_sudah_berakhir(periode: str, hari_ini: date | None = None) -> bool:
-    """Sementara (sebelum tutup buku Fase 2): bulan dianggap tertutup bila sudah berakhir."""
-    _, akhir = _rentang_periode(periode)
-    return akhir < (hari_ini or _hari_ini())
-
-
 async def simpan_bagi_hasil(session: AsyncSession, user: BlUser, periode: str) -> BlBagiHasil:
-    if not periode_sudah_berakhir(periode):
-        raise _bad("Bagi hasil hanya untuk bulan yang sudah berakhir (tutup buku)", status.HTTP_409_CONFLICT)
+    if await _snapshot_tutup_buku(session, periode) is None:
+        raise _bad(
+            "Bagi hasil hanya untuk bulan yang sudah tutup buku. Tutup buku dulu di Laporan > Tutup buku.",
+            status.HTTP_409_CONFLICT,
+        )
     if await _bagi_hasil_aktif(session, periode):
         raise _bad("Bagi hasil periode ini sudah disimpan (batalkan dulu bila ingin menghitung ulang)", 409)
     h = await hitung_bagi_hasil(session, periode)
