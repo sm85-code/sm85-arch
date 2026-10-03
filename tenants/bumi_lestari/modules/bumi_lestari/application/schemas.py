@@ -163,6 +163,8 @@ class TransaksiIn(BaseModel):
     keterangan: str = Field(default="", max_length=1000)
     # Setoran modal kedua dan seterusnya wajib dikonfirmasi eksplisit oleh admin (spesifikasi 8.12).
     konfirmasi_setoran_modal_kedua: bool = False
+    # Koreksi atas bulan yang sudah tutup buku (YYYY-MM); dicatat & dihitung di bulan berjalan (AB-TB-4).
+    koreksi_periode: Optional[str] = Field(default=None, pattern=r"^\d{4}-(0[1-9]|1[0-2])$")
 
 
 class TransaksiOut(BaseModel):
@@ -178,6 +180,7 @@ class TransaksiOut(BaseModel):
     ref_id: Optional[str] = None
     status_kirim: str = "terkirim"  # draf = belum masuk laporan keuangan
     kiriman_id: Optional[str] = None
+    koreksi_periode: Optional[str] = None
     dibatalkan: bool
     alasan_batal: Optional[str] = None
     created_at: datetime

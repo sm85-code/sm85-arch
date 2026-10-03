@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from datetime import date
+from datetime import date, datetime
 from decimal import Decimal
 from typing import Optional
 
@@ -42,6 +42,9 @@ class LaporanUmumOut(BaseModel):
     total_kas_akhir: Decimal
     # Draf yang belum dikirim ke laporan keuangan (tidak dihitung di atas), per sumber.
     draf_belum_dikirim: list[DrafSumberOut] = []
+    # Bulan tutup buku: angka diambil dari snapshot saat ditutup.
+    dari_snapshot: bool = False
+    ditutup_pada: Optional[datetime] = None
 
 
 class TransaksiLaporanOut(BaseModel):

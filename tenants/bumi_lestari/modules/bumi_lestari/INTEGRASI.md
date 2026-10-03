@@ -63,3 +63,11 @@ Semua menerima `(session, user, ...)` dan tidak bergantung pada HTTP:
 - Saluran dan pemasok bawaan untuk order hasil sinkronisasi (tukang belum diketahui saat order masuk).
 - Pencairan: sinkron dari API platform atau tetap unggah file (spesifikasi 8.3).
 - Jadwal job (mis. tiap jam) dan pengguna sistem yang tercatat di log audit.
+
+## Bulan tutup buku (Fase 2.3)
+
+- Setelah bulan ditutup (`bl_tutup_buku.status = 'ditutup'`), setiap penulisan `bl_transaksi`/`bl_transfer` bertanggal di
+  bulan itu ditolak 409 — juga dari job sinkronisasi (pengaman di tingkat mapper, `audit_core.py`).
+- Data sinkron yang terlambat untuk bulan tertutup dicatat **di bulan berjalan** dengan `koreksi_periode = 'YYYY-MM'`
+  (bulan asal); laporan bulan tertutup tetap memakai snapshot.
+- Bagi hasil hanya dari bulan tertutup, memakai `snapshot.laba_rugi.laba_bersih`.

@@ -378,9 +378,7 @@ async def test_dashboard_bulanan_dan_bagi_hasil_hanya_bulan_berakhir(c):
     hari_ini = services._hari_ini()
     bulan_ini = f"{hari_ini.year}-{hari_ini.month:02d}"
     assert await _kode(c, pembayaran.simpan_bagi_hasil, c.s, c.admin, bulan_ini) == 409
-    assert pembayaran.periode_sudah_berakhir("2026-08", date(2026, 9, 1))
-    assert not pembayaran.periode_sudah_berakhir("2026-09", date(2026, 9, 30))
-    await pembayaran.simpan_bagi_hasil(c.s, c.admin, "2020-01")
+    assert await _kode(c, pembayaran.simpan_bagi_hasil, c.s, c.admin, "2020-01") == 409  # belum tutup buku
 
 
 # --- keamanan ------------------------------------------------------------------------------------------

@@ -112,6 +112,8 @@ class BlTransaksi(BumiLestariBase):
     # Referensi sistem asal untuk sinkronisasi idempoten (mis. "marketplace_erp" + id settlement); lihat INTEGRASI.md.
     sumber_sistem: Mapped[Optional[str]] = mapped_column(String(32), nullable=True)
     sumber_ref: Mapped[Optional[str]] = mapped_column(String(255), nullable=True)
+    # Koreksi atas bulan yang sudah tutup buku (YYYY-MM); transaksi tetap bertanggal & dihitung di bulan berjalan.
+    koreksi_periode: Mapped[Optional[str]] = mapped_column(String(7), nullable=True)
     dibatalkan: Mapped[bool] = mapped_column(Boolean, nullable=False, default=False)
     dibatalkan_at: Mapped[Optional[datetime]] = mapped_column(DateTime(timezone=True), nullable=True)
     alasan_batal: Mapped[Optional[str]] = mapped_column(Text, nullable=True)
@@ -224,3 +226,23 @@ class BlAuditLog(BumiLestariBase):
     sebelum: Mapped[Optional[dict]] = mapped_column(JSON, nullable=True)
     sesudah: Mapped[Optional[dict]] = mapped_column(JSON, nullable=True)
     alasan: Mapped[Optional[str]] = mapped_column(Text, nullable=True)
+
+
+STATUS_DITUTUP = "ditutup"
+STATUS_DIBUKA = "dibuka"
+
+
+class BlTutupBuku(BumiLestariBase):
+    """Tutup buku bulanan (spesifikasi 8.10): bulan terkunci + snapshot angka; buka darurat beralasan."""
+
+    __tablename__ = "bl_tutup_buku"
+
+    id: Mapped[str] = mapped_column(String(64), primary_key=True, default=_uuid)
+    periode: Mapped[str] = mapped_column(String(7), nullable=False, unique=True)  # YYYY-MM
+    status: Mapped[str] = mapped_column(String(16), nullable=False, default=STATUS_DITUTUP)  # ditutup / dibuka
+    ditutup_oleh: Mapped[str] = mapped_column(String(64), nullable=False)
+    ditutup_pada: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=_utcnow)
+    snapshot: Mapped[dict] = mapped_column(JSON, nullable=False, default=dict)
+    dibuka_oleh: Mapped[Optional[str]] = mapped_column(String(64), nullable=True)
+    dibuka_pada: Mapped[Optional[datetime]] = mapped_column(DateTime(timezone=True), nullable=True)
+    alasan_buka: Mapped[Optional[str]] = mapped_column(Text, nullable=True)

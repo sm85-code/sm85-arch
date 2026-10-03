@@ -80,6 +80,7 @@ _ALTER_POSTGRES = (
     "ALTER TABLE bl_transaksi ADD COLUMN IF NOT EXISTS kiriman_id VARCHAR(64)",
     "ALTER TABLE bl_transaksi ADD COLUMN IF NOT EXISTS sumber_sistem VARCHAR(32)",
     "ALTER TABLE bl_transaksi ADD COLUMN IF NOT EXISTS sumber_ref VARCHAR(255)",
+    "ALTER TABLE bl_transaksi ADD COLUMN IF NOT EXISTS koreksi_periode VARCHAR(7)",
     "ALTER TABLE bl_pembayaran_pemasok ADD COLUMN IF NOT EXISTS status_kirim VARCHAR(16) NOT NULL DEFAULT 'terkirim'",
     "ALTER TABLE bl_pembayaran_pemasok ADD COLUMN IF NOT EXISTS kiriman_id VARCHAR(64)",
     "ALTER TABLE bl_penerimaan_reseller ADD COLUMN IF NOT EXISTS status_kirim VARCHAR(16) NOT NULL DEFAULT 'terkirim'",

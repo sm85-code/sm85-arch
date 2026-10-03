@@ -167,6 +167,7 @@ class BagiHasilOut(BaseModel):
     persen_owner: Decimal
     bagian_admin: Decimal
     bagian_owner: Decimal
+    final: bool = False  # True = dari snapshot tutup buku (laba terkunci); False = pratinjau
 
 
 class BagiHasilTersimpanOut(BaseModel):
