@@ -137,6 +137,25 @@ Efek ke keuangan:
 - Endpoint: `/karyawan` (CRUD, owner/admin), `POST /gaji/generate?periode=` (siapkan daftar
   gaji bulan itu), `POST /gaji/{id}/bayar`.
 
+**Karyawan tetap saat ini (4 orang, semua bergaji bulanan tetap):**
+
+| Peran (`bl_karyawan.peran`) | Tugas | Akun login |
+|---|---|---|
+| `kas_kecil_packing` | Pemegang kas kecil + packing | Ya (role staf) |
+| `order_non_kayu` | Khusus order produk non kayu | Belum (data karyawan saja) |
+| `tukang_cat` | Karyawan utama, mengecat produk kayu | Belum |
+| `asisten_tukang_cat` | Asisten tukang cat | Belum |
+
+`peran` hanya label (teks bebas bertipe enum longgar), bukan hak akses. Hak akses tetap
+admin/owner/staf. Karyawan tanpa login cukup tercatat untuk gaji.
+
+Dampak ke desain order dan katalog:
+- Katalog produk punya `jenis_produk`: `kayu` atau `non_kayu` (filter di daftar order).
+- Order kayu punya langkah **pengecatan** setelah barang diambil dari tukang kayu
+  (`diambil → dicat → dikirim`); langkah ini dilewati untuk order non kayu.
+- Biaya cat (bahan cat, thinner, kuas) dicatat sebagai pengeluaran kategori "Bahan cat",
+  bukan biaya per order, karena upah tukang cat sudah masuk gaji tetap.
+
 **Bagi hasil admin 40% : owner 60% dari laba bersih:**
 - **Tidak di-hardcode.** Proporsi disimpan di `bl_proporsi_bagi_hasil` (penerima `admin`/`owner`,
   persen; total harus tepat 100) dan diubah dari **halaman Profil UMKM**
