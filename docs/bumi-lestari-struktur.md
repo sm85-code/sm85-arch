@@ -117,6 +117,12 @@ Setiap saluran marketplace punya akun kas sendiri (mis. "Saldo Shopee", "Saldo T
 Order reseller yang belum dibayar menjadi `bl_piutang` (kebalikan utang), dilunasi saat
 uangnya masuk ke akun kas.
 
+Produk kayu dari tukang kayu dipakai untuk **dua tujuan**: dijual lewat saluran UMKM sendiri
+(marketplace, toko web) dan dipesan **penjual lain (reseller)**. Order reseller melewati alur
+produksi yang sama (pesan tukang → diambil → dicat → serah/kirim); bedanya hanya harga
+(grosir) dan cara bayar (di muka atau tempo → piutang), dan laba per order dihitung dari
+harga grosir itu dikurangi biaya tukang.
+
 Katalog produk (SKU dan harga yang sudah ada) dipakai bersama semua saluran; harga bisa
 dioverride per saluran atau per reseller.
 
