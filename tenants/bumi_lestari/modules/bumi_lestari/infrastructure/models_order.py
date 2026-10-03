@@ -88,10 +88,11 @@ class BlHargaGrosir(BumiLestariBase):
     id: Mapped[str] = mapped_column(String(64), primary_key=True, default=_uuid)
     produk_id: Mapped[str] = mapped_column(ForeignKey("bl_produk.id"), nullable=False)
     pelanggan_id: Mapped[str] = mapped_column(ForeignKey("bl_pelanggan.id"), nullable=False)
-    # Tiga komponen yang dibayar penjual lain: barang, cat + jasa (termasuk packing), biaya proses pesanan.
+    # Tiga komponen yang dibayar penjual lain, semuanya per unit: barang, cat + jasa (termasuk packing),
+    # biaya proses pesanan (tergantung ukuran barang, jadi melekat ke produk).
     harga: Mapped[Decimal] = mapped_column(Numeric(14, 2), nullable=False)  # barang, per unit
     harga_cat_jasa: Mapped[Decimal] = mapped_column(Numeric(14, 2), nullable=False, default=Decimal("0"))  # per unit
-    biaya_proses: Mapped[Decimal] = mapped_column(Numeric(14, 2), nullable=False, default=Decimal("0"))  # per order
+    biaya_proses: Mapped[Decimal] = mapped_column(Numeric(14, 2), nullable=False, default=Decimal("0"))  # per unit (tergantung ukuran barang)
 
 
 class BlOrder(BumiLestariBase):

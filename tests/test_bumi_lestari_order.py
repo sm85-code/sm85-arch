@@ -162,12 +162,12 @@ async def test_reseller_three_price_components_polos_and_color(session, data):
     out = OrderOut.model_validate(dicat)
     assert dicat.warna == "Custom: hijau sage"
     assert (dicat.harga_satuan, dicat.harga_cat_jasa, dicat.biaya_proses) == (600000, 100000, 15000)
-    assert out.total_penjualan == Decimal("1415000")  # (600rb + 100rb) x 2 + 15rb
-    assert out.laba_kotor == Decimal("415000")  # - biaya pokok 2 x 500rb
+    assert out.total_penjualan == Decimal("1430000")  # (600rb + 100rb + 15rb) x 2
+    assert out.laba_kotor == Decimal("430000")  # - biaya pokok 2 x 500rb
 
     polos = await svc.create_order(session, order(qty=2, butuh_cat=False))
     assert polos.harga_cat_jasa == 0 and polos.butuh_cat is False
-    assert OrderOut.model_validate(polos).total_penjualan == Decimal("1215000")  # 600rb x 2 + 15rb
+    assert OrderOut.model_validate(polos).total_penjualan == Decimal("1230000")  # (600rb + 15rb) x 2
 
     await svc.update_order(session, dicat.id, OrderPatch(butuh_cat=False))  # jadi polos -> cat/jasa nol
     assert dicat.harga_cat_jasa == 0

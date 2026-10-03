@@ -74,7 +74,8 @@ class PelangganOut(PelangganIn):
 
 
 class HargaGrosirIn(BaseModel):
-    """Tiga komponen harga untuk penjual lain: barang, cat + jasa (termasuk packing), biaya proses."""
+    """Tiga komponen harga per unit untuk penjual lain: barang, cat + jasa (termasuk packing), biaya proses
+    (biaya proses tergantung ukuran barang)."""
 
     produk_id: str
     pelanggan_id: str
@@ -156,8 +157,8 @@ class OrderOut(BaseModel):
     @computed_field
     @property
     def total_penjualan(self) -> Decimal:
-        # (barang + cat/jasa) per unit x qty + biaya proses per order; cat/jasa = 0 untuk order polos.
-        return (self.harga_satuan + self.harga_cat_jasa) * self.qty + self.biaya_proses
+        # (barang + cat/jasa + biaya proses) per unit x qty; cat/jasa = 0 untuk order polos.
+        return (self.harga_satuan + self.harga_cat_jasa + self.biaya_proses) * self.qty
 
     @computed_field
     @property

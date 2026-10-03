@@ -127,9 +127,9 @@ harga grosir itu dikurangi biaya tukang.
 **Harga untuk penjual lain = 3 komponen** (`bl_harga_grosir` per produk × pelanggan):
 1. **barang** (`harga`, per unit),
 2. **cat dan jasa, termasuk packing** (`harga_cat_jasa`, per unit; **0 untuk order polos**),
-3. **biaya proses pesanan** (`biaya_proses`, per order).
+3. **biaya proses pesanan** (`biaya_proses`, per unit; besarnya tergantung ukuran barang, jadi diisi per produk).
 
-Total order = (barang + cat/jasa) × qty + biaya proses. Order polos (tanpa cat) kadang ada:
+Total order = (barang + cat/jasa + biaya proses) × qty. Order polos (tanpa cat) kadang ada:
 `butuh_cat = false` → komponen cat/jasa nol dan langkah pengecatan dilewati. Warna cat berbeda-beda
 dan kadang custom, tetapi **harga sama**, jadi warna hanya catatan teks (`warna`) di order.
 Penjual lain **membayar hari Selasa** (piutang reseller dilunasi di siklus Selasa, bersama
