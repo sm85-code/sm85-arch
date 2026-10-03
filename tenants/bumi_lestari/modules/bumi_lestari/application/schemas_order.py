@@ -43,6 +43,7 @@ class PemasokIn(BaseModel):
     jenis: str
     kode: str = Field(default="", max_length=16)  # kosong -> otomatis (urut per jenis pemasok)
     kontak: str = Field(default="", max_length=255)
+    no_wa: str = Field(default="", max_length=32)
     nama_bank: str = Field(default="", max_length=64)
     no_rekening: str = Field(default="", max_length=64)
     atas_nama: str = Field(default="", max_length=255)
@@ -72,6 +73,7 @@ class PelangganIn(BaseModel):
     kode: str = Field(default="", max_length=16)  # kosong -> otomatis (urut)
     alamat: str = Field(default="", max_length=1000)
     kontak: str = Field(default="", max_length=255)
+    no_wa: str = Field(default="", max_length=32)
     catatan: str = Field(default="", max_length=1000)
 
 

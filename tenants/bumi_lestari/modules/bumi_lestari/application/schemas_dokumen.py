@@ -4,7 +4,7 @@ Backend hanya menyusun datanya; tampilan/cetak PDF (logo, tata letak) dilakukan 
 """
 from __future__ import annotations
 
-from datetime import date
+from datetime import date, datetime
 from decimal import Decimal
 from typing import Optional
 
@@ -87,3 +87,20 @@ class InvoiceOut(BaseModel):
     grand_total: Decimal
     syarat: list[str]
     info_pembayaran: Optional[str] = None
+
+
+class BagikanIn(BaseModel):
+    jenis: str  # invoice | po
+    tanggal: Optional[date] = None  # tanggal acuan (kosong -> hari ini)
+    pelanggan_id: Optional[str] = None  # wajib untuk invoice
+    pemasok_id: Optional[str] = None  # wajib untuk po
+
+
+class BagikanOut(BaseModel):
+    nomor: str
+    penerima: str
+    no_wa: Optional[str]  # format internasional tanpa +, mis. 6281234567890
+    url: str  # tautan PDF (tanpa login), berlaku sampai kedaluwarsa
+    pesan: str
+    wa_link: str  # buka di HP -> WhatsApp pengguna terbuka dengan pesan siap kirim
+    kedaluwarsa: datetime

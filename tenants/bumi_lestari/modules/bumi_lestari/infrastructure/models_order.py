@@ -57,6 +57,7 @@ class BlPemasok(BumiLestariBase):
     # Kode urut untuk nomor PO (PO/MG.4-005/IX/2026 -> "005"); otomatis, boleh diubah.
     kode: Mapped[str] = mapped_column(String(16), nullable=False, default="")
     kontak: Mapped[str] = mapped_column(String(255), nullable=False, default="")
+    no_wa: Mapped[str] = mapped_column(String(32), nullable=False, default="")  # untuk tombol kirim WhatsApp
     nama_bank: Mapped[str] = mapped_column(String(64), nullable=False, default="")
     no_rekening: Mapped[str] = mapped_column(String(64), nullable=False, default="")
     atas_nama: Mapped[str] = mapped_column(String(255), nullable=False, default="")
@@ -86,6 +87,7 @@ class BlPelanggan(BumiLestariBase):
     kode: Mapped[str] = mapped_column(String(16), nullable=False, default="")
     alamat: Mapped[str] = mapped_column(Text, nullable=False, default="")
     kontak: Mapped[str] = mapped_column(String(255), nullable=False, default="")
+    no_wa: Mapped[str] = mapped_column(String(32), nullable=False, default="")  # untuk tombol kirim WhatsApp
     catatan: Mapped[str] = mapped_column(Text, nullable=False, default="")
     aktif: Mapped[bool] = mapped_column(Boolean, nullable=False, default=True)
 

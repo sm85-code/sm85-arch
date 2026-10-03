@@ -1,13 +1,20 @@
 """HTTP surface for bumi_lestari dokumen cetak -- Purchase Order & Invoice mingguan (data JSON)."""
 from __future__ import annotations
 
+import os
 from datetime import date
 
-from fastapi import APIRouter, Depends
+from fastapi import APIRouter, Depends, Request, Response
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from tenants.bumi_lestari.modules.bumi_lestari.application import dokumen_services as svc
-from tenants.bumi_lestari.modules.bumi_lestari.application.schemas_dokumen import InvoiceOut, PurchaseOrderOut
+from tenants.bumi_lestari.modules.bumi_lestari.application.pdf_dokumen import render_invoice, render_po
+from tenants.bumi_lestari.modules.bumi_lestari.application.schemas_dokumen import (
+    BagikanIn,
+    BagikanOut,
+    InvoiceOut,
+    PurchaseOrderOut,
+)
 from tenants.bumi_lestari.modules.bumi_lestari.infrastructure.auth import require_roles_bumi_lestari
 from tenants.bumi_lestari.modules.bumi_lestari.infrastructure.database import get_db_bumi_lestari
 from tenants.bumi_lestari.modules.bumi_lestari.infrastructure.models import BlUser
@@ -40,3 +47,37 @@ async def invoice_reseller(
 ):
     """Invoice mingguan per penjual lain (satu per pelanggan yang punya tagihan)."""
     return await svc.invoice_reseller(session, tanggal, pelanggan_id)
+
+
+def _pdf(isi: bytes, nama_file: str) -> Response:
+    return Response(
+        content=isi, media_type="application/pdf",
+        headers={"Content-Disposition": f'inline; filename="{nama_file}"', "Cache-Control": "private, no-store"},
+    )
+
+
+@dokumen_router.get("/invoice-reseller/{pelanggan_id}/pdf")
+async def invoice_pdf(pelanggan_id: str, tanggal: date | None = None, session: AsyncSession = _db(), _: BlUser = _guard()):
+    inv = await svc.invoice_untuk(session, pelanggan_id, tanggal)
+    return _pdf(render_invoice(inv), inv.nomor.replace("/", "-") + ".pdf")
+
+
+@dokumen_router.get("/po/{pemasok_id}/pdf")
+async def po_pdf(pemasok_id: str, tanggal: date | None = None, session: AsyncSession = _db(), _: BlUser = _guard()):
+    po = await svc.po_untuk(session, pemasok_id, tanggal)
+    return _pdf(render_po(po), po.nomor.replace("/", "-") + ".pdf")
+
+
+@dokumen_router.post("/dokumen/bagikan", response_model=BagikanOut)
+async def bagikan(payload: BagikanIn, request: Request, session: AsyncSession = _db(), user: BlUser = _guard()):
+    """Tombol "Kirim ke WhatsApp": kembalikan `wa_link`; dibuka di HP -> WhatsApp pengguna terbuka
+    dengan pesan + tautan PDF siap kirim ke penjual lain / tukang."""
+    base = os.getenv("BUMI_LESTARI_PUBLIC_URL") or str(request.base_url)
+    return await svc.bagikan_dokumen(session, user, payload, base)
+
+
+@dokumen_router.get("/dokumen-publik/{token}")
+async def dokumen_publik(token: str, session: AsyncSession = _db()):
+    """PDF untuk penerima (tanpa login); token acak, berlaku 30 hari."""
+    isi, nama_file = await svc.pdf_dari_token(session, token)
+    return _pdf(isi, nama_file)

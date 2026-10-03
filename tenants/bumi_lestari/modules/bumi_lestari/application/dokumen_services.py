@@ -1,14 +1,19 @@
 """Penyusun data Purchase Order (ke tukang/supplier) dan Invoice (ke penjual lain) mingguan."""
 from __future__ import annotations
 
-from datetime import date, timedelta
+import secrets
+from datetime import date, datetime, timedelta, timezone
+from urllib.parse import quote
 from decimal import Decimal
 
 from fastapi import HTTPException, status
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from tenants.bumi_lestari.modules.bumi_lestari.application.pdf_dokumen import render_invoice, render_po, rp, tgl
 from tenants.bumi_lestari.modules.bumi_lestari.application.schemas_dokumen import (
+    BagikanIn,
+    BagikanOut,
     InvoiceItemOut,
     InvoiceKepadaOut,
     InvoiceOut,
@@ -31,7 +36,9 @@ from tenants.bumi_lestari.modules.bumi_lestari.infrastructure.models_order impor
     BlProduk,
     BlSaluran,
 )
+from tenants.bumi_lestari.modules.bumi_lestari.infrastructure.models import BlUser
 from tenants.bumi_lestari.modules.bumi_lestari.infrastructure.models_t3 import (
+    BlDokumenBagikan,
     BlPembayaranPemasok,
     BlPembayaranPemasokItem,
 )
@@ -196,3 +203,94 @@ async def invoice_reseller(
             )
         )
     return hasil
+
+
+# --- Bagikan lewat WhatsApp ---------------------------------------------------------------------
+
+MASA_BERLAKU_TAUTAN = timedelta(days=30)
+
+
+def normalisasi_wa(nomor: str) -> str | None:
+    """08xx / +62xx / 62xx -> 62xx (format wa.me). None bila kosong."""
+    digit = "".join(c for c in (nomor or "") if c.isdigit())
+    if not digit:
+        return None
+    if digit.startswith("0"):
+        digit = "62" + digit[1:]
+    return digit
+
+
+def _cari_dokumen_untuk_pemasok(daftar: list[PurchaseOrderOut], pemasok_id: str) -> PurchaseOrderOut:
+    for po in daftar:
+        if po.kepada.pemasok_id == pemasok_id:
+            return po
+    raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Tidak ada PO untuk tukang/supplier ini pada periode itu")
+
+
+async def invoice_untuk(session: AsyncSession, pelanggan_id: str, tanggal: date | None) -> InvoiceOut:
+    hasil = await invoice_reseller(session, tanggal, pelanggan_id)
+    if not hasil:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Tidak ada tagihan untuk penjual ini pada periode itu")
+    return hasil[0]
+
+
+async def po_untuk(session: AsyncSession, pemasok_id: str, tanggal: date | None) -> PurchaseOrderOut:
+    return _cari_dokumen_untuk_pemasok(await po_dari_siap(session, tanggal), pemasok_id)
+
+
+async def bagikan_dokumen(session: AsyncSession, user: BlUser, payload: BagikanIn, base_url: str) -> BagikanOut:
+    """Simpan salinan dokumen + token acak, lalu susun tautan WhatsApp (wa.me) berisi pesan dan tautan PDF."""
+    if payload.jenis == "invoice":
+        if not payload.pelanggan_id:
+            raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="pelanggan_id wajib untuk invoice")
+        dok = await invoice_untuk(session, payload.pelanggan_id, payload.tanggal)
+        pelanggan = await session.get(BlPelanggan, payload.pelanggan_id)
+        penerima, no_wa = pelanggan.nama, normalisasi_wa(pelanggan.no_wa)
+        pesan_awal = (
+            f"Halo {penerima}, berikut invoice {dok.nomor} ({dok.minggu.label}, "
+            f"{tgl(dok.minggu.periode_awal)} s.d. {tgl(dok.minggu.periode_akhir)}).\n"
+            f"Total {rp(dok.grand_total)}, jatuh tempo {tgl(dok.jatuh_tempo)}."
+        )
+    elif payload.jenis == "po":
+        if not payload.pemasok_id:
+            raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="pemasok_id wajib untuk po")
+        dok = await po_untuk(session, payload.pemasok_id, payload.tanggal)
+        pemasok = await session.get(BlPemasok, payload.pemasok_id)
+        penerima, no_wa = pemasok.nama, normalisasi_wa(pemasok.no_wa)
+        pesan_awal = (
+            f"Halo {penerima}, berikut PO {dok.nomor} ({dok.minggu.label}, "
+            f"{tgl(dok.minggu.periode_awal)} s.d. {tgl(dok.minggu.periode_akhir)}).\n"
+            f"Total {rp(dok.grand_total)}, pembayaran {tgl(dok.tgl_pembayaran)}."
+        )
+    else:
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="jenis harus 'invoice' atau 'po'")
+
+    token = secrets.token_urlsafe(24)
+    kedaluwarsa = datetime.now(timezone.utc) + MASA_BERLAKU_TAUTAN
+    session.add(
+        BlDokumenBagikan(
+            token=token, jenis=payload.jenis, nomor=dok.nomor, payload_json=dok.model_dump_json(),
+            dibuat_oleh=user.id, kedaluwarsa=kedaluwarsa,
+        )
+    )
+    await session.flush()
+    url = f"{base_url.rstrip('/')}/api/bumi-lestari/dokumen-publik/{token}"
+    pesan = f"{pesan_awal}\nUnduh PDF: {url}\n\nTerima kasih. {dok.perusahaan.nama}"
+    tujuan = no_wa or ""
+    return BagikanOut(
+        nomor=dok.nomor, penerima=penerima, no_wa=no_wa, url=url, pesan=pesan,
+        wa_link=f"https://wa.me/{tujuan}?text={quote(pesan)}", kedaluwarsa=kedaluwarsa,
+    )
+
+
+async def pdf_dari_token(session: AsyncSession, token: str) -> tuple[bytes, str]:
+    row = (await session.execute(select(BlDokumenBagikan).where(BlDokumenBagikan.token == token))).scalar_one_or_none()
+    if row is None:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Dokumen tidak ditemukan")
+    kedaluwarsa = row.kedaluwarsa if row.kedaluwarsa.tzinfo else row.kedaluwarsa.replace(tzinfo=timezone.utc)
+    if kedaluwarsa < datetime.now(timezone.utc):
+        raise HTTPException(status_code=status.HTTP_410_GONE, detail="Tautan dokumen sudah kedaluwarsa")
+    nama_file = row.nomor.replace("/", "-") + ".pdf"
+    if row.jenis == "invoice":
+        return render_invoice(InvoiceOut.model_validate_json(row.payload_json)), nama_file
+    return render_po(PurchaseOrderOut.model_validate_json(row.payload_json)), nama_file

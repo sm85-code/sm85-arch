@@ -120,7 +120,7 @@ async def create_pemasok(session: AsyncSession, payload: PemasokIn) -> BlPemasok
         raise _bad(f"Jenis pemasok harus salah satu dari: {', '.join(JENIS_PEMASOK)}")
     kode = payload.kode.strip() or await _kode_berikut(session, BlPemasok, BlPemasok.jenis == payload.jenis)
     pemasok = BlPemasok(
-        nama=payload.nama.strip(), jenis=payload.jenis, kode=kode, kontak=payload.kontak.strip(),
+        nama=payload.nama.strip(), jenis=payload.jenis, kode=kode, kontak=payload.kontak.strip(), no_wa=payload.no_wa.strip(),
         nama_bank=payload.nama_bank.strip(), no_rekening=payload.no_rekening.strip(),
         atas_nama=payload.atas_nama.strip(), catatan=payload.catatan.strip(),
     )
@@ -156,6 +156,7 @@ async def create_pelanggan(session: AsyncSession, payload: PelangganIn) -> BlPel
     kode = payload.kode.strip() or await _kode_berikut(session, BlPelanggan)
     pelanggan = BlPelanggan(
         nama=payload.nama.strip(), kode=kode, alamat=payload.alamat.strip(), kontak=payload.kontak.strip(),
+        no_wa=payload.no_wa.strip(),
         catatan=payload.catatan.strip(),
     )
     session.add(pelanggan)

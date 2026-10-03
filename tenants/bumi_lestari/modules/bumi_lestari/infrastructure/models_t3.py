@@ -188,3 +188,19 @@ class BlTagihan(_Batal, BumiLestariBase):
     tanggal_bayar: Mapped[date] = mapped_column(Date, nullable=False)
     dibayar_oleh: Mapped[str] = mapped_column(String(64), nullable=False)
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=_utcnow)
+
+
+class BlDokumenBagikan(BumiLestariBase):
+    """Dokumen (invoice/PO) yang dibagikan lewat tautan WhatsApp. Isi disimpan sebagai salinan saat dikirim,
+    jadi PDF yang dibuka penerima sama persis dengan yang dikirim. Diakses lewat token acak tanpa login."""
+
+    __tablename__ = "bl_dokumen_bagikan"
+
+    id: Mapped[str] = mapped_column(String(64), primary_key=True, default=_uuid)
+    token: Mapped[str] = mapped_column(String(64), nullable=False, unique=True, index=True)
+    jenis: Mapped[str] = mapped_column(String(16), nullable=False)  # invoice | po
+    nomor: Mapped[str] = mapped_column(String(64), nullable=False)
+    payload_json: Mapped[str] = mapped_column(Text, nullable=False)
+    dibuat_oleh: Mapped[str] = mapped_column(String(64), nullable=False)
+    kedaluwarsa: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=_utcnow)
