@@ -7,6 +7,7 @@ Environment:
   BITESHIP_COURIERS       comma separated Biteship courier codes to quote (default: the common ones)
   BITESHIP_DEFAULT_WEIGHT_GRAM  weight used for a product that has none recorded (default 500)
   BITESHIP_ORIGIN_NAME / _PHONE / _ADDRESS  the pickup contact and address printed on the shipment
+  BITESHIP_COD_TYPE       when the courier pays out the COD money: 7_days (cheapest, default), 5_days or 3_days
 
 Until BITESHIP_API_KEY is set every entry point answers HTTP 501 (never 503: DigitalOcean App Platform replaces
 an application 503 with its own HTML 504 page) instead of inventing a price.
@@ -55,8 +56,9 @@ class OngkirOption:
     kurir_nama: str
     layanan: str  # service code, e.g. "reg"
     layanan_nama: str
-    ongkir: str  # rupiah, whole number
+    ongkir: str  # rupiah, whole number (the courier's shipping fee, without any COD fee)
     estimasi: str
+    biaya_cod: str = "0"  # rupiah; only set when the rates were asked for a COD amount
 
 
 @dataclass
@@ -108,13 +110,21 @@ def _item_payload(item: ItemKirim) -> dict[str, Any]:
     return data
 
 
-def _rates_sync(kode_pos_tujuan: str, items: list[ItemKirim]) -> dict[str, Any]:
-    body = {
+def _cod_type() -> str:
+    nilai = os.getenv("BITESHIP_COD_TYPE", "7_days").strip()
+    return nilai if nilai in ("3_days", "5_days", "7_days") else "7_days"
+
+
+def _rates_sync(kode_pos_tujuan: str, items: list[ItemKirim], cod_nilai: int = 0) -> dict[str, Any]:
+    body: dict[str, Any] = {
         "origin_postal_code": int(os.getenv("BITESHIP_ORIGIN_POSTAL", _DEFAULT_ORIGIN_POSTAL).strip() or _DEFAULT_ORIGIN_POSTAL),
         "destination_postal_code": int(kode_pos_tujuan),
         "couriers": os.getenv("BITESHIP_COURIERS", _DEFAULT_COURIERS).strip() or _DEFAULT_COURIERS,
         "items": [_item_payload(i) for i in items],
     }
+    if cod_nilai > 0:
+        body["destination_cash_on_delivery"] = int(cod_nilai)
+        body["destination_cash_on_delivery_type"] = _cod_type()
     try:
         resp = requests.post(
             f"{_BASE_URL}/rates/couriers",
@@ -141,14 +151,16 @@ def _rates_sync(kode_pos_tujuan: str, items: list[ItemKirim]) -> dict[str, Any]:
     return data
 
 
-async def cek_ongkir(*, kode_pos_tujuan: str, items: list[ItemKirim]) -> list[OngkirOption]:
+async def cek_ongkir(*, kode_pos_tujuan: str, items: list[ItemKirim], cod_nilai: int = 0) -> list[OngkirOption]:
+    """Rates for the items. With ``cod_nilai`` only the couriers that can collect that amount on delivery are
+    returned, and each option carries the COD fee (``biaya_cod``) apart from the shipping fee (``ongkir``)."""
     if not aktif():
         raise BiteshipNotReady()
     if not items:
         raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Tidak ada barang untuk dikirim")
     if not kode_pos_tujuan.isdigit() or len(kode_pos_tujuan) != 5:
         raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Kode pos alamat tujuan harus 5 angka")
-    data = await asyncio.to_thread(_rates_sync, kode_pos_tujuan, items)
+    data = await asyncio.to_thread(_rates_sync, kode_pos_tujuan, items, cod_nilai)
 
     options: list[OngkirOption] = []
     for row in data.get("pricing") or []:
@@ -156,8 +168,16 @@ async def cek_ongkir(*, kode_pos_tujuan: str, items: list[ItemKirim]) -> list[On
             harga = int(round(float(row["price"])))
             kurir = str(row["courier_code"]).lower()
             layanan = str(row["courier_service_code"])
+            fee_cod = int(round(float(row.get("cash_on_delivery_fee") or 0)))
         except (KeyError, TypeError, ValueError):
             continue
+        if cod_nilai > 0:
+            if not row.get("available_for_cash_on_delivery"):
+                continue
+            try:
+                harga = int(round(float(row["shipping_fee"])))
+            except (KeyError, TypeError, ValueError):
+                harga = max(harga - fee_cod, 0)
         options.append(
             OngkirOption(
                 kurir=kurir,
@@ -166,6 +186,7 @@ async def cek_ongkir(*, kode_pos_tujuan: str, items: list[ItemKirim]) -> list[On
                 layanan_nama=str(row.get("courier_service_name") or layanan),
                 ongkir=str(harga),
                 estimasi=str(row.get("duration") or row.get("shipment_duration_range") or "").strip(),
+                biaya_cod=str(fee_cod if cod_nilai > 0 else 0),
             )
         )
     if not options:
@@ -223,6 +244,7 @@ async def buat_order(
     kode_pos_tujuan: str,
     items: list[ItemKirim],
     catatan: str = "",
+    cod_nilai: int = 0,
 ) -> OrderBiteship:
     """Book the parcel with the courier (a testing key only simulates it: no courier comes)."""
     if not aktif():
@@ -241,6 +263,9 @@ async def buat_order(
         "order_note": catatan[:200],
         "items": [_item_payload(i) for i in items],
     }
+    if cod_nilai > 0:
+        body["destination_cash_on_delivery"] = int(cod_nilai)
+        body["destination_cash_on_delivery_type"] = _cod_type()
     data = await asyncio.to_thread(_request_sync, "POST", "/orders", body)
     kurir_data = data.get("courier") if isinstance(data.get("courier"), dict) else {}
     order_id = str(data.get("id") or "")

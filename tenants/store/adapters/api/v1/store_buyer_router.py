@@ -19,6 +19,7 @@ from tenants.store.modules.store.application.schemas import (
     AlamatIn,
     AlamatPatch,
     CekOngkirIn,
+    CheckoutIn,
     GoogleLoginRequest,
     KeranjangItemIn,
     KeranjangItemPatch,
@@ -189,8 +190,12 @@ async def _pesanan_milik(session: AsyncSession, pesanan_id: str, user: PembeliSt
 
 
 @store_buyer_router.post("/pesanan/checkout")
-async def checkout(session: AsyncSession = Depends(get_db_store), user: PembeliStore = Depends(get_current_buyer)):
-    return services.pesanan_out(await services.checkout(session, user.id))
+async def checkout(
+    payload: CheckoutIn | None = None,
+    session: AsyncSession = Depends(get_db_store),
+    user: PembeliStore = Depends(get_current_buyer),
+):
+    return services.pesanan_out(await services.checkout(session, user.id, cod=bool(payload and payload.cod)))
 
 
 @store_buyer_router.get("/pesanan")
@@ -285,9 +290,15 @@ async def payment_callback(request: Request, session: AsyncSession = Depends(get
 async def cek_ongkir(
     payload: CekOngkirIn, session: AsyncSession = Depends(get_db_store), user: PembeliStore = Depends(get_current_buyer)
 ):
-    """Shipping options for what is in the buyer's cart, to the given postal code."""
+    """Shipping options for what is in the buyer's cart, to the given postal code. With ``cod`` only the couriers
+    that can collect the payment on delivery are offered, with their COD fee."""
+    cod_nilai = 0
+    if payload.cod:
+        cod_nilai = int(services.cek_syarat_cod(await services.get_keranjang(session, user.id)))
     options = await biteship_cek_ongkir(
-        kode_pos_tujuan=payload.kode_pos_tujuan, items=await services.item_kirim_keranjang(session, user.id)
+        kode_pos_tujuan=payload.kode_pos_tujuan,
+        items=await services.item_kirim_keranjang(session, user.id),
+        cod_nilai=cod_nilai,
     )
     return [asdict(o) for o in options]
 
@@ -301,10 +312,13 @@ async def isi_alamat_pengiriman(
 ):
     pesanan = await _pesanan_milik(session, pesanan_id, user)
     # The buyer must not set their own shipping price: it is always worked out here.
-    payload = payload.model_copy(update={"ongkir": Decimal("0"), "layanan_nama": ""})
+    payload = payload.model_copy(update={"ongkir": Decimal("0"), "layanan_nama": "", "biaya_cod": Decimal("0")})
     if shipping_biteship.aktif():
+        cod = pesanan.metode_pembayaran == "cod"
         options = await biteship_cek_ongkir(
-            kode_pos_tujuan=payload.kode_pos_tujuan, items=await services.item_kirim_pesanan(session, pesanan)
+            kode_pos_tujuan=payload.kode_pos_tujuan,
+            items=await services.item_kirim_pesanan(session, pesanan),
+            cod_nilai=int(sum((it.subtotal for it in pesanan.items), Decimal("0"))) if cod else 0,
         )
         pilihan = next((o for o in options if o.kurir == payload.kurir.lower() and o.layanan == payload.layanan), None)
         if pilihan is None:
@@ -317,6 +331,7 @@ async def isi_alamat_pengiriman(
                 "layanan": pilihan.layanan,
                 "layanan_nama": pilihan.layanan_nama,
                 "ongkir": Decimal(pilihan.ongkir),
+                "biaya_cod": Decimal(pilihan.biaya_cod),
             }
         )
     return services.pengiriman_out(await services.buat_pengiriman_lokal(session, pesanan_id, payload))

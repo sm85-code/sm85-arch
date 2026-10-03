@@ -117,6 +117,7 @@ class ProdukStore(StoreBase):
     tinggi_cm: Mapped[Decimal] = mapped_column(Numeric(8, 1), nullable=False, default=Decimal("0"), server_default="0")
     # Ready stock ships within 2 days; a pre-order product says how many days (3-14) it takes to make/obtain.
     preorder: Mapped[bool] = mapped_column(Boolean, nullable=False, default=False, server_default=false())
+    cod: Mapped[bool] = mapped_column(Boolean, nullable=False, default=False, server_default=false())
     hari_proses: Mapped[int] = mapped_column(Integer, nullable=False, default=2, server_default="2")
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=_utcnow)
     updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=_utcnow, onupdate=_utcnow)
@@ -238,6 +239,7 @@ Index(
 # menunggu_pembayaran -> dibayar -> diproses -> dikirim -> selesai, or
 # dibatalkan from menunggu_pembayaran/dibayar.
 STATUS_PESANAN = (
+    "menunggu_konfirmasi",  # COD order waiting for the seller to confirm
     "menunggu_pembayaran",
     "dibayar",
     "diproses",
@@ -307,6 +309,7 @@ class PengirimanStore(StoreBase):
     layanan: Mapped[str] = mapped_column(String(64), nullable=False, default="")
     layanan_nama: Mapped[str] = mapped_column(String(128), nullable=False, default="", server_default="")
     ongkir: Mapped[Decimal] = mapped_column(Numeric(20, 2), nullable=False, default=Decimal("0"))
+    biaya_cod: Mapped[Decimal] = mapped_column(Numeric(20, 2), nullable=False, default=Decimal("0"), server_default="0")
     nama_penerima: Mapped[str] = mapped_column(String(255), nullable=False)
     telepon_penerima: Mapped[str] = mapped_column(String(32), nullable=False)
     alamat_tujuan: Mapped[str] = mapped_column(Text, nullable=False)
