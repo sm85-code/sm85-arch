@@ -33,7 +33,7 @@ from tenants.bumi_lestari.modules.bumi_lestari.application.services import (
     list_akun,
     saldo_akun,
 )
-from tenants.bumi_lestari.modules.bumi_lestari.application.t3_services import (
+from tenants.bumi_lestari.modules.bumi_lestari.application.pembayaran_services import (
     _rentang_periode,
     list_piutang_reseller,
     selasa_acuan,

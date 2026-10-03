@@ -24,7 +24,7 @@ from tenants.bumi_lestari.modules.bumi_lestari.application.schemas_dokumen impor
     PurchaseOrderOut,
 )
 from tenants.bumi_lestari.modules.bumi_lestari.application.services import _hari_ini, get_profil, nama_usaha_pada
-from tenants.bumi_lestari.modules.bumi_lestari.application.t3_services import (
+from tenants.bumi_lestari.modules.bumi_lestari.application.pembayaran_services import (
     order_sudah_dibayar_reseller,
     selasa_acuan,
     siap_bayar_pemasok,
@@ -37,7 +37,7 @@ from tenants.bumi_lestari.modules.bumi_lestari.infrastructure.models_order impor
     BlSaluran,
 )
 from tenants.bumi_lestari.modules.bumi_lestari.infrastructure.models import BlUser
-from tenants.bumi_lestari.modules.bumi_lestari.infrastructure.models_t3 import (
+from tenants.bumi_lestari.modules.bumi_lestari.infrastructure.models_pembayaran import (
     BlDokumenBagikan,
     BlPembayaranPemasok,
     BlPembayaranPemasokItem,

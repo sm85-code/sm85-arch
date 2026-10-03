@@ -18,7 +18,7 @@ from tenants.bumi_lestari.modules.bumi_lestari.application.provisi_core import (
     sesuaikan,
 )
 from tenants.bumi_lestari.modules.bumi_lestari.application.schemas_order import OrderOut
-from tenants.bumi_lestari.modules.bumi_lestari.application.schemas_t3 import (
+from tenants.bumi_lestari.modules.bumi_lestari.application.schemas_pembayaran import (
     BagiHasilOut,
     ItemRincianOut,
     ItemSiapBayarOut,
@@ -54,7 +54,7 @@ from tenants.bumi_lestari.modules.bumi_lestari.infrastructure.models_order impor
     BlProduk,
     BlSaluran,
 )
-from tenants.bumi_lestari.modules.bumi_lestari.infrastructure.models_t3 import (
+from tenants.bumi_lestari.modules.bumi_lestari.infrastructure.models_pembayaran import (
     PERAN_KARYAWAN,
     REF_BAGI_HASIL,
     REF_GAJI,

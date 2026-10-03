@@ -15,8 +15,8 @@ from shared.security import hash_password
 from tenants.bumi_lestari.modules.bumi_lestari.infrastructure import database as bl_database
 from tenants.bumi_lestari.modules.bumi_lestari.infrastructure.database import BumiLestariBase
 from tenants.bumi_lestari.modules.bumi_lestari.infrastructure.models_order import BlSaluran
-from tenants.bumi_lestari.modules.bumi_lestari.infrastructure import models_t3  # noqa: F401  (register tables)
-from tenants.bumi_lestari.modules.bumi_lestari.infrastructure.models_t3 import BlLangganan
+from tenants.bumi_lestari.modules.bumi_lestari.infrastructure import models_pembayaran  # noqa: F401  (register tables)
+from tenants.bumi_lestari.modules.bumi_lestari.infrastructure.models_pembayaran import BlLangganan
 from tenants.bumi_lestari.modules.bumi_lestari.infrastructure.models import (
     KODE_DANA_CADANGAN,
     KODE_KAS_IKLAN,
