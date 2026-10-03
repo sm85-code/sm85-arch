@@ -49,6 +49,7 @@ DEFAULT_KATEGORI = (
     ("Penjualan toko web", "pemasukan"),
     ("Penjualan reseller", "pemasukan"),
     ("Pemasukan lain", "pemasukan"),
+    ("Setoran modal", "pemasukan"),
     ("Biaya produksi / pembelian barang", "pengeluaran"),
     ("Gaji karyawan", "pengeluaran"),
     ("Bagi hasil", "pengeluaran"),

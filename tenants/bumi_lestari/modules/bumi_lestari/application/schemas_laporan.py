@@ -34,7 +34,7 @@ class LaporanUmumOut(BaseModel):
     biaya: list[BarisKategoriOut]
     total_biaya: Decimal
     laba_bersih: Decimal
-    di_luar_laba: list[BarisKategoriOut]  # Prive dan Bagi hasil: tidak mengurangi laba
+    di_luar_laba: list[BarisKategoriOut]  # Prive, Bagi hasil, Setoran modal: di luar laba
     arus_kas: list[ArusAkunOut]
     total_kas_awal: Decimal
     total_kas_akhir: Decimal

@@ -15,6 +15,8 @@ from tenants.bumi_lestari.modules.bumi_lestari.infrastructure.models_pembayaran 
 KATEGORI_BAGI_HASIL = "Bagi hasil"
 # Bukan biaya usaha: tidak mengurangi laba bersih yang dibagi.
 KATEGORI_BUKAN_BIAYA = ("Prive", KATEGORI_BAGI_HASIL)
+# Setoran modal dari pemilik: uang masuk ke kas, tetapi bukan pendapatan usaha.
+KATEGORI_MODAL = "Setoran modal"
 LABEL_GAJI_CICILAN = "Gaji karyawan (cicilan)"
 
 
@@ -29,7 +31,7 @@ class Baris:
 class RingkasanLaba:
     pemasukan: list[Baris] = field(default_factory=list)
     biaya: list[Baris] = field(default_factory=list)
-    di_luar_laba: list[Baris] = field(default_factory=list)  # Prive, Bagi hasil
+    di_luar_laba: list[Baris] = field(default_factory=list)  # Prive, Bagi hasil, Setoran modal
 
     @property
     def total_pemasukan(self) -> Decimal:
@@ -68,10 +70,11 @@ async def ringkasan_laba(session: AsyncSession, awal: date, akhir: date) -> Ring
     """Laba = pemasukan - biaya. Transfer tidak dihitung. Gaji diakui lewat cicilan mingguan (bukan saat
     dibayar), jadi transaksi pembayaran gaji dikecualikan; langganan diakui saat dibayar."""
     hasil = RingkasanLaba()
-    hasil.pemasukan = await _per_kategori(session, "masuk", awal, akhir)
+    hasil.pemasukan = await _per_kategori(session, "masuk", awal, akhir, kecuali=(KATEGORI_MODAL,))
     hasil.biaya = await _per_kategori(session, "keluar", awal, akhir, kecuali=KATEGORI_BUKAN_BIAYA, kecuali_ref=(REF_GAJI,))
     cicilan = await beban_provisi(session, awal, akhir)
     if cicilan != 0:
         hasil.biaya.append(Baris(LABEL_GAJI_CICILAN, cicilan))
     hasil.di_luar_laba = await _per_kategori(session, "keluar", awal, akhir, dalam=KATEGORI_BUKAN_BIAYA)
+    hasil.di_luar_laba += await _per_kategori(session, "masuk", awal, akhir, dalam=(KATEGORI_MODAL,))
     return hasil
