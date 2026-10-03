@@ -285,8 +285,8 @@ Backend menyusun **data** (JSON); tampilan/PDF (logo, tata letak) dibuat fronten
   (nama, bank, no. rekening), tabel Tanggal Selesai (+hari) / Kode Pesanan / Nama Barang / Ukuran / Qty / Harga
   Barang / Total, serta grand total.
 - **Invoice ke penjual lain** (`GET /invoice-reseller?tanggal=&pelanggan_id=`): satu invoice per pelanggan.
-  Nomor `INV/MG.{minggu}-{kode}/{bulan romawi}/{tahun}` (`bl_pelanggan.kode`). Tgl. invoice = Senin setelah periode,
-  jatuh tempo = Selasa. Kolom: Tanggal (**tanggal barang jadi dan diambil dari tukang**, sama dengan "Tanggal Selesai" di PO) / Nama Barang / Ukuran / Harga Barang / Biaya Jasa
+  Nomor `INV/MG.{minggu}-{kode}/{bulan romawi}/{tahun}` (`bl_pelanggan.kode`). Tgl. invoice = **Sabtu minggu lalu**
+  (akhir periode), jatuh tempo = **Selasa minggu ini**; dikirim ke penjual lain untuk pesanan Senin–Sabtu minggu lalu. Kolom: Tanggal (**tanggal barang jadi dan diambil dari tukang**, sama dengan "Tanggal Selesai" di PO) / Nama Barang / Ukuran / Harga Barang / Biaya Jasa
   Pengecatan (cat + jasa + packing) / Biaya Proses Pesanan / Total. Syarat pembayaran dan tujuan transfer
   (`info_pembayaran` di profil, mis. "QRIS Pangeran Homeware").
 - **Minggu ke-N:** Senin–Sabtu; minggu pertama adalah minggu yang memuat tanggal 1, bulan mengikuti hari Sabtu

@@ -77,7 +77,7 @@ class InvoiceOut(BaseModel):
     nomor: str  # INV/MG.4-002/IX/2026
     perusahaan: PerusahaanOut
     minggu: MingguOut
-    tgl_invoice: date  # Senin setelah periode
+    tgl_invoice: date  # Sabtu minggu lalu (akhir periode)
     jatuh_tempo: date  # Selasa
     kepada: InvoiceKepadaOut
     items: list[InvoiceItemOut]

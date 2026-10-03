@@ -113,7 +113,7 @@ async def test_invoice_matches_sample_and_company_name_switches_to_pt(session):
 
     (inv,) = await dok.invoice_reseller(session, SELASA)
     assert inv.nomor == "INV/MG.4-002/IX/2026" and inv.minggu.label == "Minggu ke-4 September"
-    assert (inv.tgl_invoice, inv.jatuh_tempo) == (date(2026, 9, 28), date(2026, 9, 29))
+    assert (inv.tgl_invoice, inv.jatuh_tempo) == (date(2026, 9, 26), date(2026, 9, 29))  # Sabtu minggu lalu, Selasa ini
     assert (inv.kepada.nama, inv.kepada.alamat) == ("MANDALAWANGI", "Desa Wonoharjo, Kec. Pangandaran")
     assert [(i.hari, i.nama_barang, i.harga_barang, i.biaya_jasa_pengecatan, i.biaya_proses, i.total) for i in inv.items][0] == (
         "Senin", "Partisi Rak Tengah [tanpa rak]", Decimal("600000"), Decimal("240000"), Decimal("10000"), Decimal("850000"),
@@ -123,13 +123,17 @@ async def test_invoice_matches_sample_and_company_name_switches_to_pt(session):
         Decimal("2350000"), Decimal("800000"), Decimal("40000"), Decimal("3190000"),
     )
     assert inv.info_pembayaran == "QRIS Pangeran Homeware" and len(inv.syarat) == 2
-    assert inv.perusahaan.nama == "CV. Bumi Lestari Indonesia"  # tgl. invoice 28/09/2026: masih CV
+    assert inv.perusahaan.nama == "CV. Bumi Lestari Indonesia"  # tgl. invoice 26/09/2026: masih CV
 
     # Dokumen bertanggal mulai 4 Oktober 2026 memakai PT; yang sebelumnya tetap CV.
     assert dok.nama_usaha_pada(await _profil(session), date(2026, 10, 3)).startswith("CV.")
     assert dok.nama_usaha_pada(await _profil(session), date(2026, 10, 4)).startswith("PT.")
-    (lama,) = await dok.invoice_reseller(session, date(2026, 10, 6))  # minggu berikutnya: belum dibayar -> terlambat
-    assert lama.perusahaan.nama == "PT. Bumi Lestari Indonesia" and lama.items[0].terlambat is True
+    # Invoice minggu 28 Sep-3 Okt bertanggal Sabtu 3 Okt (masih CV); minggu berikutnya bertanggal 10 Okt (PT).
+    (pekan_1,) = await dok.invoice_reseller(session, date(2026, 10, 6))
+    assert (pekan_1.tgl_invoice, pekan_1.perusahaan.nama) == (date(2026, 10, 3), "CV. Bumi Lestari Indonesia")
+    (pekan_2,) = await dok.invoice_reseller(session, date(2026, 10, 13))  # belum dibayar -> terbawa, terlambat
+    assert (pekan_2.tgl_invoice, pekan_2.perusahaan.nama) == (date(2026, 10, 10), "PT. Bumi Lestari Indonesia")
+    assert pekan_2.items[0].terlambat is True
 
 
 async def _profil(session):

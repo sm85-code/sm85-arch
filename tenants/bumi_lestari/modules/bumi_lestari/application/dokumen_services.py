@@ -143,7 +143,7 @@ async def invoice_reseller(
     """Invoice mingguan per penjual lain: order reseller yang barangnya jadi dan sudah diambil dari tukang
     (tgl_diambil, sama dengan "Tanggal Selesai" di PO) s.d. Sabtu sebelum Selasa acuan dan belum dibayar.
     Seluruh prosesnya (ambil, cat, tempel resi, kirim) dikerjakan UMKM; penjual lain hanya mengirim resi.
-    Tgl. invoice = Senin setelah periode, jatuh tempo = Selasa."""
+    Tgl. invoice = Sabtu minggu lalu (akhir periode), jatuh tempo = Selasa minggu ini."""
     selasa = selasa_acuan(tanggal or _hari_ini())
     minggu, _, _ = info_minggu(selasa)
     dibayar = await order_sudah_dibayar_reseller(session)
@@ -179,7 +179,7 @@ async def invoice_reseller(
             )
         )
     profil = await get_profil(session)
-    perusahaan = await _perusahaan(session, selasa - timedelta(days=1))  # tanggal invoice
+    perusahaan = await _perusahaan(session, minggu.periode_akhir)  # tanggal invoice
     hasil = []
     for pelanggan, items in per_pelanggan.values():
         total_barang = sum((i.harga_barang for i in items), Decimal("0"))
@@ -188,7 +188,7 @@ async def invoice_reseller(
         hasil.append(
             InvoiceOut(
                 nomor=_nomor("INV", selasa, pelanggan.kode), perusahaan=perusahaan, minggu=minggu,
-                tgl_invoice=selasa - timedelta(days=1), jatuh_tempo=selasa,
+                tgl_invoice=minggu.periode_akhir, jatuh_tempo=selasa,
                 kepada=InvoiceKepadaOut(pelanggan_id=pelanggan.id, nama=pelanggan.nama, alamat=pelanggan.alamat),
                 items=items, total_barang=total_barang, total_jasa_pengecatan=total_jasa,
                 total_biaya_proses=total_proses, grand_total=total_barang + total_jasa + total_proses,
