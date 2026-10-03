@@ -16,13 +16,16 @@ from tenants.bumi_lestari.modules.bumi_lestari.application.schemas_order import 
     OrderStatusIn,
     PelangganIn,
     PelangganOut,
+    PelangganPatch,
     PemasokIn,
     PemasokOut,
+    PemasokPatch,
     ProdukIn,
     ProdukOut,
     ProdukPatch,
     SaluranIn,
     SaluranOut,
+    SaluranPatch,
 )
 from tenants.bumi_lestari.modules.bumi_lestari.infrastructure.auth import require_roles_bumi_lestari
 from tenants.bumi_lestari.modules.bumi_lestari.infrastructure.database import get_db_bumi_lestari
@@ -65,6 +68,11 @@ async def create_pemasok(payload: PemasokIn, session: AsyncSession = _db(), _: B
     return await svc.create_pemasok(session, payload)
 
 
+@order_router.patch("/pemasok/{pemasok_id}", response_model=PemasokOut)
+async def update_pemasok(pemasok_id: str, payload: PemasokPatch, session: AsyncSession = _db(), _: BlUser = _guard()):
+    return await svc.update_pemasok(session, pemasok_id, payload)
+
+
 @order_router.get("/saluran", response_model=list[SaluranOut])
 async def list_saluran(session: AsyncSession = _db(), _: BlUser = _guard()):
     return await svc.list_saluran(session)
@@ -75,6 +83,11 @@ async def create_saluran(payload: SaluranIn, session: AsyncSession = _db(), _: B
     return await svc.create_saluran(session, payload)
 
 
+@order_router.patch("/saluran/{saluran_id}", response_model=SaluranOut)
+async def update_saluran(saluran_id: str, payload: SaluranPatch, session: AsyncSession = _db(), _: BlUser = _guard()):
+    return await svc.update_saluran(session, saluran_id, payload)
+
+
 @order_router.get("/pelanggan", response_model=list[PelangganOut])
 async def list_pelanggan(session: AsyncSession = _db(), _: BlUser = _guard()):
     return await svc.list_pelanggan(session)
@@ -83,6 +96,11 @@ async def list_pelanggan(session: AsyncSession = _db(), _: BlUser = _guard()):
 @order_router.post("/pelanggan", response_model=PelangganOut, status_code=status.HTTP_201_CREATED)
 async def create_pelanggan(payload: PelangganIn, session: AsyncSession = _db(), _: BlUser = _guard()):
     return await svc.create_pelanggan(session, payload)
+
+
+@order_router.patch("/pelanggan/{pelanggan_id}", response_model=PelangganOut)
+async def update_pelanggan(pelanggan_id: str, payload: PelangganPatch, session: AsyncSession = _db(), _: BlUser = _guard()):
+    return await svc.update_pelanggan(session, pelanggan_id, payload)
 
 
 @order_router.get("/harga-grosir", response_model=list[HargaGrosirOut])

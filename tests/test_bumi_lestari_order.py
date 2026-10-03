@@ -206,3 +206,33 @@ async def test_biaya_proses_is_flat_per_order_and_configurable_in_profil(session
 
     eceran = await svc.create_order(session, OrderIn(saluran_id=data.shopee.id, produk_id=data.partisi.id))
     assert eceran.biaya_proses == 0  # saluran lain: harga all-in
+
+
+@pytest.mark.asyncio
+async def test_patch_pemasok_pelanggan_saluran(session, data):
+    from tenants.bumi_lestari.modules.bumi_lestari.application.schemas_order import PelangganPatch, PemasokPatch, SaluranPatch
+
+    p = await svc.update_pemasok(session, data.tukang.id, PemasokPatch(no_wa=" 0812 ", nama_bank="Mandiri", kode="005"))
+    assert (p.no_wa, p.nama_bank, p.kode, p.nama) == ("0812", "Mandiri", "005", "Pak Budi")
+    lain = await svc.create_pemasok(session, PemasokIn(nama="Pak Joko", jenis="tukang_kayu"))
+    with pytest.raises(HTTPException) as exc:  # kode PO tidak boleh kembar sejenis
+        await svc.update_pemasok(session, lain.id, PemasokPatch(kode="005"))
+    assert exc.value.status_code == 409
+    nonaktif = await svc.update_pemasok(session, lain.id, PemasokPatch(aktif=False))
+    assert nonaktif.aktif is False and lain.id not in [x.id for x in await svc.list_pemasok(session)]
+
+    pl = await svc.update_pelanggan(session, data.rina.id, PelangganPatch(alamat="Desa A", kode="007"))
+    assert (pl.alamat, pl.kode) == ("Desa A", "007")
+    dua = await svc.create_pelanggan(session, PelangganIn(nama="Toko Dua"))
+    with pytest.raises(HTTPException) as exc:
+        await svc.update_pelanggan(session, dua.id, PelangganPatch(kode="007"))
+    assert exc.value.status_code == 409
+
+    sal = await svc.update_saluran(session, data.shopee.id, SaluranPatch(nama="Shopee Utama"))
+    assert sal.nama == "Shopee Utama"
+    with pytest.raises(HTTPException) as exc:
+        await svc.update_saluran(session, data.shopee.id, SaluranPatch(nama="Reseller"))
+    assert exc.value.status_code == 409
+    with pytest.raises(HTTPException) as exc:
+        await svc.update_pemasok(session, "tidak-ada", PemasokPatch(nama="X"))
+    assert exc.value.status_code == 404
