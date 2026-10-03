@@ -20,6 +20,7 @@ from tenants.store.modules.store.application.schemas import (
     KategoriIn,
     LoginRequest,
     PengaturanPatch,
+    PengaturanPengirimanPatch,
     KurirIn,
     PengirimanIn,
     PesanChatIn,
@@ -443,3 +444,12 @@ async def remove_staff(
 ):
     await services.delete_staff(session, staff_id)
     return {"ok": True}
+
+
+@store_admin_router.patch("/pengaturan/pengiriman")
+async def patch_pengaturan_pengiriman(
+    payload: PengaturanPengirimanPatch,
+    session: AsyncSession = Depends(get_db_store),
+    _user: AdminStore = Depends(admin_only),
+):
+    return services.pengaturan_out(await services.update_pengaturan_pengiriman(session, payload))

@@ -107,6 +107,14 @@ async def ensure_store_schema() -> None:
         await conn.execute(
             text("ALTER TABLE store_pengiriman ADD COLUMN IF NOT EXISTS layanan_nama VARCHAR(128) NOT NULL DEFAULT ''")
         )
+        for column, ddl in (
+            ("kurir_aktif", "TEXT NOT NULL DEFAULT ''"),
+            ("asal_nama", "VARCHAR(128) NOT NULL DEFAULT ''"),
+            ("asal_telepon", "VARCHAR(32) NOT NULL DEFAULT ''"),
+            ("asal_alamat", "TEXT NOT NULL DEFAULT ''"),
+            ("asal_kode_pos", "VARCHAR(8) NOT NULL DEFAULT ''"),
+        ):
+            await conn.execute(text(f"ALTER TABLE store_pengaturan ADD COLUMN IF NOT EXISTS {column} {ddl}"))
         await conn.execute(text("ALTER TABLE store_pengiriman ADD COLUMN IF NOT EXISTS biaya_cod NUMERIC(20,2) NOT NULL DEFAULT 0"))
         for column, size in (("biteship_order_id", 64), ("biteship_tracking_id", 128)):
             await conn.execute(text(f"ALTER TABLE store_pengiriman ADD COLUMN IF NOT EXISTS {column} VARCHAR({size})"))

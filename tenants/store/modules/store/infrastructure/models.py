@@ -69,6 +69,13 @@ class PengaturanStore(StoreBase):
 
     id: Mapped[str] = mapped_column(String(64), primary_key=True, default=lambda: PengaturanStore.SINGLETON_ID)
     metode_proses_pesanan: Mapped[str] = mapped_column(String(16), nullable=False, default="drop_off")
+    # Shipping: couriers offered at checkout (comma separated Biteship codes) and the pickup address.
+    # Empty values fall back to the BITESHIP_* environment variables.
+    kurir_aktif: Mapped[str] = mapped_column(Text, nullable=False, default="", server_default="")
+    asal_nama: Mapped[str] = mapped_column(String(128), nullable=False, default="", server_default="")
+    asal_telepon: Mapped[str] = mapped_column(String(32), nullable=False, default="", server_default="")
+    asal_alamat: Mapped[str] = mapped_column(Text, nullable=False, default="", server_default="")
+    asal_kode_pos: Mapped[str] = mapped_column(String(8), nullable=False, default="", server_default="")
     updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=_utcnow, onupdate=_utcnow)
 
 

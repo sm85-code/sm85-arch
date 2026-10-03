@@ -295,3 +295,34 @@ class PengaturanPatch(BaseModel):
         if v not in METODE_PROSES_PESANAN:
             raise ValueError(f"metode_proses_pesanan harus salah satu dari {METODE_PROSES_PESANAN}")
         return v
+
+
+# Couriers the store can offer. Instant couriers (Gojek, Grab, ...) are left out: they need map coordinates.
+KURIR_DIDUKUNG = (
+    "jne", "jnt", "jntcargo", "sicepat", "anteraja", "idexpress", "ninja", "lion", "tiki", "pos", "wahana", "rpx",
+    "sentralcargo", "dash_express", "jdl",
+)
+
+
+class PengaturanPengirimanPatch(BaseModel):
+    kurir_aktif: list[str] = Field(default_factory=list)
+    asal_nama: str = Field("", max_length=128)
+    asal_telepon: str = ""
+    asal_alamat: str = Field("", max_length=500)
+    asal_kode_pos: str = ""
+
+    @field_validator("kurir_aktif")
+    @classmethod
+    def _v_kurir(cls, v: list[str]) -> list[str]:
+        kode = list(dict.fromkeys(k.strip().lower() for k in v if k and k.strip()))
+        salah = [k for k in kode if k not in KURIR_DIDUKUNG]
+        if salah:
+            raise ValueError(f"Kurir tidak dikenal: {', '.join(salah)}")
+        return kode
+
+    @field_validator("asal_telepon")
+    @classmethod
+    def _v_telepon(cls, v: str) -> str:
+        return _validate_telepon(v) if v.strip() else ""
+
+    _v_kodepos = field_validator("asal_kode_pos")(_validate_kode_pos)
