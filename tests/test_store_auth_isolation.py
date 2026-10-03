@@ -284,7 +284,7 @@ async def test_seed_requires_owner_password_env(monkeypatch, session):
 @pytest.mark.asyncio
 async def test_payment_callback_never_marks_an_order_paid_anonymously(session):
     with pytest.raises(HTTPException) as exc:
-        await buyer_module.payment_callback({"trx_id": "anything", "status": "berhasil"}, session)
+        await buyer_module.proses_notifikasi_pembayaran({"trx_id": "anything", "status": "berhasil"}, session)
     assert exc.value.status_code == 403
 
 
@@ -294,7 +294,8 @@ async def test_ipaymu_and_biteship_placeholders_return_501():
 
     with pytest.raises(HTTPException) as exc:
         await payment_ipaymu.create_payment(
-            pesanan_id="p", total="1", nama_pembeli="n", email_pembeli="e@x.com", notify_url="/n", return_url="/r"
+            pesanan_id="p", items=[], total="1", nama_pembeli="n", email_pembeli="e@x.com",
+            notify_url="/n", return_url="/r", cancel_url="/c",
         )
     assert exc.value.status_code == 501
     with pytest.raises(HTTPException) as exc:

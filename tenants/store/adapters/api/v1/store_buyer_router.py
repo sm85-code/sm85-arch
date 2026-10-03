@@ -7,9 +7,10 @@ read or change their own cart, addresses, orders and chat.
 """
 from __future__ import annotations
 
+import os
 from decimal import Decimal
 
-from fastapi import APIRouter, Depends, File, Form, HTTPException, Response, UploadFile, status
+from fastapi import APIRouter, Depends, File, Form, HTTPException, Request, Response, UploadFile, status
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from tenants.store.modules.store.application import services
@@ -35,6 +36,7 @@ from tenants.store.modules.store.infrastructure.database import get_db_store
 from tenants.store.modules.store.infrastructure.google_auth import verify_google_id_token
 from tenants.store.modules.store.infrastructure.media_storage import upload_chat_media
 from tenants.store.modules.store.infrastructure.models import PembeliStore
+from tenants.store.modules.store.infrastructure.payment_ipaymu import ItemBayar
 from tenants.store.modules.store.infrastructure.payment_ipaymu import create_payment as ipaymu_create_payment
 from tenants.store.modules.store.infrastructure.payment_ipaymu import verify_webhook as ipaymu_verify_webhook
 from tenants.store.modules.store.infrastructure.shipping_biteship import cek_ongkir as biteship_cek_ongkir
@@ -201,7 +203,11 @@ async def get_pesanan(
     return services.pesanan_out(await _pesanan_milik(session, pesanan_id, user))
 
 
-# --- Pembayaran (iPaymu -- placeholder, 501 until wired) --------------------
+# --- Pembayaran (iPaymu -- 501 until IPAYMU_VA / IPAYMU_API_KEY are set) ----
+
+
+def _url_publik(env: str, default: str) -> str:
+    return (os.getenv(env) or default).strip().rstrip("/")
 
 
 @store_buyer_router.post("/pesanan/{pesanan_id}/bayar")
@@ -214,31 +220,58 @@ async def mulai_pembayaran(
             status_code=status.HTTP_409_CONFLICT,
             detail=f"Pesanan berstatus '{pesanan.status}', tidak bisa dibayar ulang",
         )
+    api = _url_publik("API_PUBLIC_URL", "https://api.ampelkuning.com")
+    situs = _url_publik("SITE_PUBLIC_URL", "https://ampelkuning.com")
     result = await ipaymu_create_payment(
         pesanan_id=pesanan.id,
+        items=[
+            ItemBayar(
+                nama=f"{it.nama_produk} ({it.nama_varian})" if it.nama_varian else it.nama_produk,
+                qty=it.qty,
+                harga=str(it.harga_satuan),
+            )
+            for it in pesanan.items
+        ],
         total=str(pesanan.total),
         nama_pembeli=user.nama,
         email_pembeli=user.email,
-        notify_url="/api/store/buyer/payment/callback",
-        return_url=f"/pesanan/{pesanan.id}",
+        notify_url=f"{api}/api/store/buyer/payment/callback",
+        return_url=f"{situs}/pesanan/{pesanan.id}",
+        cancel_url=f"{situs}/pesanan/{pesanan.id}",
     )
     await services.catat_metode_pembayaran(session, pesanan.id, metode="gateway", gateway_ref=result.gateway_ref)
     return {"checkout_url": result.checkout_url}
 
 
-@store_buyer_router.post("/payment/callback")
-async def payment_callback(payload: dict, session: AsyncSession = Depends(get_db_store)):
-    """iPaymu webhook. Fails closed: an order is only marked paid when the
-    adapter has verified the notification, and until the adapter is wired
-    nothing can be verified -- so an anonymous POST can never mark an order
-    as paid."""
-    gateway_ref = await ipaymu_verify_webhook(payload)
-    if not gateway_ref:
+async def proses_notifikasi_pembayaran(payload: dict, session: AsyncSession) -> dict:
+    """Handle an iPaymu notify. Fails closed: the notify itself is never trusted -- the adapter asks iPaymu what
+    the transaction is, and only a verified, paid transaction for the full amount marks the order paid."""
+    verified = await ipaymu_verify_webhook(payload)
+    if verified is None:
         raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="Notifikasi pembayaran tidak dapat diverifikasi")
-    pesanan = await services.tandai_dibayar_dari_webhook(session, gateway_ref)
+    if not verified.lunas:
+        return {"ok": True, "status": "belum_lunas"}  # pending / expired: nothing to do, and no retry needed
+    pesanan = await services.tandai_dibayar_pesanan(session, verified.reference_id, verified.jumlah)
     if not pesanan:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Pesanan tidak ditemukan")
     return {"ok": True}
+
+
+async def _baca_payload(request: Request) -> dict:
+    """iPaymu sends JSON or form fields, depending on the dashboard setting."""
+    try:
+        if "json" in request.headers.get("content-type", "").lower():
+            data = await request.json()
+        else:
+            data = dict(await request.form())
+    except Exception:  # noqa: BLE001 -- an unreadable body is simply an unverifiable notify
+        return {}
+    return data if isinstance(data, dict) else {}
+
+
+@store_buyer_router.post("/payment/callback")
+async def payment_callback(request: Request, session: AsyncSession = Depends(get_db_store)):
+    return await proses_notifikasi_pembayaran(await _baca_payload(request), session)
 
 
 # --- Pengiriman (Biteship -- placeholder, 501 until wired) ------------------

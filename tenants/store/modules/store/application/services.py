@@ -758,6 +758,23 @@ async def tandai_dibayar_dari_webhook(session: AsyncSession, gateway_ref: str) -
     return pesanan
 
 
+async def tandai_dibayar_pesanan(session: AsyncSession, pesanan_id: str, jumlah: Decimal) -> PesananStore | None:
+    """Mark an order paid after the payment gateway itself confirmed ``jumlah`` for it.
+
+    Returns None for an unknown order. An amount below the order total never marks it paid (the order is
+    returned unchanged); calling it again for an already paid order is harmless (the status flow allows
+    the transition once)."""
+    pesanan = await session.get(PesananStore, pesanan_id)
+    if not pesanan:
+        return None
+    if jumlah < pesanan.total:
+        return pesanan
+    if "dibayar" in _TRANSISI_STATUS.get(pesanan.status, set()):
+        pesanan.status = "dibayar"
+        await session.flush()
+    return pesanan
+
+
 def pengiriman_out(pengiriman: PengirimanStore) -> dict:
     return {
         "id": pengiriman.id,
