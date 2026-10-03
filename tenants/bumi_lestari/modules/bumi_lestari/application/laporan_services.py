@@ -47,6 +47,7 @@ from tenants.bumi_lestari.modules.bumi_lestari.application.pembayaran_services i
     tagihan_order,
 )
 from tenants.bumi_lestari.modules.bumi_lestari.infrastructure.models import (
+    JENIS_KEWAJIBAN,
     KODE_DANA_CADANGAN,
     STATUS_DRAF,
     STATUS_DITUTUP,
@@ -71,6 +72,11 @@ from tenants.bumi_lestari.modules.bumi_lestari.infrastructure.models_order impor
 def _baris(items) -> list[BarisKategoriOut]:
     return [BarisKategoriOut(kategori=b.kategori, jumlah=b.jumlah, jumlah_transaksi=b.jumlah_transaksi) for b in items]
 
+
+async def total_talangan_belum_lunas(session: AsyncSession, user: BlUser) -> Decimal:
+    from tenants.bumi_lestari.modules.bumi_lestari.application.talangan_services import list_talangan
+
+    return sum((t.sisa for t in await list_talangan(session, user, status_filter="belum_lunas")), Decimal("0"))
 
 async def _jumlah(session: AsyncSession, model, kolom_jumlah, *kondisi) -> Decimal:
     stmt = select(func.coalesce(func.sum(kolom_jumlah), 0)).where(*kondisi)
@@ -162,7 +168,11 @@ async def laporan_umum(
     ringkas = await ringkasan_laba(session, dari, sampai)
 
     arus: list[ArusAkunOut] = []
-    akuns = (await session.execute(select(BlAkunKas).where(BlAkunKas.aktif.is_(True)).order_by(BlAkunKas.created_at))).scalars()
+    akuns = (
+        await session.execute(
+            select(BlAkunKas).where(BlAkunKas.aktif.is_(True), BlAkunKas.jenis != JENIS_KEWAJIBAN).order_by(BlAkunKas.created_at)
+        )
+    ).scalars()
     for akun in akuns:
         if not boleh_akses_akun(user, akun):
             continue  # kas iklan hanya terlihat admin (biayanya tetap masuk laba di atas)
@@ -347,7 +357,7 @@ async def dashboard(session: AsyncSession, user: BlUser, periode: str | None = N
         order_per_status={s: int(n) for s, n in status_hitung}, order_bulan_ini=len(orders), omzet_order_bulan_ini=omzet,
         order_aktif_per_status={s: int(n) for s, n in aktif_hitung},
         tagihan_penjual_lain_minggu_ini=tagihan_minggu, belum_cair=belum_cair_kini, belum_cair_sementara=belum_cair_kini,
-        draf_belum_dikirim=draf,
+        draf_belum_dikirim=draf, talangan_belum_lunas=await total_talangan_belum_lunas(session, user),
         piutang_penjual_lain=piutang, utang_pemasok_siap_bayar=siap.total, dana_cadangan=dana,
         kas_kecil=await _ringkas_imprest(session, "kas_kecil"), kas_iklan=kas_iklan,
         bagian_admin_pratinjau=bagian_admin, bagian_owner_pratinjau=bagian_owner,

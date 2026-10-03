@@ -40,6 +40,7 @@ from tenants.bumi_lestari.modules.bumi_lestari.infrastructure.models_pembayaran 
     BlPenerimaanReseller,
 )
 from tenants.bumi_lestari.modules.bumi_lestari.infrastructure.models_pencairan import REF_PENCAIRAN, BlPencairanUnggahan
+from tenants.bumi_lestari.modules.bumi_lestari.infrastructure.models_talangan import REF_TALANGAN, BlTalangan
 
 LABEL_SUMBER = {
     "kas_kecil": "Kas kecil",
@@ -95,12 +96,22 @@ async def _entri_draf(session: AsyncSession, sumber: str, sampai: date | None = 
             )
             .order_by(BlTransaksi.tanggal, BlTransaksi.created_at)
         )
+        # Bagian talangan (akun TALANGAN) ikut kiriman akun asal pengeluarannya.
+        stmt_tl = (
+            select(BlTransaksi)
+            .join(BlTalangan, BlTalangan.transaksi_talangan_id == BlTransaksi.id)
+            .join(BlAkunKas, BlAkunKas.id == BlTalangan.akun_asal_id)
+            .where(
+                BlAkunKas.jenis == sumber, BlTransaksi.status_kirim == STATUS_DRAF,
+                BlTransaksi.dibatalkan.is_(False), BlTransaksi.ref_jenis == REF_TALANGAN,
+            )
+        )
         if sampai:
             stmt = stmt.where(BlTransaksi.tanggal <= sampai)
-        return [
-            _Entri(REF_TRANSAKSI, t.id, t.tanggal, t.jenis, Decimal(t.jumlah), t.keterangan, None, [t])
-            for t in (await session.execute(stmt)).scalars()
-        ]
+            stmt_tl = stmt_tl.where(BlTransaksi.tanggal <= sampai)
+        semua = list((await session.execute(stmt)).scalars()) + list((await session.execute(stmt_tl)).scalars())
+        semua.sort(key=lambda t: t.tanggal)  # stabil: urutan created_at dalam satu tanggal tetap
+        return [_Entri(REF_TRANSAKSI, t.id, t.tanggal, t.jenis, Decimal(t.jumlah), t.keterangan, None, [t]) for t in semua]
     model, ref_jenis, jenis = _MODEL_SUMBER[sumber]
     stmt = (
         select(model)

@@ -19,6 +19,7 @@ from tenants.bumi_lestari.modules.bumi_lestari.infrastructure.database import Bu
 from tenants.bumi_lestari.modules.bumi_lestari.infrastructure.models_order import BlSaluran
 from tenants.bumi_lestari.modules.bumi_lestari.infrastructure import models_pembayaran  # noqa: F401  (register tables)
 from tenants.bumi_lestari.modules.bumi_lestari.infrastructure.models_pembayaran import BlLangganan
+from tenants.bumi_lestari.modules.bumi_lestari.infrastructure import models_talangan  # noqa: F401 (daftarkan tabel)
 from tenants.bumi_lestari.modules.bumi_lestari.infrastructure.models_pencairan import (
     BlFormatPenghasilan,
     BlFormatPenghasilanKolom,
@@ -27,7 +28,9 @@ from tenants.bumi_lestari.modules.bumi_lestari.infrastructure.models import (
     KODE_DANA_CADANGAN,
     KODE_KAS_IKLAN,
     KODE_KAS_KECIL,
+    JENIS_KEWAJIBAN,
     KODE_KAS_UTAMA,
+    KODE_TALANGAN,
     KODE_SALDO_BLIBLI,
     KODE_SALDO_IPAYMU,
     KODE_SALDO_LAZADA,
@@ -55,6 +58,7 @@ DEFAULT_AKUN = (
     (KODE_KAS_KECIL, "Kas kecil", "kas_kecil", PLAFON_KAS_KECIL_DEFAULT),
     (KODE_KAS_IKLAN, "Kas iklan", "kas_iklan", PLAFON_KAS_IKLAN_DEFAULT),
     (KODE_DANA_CADANGAN, "Dana cadangan (gaji & langganan)", "kas", None),
+    (KODE_TALANGAN, "Talangan (utang ke perorangan)", JENIS_KEWAJIBAN, None),
 )
 
 # Saluran bawaan dan akun saldonya (spesifikasi 2.6). Saluran lain ditambah lewat POST /saluran.
@@ -151,6 +155,8 @@ _ALTER_POSTGRES = (
     "ALTER TABLE bl_order ADD COLUMN IF NOT EXISTS tgl_retur DATE",
     "ALTER TABLE bl_order ADD COLUMN IF NOT EXISTS alasan_retur TEXT",
     "ALTER TABLE bl_order ADD COLUMN IF NOT EXISTS kembali_stok BOOLEAN NOT NULL DEFAULT false",
+    "ALTER TABLE bl_transfer ADD COLUMN IF NOT EXISTS di_luar_jadwal BOOLEAN NOT NULL DEFAULT false",
+    "ALTER TABLE bl_transfer ADD COLUMN IF NOT EXISTS alasan_luar_jadwal TEXT",
     "CREATE INDEX IF NOT EXISTS ix_bl_order_status_cair ON bl_order (status_cair)",
     "CREATE INDEX IF NOT EXISTS ix_bl_order_pencairan_baris_id ON bl_order (pencairan_baris_id)",
     "CREATE INDEX IF NOT EXISTS ix_bl_transaksi_status_kirim ON bl_transaksi (status_kirim)",

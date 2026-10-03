@@ -311,7 +311,7 @@ async def test_router_list_akun_kas_serializes_saldo(session):
 
     admin = await _user(session, "admin")
     hasil = await router.list_akun_kas(session=session, user=admin)
-    assert {a.kode for a in hasil} >= {k for k, *_ in DEFAULT_AKUN}
+    assert {a.kode for a in hasil} >= {k for k, _n, jenis, _p in DEFAULT_AKUN if jenis != "kewajiban"}  # TALANGAN bukan kas
     assert all(a.saldo == a.saldo_awal for a in hasil)
 
 

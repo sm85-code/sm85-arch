@@ -35,8 +35,10 @@ from tenants.bumi_lestari.modules.bumi_lestari.infrastructure.models import (
     JENIS_AKUN,
     JENIS_IMPRESET,
     JENIS_KATEGORI,
+    JENIS_KEWAJIBAN,
     JENIS_TRANSAKSI,
     KODE_KAS_UTAMA,
+    KODE_TALANGAN,
     PROFIL_ID,
     STATUS_DRAF,
     STATUS_TERKIRIM,
@@ -48,6 +50,7 @@ from tenants.bumi_lestari.modules.bumi_lestari.infrastructure.models import (
     BlTransfer,
     BlUser,
 )
+from tenants.bumi_lestari.modules.bumi_lestari.infrastructure.models_talangan import REF_TALANGAN, BlTalangan
 
 WIB = ZoneInfo("Asia/Jakarta")
 
@@ -231,7 +234,7 @@ async def saldo_akun(
 
 async def list_akun(session: AsyncSession, user: BlUser) -> list[tuple[BlAkunKas, Decimal, Decimal]]:
     """(akun, saldo resmi, saldo setelah draf)."""
-    stmt = select(BlAkunKas).where(BlAkunKas.aktif.is_(True)).order_by(BlAkunKas.created_at)
+    stmt = select(BlAkunKas).where(BlAkunKas.aktif.is_(True), BlAkunKas.jenis != JENIS_KEWAJIBAN).order_by(BlAkunKas.created_at)
     if _is_staff(user):
         stmt = stmt.where(BlAkunKas.jenis == "kas_kecil")
     akuns = [a for a in (await session.execute(stmt)).scalars() if boleh_akses_akun(user, a)]
@@ -340,6 +343,8 @@ async def create_transaksi(session: AsyncSession, user: BlUser, payload: Transak
     if payload.jenis not in JENIS_TRANSAKSI:
         raise _bad(f"Jenis transaksi harus salah satu dari: {', '.join(JENIS_TRANSAKSI)}")
     akun = await _akun_or_404(session, payload.akun_id)
+    if akun.jenis == JENIS_KEWAJIBAN:
+        raise _bad("Akun talangan tidak bisa dipakai langsung; catat pengeluaran kas kecil/kas iklan dengan talangan")
     kategori = await session.get(BlKategori, payload.kategori_id)
     if not kategori or not kategori.aktif:
         raise _bad("Kategori tidak ditemukan", status.HTTP_404_NOT_FOUND)
@@ -357,9 +362,16 @@ async def create_transaksi(session: AsyncSession, user: BlUser, payload: Transak
     if payload.koreksi_periode is not None:
         if payload.koreksi_periode >= periode_dari(tanggal) or not await periode_tertutup(session, payload.koreksi_periode):
             raise _bad("Koreksi bulan lalu hanya untuk bulan yang sudah tutup buku, dicatat di bulan berjalan", 422)
-    # Akun imprest (kas kecil, kas iklan) berplafon: tidak boleh minus.
+    # Akun imprest (kas kecil, kas iklan) berplafon: tidak boleh minus. Kekurangannya boleh dicatat sebagai
+    # talangan atas nama seseorang (AB-TL-1): biaya tetap penuh, bagian akun asal hanya sebesar saldonya.
     if akun.jenis in JENIS_IMPRESET and payload.jenis == "keluar":
-        await _pastikan_saldo_cukup(session, akun, payload.jumlah)
+        saldo = await saldo_akun(session, akun, termasuk_draf=True)
+        if saldo < payload.jumlah:
+            if not (payload.talangan_oleh or "").strip():
+                raise _bad(f"Saldo {akun.nama} tidak cukup")
+            return await _catat_dengan_talangan(session, user, payload, akun, kategori, tanggal, max(saldo, Decimal("0")))
+    elif payload.talangan_oleh:
+        raise _bad("Talangan hanya untuk pengeluaran kas kecil/kas iklan")
     trx = BlTransaksi(
         tanggal=tanggal,
         akun_id=akun.id,
@@ -418,6 +430,43 @@ async def list_transaksi(
     return list((await session.execute(stmt)).scalars())
 
 
+async def _catat_dengan_talangan(
+    session: AsyncSession, user: BlUser, payload: TransaksiIn, akun: BlAkunKas, kategori: BlKategori,
+    tanggal: date, saldo: Decimal,
+) -> BlTransaksi:
+    """Pecah pengeluaran: `saldo` dari akun asal + kekurangannya di akun TALANGAN (keduanya biaya, keduanya draf
+    dan ikut kiriman sumber akun asal). Mengembalikan transaksi akun asal (atau transaksi talangan bila saldo 0)."""
+    talangan_akun = await _akun_by_kode(session, KODE_TALANGAN)
+    nama = payload.talangan_oleh.strip()
+    ket = payload.keterangan.strip()
+    kurang = payload.jumlah - saldo
+
+    def baris(akun_id: str, jumlah: Decimal, keterangan: str, ref: bool) -> BlTransaksi:
+        return BlTransaksi(
+            tanggal=tanggal, akun_id=akun_id, kategori_id=kategori.id, jenis="keluar", jumlah=jumlah,
+            keterangan=keterangan, dibuat_oleh=user.id, status_kirim=STATUS_DRAF, koreksi_periode=payload.koreksi_periode,
+            ref_jenis=REF_TALANGAN if ref else None,
+        )
+
+    utama = baris(akun.id, saldo, ket, False) if saldo > 0 else None
+    bagian = baris(talangan_akun.id, kurang, f"{ket} (talangan oleh {nama})".strip(), True)
+    session.add_all([x for x in (utama, bagian) if x is not None])
+    await session.flush()
+    tl = BlTalangan(
+        tanggal=tanggal, nama=nama, akun_asal_id=akun.id, transaksi_id=utama.id if utama else None,
+        transaksi_talangan_id=bagian.id, jumlah=kurang, keterangan=ket, dibuat_oleh=user.id,
+    )
+    session.add(tl)
+    await session.flush()
+    bagian.ref_id = tl.id
+    await catat_audit(
+        session, user.id, "talangan", "talangan", tl.id,
+        sesudah={"nama": nama, "jumlah": kurang, "akun": akun.kode, "total_pengeluaran": payload.jumlah},
+    )
+    await session.flush()
+    return utama or bagian
+
+
 def _batalkan(row, alasan: str) -> None:
     if row.dibatalkan:
         raise _bad("Sudah dibatalkan", status.HTTP_409_CONFLICT)
@@ -440,6 +489,10 @@ async def batalkan_transaksi(
             raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="Akun ini hanya bisa diakses admin")
     if trx.ref_jenis:
         raise _bad("Transaksi otomatis; batalkan dari halaman asalnya", status.HTTP_409_CONFLICT)
+    if (
+        await session.execute(select(BlTalangan.id).where(BlTalangan.transaksi_id == trx.id, BlTalangan.dibatalkan.is_(False)))
+    ).first():
+        raise _bad("Pengeluaran ini punya talangan; batalkan dari daftar talangan", status.HTTP_409_CONFLICT)
     if trx.kiriman_id and trx.status_kirim == STATUS_TERKIRIM:
         raise _bad(
             "Entri ini sudah dikirim ke laporan keuangan; batalkan kirimannya dulu", status.HTTP_409_CONFLICT
@@ -459,7 +512,7 @@ async def batalkan_transaksi(
 
 async def _buat_transfer(
     session: AsyncSession, user: BlUser, *, tanggal, dari: BlAkunKas, ke: BlAkunKas, jumlah: Decimal,
-    jenis: str, keterangan: str,
+    jenis: str, keterangan: str, di_luar_jadwal: bool = False, alasan_luar_jadwal: str | None = None,
 ) -> BlTransfer:
     if dari.id == ke.id:
         raise _bad("Akun asal dan tujuan harus berbeda")
@@ -472,6 +525,8 @@ async def _buat_transfer(
         jenis=jenis,
         keterangan=keterangan.strip(),
         dibuat_oleh=user.id,
+        di_luar_jadwal=di_luar_jadwal,
+        alasan_luar_jadwal=alasan_luar_jadwal,
     )
     session.add(transfer)
     await session.flush()
@@ -483,6 +538,8 @@ async def create_transfer(session: AsyncSession, user: BlUser, payload: Transfer
     ke = await _akun_or_404(session, payload.ke_akun_id)
     if not (boleh_akses_akun(user, dari) and boleh_akses_akun(user, ke)):
         raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="Akun ini hanya bisa diakses admin")
+    if JENIS_KEWAJIBAN in (dari.jenis, ke.jenis):
+        raise _bad("Pelunasan talangan dicatat dari daftar talangan")
     jenis = f"pengisian_{ke.jenis}" if ke.jenis in JENIS_IMPRESET else "biasa"
     await pastikan_bulan_terbuka(session, payload.tanggal or _hari_ini())
     return await _buat_transfer(
@@ -523,6 +580,8 @@ async def batalkan_transfer(
         raise _bad("Transfer tidak ditemukan", status.HTTP_404_NOT_FOUND)
     if transfer.jenis == "sisihan_dana" and not dari_halaman_asal:
         raise _bad("Transfer sisihan hanya bisa dibatalkan dari halaman Sisihan", status.HTTP_409_CONFLICT)
+    if transfer.jenis == "pelunasan_talangan" and not dari_halaman_asal:
+        raise _bad("Pelunasan talangan hanya bisa dibatalkan dari daftar talangan", status.HTTP_409_CONFLICT)
     await pastikan_bulan_terbuka(session, transfer.tanggal)
     if user is not None:  # akun kas iklan hanya boleh diurus admin
         for akun_id in (transfer.dari_akun_id, transfer.ke_akun_id):
@@ -566,11 +625,15 @@ async def hitung_pengisian(session: AsyncSession, jenis: str) -> dict:
 
 
 async def catat_pengisian(
-    session: AsyncSession, user: BlUser, jenis: str, tanggal: date | None = None
+    session: AsyncSession, user: BlUser, jenis: str, tanggal: date | None = None, *,
+    di_luar_jadwal: bool = False, alasan: str | None = None,
 ) -> BlTransfer:
     """Kembalikan akun imprest ke plafon dengan transfer dari kas utama (owner/admin).
     `tanggal`: tanggal isi ulang (bawaan hari ini), mis. Selasa Tutup Kas Mingguan yang dicatat belakangan."""
     tanggal = tanggal or _hari_ini()
+    alasan = (alasan or "").strip() or None
+    if di_luar_jadwal and (alasan is None or len(alasan) < 3):
+        raise _bad("Isi ulang di luar jadwal wajib menulis alasan", 422)
     await pastikan_bulan_terbuka(session, tanggal)
     info = await hitung_pengisian(session, jenis)
     nama = "kas kecil" if jenis == "kas_kecil" else "kas iklan"
@@ -580,7 +643,9 @@ async def catat_pengisian(
     kas_utama = await _akun_by_kode(session, KODE_KAS_UTAMA)
     return await _buat_transfer(
         session, user, tanggal=tanggal, dari=kas_utama, ke=akun, jumlah=info["perlu_diisi"],
-        jenis=f"pengisian_{jenis}", keterangan=f"Pengisian {nama} ke plafon ({tanggal:%d-%m-%Y})",
+        jenis=f"pengisian_{jenis}", keterangan=f"Pengisian {nama} ke plafon ({tanggal:%d-%m-%Y})"
+        + (" — di luar jadwal" if di_luar_jadwal else ""),
+        di_luar_jadwal=di_luar_jadwal, alasan_luar_jadwal=alasan if di_luar_jadwal else None,
     )
 
 
@@ -588,8 +653,10 @@ async def hitung_pengisian_kas_kecil(session: AsyncSession) -> dict:
     return await hitung_pengisian(session, "kas_kecil")
 
 
-async def catat_pengisian_kas_kecil(session: AsyncSession, user: BlUser, tanggal: date | None = None) -> BlTransfer:
-    return await catat_pengisian(session, user, "kas_kecil", tanggal)
+async def catat_pengisian_kas_kecil(
+    session: AsyncSession, user: BlUser, tanggal: date | None = None, *, di_luar_jadwal: bool = False, alasan: str | None = None
+) -> BlTransfer:
+    return await catat_pengisian(session, user, "kas_kecil", tanggal, di_luar_jadwal=di_luar_jadwal, alasan=alasan)
 
 
 # --- Profil UMKM & proporsi bagi hasil -----------------------------------------------
