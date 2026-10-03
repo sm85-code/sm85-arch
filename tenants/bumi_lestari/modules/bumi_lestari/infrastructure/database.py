@@ -68,3 +68,12 @@ async def get_db_bumi_lestari() -> AsyncGenerator[AsyncSession, None]:
         except Exception:
             await session.rollback()
             raise
+
+
+def kolom_tambahan_column():
+    """Nilai kolom tambahan (spesifikasi 10.5): JSONB di PostgreSQL (indeks GIN), JSON di SQLite; kunci = definisi kolom."""
+    from sqlalchemy import JSON, text
+    from sqlalchemy.dialects.postgresql import JSONB
+    from sqlalchemy.orm import mapped_column
+
+    return mapped_column(JSON().with_variant(JSONB(), "postgresql"), nullable=False, default=dict, server_default=text("'{}'"))

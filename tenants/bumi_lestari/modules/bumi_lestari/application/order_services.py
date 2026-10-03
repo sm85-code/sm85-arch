@@ -8,6 +8,7 @@ from fastapi import HTTPException, status
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from tenants.bumi_lestari.modules.bumi_lestari.application import kolom_core
 from tenants.bumi_lestari.modules.bumi_lestari.application.schemas_order import (
     HargaGrosirIn,
     OrderIn,
@@ -99,6 +100,7 @@ async def create_produk(session: AsyncSession, payload: ProdukIn) -> BlProduk:
         sku=sku, nama=payload.nama.strip(), jenis_produk=payload.jenis_produk, ukuran=payload.ukuran.strip(),
         harga_jual=payload.harga_jual, biaya_pokok_default=payload.biaya_pokok_default,
     )
+    await kolom_core.terapkan(session, "produk", produk, payload.kolom_tambahan, baru=True)
     session.add(produk)
     await session.flush()
     return produk
@@ -108,8 +110,9 @@ async def update_produk(session: AsyncSession, produk_id: str, payload: ProdukPa
     produk = await session.get(BlProduk, produk_id)
     if produk is None:
         raise _bad("Produk tidak ditemukan", status.HTTP_404_NOT_FOUND)
-    for kolom, nilai in payload.model_dump(exclude_unset=True).items():
+    for kolom, nilai in payload.model_dump(exclude_unset=True, exclude={"kolom_tambahan"}).items():
         setattr(produk, kolom, nilai.strip() if isinstance(nilai, str) else nilai)
+    await kolom_core.terapkan(session, "produk", produk, payload.kolom_tambahan, baru=False)
     await session.flush()
     return produk
 
@@ -138,6 +141,7 @@ async def create_pemasok(session: AsyncSession, payload: PemasokIn) -> BlPemasok
         nama_bank=payload.nama_bank.strip(), no_rekening=payload.no_rekening.strip(),
         atas_nama=payload.atas_nama.strip(), catatan=payload.catatan.strip(),
     )
+    await kolom_core.terapkan(session, "pemasok", pemasok, payload.kolom_tambahan, baru=True)
     session.add(pemasok)
     await session.flush()
     return pemasok
@@ -148,7 +152,10 @@ async def _ubah(session: AsyncSession, model, row_id: str, payload, label: str, 
     row = await session.get(model, row_id)
     if row is None:
         raise _bad(f"{label} tidak ditemukan", status.HTTP_404_NOT_FOUND)
-    data = payload.model_dump(exclude_unset=True)
+    data = payload.model_dump(exclude_unset=True, exclude={"kolom_tambahan"})
+    entitas = {BlPemasok: "pemasok", BlPelanggan: "pelanggan"}.get(model)
+    if entitas:
+        await kolom_core.terapkan(session, entitas, row, getattr(payload, "kolom_tambahan", None), baru=False)
     for kolom, nilai in data.items():
         if nilai is None and kolom != "akun_id":
             continue
@@ -221,6 +228,7 @@ async def create_pelanggan(session: AsyncSession, payload: PelangganIn) -> BlPel
         no_wa=payload.no_wa.strip(),
         catatan=payload.catatan.strip(),
     )
+    await kolom_core.terapkan(session, "pelanggan", pelanggan, payload.kolom_tambahan, baru=True)
     session.add(pelanggan)
     await session.flush()
     return pelanggan
@@ -401,6 +409,7 @@ async def create_order(session: AsyncSession, payload: OrderIn) -> BlOrder:
         status="dipesan",
         catatan=payload.catatan.strip(),
     )
+    await kolom_core.terapkan(session, "order", order, payload.kolom_tambahan, baru=True)
     session.add(order)
     await session.flush()
     order.dibayar_tukang = order.dibayar_penjual_lain = False
@@ -448,7 +457,8 @@ async def update_order(session: AsyncSession, order_id: str, payload: OrderPatch
     order = await get_order(session, order_id)
     if order.status in ("selesai", STATUS_BATAL, STATUS_RETUR):
         raise _bad("Order yang sudah selesai/batal/retur tidak bisa diubah", status.HTTP_409_CONFLICT)
-    data = payload.model_dump(exclude_unset=True)
+    data = payload.model_dump(exclude_unset=True, exclude={"kolom_tambahan"})
+    await kolom_core.terapkan(session, "order", order, payload.kolom_tambahan, baru=False)
     if order.dibayar_tukang or order.dibayar_penjual_lain:
         def _berubah(kolom, nilai):
             lama = getattr(order, kolom)

@@ -14,7 +14,7 @@ from typing import Optional
 from sqlalchemy import Boolean, Date, DateTime, ForeignKey, Integer, Numeric, String, Text, UniqueConstraint
 from sqlalchemy.orm import Mapped, mapped_column
 
-from tenants.bumi_lestari.modules.bumi_lestari.infrastructure.database import BumiLestariBase
+from tenants.bumi_lestari.modules.bumi_lestari.infrastructure.database import BumiLestariBase, kolom_tambahan_column
 
 
 def _uuid() -> str:
@@ -105,6 +105,7 @@ class BlKaryawan(BumiLestariBase):
     gaji_bulanan: Mapped[Decimal] = mapped_column(Numeric(14, 2), nullable=False, default=Decimal("0"))
     user_id: Mapped[Optional[str]] = mapped_column(ForeignKey("bl_users.id"), nullable=True)
     aktif: Mapped[bool] = mapped_column(Boolean, nullable=False, default=True)
+    kolom_tambahan: Mapped[dict] = kolom_tambahan_column()
 
 
 class BlGaji(BumiLestariBase):

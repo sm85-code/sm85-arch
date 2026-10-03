@@ -6,10 +6,13 @@ from typing import Optional
 
 from pydantic import BaseModel, ConfigDict, Field, computed_field
 
+from tenants.bumi_lestari.modules.bumi_lestari.application.schemas_kolom import KolomTambahanIn, KolomTambahanOut
+
 Uang = Field(ge=0, max_digits=14, decimal_places=2)
 
 
 class ProdukIn(BaseModel):
+    kolom_tambahan: KolomTambahanIn = None
     sku: str = Field(min_length=1, max_length=128)
     nama: str = Field(min_length=1, max_length=255)
     jenis_produk: str = "kayu"
@@ -19,6 +22,7 @@ class ProdukIn(BaseModel):
 
 
 class ProdukPatch(BaseModel):
+    kolom_tambahan: KolomTambahanIn = None
     nama: Optional[str] = Field(default=None, min_length=1, max_length=255)
     ukuran: Optional[str] = Field(default=None, max_length=64)
     harga_jual: Optional[Decimal] = Field(default=None, ge=0, max_digits=14, decimal_places=2)
@@ -27,6 +31,7 @@ class ProdukPatch(BaseModel):
 
 
 class ProdukOut(BaseModel):
+    kolom_tambahan: KolomTambahanOut = {}
     id: str
     sku: str
     nama: str
@@ -39,6 +44,7 @@ class ProdukOut(BaseModel):
 
 
 class PemasokIn(BaseModel):
+    kolom_tambahan: KolomTambahanIn = None
     nama: str = Field(min_length=1, max_length=255)
     jenis: str
     kode: str = Field(default="", max_length=16)  # kosong -> otomatis (urut per jenis pemasok)
@@ -51,6 +57,7 @@ class PemasokIn(BaseModel):
 
 
 class PemasokPatch(BaseModel):
+    kolom_tambahan: KolomTambahanIn = None
     nama: Optional[str] = Field(default=None, min_length=1, max_length=255)
     kode: Optional[str] = Field(default=None, min_length=1, max_length=16)
     kontak: Optional[str] = Field(default=None, max_length=255)
@@ -63,6 +70,7 @@ class PemasokPatch(BaseModel):
 
 
 class PemasokOut(PemasokIn):
+    kolom_tambahan: KolomTambahanOut = {}
     id: str
     aktif: bool
     model_config = ConfigDict(from_attributes=True)
@@ -87,6 +95,7 @@ class SaluranOut(SaluranIn):
 
 
 class PelangganIn(BaseModel):
+    kolom_tambahan: KolomTambahanIn = None
     nama: str = Field(min_length=1, max_length=255)
     kode: str = Field(default="", max_length=16)  # kosong -> otomatis (urut)
     alamat: str = Field(default="", max_length=1000)
@@ -96,6 +105,7 @@ class PelangganIn(BaseModel):
 
 
 class PelangganPatch(BaseModel):
+    kolom_tambahan: KolomTambahanIn = None
     nama: Optional[str] = Field(default=None, min_length=1, max_length=255)
     kode: Optional[str] = Field(default=None, min_length=1, max_length=16)
     alamat: Optional[str] = Field(default=None, max_length=1000)
@@ -106,6 +116,7 @@ class PelangganPatch(BaseModel):
 
 
 class PelangganOut(PelangganIn):
+    kolom_tambahan: KolomTambahanOut = {}
     id: str
     aktif: bool
     model_config = ConfigDict(from_attributes=True)
@@ -129,6 +140,7 @@ class HargaGrosirOut(HargaGrosirIn):
 
 
 class OrderIn(BaseModel):
+    kolom_tambahan: KolomTambahanIn = None
     no_order: str = Field(default="", max_length=128)
     tanggal_order: Optional[date] = None
     saluran_id: str
@@ -152,6 +164,7 @@ class OrderIn(BaseModel):
 
 
 class OrderPatch(BaseModel):
+    kolom_tambahan: KolomTambahanIn = None
     no_order: Optional[str] = Field(default=None, max_length=128)
     nama_pembeli: Optional[str] = Field(default=None, max_length=255)
     harga_satuan: Optional[Decimal] = Field(default=None, ge=0, max_digits=14, decimal_places=2)
@@ -180,6 +193,7 @@ class OrderReturIn(BaseModel):
 
 
 class OrderOut(BaseModel):
+    kolom_tambahan: KolomTambahanOut = {}
     id: str
     no_order: str
     tanggal_order: date

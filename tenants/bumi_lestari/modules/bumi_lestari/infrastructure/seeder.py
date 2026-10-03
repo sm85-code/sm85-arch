@@ -20,6 +20,7 @@ from tenants.bumi_lestari.modules.bumi_lestari.infrastructure.models_order impor
 from tenants.bumi_lestari.modules.bumi_lestari.infrastructure import models_pembayaran  # noqa: F401  (register tables)
 from tenants.bumi_lestari.modules.bumi_lestari.infrastructure.models_pembayaran import BlLangganan
 from tenants.bumi_lestari.modules.bumi_lestari.infrastructure import models_talangan  # noqa: F401 (daftarkan tabel)
+from tenants.bumi_lestari.modules.bumi_lestari.infrastructure import models_kolom  # noqa: F401 (daftarkan tabel)
 from tenants.bumi_lestari.modules.bumi_lestari.infrastructure.models_iklan import BlPlatformIklan
 from tenants.bumi_lestari.modules.bumi_lestari.infrastructure.models_pencairan import (
     BlFormatPenghasilan,
@@ -174,6 +175,18 @@ _ALTER_POSTGRES = (
     "ALTER TABLE bl_profil ADD COLUMN IF NOT EXISTS porsi_iklan_internal NUMERIC(5, 2) NOT NULL DEFAULT 25",
     "ALTER TABLE bl_profil ADD COLUMN IF NOT EXISTS porsi_iklan_eksternal NUMERIC(5, 2) NOT NULL DEFAULT 75",
     "ALTER TABLE bl_profil ADD COLUMN IF NOT EXISTS budget_iklan_bulanan NUMERIC(14, 2)",
+    "ALTER TABLE bl_order ADD COLUMN IF NOT EXISTS kolom_tambahan JSONB NOT NULL DEFAULT '{}'",
+    "CREATE INDEX IF NOT EXISTS ix_bl_order_kolom_tambahan ON bl_order USING GIN (kolom_tambahan)",
+    "ALTER TABLE bl_produk ADD COLUMN IF NOT EXISTS kolom_tambahan JSONB NOT NULL DEFAULT '{}'",
+    "CREATE INDEX IF NOT EXISTS ix_bl_produk_kolom_tambahan ON bl_produk USING GIN (kolom_tambahan)",
+    "ALTER TABLE bl_pemasok ADD COLUMN IF NOT EXISTS kolom_tambahan JSONB NOT NULL DEFAULT '{}'",
+    "CREATE INDEX IF NOT EXISTS ix_bl_pemasok_kolom_tambahan ON bl_pemasok USING GIN (kolom_tambahan)",
+    "ALTER TABLE bl_pelanggan ADD COLUMN IF NOT EXISTS kolom_tambahan JSONB NOT NULL DEFAULT '{}'",
+    "CREATE INDEX IF NOT EXISTS ix_bl_pelanggan_kolom_tambahan ON bl_pelanggan USING GIN (kolom_tambahan)",
+    "ALTER TABLE bl_transaksi ADD COLUMN IF NOT EXISTS kolom_tambahan JSONB NOT NULL DEFAULT '{}'",
+    "CREATE INDEX IF NOT EXISTS ix_bl_transaksi_kolom_tambahan ON bl_transaksi USING GIN (kolom_tambahan)",
+    "ALTER TABLE bl_karyawan ADD COLUMN IF NOT EXISTS kolom_tambahan JSONB NOT NULL DEFAULT '{}'",
+    "CREATE INDEX IF NOT EXISTS ix_bl_karyawan_kolom_tambahan ON bl_karyawan USING GIN (kolom_tambahan)",
     "CREATE INDEX IF NOT EXISTS ix_bl_order_status_cair ON bl_order (status_cair)",
     "CREATE INDEX IF NOT EXISTS ix_bl_order_pencairan_baris_id ON bl_order (pencairan_baris_id)",
     "CREATE INDEX IF NOT EXISTS ix_bl_transaksi_status_kirim ON bl_transaksi (status_kirim)",
@@ -269,9 +282,61 @@ async def seed_bumi_lestari(session: AsyncSession) -> dict[str, str]:
             session.add(BlPlatformIklan(nama=nama, grup=grup, saluran_id=sid))
     await session.flush()
     await _seed_format_shopee(session)
+    await _seed_kolom_tambahan(session)
     await _seed_setoran_modal(session, owner)
     await session.commit()
     return {"owner_email": email, "status": "ok"}
+
+
+# Kolom tambahan bawaan (spesifikasi 10.2). (entitas, label, tipe, pilihan, tampil_tabel, bisa_filter, tampil_staf)
+DEFAULT_KOLOM_TAMBAHAN = (
+    ("order", "Target selesai di tukang", "tanggal", (), True, True, False),
+    ("order", "No. resi", "teks", (), True, False, False),
+    ("order", "Kurir", "pilihan", ("JNE", "J&T", "SiCepat", "Kurir toko", "Lainnya"), True, True, False),
+    ("order", "Kota tujuan", "teks", (), False, True, False),
+    ("order", "Ukuran khusus", "teks", (), False, False, False),
+    ("order", "Prioritas / mendesak", "ya_tidak", (), True, True, False),
+    ("order", "Catatan untuk tukang", "teks", (), False, False, False),
+    ("produk", "Bahan / jenis kayu", "pilihan", ("Jati", "Mahoni", "Pinus", "Mindi", "Lainnya"), True, True, False),
+    ("produk", "Kategori produk", "pilihan", ("Partisi", "Rak", "Meja", "Lemari", "Lainnya"), True, True, False),
+    ("produk", "Berat (gram)", "angka", (), False, False, False),
+    ("produk", "Dimensi paket", "teks", (), False, False, False),
+    ("produk", "Lama produksi (hari)", "angka", (), False, False, False),
+    ("produk", "Link foto", "teks", (), False, False, False),
+    ("pemasok", "Alamat / lokasi", "teks", (), False, False, False),
+    ("pemasok", "Spesialisasi", "pilihan", ("Kayu", "Cat", "Besi", "Lainnya"), True, True, False),
+    ("pemasok", "Kapasitas per minggu", "angka", (), False, False, False),
+    ("pemasok", "Lama pengerjaan biasa (hari)", "angka", (), False, False, False),
+    ("pemasok", "Mulai bekerja sama", "tanggal", (), False, False, False),
+    ("pelanggan", "Nama toko penjual lain", "teks", (), True, False, False),
+    ("pelanggan", "Kota / wilayah", "pilihan", ("Jabodetabek", "Jawa Barat", "Jawa Tengah", "Jawa Timur", "Luar Jawa"), True, True, False),
+    ("pelanggan", "Rekening penjual lain", "teks", (), False, False, False),
+    ("pelanggan", "Mulai bekerja sama", "tanggal", (), False, False, False),
+    ("transaksi", "No. nota / struk", "teks", (), False, False, True),
+    ("transaksi", "Ada nota", "ya_tidak", (), True, True, True),
+    ("transaksi", "Toko / vendor", "teks", (), False, False, True),
+    ("transaksi", "Metode bayar", "pilihan", ("Tunai", "Transfer", "QRIS"), False, True, True),
+    ("karyawan", "No. HP", "teks", (), True, False, False),
+    ("karyawan", "Tanggal mulai kerja", "tanggal", (), False, False, False),
+    ("karyawan", "Rekening gaji", "teks", (), False, False, False),
+)
+
+
+async def _seed_kolom_tambahan(session: AsyncSession) -> None:
+    """Hanya untuk entitas yang belum punya definisi kolom sama sekali, agar kolom yang dihapus Admin tidak muncul lagi."""
+    from tenants.bumi_lestari.modules.bumi_lestari.application.kolom_core import kunci_dari_label
+    from tenants.bumi_lestari.modules.bumi_lestari.infrastructure.models_kolom import BlDefinisiKolom
+
+    sudah = set((await session.execute(select(BlDefinisiKolom.entitas).distinct())).scalars())
+    for i, (entitas, label, tipe, pilihan, tabel, filt, staf) in enumerate(DEFAULT_KOLOM_TAMBAHAN):
+        if entitas in sudah:
+            continue
+        session.add(BlDefinisiKolom(
+            entitas=entitas, kunci=kunci_dari_label(label), lapisan="tambahan", label=label, tipe=tipe,
+            pilihan=[{"nilai": p, "arsip": False} for p in pilihan], tampil_tabel=tabel, bisa_filter=filt,
+            tampil_staf=staf, urutan=100 + i,
+        ))
+    await session.flush()
 
 
 async def _seed_setoran_modal(session: AsyncSession, owner: BlUser) -> None:

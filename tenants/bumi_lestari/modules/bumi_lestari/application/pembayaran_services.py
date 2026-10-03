@@ -12,6 +12,7 @@ from fastapi import HTTPException, status
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from tenants.bumi_lestari.modules.bumi_lestari.application import kolom_core
 from tenants.bumi_lestari.modules.bumi_lestari.application.audit_core import catat_audit
 from tenants.bumi_lestari.modules.bumi_lestari.application.laba_core import KATEGORI_BAGI_HASIL, ringkasan_laba
 from tenants.bumi_lestari.modules.bumi_lestari.application.provisi_core import (
@@ -450,6 +451,7 @@ async def create_karyawan(session: AsyncSession, payload: KaryawanIn) -> BlKarya
     k = BlKaryawan(
         nama=payload.nama.strip(), peran=payload.peran, gaji_bulanan=payload.gaji_bulanan, user_id=payload.user_id
     )
+    await kolom_core.terapkan(session, "karyawan", k, payload.kolom_tambahan, baru=True)
     session.add(k)
     await session.flush()
     return k
@@ -459,7 +461,8 @@ async def update_karyawan(session: AsyncSession, karyawan_id: str, payload: Kary
     k = await session.get(BlKaryawan, karyawan_id)
     if k is None:
         raise _bad("Karyawan tidak ditemukan", status.HTTP_404_NOT_FOUND)
-    data = payload.model_dump(exclude_unset=True)
+    data = payload.model_dump(exclude_unset=True, exclude={"kolom_tambahan"})
+    await kolom_core.terapkan(session, "karyawan", k, payload.kolom_tambahan, baru=False)
     if "peran" in data:
         _cek_peran(data["peran"])
     for kolom, nilai in data.items():

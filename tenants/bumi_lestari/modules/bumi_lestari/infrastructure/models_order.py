@@ -14,7 +14,7 @@ from typing import Optional
 from sqlalchemy import Boolean, Date, DateTime, ForeignKey, Index, Integer, Numeric, String, Text, UniqueConstraint
 from sqlalchemy.orm import Mapped, mapped_column
 
-from tenants.bumi_lestari.modules.bumi_lestari.infrastructure.database import BumiLestariBase
+from tenants.bumi_lestari.modules.bumi_lestari.infrastructure.database import BumiLestariBase, kolom_tambahan_column
 
 
 def _uuid() -> str:
@@ -56,6 +56,7 @@ class BlProduk(BumiLestariBase):
     sumber_sistem: Mapped[Optional[str]] = mapped_column(String(32), nullable=True)
     sumber_ref: Mapped[Optional[str]] = mapped_column(String(255), nullable=True)
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=_utcnow)
+    kolom_tambahan: Mapped[dict] = kolom_tambahan_column()
 
 
 class BlPemasok(BumiLestariBase):
@@ -73,6 +74,7 @@ class BlPemasok(BumiLestariBase):
     atas_nama: Mapped[str] = mapped_column(String(255), nullable=False, default="")
     catatan: Mapped[str] = mapped_column(Text, nullable=False, default="")
     aktif: Mapped[bool] = mapped_column(Boolean, nullable=False, default=True)
+    kolom_tambahan: Mapped[dict] = kolom_tambahan_column()
 
 
 class BlSaluran(BumiLestariBase):
@@ -100,6 +102,7 @@ class BlPelanggan(BumiLestariBase):
     no_wa: Mapped[str] = mapped_column(String(32), nullable=False, default="")  # untuk tombol kirim WhatsApp
     catatan: Mapped[str] = mapped_column(Text, nullable=False, default="")
     aktif: Mapped[bool] = mapped_column(Boolean, nullable=False, default=True)
+    kolom_tambahan: Mapped[dict] = kolom_tambahan_column()
 
 
 class BlHargaGrosir(BumiLestariBase):
@@ -164,3 +167,4 @@ class BlOrder(BumiLestariBase):
     sumber_sistem: Mapped[Optional[str]] = mapped_column(String(32), nullable=True)
     sumber_ref: Mapped[Optional[str]] = mapped_column(String(255), nullable=True)
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=_utcnow)
+    kolom_tambahan: Mapped[dict] = kolom_tambahan_column()
