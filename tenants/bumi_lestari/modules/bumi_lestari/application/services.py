@@ -360,7 +360,7 @@ async def get_profil(session: AsyncSession) -> BlProfil:
 async def update_profil(session: AsyncSession, payload: ProfilIn) -> BlProfil:
     profil = await get_profil(session)
     for kolom, nilai in payload.model_dump().items():
-        setattr(profil, kolom, nilai.strip())
+        setattr(profil, kolom, nilai.strip() if isinstance(nilai, str) else nilai)
     await session.flush()
     return profil
 

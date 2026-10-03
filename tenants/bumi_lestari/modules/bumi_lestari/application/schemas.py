@@ -165,6 +165,7 @@ class ProfilIn(BaseModel):
     telepon: str = Field(default="", max_length=64)
     email: str = Field(default="", max_length=255)
     catatan: str = Field(default="", max_length=2000)
+    biaya_proses_order: Decimal = Field(default=Decimal("10000"), ge=0, max_digits=14, decimal_places=2)
 
 
 class ProporsiItemOut(BaseModel):
@@ -187,4 +188,5 @@ class ProfilOut(BaseModel):
     telepon: str
     email: str
     catatan: str
+    biaya_proses_order: Decimal
     proporsi_bagi_hasil: list[ProporsiItemOut]

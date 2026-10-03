@@ -124,14 +124,16 @@ produksi yang sama (pesan tukang → diambil → dicat → serah/kirim); bedanya
 (grosir) dan cara bayar (di muka atau tempo → piutang), dan laba per order dihitung dari
 harga grosir itu dikurangi biaya tukang.
 
-**Harga untuk penjual lain = 4 komponen** (`bl_harga_grosir` per produk × pelanggan, semua per unit):
+**Harga untuk penjual lain = 4 komponen** (tiga per unit di `bl_harga_grosir` per produk × pelanggan, satu flat per order):
 1. **barang** (`harga`),
-2. **cat dan jasa** (`harga_cat_jasa`; **0 untuk order polos**),
+2. **cat dan jasa** (`harga_cat_jasa`; **mengikuti ukuran barang**, jadi diisi per produk; **0 untuk order polos**),
 3. **packing**, dua jenis dengan harga berbeda: `biasa` (`harga_packing_biasa`) atau `kayu`
    (`harga_packing_kayu`). Order memilih `jenis_packing`; **packing selalu dibayar, termasuk order polos**,
-4. **biaya proses pesanan** (`biaya_proses`; besarnya tergantung ukuran barang, jadi diisi per produk).
+4. **biaya proses pesanan**: **flat Rp 10.000 per order** (tidak tergantung ukuran atau jumlah). Nilainya
+   diatur di **Profil UMKM** (`biaya_proses_order`, bukan hardcode) dan disalin ke order saat dibuat,
+   jadi mengubahnya tidak mengubah order lama.
 
-Total order = (barang + cat/jasa + packing + biaya proses) × qty. Order polos (tanpa cat) kadang ada:
+Total order = (barang + cat/jasa + packing) × qty + biaya proses. Order polos (tanpa cat) kadang ada:
 `butuh_cat = false` → hanya komponen cat/jasa yang nol dan langkah pengecatan dilewati; packing tetap. Warna cat berbeda-beda
 dan kadang custom, tetapi **harga sama**, jadi warna hanya catatan teks (`warna`) di order.
 Penjual lain **membayar hari Selasa** (piutang reseller dilunasi di siklus Selasa, bersama

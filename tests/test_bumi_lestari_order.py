@@ -148,7 +148,7 @@ async def test_reseller_three_price_components_polos_and_color(session, data):
         session,
         HargaGrosirIn(
             produk_id=data.partisi.id, pelanggan_id=data.rina.id, harga=Decimal("600000"),
-            harga_cat_jasa=Decimal("100000"), biaya_proses=Decimal("15000"),
+            harga_cat_jasa=Decimal("100000"),
             harga_packing_biasa=Decimal("20000"), harga_packing_kayu=Decimal("50000"),
         ),
     )
@@ -163,19 +163,19 @@ async def test_reseller_three_price_components_polos_and_color(session, data):
     out = OrderOut.model_validate(dicat)
     assert dicat.warna == "Custom: hijau sage"
     assert (dicat.harga_satuan, dicat.harga_cat_jasa, dicat.harga_packing, dicat.biaya_proses) == (
-        600000, 100000, 20000, 15000,
+        600000, 100000, 20000, 10000,  # biaya proses flat Rp 10.000 per order dari profil
     )
-    assert out.total_penjualan == Decimal("1470000")  # (600rb + 100rb + packing biasa 20rb + 15rb) x 2
-    assert out.laba_kotor == Decimal("470000")  # - biaya pokok 2 x 500rb
+    assert out.total_penjualan == Decimal("1450000")  # (600rb + 100rb + packing biasa 20rb) x 2 + 10rb
+    assert out.laba_kotor == Decimal("450000")  # - biaya pokok 2 x 500rb
 
     polos = await svc.create_order(session, order(qty=2, butuh_cat=False))
     assert polos.harga_cat_jasa == 0 and polos.butuh_cat is False
     assert polos.harga_packing == 20000  # polos tetap bayar packing
-    assert OrderOut.model_validate(polos).total_penjualan == Decimal("1270000")  # (600rb + 20rb + 15rb) x 2
+    assert OrderOut.model_validate(polos).total_penjualan == Decimal("1250000")  # (600rb + 20rb) x 2 + 10rb
 
     kayu = await svc.create_order(session, order(qty=1, butuh_cat=False, jenis_packing="kayu"))
     assert kayu.harga_packing == 50000
-    assert OrderOut.model_validate(kayu).total_penjualan == Decimal("665000")  # 600rb + 50rb + 15rb
+    assert OrderOut.model_validate(kayu).total_penjualan == Decimal("660000")  # 600rb + 50rb + 10rb (biaya proses tetap 10rb walau qty 1)
     await svc.update_order(session, kayu.id, OrderPatch(jenis_packing="biasa"))
     assert kayu.harga_packing == 20000
     with pytest.raises(HTTPException):
@@ -183,3 +183,26 @@ async def test_reseller_three_price_components_polos_and_color(session, data):
 
     await svc.update_order(session, dicat.id, OrderPatch(butuh_cat=False))  # jadi polos -> cat/jasa nol
     assert dicat.harga_cat_jasa == 0 and dicat.harga_packing == 20000
+
+
+@pytest.mark.asyncio
+async def test_biaya_proses_is_flat_per_order_and_configurable_in_profil(session, data):
+    from tenants.bumi_lestari.modules.bumi_lestari.application import services
+    from tenants.bumi_lestari.modules.bumi_lestari.application.schemas import ProfilIn
+
+    await svc.set_harga_grosir(session, HargaGrosirIn(produk_id=data.partisi.id, pelanggan_id=data.rina.id, harga=Decimal("600000")))
+
+    def order(qty):
+        return OrderIn(
+            saluran_id=data.reseller_saluran.id, pelanggan_id=data.rina.id, produk_id=data.partisi.id, qty=qty
+        )
+
+    kecil, besar = await svc.create_order(session, order(1)), await svc.create_order(session, order(5))
+    assert kecil.biaya_proses == besar.biaya_proses == Decimal("10000")  # flat, tidak tergantung qty/ukuran
+
+    await services.update_profil(session, ProfilIn(nama_usaha="Bumi Lestari", biaya_proses_order=Decimal("12500")))
+    assert (await svc.create_order(session, order(1))).biaya_proses == Decimal("12500")
+    assert kecil.biaya_proses == Decimal("10000")  # order lama tidak berubah
+
+    eceran = await svc.create_order(session, OrderIn(saluran_id=data.shopee.id, produk_id=data.partisi.id))
+    assert eceran.biaya_proses == 0  # saluran lain: harga all-in

@@ -267,7 +267,7 @@ async def _profil_out(session: AsyncSession) -> ProfilOut:
     proporsi = [ProporsiItemOut.model_validate(p) for p in await services.get_proporsi(session)]
     return ProfilOut(
         nama_usaha=profil.nama_usaha, alamat=profil.alamat, telepon=profil.telepon,
-        email=profil.email, catatan=profil.catatan, proporsi_bagi_hasil=proporsi,
+        email=profil.email, catatan=profil.catatan, biaya_proses_order=profil.biaya_proses_order, proporsi_bagi_hasil=proporsi,
     )
 
 

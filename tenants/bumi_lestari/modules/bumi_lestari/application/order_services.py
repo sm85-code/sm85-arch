@@ -19,7 +19,7 @@ from tenants.bumi_lestari.modules.bumi_lestari.application.schemas_order import 
     ProdukPatch,
     SaluranIn,
 )
-from tenants.bumi_lestari.modules.bumi_lestari.application.services import _hari_ini
+from tenants.bumi_lestari.modules.bumi_lestari.application.services import _hari_ini, get_profil
 from tenants.bumi_lestari.modules.bumi_lestari.infrastructure.models import BlAkunKas
 from tenants.bumi_lestari.modules.bumi_lestari.infrastructure.models_order import (
     JENIS_PACKING,
@@ -169,7 +169,6 @@ async def set_harga_grosir(session: AsyncSession, payload: HargaGrosirIn) -> BlH
     row.harga_cat_jasa = payload.harga_cat_jasa
     row.harga_packing_biasa = payload.harga_packing_biasa
     row.harga_packing_kayu = payload.harga_packing_kayu
-    row.biaya_proses = payload.biaya_proses
     await session.flush()
     return row
 
@@ -240,7 +239,8 @@ async def create_order(session: AsyncSession, payload: OrderIn) -> BlOrder:
         harga_packing = _harga_packing_grosir(grosir, payload.jenis_packing)
     biaya_proses = payload.biaya_proses
     if biaya_proses is None:
-        biaya_proses = Decimal(grosir.biaya_proses) if grosir else Decimal("0")
+        # Flat per order, dari profil UMKM; hanya untuk order penjual lain (saluran lain sudah all-in).
+        biaya_proses = Decimal((await get_profil(session)).biaya_proses_order) if payload.pelanggan_id else Decimal("0")
     biaya = payload.biaya_pokok if payload.biaya_pokok is not None else Decimal(produk.biaya_pokok_default) * payload.qty
     butuh_cat = produk.jenis_produk == "kayu" if payload.butuh_cat is None else payload.butuh_cat
     if produk.jenis_produk == "non_kayu":

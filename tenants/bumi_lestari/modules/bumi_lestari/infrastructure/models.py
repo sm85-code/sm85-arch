@@ -121,6 +121,8 @@ class BlProfil(BumiLestariBase):
     telepon: Mapped[str] = mapped_column(String(64), nullable=False, default="")
     email: Mapped[str] = mapped_column(String(255), nullable=False, default="")
     catatan: Mapped[str] = mapped_column(Text, nullable=False, default="")
+    # Biaya proses pesanan untuk order penjual lain: flat per order, tidak tergantung ukuran barang.
+    biaya_proses_order: Mapped[Decimal] = mapped_column(Numeric(14, 2), nullable=False, default=Decimal("10000"))
     updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=_utcnow, onupdate=_utcnow)
 
 

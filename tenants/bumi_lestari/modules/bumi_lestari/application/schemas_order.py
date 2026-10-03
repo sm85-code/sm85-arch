@@ -74,8 +74,8 @@ class PelangganOut(PelangganIn):
 
 
 class HargaGrosirIn(BaseModel):
-    """Empat komponen harga per unit untuk penjual lain: barang, cat + jasa, packing (biasa/kayu),
-    biaya proses (tergantung ukuran barang)."""
+    """Komponen harga per unit untuk penjual lain: barang, cat + jasa (tergantung ukuran barang),
+    packing (biasa/kayu). Biaya proses pesanan flat per order, diatur di profil UMKM."""
 
     produk_id: str
     pelanggan_id: str
@@ -83,7 +83,6 @@ class HargaGrosirIn(BaseModel):
     harga_cat_jasa: Decimal = Field(default=Decimal("0"), ge=0, max_digits=14, decimal_places=2)
     harga_packing_biasa: Decimal = Field(default=Decimal("0"), ge=0, max_digits=14, decimal_places=2)
     harga_packing_kayu: Decimal = Field(default=Decimal("0"), ge=0, max_digits=14, decimal_places=2)
-    biaya_proses: Decimal = Field(default=Decimal("0"), ge=0, max_digits=14, decimal_places=2)
 
 
 class HargaGrosirOut(HargaGrosirIn):
@@ -165,9 +164,9 @@ class OrderOut(BaseModel):
     @computed_field
     @property
     def total_penjualan(self) -> Decimal:
-        # (barang + cat/jasa + packing + biaya proses) per unit x qty. Order polos: cat/jasa = 0,
-        # tetapi packing tetap dibayar.
-        return (self.harga_satuan + self.harga_cat_jasa + self.harga_packing + self.biaya_proses) * self.qty
+        # (barang + cat/jasa + packing) per unit x qty + biaya proses flat per order.
+        # Order polos: cat/jasa = 0, tetapi packing tetap dibayar.
+        return (self.harga_satuan + self.harga_cat_jasa + self.harga_packing) * self.qty + self.biaya_proses
 
     @computed_field
     @property

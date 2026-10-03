@@ -89,13 +89,12 @@ class BlHargaGrosir(BumiLestariBase):
     id: Mapped[str] = mapped_column(String(64), primary_key=True, default=_uuid)
     produk_id: Mapped[str] = mapped_column(ForeignKey("bl_produk.id"), nullable=False)
     pelanggan_id: Mapped[str] = mapped_column(ForeignKey("bl_pelanggan.id"), nullable=False)
-    # Empat komponen yang dibayar penjual lain, semuanya per unit: barang, cat + jasa, packing
-    # (biasa atau kayu), biaya proses pesanan (tergantung ukuran barang, jadi melekat ke produk).
+    # Komponen per unit yang dibayar penjual lain: barang, cat + jasa (tergantung ukuran barang, jadi
+    # melekat ke produk), packing (biasa atau kayu). Biaya proses pesanan flat per order: ada di profil.
     harga: Mapped[Decimal] = mapped_column(Numeric(14, 2), nullable=False)  # barang, per unit
     harga_cat_jasa: Mapped[Decimal] = mapped_column(Numeric(14, 2), nullable=False, default=Decimal("0"))  # per unit
     harga_packing_biasa: Mapped[Decimal] = mapped_column(Numeric(14, 2), nullable=False, default=Decimal("0"))
     harga_packing_kayu: Mapped[Decimal] = mapped_column(Numeric(14, 2), nullable=False, default=Decimal("0"))
-    biaya_proses: Mapped[Decimal] = mapped_column(Numeric(14, 2), nullable=False, default=Decimal("0"))  # per unit (tergantung ukuran barang)
 
 
 class BlOrder(BumiLestariBase):
@@ -115,7 +114,8 @@ class BlOrder(BumiLestariBase):
     # Packing tetap dibayar walau polos: jenis "biasa" atau "kayu" (harga berbeda), per unit.
     jenis_packing: Mapped[str] = mapped_column(String(16), nullable=False, default="biasa")
     harga_packing: Mapped[Decimal] = mapped_column(Numeric(14, 2), nullable=False, default=Decimal("0"))
-    biaya_proses: Mapped[Decimal] = mapped_column(Numeric(14, 2), nullable=False, default=Decimal("0"))  # per order
+    # Biaya proses pesanan, flat per order (disalin dari profil saat order dibuat; 0 selain order penjual lain).
+    biaya_proses: Mapped[Decimal] = mapped_column(Numeric(14, 2), nullable=False, default=Decimal("0"))
     # Warna cat (bisa custom). Tidak memengaruhi harga.
     warna: Mapped[str] = mapped_column(String(128), nullable=False, default="")
     potongan_marketplace: Mapped[Decimal] = mapped_column(Numeric(14, 2), nullable=False, default=Decimal("0"))
