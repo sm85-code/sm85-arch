@@ -368,10 +368,38 @@ async def create_transfer(session: AsyncSession, user: BlUser, payload: Transfer
     )
 
 
-async def batalkan_transfer(session: AsyncSession, transfer_id: str, alasan: str) -> BlTransfer:
+async def list_transfer(
+    session: AsyncSession,
+    user: BlUser,
+    *,
+    dari: date | None = None,
+    sampai: date | None = None,
+    termasuk_batal: bool = False,
+    limit: int = 200,
+) -> list[BlTransfer]:
+    """Riwayat transfer antar akun (terbaru dulu). Transfer yang menyentuh kas iklan hanya terlihat oleh admin."""
+    stmt = select(BlTransfer).order_by(BlTransfer.tanggal.desc(), BlTransfer.created_at.desc()).limit(limit)
+    if not _is_admin(user):
+        iklan = select(BlAkunKas.id).where(BlAkunKas.jenis == "kas_iklan")
+        stmt = stmt.where(BlTransfer.dari_akun_id.not_in(iklan), BlTransfer.ke_akun_id.not_in(iklan))
+    if dari:
+        stmt = stmt.where(BlTransfer.tanggal >= dari)
+    if sampai:
+        stmt = stmt.where(BlTransfer.tanggal <= sampai)
+    if not termasuk_batal:
+        stmt = stmt.where(BlTransfer.dibatalkan.is_(False))
+    return list((await session.execute(stmt)).scalars())
+
+
+async def batalkan_transfer(session: AsyncSession, transfer_id: str, alasan: str, user: BlUser | None = None) -> BlTransfer:
     transfer = await session.get(BlTransfer, transfer_id)
     if not transfer:
         raise _bad("Transfer tidak ditemukan", status.HTTP_404_NOT_FOUND)
+    if user is not None:  # akun kas iklan hanya boleh diurus admin
+        for akun_id in (transfer.dari_akun_id, transfer.ke_akun_id):
+            akun = await session.get(BlAkunKas, akun_id)
+            if akun is not None and not boleh_akses_akun(user, akun):
+                raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="Akun ini hanya bisa diakses admin")
     _batalkan(transfer, alasan)
     await session.flush()
     return transfer

@@ -301,3 +301,52 @@ async def test_router_list_akun_kas_serializes_saldo(session):
     hasil = await router.list_akun_kas(session=session, user=admin)
     assert {a.kode for a in hasil} >= {k for k, *_ in DEFAULT_AKUN}
     assert all(a.saldo == a.saldo_awal for a in hasil)
+
+
+@pytest.mark.asyncio
+async def test_list_transfer_dan_batal(session):
+    owner, admin = await _user(session, "owner"), await _user(session, "admin")
+    ku, shopee = await _akun(session, "KAS_UTAMA"), await _akun(session, "SALDO_SHOPEE")
+    await services.create_transaksi(
+        session, owner,
+        TransaksiIn(akun_id=shopee.id, kategori_id=(await _kat(session, "Penjualan marketplace")).id, jenis="masuk", jumlah=Decimal("900000")),
+    )
+    t1 = await services.create_transfer(session, owner, TransferIn(dari_akun_id=shopee.id, ke_akun_id=ku.id, jumlah=Decimal("400000")))
+    await services.create_transfer(session, owner, TransferIn(dari_akun_id=shopee.id, ke_akun_id=ku.id, jumlah=Decimal("100000")))
+    assert len(await services.list_transfer(session, owner)) == 2
+
+    await services.batalkan_transfer(session, t1.id, "salah jumlah", owner)
+    assert len(await services.list_transfer(session, owner)) == 1  # yang batal disembunyikan
+    semua = await services.list_transfer(session, owner, termasuk_batal=True)
+    assert len(semua) == 2 and sum(1 for t in semua if t.dibatalkan) == 1
+    assert await services.saldo_akun(session, ku) == Decimal("100000")  # transfer 400rb dikembalikan
+
+
+@pytest.mark.asyncio
+async def test_transfer_kas_iklan_hanya_admin(session):
+    owner, admin = await _user(session, "owner"), await _user(session, "admin")
+    iklan = (await session.execute(select(BlAkunKas).where(BlAkunKas.jenis == "kas_iklan"))).scalar_one()
+    ku = await _isi_kas_utama(session, owner, Decimal("5000000"))
+    t = await services.create_transfer(session, admin, TransferIn(dari_akun_id=ku.id, ke_akun_id=iklan.id, jumlah=Decimal("2000000")))
+    assert [x.id for x in await services.list_transfer(session, admin)] == [t.id]
+    assert await services.list_transfer(session, owner) == []  # owner tidak melihat transfer kas iklan
+    with pytest.raises(HTTPException) as exc:
+        await services.batalkan_transfer(session, t.id, "coba batalkan", owner)
+    assert exc.value.status_code == 403
+    await services.batalkan_transfer(session, t.id, "admin membatalkan", admin)
+
+
+@pytest.mark.asyncio
+async def test_router_list_transfer_serializes(session):
+    """Lapisan router: respons GET /transfer harus lolos validasi TransferOut."""
+    from tenants.bumi_lestari.adapters.api.v1 import bumi_lestari_router as router
+
+    owner = await _user(session, "owner")
+    ku, shopee = await _akun(session, "KAS_UTAMA"), await _akun(session, "SALDO_SHOPEE")
+    await services.create_transaksi(
+        session, owner,
+        TransaksiIn(akun_id=shopee.id, kategori_id=(await _kat(session, "Penjualan marketplace")).id, jenis="masuk", jumlah=Decimal("300000")),
+    )
+    await services.create_transfer(session, owner, TransferIn(dari_akun_id=shopee.id, ke_akun_id=ku.id, jumlah=Decimal("300000")))
+    hasil = await router.list_transfer(session=session, user=owner)
+    assert len(hasil) == 1 and hasil[0].jumlah == Decimal("300000")

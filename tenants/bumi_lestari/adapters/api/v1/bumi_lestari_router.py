@@ -268,14 +268,25 @@ async def create_transfer(
     return await services.create_transfer(session, user, payload)
 
 
+@bumi_lestari_router.get("/transfer", response_model=list[TransferOut])
+async def list_transfer(
+    dari: date | None = None,
+    sampai: date | None = None,
+    termasuk_batal: bool = False,
+    session: AsyncSession = Depends(get_db_bumi_lestari),
+    user: BlUser = Depends(require_roles_bumi_lestari(*OWNER_ONLY)),
+):
+    return await services.list_transfer(session, user, dari=dari, sampai=sampai, termasuk_batal=termasuk_batal)
+
+
 @bumi_lestari_router.post("/transfer/{transfer_id}/batal", response_model=TransferOut)
 async def batalkan_transfer(
     transfer_id: str,
     payload: BatalIn,
     session: AsyncSession = Depends(get_db_bumi_lestari),
-    _: BlUser = Depends(require_roles_bumi_lestari(*OWNER_ONLY)),
+    user: BlUser = Depends(require_roles_bumi_lestari(*OWNER_ONLY)),
 ):
-    return await services.batalkan_transfer(session, transfer_id, payload.alasan)
+    return await services.batalkan_transfer(session, transfer_id, payload.alasan, user)
 
 
 @bumi_lestari_router.get("/kas-kecil/pengisian", response_model=PengisianKasKecilOut)
