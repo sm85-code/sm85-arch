@@ -339,6 +339,14 @@ async def isi_alamat_pengiriman(
     return services.pengiriman_out(await services.buat_pengiriman_lokal(session, pesanan_id, payload))
 
 
+@store_buyer_router.post("/pengiriman/webhook")
+async def webhook_pengiriman(request: Request, session: AsyncSession = Depends(get_db_store)):
+    """Biteship tells us a shipment changed; see services.sinkron_dari_webhook."""
+    if not shipping_biteship.webhook_sah(request.headers):
+        raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="Webhook ditolak")
+    return await services.sinkron_dari_webhook(session, await _baca_payload(request))
+
+
 @store_buyer_router.get("/pesanan/{pesanan_id}/pengiriman/lacak")
 async def lacak_pengiriman(
     pesanan_id: str, session: AsyncSession = Depends(get_db_store), user: PembeliStore = Depends(get_current_buyer)

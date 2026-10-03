@@ -8,6 +8,10 @@ Environment:
   BITESHIP_DEFAULT_WEIGHT_GRAM  weight used for a product that has none recorded (default 500)
   BITESHIP_ORIGIN_NAME / _PHONE / _ADDRESS  the pickup contact and address printed on the shipment
   BITESHIP_COD_TYPE       when the courier pays out the COD money: 7_days (cheapest, default), 5_days or 3_days
+  BITESHIP_WEBHOOK_KEY / BITESHIP_WEBHOOK_SECRET  header name (default X-Webhook-Secret) and value that Biteship sends
+                          with every webhook ("Headers Signature Key / Secret" in the dashboard). When the secret is set,
+                          webhooks without it are refused. A webhook is never trusted anyway: it only tells us which
+                          shipment to ask Biteship about.
 
 Until BITESHIP_API_KEY is set every entry point answers HTTP 501 (never 503: DigitalOcean App Platform replaces
 an application 503 with its own HTML 504 page) instead of inventing a price.
@@ -18,6 +22,7 @@ server, and the price of the chosen courier service is looked up again here when
 from __future__ import annotations
 
 import asyncio
+import hmac
 import logging
 import os
 from dataclasses import dataclass
@@ -322,3 +327,13 @@ async def lacak(tracking_id: str) -> HasilLacak:
     ]
     riwayat.sort(key=lambda r: r.waktu, reverse=True)
     return HasilLacak(status=str(data.get("status") or ""), waybill_id=str(data.get("waybill_id") or ""), riwayat=riwayat)
+
+
+def webhook_sah(headers: Any) -> bool:
+    """True when no webhook secret is configured, or the request carries the configured header with the right value."""
+    rahasia = os.getenv("BITESHIP_WEBHOOK_SECRET", "").strip()
+    if not rahasia:
+        return True
+    nama = os.getenv("BITESHIP_WEBHOOK_KEY", "").strip() or "X-Webhook-Secret"
+    diterima = str(headers.get(nama) or "")
+    return hmac.compare_digest(diterima.encode(), rahasia.encode())
