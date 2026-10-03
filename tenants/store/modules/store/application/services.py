@@ -997,6 +997,25 @@ async def ganti_kurir(session: AsyncSession, pesanan_id: str, kurir: str, layana
     return pengiriman
 
 
+_EVENT_WEBHOOK_BITESHIP = {"order.status", "order.waybill_id"}
+
+
+async def sinkron_dari_webhook(session: AsyncSession, payload: dict) -> dict:
+    """A Biteship webhook only says "this shipment changed". We never act on its content: we find the shipment by the
+    Biteship order id and ask Biteship (tracking API) what the real status is. Unknown orders and other events are
+    acknowledged and ignored, so Biteship's installation test and later events never fail."""
+    order_id = str(payload.get("order_id") or "")
+    if not order_id or payload.get("event") not in _EVENT_WEBHOOK_BITESHIP:
+        return {"ok": True, "diabaikan": True}
+    pengiriman = (
+        await session.execute(select(PengirimanStore).where(PengirimanStore.biteship_order_id == order_id))
+    ).scalar_one_or_none()
+    if pengiriman is None or not pengiriman.biteship_tracking_id:
+        return {"ok": True, "diabaikan": True}
+    hasil = await lacak_pengiriman(session, pengiriman.pesanan_id)
+    return {"ok": True, "status": hasil["status"]}
+
+
 async def lacak_pengiriman(session: AsyncSession, pesanan_id: str) -> dict:
     """Ask Biteship where the parcel is and bring our own shipment status in line with the answer."""
     pengiriman = await get_pengiriman(session, pesanan_id)

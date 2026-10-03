@@ -218,6 +218,7 @@ def test_buyer_routes_are_public_only_for_catalog_and_auth():
         "/produk/{ref}",
         "/kategori",
         "/payment/callback",
+        "/pengiriman/webhook",  # Biteship webhook: secret header + re-queried at Biteship, never trusted
     }
     for route, deps in _routes(buyer_module.store_buyer_router):
         if route.path in public:

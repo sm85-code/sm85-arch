@@ -467,3 +467,48 @@ async def test_admin_settings_choose_couriers_and_pickup_address(session, monkey
     monkeypatch.setenv("BITESHIP_COURIERS", "pos")
     assert bs._kurir_aktif(bs.PengaturanKirim()) == "pos"
     assert bs._lokasi_asal(None)["origin_postal_code"] == 46396
+
+
+def test_webhook_secret_is_checked_only_when_configured(monkeypatch):
+    monkeypatch.delenv("BITESHIP_WEBHOOK_SECRET", raising=False)
+    assert bs.webhook_sah({})
+    monkeypatch.setenv("BITESHIP_WEBHOOK_SECRET", "s3cret")
+    assert not bs.webhook_sah({})
+    assert not bs.webhook_sah({"X-Webhook-Secret": "salah"})
+    assert bs.webhook_sah({"X-Webhook-Secret": "s3cret"})
+    monkeypatch.setenv("BITESHIP_WEBHOOK_KEY", "X-Biteship")
+    assert not bs.webhook_sah({"X-Webhook-Secret": "s3cret"})
+    assert bs.webhook_sah({"X-Biteship": "s3cret"})
+
+
+@pytest.mark.asyncio
+async def test_webhook_asks_biteship_and_moves_the_status(session, monkeypatch):
+    _user, pesanan = await _dengan_pengiriman(session)
+    monkeypatch.setattr(bs, "_request_sync", lambda m, p, b=None: ORDER_OK)
+    await services.buat_order_biteship(session, pesanan.id)
+    asked = []
+
+    def fake(method, path, body=None):
+        asked.append(path)
+        return {"success": True, "status": "dropping_off", "waybill_id": "JNE123", "history": []}
+
+    monkeypatch.setattr(bs, "_request_sync", fake)
+    # The payload claims "delivered", but only Biteship's own answer counts.
+    out = await services.sinkron_dari_webhook(session, {"event": "order.status", "order_id": "bo-1", "status": "delivered"})
+    assert out == {"ok": True, "status": "dikirim"} and asked == ["/trackings/trk-1"]
+    assert (await services.get_pesanan(session, pesanan.id)).status == "dikirim"
+
+
+@pytest.mark.asyncio
+async def test_webhook_ignores_unknown_orders_other_events_and_empty_bodies(session, monkeypatch):
+    _user, pesanan = await _dengan_pengiriman(session)
+    monkeypatch.setattr(bs, "_request_sync", lambda m, p, b=None: ORDER_OK)
+    await services.buat_order_biteship(session, pesanan.id)
+
+    def boom(method, path, body=None):
+        raise AssertionError("must not call Biteship")
+
+    monkeypatch.setattr(bs, "_request_sync", boom)
+    for payload in ({}, {"event": "order.status"}, {"event": "order.status", "order_id": "unknown"},
+                    {"event": "order.price", "order_id": "bo-1"}):
+        assert (await services.sinkron_dari_webhook(session, payload))["diabaikan"] is True
