@@ -10,6 +10,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from tenants.bumi_lestari.modules.bumi_lestari.application import laporan_services as svc
 from tenants.bumi_lestari.modules.bumi_lestari.application.schemas_laporan import (
+    BelumCairOut,
     DashboardOut,
     LaporanImprestOut,
     LaporanUmumOut,
@@ -39,6 +40,16 @@ async def laporan_umum(
     user: BlUser = Depends(require_roles_bumi_lestari("admin", "owner")),
 ):
     return await svc.laporan_umum(session, user, dari, sampai)
+
+
+@laporan_router.get("/laporan/belum-cair", response_model=BelumCairOut)
+async def laporan_belum_cair(
+    per_tanggal: date | None = None,
+    session: AsyncSession = Depends(get_db_bumi_lestari),
+    _: BlUser = Depends(require_roles_bumi_lestari("admin", "owner")),
+):
+    """Order marketplace/Toko web sudah dikirim, belum cair, belum retur -- per saluran (AB-BC-1)."""
+    return await svc.belum_cair(session, per_tanggal)
 
 
 @laporan_router.get("/laporan/kas-kecil", response_model=LaporanImprestOut)

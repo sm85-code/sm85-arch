@@ -13,6 +13,7 @@ from tenants.bumi_lestari.modules.bumi_lestari.application.schemas_order import 
     OrderIn,
     OrderOut,
     OrderPatch,
+    OrderReturIn,
     OrderStatusIn,
     PelangganIn,
     PelangganOut,
@@ -121,12 +122,13 @@ async def list_order(
     jenis_produk: str | None = None,
     dari: date | None = None,
     sampai: date | None = None,
+    status_cair: str | None = None,
     session: AsyncSession = _db(),
     _: BlUser = _guard(),
 ):
     return await svc.list_order(
         session, status_order=status_order, saluran_id=saluran_id, pelanggan_id=pelanggan_id,
-        jenis_produk=jenis_produk, dari=dari, sampai=sampai,
+        jenis_produk=jenis_produk, dari=dari, sampai=sampai, status_cair=status_cair,
     )
 
 
@@ -148,3 +150,8 @@ async def update_order(order_id: str, payload: OrderPatch, session: AsyncSession
 @order_router.post("/order/{order_id}/status", response_model=OrderOut)
 async def ubah_status(order_id: str, payload: OrderStatusIn, session: AsyncSession = _db(), _: BlUser = _guard()):
     return await svc.ubah_status_order(session, order_id, payload)
+
+
+@order_router.post("/order/{order_id}/retur", response_model=OrderOut)
+async def retur_order(order_id: str, payload: OrderReturIn, session: AsyncSession = _db(), user: BlUser = _guard()):
+    return await svc.retur_order(session, order_id, payload, user.id)

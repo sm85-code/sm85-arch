@@ -32,6 +32,12 @@ JENIS_SALURAN = ("marketplace", "web", "reseller")
 STATUS_ORDER_KAYU = ("dipesan", "dikerjakan", "diambil", "dicat", "dikirim", "selesai")
 STATUS_ORDER_NON_KAYU = ("dipesan", "diterima", "dikirim", "selesai")
 STATUS_BATAL = "batal"
+# Retur sebelum cair (AB-BC-3): order keluar dari belum cair, biaya pokoknya jadi Kerugian retur.
+STATUS_RETUR = "retur"
+# Status pencairan order marketplace/Toko web (Fase 2.7). "cair" diisi oleh pencairan (unggah file / entri iPaymu / sinkron).
+STATUS_CAIR_BELUM = "belum"
+STATUS_CAIR_CAIR = "cair"
+JENIS_SALURAN_CAIR = ("marketplace", "web")
 
 
 class BlProduk(BumiLestariBase):
@@ -144,6 +150,16 @@ class BlOrder(BumiLestariBase):
     tgl_dikirim: Mapped[Optional[date]] = mapped_column(Date, nullable=True)
     tgl_selesai: Mapped[Optional[date]] = mapped_column(Date, nullable=True)
     catatan: Mapped[str] = mapped_column(Text, nullable=False, default="")
+    status_cair: Mapped[str] = mapped_column(
+        String(16), nullable=False, default=STATUS_CAIR_BELUM, server_default=STATUS_CAIR_BELUM, index=True
+    )
+    tgl_cair: Mapped[Optional[date]] = mapped_column(Date, nullable=True)
+    pencairan_baris_id: Mapped[Optional[str]] = mapped_column(String(64), nullable=True, index=True)
+    # Potongan marketplace sebenarnya menurut file pencairan (potongan_marketplace = perkiraan saat order dicatat).
+    potongan_aktual: Mapped[Optional[Decimal]] = mapped_column(Numeric(14, 2), nullable=True)
+    tgl_retur: Mapped[Optional[date]] = mapped_column(Date, nullable=True)
+    alasan_retur: Mapped[Optional[str]] = mapped_column(Text, nullable=True)
+    kembali_stok: Mapped[bool] = mapped_column(Boolean, nullable=False, default=False, server_default="false")
     # Referensi sistem asal (store / marketplace_erp) untuk sinkronisasi idempoten; lihat INTEGRASI.md.
     sumber_sistem: Mapped[Optional[str]] = mapped_column(String(32), nullable=True)
     sumber_ref: Mapped[Optional[str]] = mapped_column(String(255), nullable=True)

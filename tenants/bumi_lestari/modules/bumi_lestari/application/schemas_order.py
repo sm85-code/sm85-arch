@@ -172,6 +172,13 @@ class OrderStatusIn(BaseModel):
     tanggal: Optional[date] = None
 
 
+class OrderReturIn(BaseModel):
+    """Retur sebelum cair (AB-BC-3)."""
+    tanggal: Optional[date] = None
+    alasan: str = Field(min_length=3, max_length=500)
+    kembali_stok: bool = False
+
+
 class OrderOut(BaseModel):
     id: str
     no_order: str
@@ -198,6 +205,14 @@ class OrderOut(BaseModel):
     tgl_dikirim: Optional[date]
     tgl_selesai: Optional[date]
     catatan: str
+    status_cair: str = "belum"
+    tgl_cair: Optional[date] = None
+    potongan_aktual: Optional[Decimal] = None
+    tgl_retur: Optional[date] = None
+    alasan_retur: Optional[str] = None
+    kembali_stok: bool = False
+    sumber_sistem: Optional[str] = None
+    sumber_ref: Optional[str] = None
     # Badge pembayaran (draf maupun terkirim); order yang sudah dibayar terkunci untuk perubahan harga/batal.
     dibayar_tukang: bool = False
     dibayar_penjual_lain: bool = False

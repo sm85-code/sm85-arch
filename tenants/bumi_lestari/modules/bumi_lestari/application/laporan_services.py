@@ -5,12 +5,15 @@ from datetime import date, timedelta
 from decimal import Decimal
 
 from fastapi import HTTPException, status
-from sqlalchemy import func, select
+from sqlalchemy import func, or_, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from tenants.bumi_lestari.modules.bumi_lestari.application.kiriman_services import ringkasan_draf
 from tenants.bumi_lestari.modules.bumi_lestari.application.laba_core import ringkasan_laba
 from tenants.bumi_lestari.modules.bumi_lestari.application.schemas_laporan import (
+    BelumCairOut,
+    OrderBelumCairOut,
+    SaluranBelumCairOut,
     ArusAkunOut,
     AkunSaldoOut,
     BarisKategoriOut,
@@ -55,7 +58,14 @@ from tenants.bumi_lestari.modules.bumi_lestari.infrastructure.models import (
     BlTutupBuku,
     BlUser,
 )
-from tenants.bumi_lestari.modules.bumi_lestari.infrastructure.models_order import BlOrder, BlSaluran
+from tenants.bumi_lestari.modules.bumi_lestari.infrastructure.models_order import (
+    JENIS_SALURAN_CAIR,
+    STATUS_BATAL,
+    STATUS_CAIR_CAIR,
+    STATUS_RETUR,
+    BlOrder,
+    BlSaluran,
+)
 
 
 def _baris(items) -> list[BarisKategoriOut]:
@@ -70,18 +80,51 @@ async def _jumlah(session: AsyncSession, model, kolom_jumlah, *kondisi) -> Decim
 # --- Laporan umum ---------------------------------------------------------------------------
 
 
-async def belum_cair_sementara(session: AsyncSession) -> Decimal:
-    """Order marketplace berstatus dikirim (belum cair) -- perkiraan sementara sampai tabel pencairan (Fase 2.4)."""
-    dikirim_mp = (
+async def belum_cair(session: AsyncSession, per_tanggal: date | None = None) -> BelumCairOut:
+    """Order marketplace/Toko web yang per tanggal itu sudah dikirim tetapi belum cair dan belum retur (AB-BC-1/2).
+    Dihitung ulang dari tanggal di order, jadi bisa dipakai untuk tanggal lampau (laporan, snapshot tutup buku)."""
+    per = per_tanggal or _hari_ini()
+    rows = (
         await session.execute(
-            select(BlOrder)
+            select(BlOrder, BlSaluran)
             .join(BlSaluran, BlSaluran.id == BlOrder.saluran_id)
-            .where(BlSaluran.jenis == "marketplace", BlOrder.status == "dikirim")
+            .where(
+                BlSaluran.jenis.in_(JENIS_SALURAN_CAIR), BlOrder.status != STATUS_BATAL,
+                BlOrder.tgl_dikirim.is_not(None), BlOrder.tgl_dikirim <= per,
+                or_(BlOrder.status_cair != STATUS_CAIR_CAIR, BlOrder.tgl_cair.is_(None), BlOrder.tgl_cair > per),
+                or_(BlOrder.status != STATUS_RETUR, BlOrder.tgl_retur.is_(None), BlOrder.tgl_retur > per),
+            )
+            .order_by(BlSaluran.nama, BlOrder.tgl_dikirim, BlOrder.no_order)
         )
-    ).scalars().all()
-    return sum(
-        (OrderOut.model_validate(o).total_penjualan - Decimal(o.potongan_marketplace) for o in dikirim_mp), Decimal("0")
+    ).all()
+    grup: dict[str, SaluranBelumCairOut] = {}
+    for o, sal in rows:
+        jual = OrderOut.model_validate(o).total_penjualan
+        potong = Decimal(o.potongan_aktual if o.potongan_aktual is not None else o.potongan_marketplace)
+        g = grup.setdefault(sal.id, SaluranBelumCairOut(
+            saluran_id=sal.id, nama=sal.nama, akun_id=sal.akun_id, jumlah_order=0, total_penjualan=Decimal("0"),
+            total_perkiraan_cair=Decimal("0"), tgl_kirim_tertua=None, order=[],
+        ))
+        g.order.append(OrderBelumCairOut(
+            order_id=o.id, no_order=o.no_order, tgl_dikirim=o.tgl_dikirim, penjualan=jual, potongan=potong,
+            perkiraan_cair=jual - potong, status=o.status,
+        ))
+        g.jumlah_order += 1
+        g.total_penjualan += jual
+        g.total_perkiraan_cair += jual - potong
+        g.tgl_kirim_tertua = min(filter(None, (g.tgl_kirim_tertua, o.tgl_dikirim)))
+    per_saluran = list(grup.values())
+    tertua = [g.tgl_kirim_tertua for g in per_saluran if g.tgl_kirim_tertua]
+    return BelumCairOut(
+        per_tanggal=per, jumlah_order=sum(g.jumlah_order for g in per_saluran),
+        total_penjualan=sum((g.total_penjualan for g in per_saluran), Decimal("0")),
+        total_perkiraan_cair=sum((g.total_perkiraan_cair for g in per_saluran), Decimal("0")),
+        tgl_kirim_tertua=min(tertua) if tertua else None, per_saluran=per_saluran,
     )
+
+
+async def total_belum_cair(session: AsyncSession, per_tanggal: date | None = None) -> Decimal:
+    return (await belum_cair(session, per_tanggal)).total_perkiraan_cair
 
 
 async def _laporan_dari_snapshot(session: AsyncSession, user: BlUser, dari: date, sampai: date) -> LaporanUmumOut | None:
@@ -146,7 +189,9 @@ async def laporan_umum(
                 saldo_akhir=await saldo_akun(session, akun, sampai),
             )
         )
+    bc = await total_belum_cair(session, sampai)
     return LaporanUmumOut(
+        belum_cair=bc, perkiraan_laba_jika_cair=ringkas.laba + bc,
         dari=dari, sampai=sampai, pemasukan=_baris(ringkas.pemasukan), total_pemasukan=ringkas.total_pemasukan,
         biaya=_baris(ringkas.biaya), total_biaya=ringkas.total_biaya, laba_bersih=ringkas.laba,
         di_luar_laba=_baris(ringkas.di_luar_laba), arus_kas=arus,
@@ -285,7 +330,7 @@ async def dashboard(session: AsyncSession, user: BlUser, periode: str | None = N
     tagihan_minggu = sum(
         (tagihan_order(o) for o, _p in await order_reseller_belum_dibayar(session, sampai_kirim=sabtu_lalu)), Decimal("0")
     )
-    belum_cair = await belum_cair_sementara(session)
+    belum_cair_kini = await total_belum_cair(session, hari_ini)
     draf = [d for d in await ringkasan_draf(session, user, rinci=False) if d.jumlah_entri]
 
     kas_iklan = await _ringkas_imprest(session, "kas_iklan") if _is_admin(user) else None
@@ -301,7 +346,8 @@ async def dashboard(session: AsyncSession, user: BlUser, periode: str | None = N
         pemasukan_bulan_ini=ringkas.total_pemasukan, biaya_bulan_ini=ringkas.total_biaya, laba_bulan_ini=ringkas.laba,
         order_per_status={s: int(n) for s, n in status_hitung}, order_bulan_ini=len(orders), omzet_order_bulan_ini=omzet,
         order_aktif_per_status={s: int(n) for s, n in aktif_hitung},
-        tagihan_penjual_lain_minggu_ini=tagihan_minggu, belum_cair_sementara=belum_cair, draf_belum_dikirim=draf,
+        tagihan_penjual_lain_minggu_ini=tagihan_minggu, belum_cair=belum_cair_kini, belum_cair_sementara=belum_cair_kini,
+        draf_belum_dikirim=draf,
         piutang_penjual_lain=piutang, utang_pemasok_siap_bayar=siap.total, dana_cadangan=dana,
         kas_kecil=await _ringkas_imprest(session, "kas_kecil"), kas_iklan=kas_iklan,
         bagian_admin_pratinjau=bagian_admin, bagian_owner_pratinjau=bagian_owner,
