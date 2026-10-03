@@ -46,7 +46,7 @@ _th_putih = ParagraphStyle("thp", parent=_th, textColor=colors.white)
 
 
 def _kepala(judul: str, perusahaan, minggu, kiri_baris: list[tuple[str, str]], kanan: list[Paragraph]) -> list:
-    logo = Image(str(LOGO), width=24 * mm, height=24 * mm) if LOGO.exists() else Spacer(24 * mm, 24 * mm)
+    logo = Image(str(LOGO), width=24 * mm, height=24 * mm, mask="auto") if LOGO.exists() else Spacer(24 * mm, 24 * mm)
     alamat = [Paragraph(baris, _normal) for baris in perusahaan.alamat.split(", Kec.")]
     if len(alamat) > 1:
         alamat[1] = Paragraph("Kec." + perusahaan.alamat.split(", Kec.")[1], _normal)
