@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from datetime import date
+import logging
 import os
 from decimal import Decimal
 from typing import TYPE_CHECKING
@@ -55,6 +56,8 @@ from tenants.store.modules.store.infrastructure.models import (
     PembeliStore,
     VarianProduk,
 )
+
+logger = logging.getLogger(__name__)
 
 # Transisi status pengiriman yang diizinkan.
 _TRANSISI_STATUS_PENGIRIMAN = {
@@ -1017,10 +1020,30 @@ LABEL_STATUS_KURIR = {
 }
 
 
+# Free-text notes couriers add on their own, matched by phrase (lower case, first match wins).
+_FRASA_KURIR = (
+    ("on the way to destination", "Paket dalam perjalanan menuju tujuan"),
+    ("out for delivery", "Paket dalam pengantaran ke penerima"),
+    ("in transit", "Paket dalam perjalanan"),
+    ("picked up", "Paket sudah diambil kurir"),
+    ("delivered", "Paket sudah diterima"),
+    ("returned", "Paket dikembalikan ke pengirim"),
+    ("returning", "Paket sedang dikembalikan ke pengirim"),
+)
+
+
 def catatan_indonesia(status: str, catatan_asli: str) -> str:
-    """The courier's own note is English and free text: show our Indonesian wording for the statuses we know and keep
-    the original text for anything else."""
-    return LABEL_STATUS_KURIR.get(status) or catatan_asli or status
+    """The courier's own note is English and free text: show our Indonesian wording for the statuses we know, then for
+    a few common phrases, and keep the original text for anything else (logged, so it can be added)."""
+    if status in LABEL_STATUS_KURIR:
+        return LABEL_STATUS_KURIR[status]
+    teks = catatan_asli.lower()
+    for frasa, terjemahan in _FRASA_KURIR:
+        if frasa in teks:
+            return terjemahan
+    if catatan_asli:
+        logger.info("Biteship: catatan belum diterjemahkan (status=%r): %s", status, catatan_asli)
+    return catatan_asli or status
 
 
 _EVENT_WEBHOOK_BITESHIP = {"order.status", "order.waybill_id"}

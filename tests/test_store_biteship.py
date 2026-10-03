@@ -531,3 +531,9 @@ def test_courier_statuses_are_shown_in_indonesian_and_unknown_text_is_kept():
     assert services.catatan_indonesia("some_new_status", "Sorting at hub") == "Sorting at hub"
     assert services.catatan_indonesia("some_new_status", "") == "some_new_status"
     assert set(services.LABEL_STATUS_KURIR) >= {"picked", "dropping_off", "delivered", "returned", "cancelled"}
+
+
+def test_free_text_courier_notes_are_translated_by_phrase():
+    assert services.catatan_indonesia("", "Item is on the way to destination") == "Paket dalam perjalanan menuju tujuan"
+    assert services.catatan_indonesia("whatever", "Shipment OUT FOR DELIVERY at hub") == "Paket dalam pengantaran ke penerima"
+    assert services.catatan_indonesia("whatever", "Barang sedang disortir") == "Barang sedang disortir"  # unknown text kept
