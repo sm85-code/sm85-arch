@@ -22,6 +22,10 @@ from tenants.bumi_lestari.modules.bumi_lestari.application.schemas import (
     KategoriOut,
     LoginIn,
     PengisianKasKecilOut,
+    ProfilIn,
+    ProfilOut,
+    ProporsiIn,
+    ProporsiItemOut,
     TransaksiIn,
     TransaksiOut,
     TransferIn,
@@ -251,3 +255,43 @@ async def catat_pengisian(
     user: BlUser = Depends(require_roles_bumi_lestari(*OWNER_ONLY)),
 ):
     return await services.catat_pengisian_kas_kecil(session, user)
+
+
+# --- Profil UMKM & proporsi bagi hasil -------------------------------------------------
+
+
+async def _profil_out(session: AsyncSession) -> ProfilOut:
+    profil = await services.get_profil(session)
+    proporsi = [ProporsiItemOut.model_validate(p) for p in await services.get_proporsi(session)]
+    return ProfilOut(
+        nama_usaha=profil.nama_usaha, alamat=profil.alamat, telepon=profil.telepon,
+        email=profil.email, catatan=profil.catatan, proporsi_bagi_hasil=proporsi,
+    )
+
+
+@bumi_lestari_router.get("/profil", response_model=ProfilOut)
+async def get_profil(
+    session: AsyncSession = Depends(get_db_bumi_lestari),
+    _: BlUser = Depends(require_roles_bumi_lestari(*OWNER_ONLY)),
+):
+    return await _profil_out(session)
+
+
+@bumi_lestari_router.put("/profil", response_model=ProfilOut)
+async def update_profil(
+    payload: ProfilIn,
+    session: AsyncSession = Depends(get_db_bumi_lestari),
+    _: BlUser = Depends(require_roles_bumi_lestari(*OWNER_ONLY)),
+):
+    await services.update_profil(session, payload)
+    return await _profil_out(session)
+
+
+@bumi_lestari_router.put("/profil/proporsi-bagi-hasil", response_model=ProfilOut)
+async def set_proporsi_bagi_hasil(
+    payload: ProporsiIn,
+    session: AsyncSession = Depends(get_db_bumi_lestari),
+    _: BlUser = Depends(require_roles_bumi_lestari("admin")),
+):
+    await services.set_proporsi(session, payload)
+    return await _profil_out(session)

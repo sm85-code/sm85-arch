@@ -157,3 +157,35 @@ class PengisianKasKecilOut(BaseModel):
     perlu_diisi: Decimal
     saldo_kas_utama: Decimal
     cukup: bool
+
+
+class ProfilIn(BaseModel):
+    nama_usaha: str = Field(min_length=1, max_length=255)
+    alamat: str = Field(default="", max_length=1000)
+    telepon: str = Field(default="", max_length=64)
+    email: str = Field(default="", max_length=255)
+    catatan: str = Field(default="", max_length=2000)
+
+
+class ProporsiItemIn(BaseModel):
+    label: str = Field(min_length=1, max_length=128)
+    user_id: Optional[str] = None
+    persen: Decimal = Field(ge=0, le=100, max_digits=5, decimal_places=2)
+
+
+class ProporsiItemOut(ProporsiItemIn):
+    id: str
+    model_config = ConfigDict(from_attributes=True)
+
+
+class ProporsiIn(BaseModel):
+    items: list[ProporsiItemIn] = Field(min_length=1, max_length=20)
+
+
+class ProfilOut(BaseModel):
+    nama_usaha: str
+    alamat: str
+    telepon: str
+    email: str
+    catatan: str
+    proporsi_bagi_hasil: list[ProporsiItemOut]

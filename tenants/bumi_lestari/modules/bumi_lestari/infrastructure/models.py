@@ -11,7 +11,7 @@ from datetime import date, datetime, timezone
 from decimal import Decimal
 from typing import Optional
 
-from sqlalchemy import Boolean, Date, DateTime, ForeignKey, Numeric, String, Text
+from sqlalchemy import Boolean, Date, DateTime, ForeignKey, Integer, Numeric, String, Text
 from sqlalchemy.orm import Mapped, mapped_column
 
 from tenants.bumi_lestari.modules.bumi_lestari.infrastructure.database import BumiLestariBase
@@ -105,3 +105,36 @@ class BlTransfer(BumiLestariBase):
     dibatalkan_at: Mapped[Optional[datetime]] = mapped_column(DateTime(timezone=True), nullable=True)
     alasan_batal: Mapped[Optional[str]] = mapped_column(Text, nullable=True)
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=_utcnow)
+
+
+PROFIL_ID = "profil"
+
+
+class BlProfil(BumiLestariBase):
+    """Profil UMKM -- satu baris (id = PROFIL_ID)."""
+
+    __tablename__ = "bl_profil"
+
+    id: Mapped[str] = mapped_column(String(64), primary_key=True, default=PROFIL_ID)
+    nama_usaha: Mapped[str] = mapped_column(String(255), nullable=False, default="Bumi Lestari")
+    alamat: Mapped[str] = mapped_column(Text, nullable=False, default="")
+    telepon: Mapped[str] = mapped_column(String(64), nullable=False, default="")
+    email: Mapped[str] = mapped_column(String(255), nullable=False, default="")
+    catatan: Mapped[str] = mapped_column(Text, nullable=False, default="")
+    updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=_utcnow, onupdate=_utcnow)
+
+
+class BlProporsiBagiHasil(BumiLestariBase):
+    """Proporsi bagi hasil dari laba bersih. Jumlah persen semua baris harus 100.
+
+    Diubah dari halaman profil UMKM; perhitungan bagi hasil periode menyalin (snapshot)
+    proporsi yang berlaku saat dihitung, jadi perubahan tidak mengubah periode lama.
+    """
+
+    __tablename__ = "bl_proporsi_bagi_hasil"
+
+    id: Mapped[str] = mapped_column(String(64), primary_key=True, default=_uuid)
+    urutan: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
+    label: Mapped[str] = mapped_column(String(128), nullable=False)
+    user_id: Mapped[Optional[str]] = mapped_column(String(64), nullable=True)
+    persen: Mapped[Decimal] = mapped_column(Numeric(5, 2), nullable=False)

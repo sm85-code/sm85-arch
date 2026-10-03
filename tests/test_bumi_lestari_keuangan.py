@@ -12,6 +12,9 @@ from tenants.bumi_lestari.modules.bumi_lestari.application.schemas import (
     AkunKasIn,
     ChangePasswordIn,
     LoginIn,
+    ProfilIn,
+    ProporsiIn,
+    ProporsiItemIn,
     TransaksiIn,
     TransferIn,
     UserCreateIn,
@@ -225,3 +228,22 @@ async def test_admin_above_owner_for_account_management(session):
     staf = await services.create_user(session, owner, UserCreateIn(nama="S", email="s@t.com", password="rahasia123", role="staff"))
     assert staf.role == "staff"
     await services.create_user(session, admin, UserCreateIn(nama="O2", email="o2@t.com", password="rahasia123", role="owner"))
+
+
+@pytest.mark.asyncio
+async def test_profil_and_proporsi_bagi_hasil_configurable(session):
+    profil = await services.update_profil(session, ProfilIn(nama_usaha=" Bumi Lestari ", alamat="Jl. Kayu 1"))
+    assert profil.nama_usaha == "Bumi Lestari"
+
+    def items(*pairs):
+        return ProporsiIn(items=[ProporsiItemIn(label=nama, persen=Decimal(persen)) for nama, persen in pairs])
+
+    rows = await services.set_proporsi(session, items(("Admin", "40"), ("Owner", "60")))
+    assert [(r.label, r.persen) for r in rows] == [("Admin", 40), ("Owner", 60)]
+    rows = await services.set_proporsi(session, items(("Admin", "35"), ("Owner", "55"), ("Dana cadangan", "10")))
+    assert [r.label for r in await services.get_proporsi(session)] == ["Admin", "Owner", "Dana cadangan"]
+    for bad in (items(("Admin", "50"), ("Owner", "60")), items(("Admin", "50"), ("admin", "50"))):
+        with pytest.raises(HTTPException) as exc:
+            await services.set_proporsi(session, bad)
+        assert exc.value.status_code == 400
+    assert len(await services.get_proporsi(session)) == 3  # gagal tidak mengubah apa pun

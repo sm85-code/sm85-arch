@@ -21,6 +21,7 @@ from tenants.bumi_lestari.modules.bumi_lestari.infrastructure.models import (
     PLAFON_KAS_KECIL_DEFAULT,
     BlAkunKas,
     BlKategori,
+    BlProporsiBagiHasil,
     BlUser,
 )
 
@@ -93,6 +94,10 @@ async def seed_bumi_lestari(session: AsyncSession) -> dict[str, str]:
     for nama, jenis in DEFAULT_KATEGORI:
         if (await session.execute(select(BlKategori.id).where(BlKategori.nama == nama))).first() is None:
             session.add(BlKategori(nama=nama, jenis=jenis))
+    # Nilai awal proporsi bagi hasil -- hanya dibuat sekali; selanjutnya diubah dari halaman profil UMKM.
+    if (await session.execute(select(BlProporsiBagiHasil.id))).first() is None:
+        for urutan, (label, persen) in enumerate((("Admin", 40), ("Owner", 60))):
+            session.add(BlProporsiBagiHasil(urutan=urutan, label=label, persen=persen))
     await session.commit()
     return {"owner_email": email, "status": "ok"}
 

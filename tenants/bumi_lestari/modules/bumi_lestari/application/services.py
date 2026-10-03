@@ -14,6 +14,8 @@ from tenants.bumi_lestari.modules.bumi_lestari.application.schemas import (
     AkunKasIn,
     ChangePasswordIn,
     KategoriIn,
+    ProfilIn,
+    ProporsiIn,
     LoginIn,
     TransaksiIn,
     TransferIn,
@@ -24,8 +26,11 @@ from tenants.bumi_lestari.modules.bumi_lestari.infrastructure.models import (
     JENIS_KATEGORI,
     JENIS_TRANSAKSI,
     KODE_KAS_UTAMA,
+    PROFIL_ID,
     BlAkunKas,
     BlKategori,
+    BlProfil,
+    BlProporsiBagiHasil,
     BlTransaksi,
     BlTransfer,
     BlUser,
@@ -338,3 +343,48 @@ async def catat_pengisian_kas_kecil(session: AsyncSession, user: BlUser) -> BlTr
         session, user, tanggal=None, dari=kas_utama, ke=kas_kecil, jumlah=info["perlu_diisi"],
         jenis="pengisian_kas_kecil", keterangan=f"Pengisian kas kecil ke plafon ({_hari_ini():%d-%m-%Y})",
     )
+
+
+# --- Profil UMKM & proporsi bagi hasil -----------------------------------------------
+
+
+async def get_profil(session: AsyncSession) -> BlProfil:
+    profil = await session.get(BlProfil, PROFIL_ID)
+    if profil is None:
+        profil = BlProfil(id=PROFIL_ID)
+        session.add(profil)
+        await session.flush()
+    return profil
+
+
+async def update_profil(session: AsyncSession, payload: ProfilIn) -> BlProfil:
+    profil = await get_profil(session)
+    for kolom, nilai in payload.model_dump().items():
+        setattr(profil, kolom, nilai.strip())
+    await session.flush()
+    return profil
+
+
+async def get_proporsi(session: AsyncSession) -> list[BlProporsiBagiHasil]:
+    stmt = select(BlProporsiBagiHasil).order_by(BlProporsiBagiHasil.urutan)
+    return list((await session.execute(stmt)).scalars())
+
+
+async def set_proporsi(session: AsyncSession, payload: ProporsiIn) -> list[BlProporsiBagiHasil]:
+    """Ganti seluruh proporsi bagi hasil (admin). Total persen harus tepat 100."""
+    total = sum((item.persen for item in payload.items), Decimal("0"))
+    if total != Decimal("100"):
+        raise _bad(f"Total proporsi harus 100%, sekarang {total}%")
+    labels = [i.label.strip().lower() for i in payload.items]
+    if len(set(labels)) != len(labels):
+        raise _bad("Label penerima tidak boleh sama")
+    for lama in await get_proporsi(session):
+        await session.delete(lama)
+    await session.flush()
+    baru = [
+        BlProporsiBagiHasil(urutan=i, label=item.label.strip(), user_id=item.user_id, persen=item.persen)
+        for i, item in enumerate(payload.items)
+    ]
+    session.add_all(baru)
+    await session.flush()
+    return baru

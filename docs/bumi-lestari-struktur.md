@@ -138,8 +138,12 @@ Efek ke keuangan:
   gaji bulan itu), `POST /gaji/{id}/bayar`.
 
 **Bagi hasil admin 40% : owner 60% dari laba bersih:**
-- `bl_pengaturan`: `persen_admin` = 40, `persen_owner` = 60 (harus berjumlah 100, hanya admin
-  yang boleh mengubah).
+- **Tidak di-hardcode.** Proporsi disimpan di `bl_proporsi_bagi_hasil` (label, user_id opsional,
+  persen; total harus tepat 100) dan diubah dari **halaman Profil UMKM**
+  (`GET/PUT /profil`, `PUT /profil/proporsi-bagi-hasil`, perubahan proporsi hanya admin).
+  Nilai awal Admin 40 / Owner 60 hanya data seed. Penerima bisa ditambah (mis. dana cadangan).
+- Setiap perhitungan bagi hasil menyimpan **snapshot** proporsi saat dihitung, jadi mengubah
+  proporsi tidak mengubah periode yang sudah dihitung.
 - Laba bersih periode = semua pemasukan − semua pengeluaran periode itu (biaya produksi
   tukang, gaji, operasional kas kecil, transport, packing, dll). **Tidak dihitung sebagai
   biaya:** transfer antar akun, kategori "Prive" dan "Bagi hasil".
@@ -169,7 +173,7 @@ Efek ke keuangan:
 5. **Utang & Piutang** — semua utang, jatuh tempo.
 6. **Laporan** — laba-rugi, arus kas, laba per produk, ekspor.
 7. **Master** — akun kas, kategori, produk, tukang.
-8. **Pengaturan** — ganti password, hari bayar (default Selasa).
+8. **Profil UMKM** — nama usaha, alamat, kontak, **proporsi bagi hasil** (bisa diubah), ganti password, hari bayar (default Selasa).
 
 ## 6. Asumsi yang perlu dikonfirmasi
 
