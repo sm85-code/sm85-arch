@@ -8,6 +8,7 @@ from fastapi import HTTPException, status
 from sqlalchemy import func, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from tenants.bumi_lestari.modules.bumi_lestari.application.kiriman_services import ringkasan_draf
 from tenants.bumi_lestari.modules.bumi_lestari.application.laba_core import ringkasan_laba
 from tenants.bumi_lestari.modules.bumi_lestari.application.schemas_laporan import (
     ArusAkunOut,
@@ -36,18 +37,23 @@ from tenants.bumi_lestari.modules.bumi_lestari.application.services import (
 from tenants.bumi_lestari.modules.bumi_lestari.application.pembayaran_services import (
     _rentang_periode,
     list_piutang_reseller,
+    minggu_tagihan,
+    order_reseller_belum_dibayar,
     selasa_acuan,
     siap_bayar_pemasok,
+    tagihan_order,
 )
 from tenants.bumi_lestari.modules.bumi_lestari.infrastructure.models import (
     KODE_DANA_CADANGAN,
+    STATUS_DRAF,
+    STATUS_TERKIRIM,
     BlAkunKas,
     BlKategori,
     BlTransaksi,
     BlTransfer,
     BlUser,
 )
-from tenants.bumi_lestari.modules.bumi_lestari.infrastructure.models_order import BlOrder
+from tenants.bumi_lestari.modules.bumi_lestari.infrastructure.models_order import BlOrder, BlSaluran
 
 
 def _baris(items) -> list[BarisKategoriOut]:
@@ -79,7 +85,8 @@ async def laporan_umum(session: AsyncSession, user: BlUser, dari: date | None, s
         async def trx(jenis: str, a=akun):
             return await _jumlah(
                 session, BlTransaksi, BlTransaksi.jumlah, BlTransaksi.akun_id == a.id, BlTransaksi.jenis == jenis,
-                BlTransaksi.dibatalkan.is_(False), BlTransaksi.tanggal >= dari, BlTransaksi.tanggal <= sampai,
+                BlTransaksi.dibatalkan.is_(False), BlTransaksi.status_kirim == STATUS_TERKIRIM,
+                BlTransaksi.tanggal >= dari, BlTransaksi.tanggal <= sampai,
             )
 
         async def trf(kolom, a=akun):
@@ -103,6 +110,7 @@ async def laporan_umum(session: AsyncSession, user: BlUser, dari: date | None, s
         di_luar_laba=_baris(ringkas.di_luar_laba), arus_kas=arus,
         total_kas_awal=sum((a.saldo_awal for a in arus), Decimal("0")),
         total_kas_akhir=sum((a.saldo_akhir for a in arus), Decimal("0")),
+        draf_belum_dikirim=[d for d in await ringkasan_draf(session, user, sampai=sampai, rinci=False) if d.jumlah_entri],
     )
 
 
@@ -135,11 +143,16 @@ async def laporan_imprest(
             .join(BlKategori, BlKategori.id == BlTransaksi.kategori_id)
             .where(
                 BlTransaksi.akun_id == akun.id, BlTransaksi.jenis == "keluar", BlTransaksi.dibatalkan.is_(False),
-                BlTransaksi.tanggal >= awal, BlTransaksi.tanggal <= akhir,
+                BlTransaksi.status_kirim == STATUS_TERKIRIM, BlTransaksi.tanggal >= awal, BlTransaksi.tanggal <= akhir,
             )
             .order_by(BlTransaksi.tanggal, BlTransaksi.created_at)
         )
     ).all()
+    total_draf = await _jumlah(
+        session, BlTransaksi, BlTransaksi.jumlah, BlTransaksi.akun_id == akun.id, BlTransaksi.jenis == "keluar",
+        BlTransaksi.dibatalkan.is_(False), BlTransaksi.status_kirim == STATUS_DRAF,
+        BlTransaksi.tanggal >= awal, BlTransaksi.tanggal <= akhir,
+    )
     transaksi = [TransaksiLaporanOut(tanggal=t.tanggal, kategori=k, keterangan=t.keterangan, jumlah=t.jumlah) for t, k in rows]
     per_kategori: dict[str, BarisKategoriOut] = {}
     for t in transaksi:
@@ -175,6 +188,7 @@ async def laporan_imprest(
         total_pengisian=sum((Decimal(p.jumlah) for p in pengisian), Decimal("0")),
         saldo_akhir=saldo_akhir, sesuai_plafon=saldo_akhir == Decimal(akun.plafon),
         per_kategori=list(per_kategori.values()), per_minggu=per_minggu, transaksi=transaksi, pengisian=pengisian,
+        total_draf_belum_dikirim=total_draf,
     )
     if saldo_fisik is not None:
         out.saldo_fisik = saldo_fisik
@@ -199,10 +213,21 @@ async def dashboard(session: AsyncSession, user: BlUser, periode: str | None = N
 
     akun = [
         AkunSaldoOut(id=a.id, kode=a.kode, nama=a.nama, jenis=a.jenis, saldo=saldo, plafon=a.plafon)
-        for a, saldo in await list_akun(session, user)
+        for a, saldo, _fisik in await list_akun(session, user)
     ]
     status_hitung = (
-        await session.execute(select(BlOrder.status, func.count(BlOrder.id)).group_by(BlOrder.status))
+        await session.execute(
+            select(BlOrder.status, func.count(BlOrder.id))
+            .where(BlOrder.tanggal_order >= awal, BlOrder.tanggal_order <= akhir)
+            .group_by(BlOrder.status)
+        )
+    ).all()
+    aktif_hitung = (
+        await session.execute(
+            select(BlOrder.status, func.count(BlOrder.id))
+            .where(BlOrder.status.not_in(("selesai", "batal")))
+            .group_by(BlOrder.status)
+        )
     ).all()
     orders = (
         await session.execute(
@@ -214,6 +239,21 @@ async def dashboard(session: AsyncSession, user: BlUser, periode: str | None = N
     siap = await siap_bayar_pemasok(session, hari_ini)
     piutang = sum((g.subtotal for g in await list_piutang_reseller(session)), Decimal("0"))
     dana = await saldo_akun(session, await _akun_by_kode(session, KODE_DANA_CADANGAN))
+    _, sabtu_lalu = minggu_tagihan(selasa_acuan(hari_ini))
+    tagihan_minggu = sum(
+        (tagihan_order(o) for o, _p in await order_reseller_belum_dibayar(session, sampai_kirim=sabtu_lalu)), Decimal("0")
+    )
+    dikirim_mp = (
+        await session.execute(
+            select(BlOrder)
+            .join(BlSaluran, BlSaluran.id == BlOrder.saluran_id)
+            .where(BlSaluran.jenis == "marketplace", BlOrder.status == "dikirim")
+        )
+    ).scalars().all()
+    belum_cair = sum(
+        (OrderOut.model_validate(o).total_penjualan - Decimal(o.potongan_marketplace) for o in dikirim_mp), Decimal("0")
+    )
+    draf = [d for d in await ringkasan_draf(session, user, rinci=False) if d.jumlah_entri]
 
     kas_iklan = await _ringkas_imprest(session, "kas_iklan") if _is_admin(user) else None
     proporsi = {p.penerima: Decimal(p.persen) for p in await get_proporsi(session)}
@@ -227,6 +267,8 @@ async def dashboard(session: AsyncSession, user: BlUser, periode: str | None = N
         periode=periode, selasa=selasa_acuan(hari_ini), akun=akun, total_kas=sum((a.saldo for a in akun), Decimal("0")),
         pemasukan_bulan_ini=ringkas.total_pemasukan, biaya_bulan_ini=ringkas.total_biaya, laba_bulan_ini=ringkas.laba,
         order_per_status={s: int(n) for s, n in status_hitung}, order_bulan_ini=len(orders), omzet_order_bulan_ini=omzet,
+        order_aktif_per_status={s: int(n) for s, n in aktif_hitung},
+        tagihan_penjual_lain_minggu_ini=tagihan_minggu, belum_cair_sementara=belum_cair, draf_belum_dikirim=draf,
         piutang_penjual_lain=piutang, utang_pemasok_siap_bayar=siap.total, dana_cadangan=dana,
         kas_kecil=await _ringkas_imprest(session, "kas_kecil"), kas_iklan=kas_iklan,
         bagian_admin_pratinjau=bagian_admin, bagian_owner_pratinjau=bagian_owner,

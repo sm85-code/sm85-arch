@@ -24,6 +24,12 @@ from tenants.bumi_lestari.modules.bumi_lestari.application.schemas_order import 
 )
 from tenants.bumi_lestari.modules.bumi_lestari.application.services import _hari_ini, get_profil
 from tenants.bumi_lestari.modules.bumi_lestari.infrastructure.models import BlAkunKas
+from tenants.bumi_lestari.modules.bumi_lestari.infrastructure.models_pembayaran import (
+    BlPembayaranPemasok,
+    BlPembayaranPemasokItem,
+    BlPenerimaanReseller,
+    BlPenerimaanResellerItem,
+)
 from tenants.bumi_lestari.modules.bumi_lestari.infrastructure.models_order import (
     JENIS_PACKING,
     JENIS_PEMASOK,
@@ -246,6 +252,62 @@ async def list_harga_grosir(session: AsyncSession, pelanggan_id: str | None = No
 # --- Order -------------------------------------------------------------------------------
 
 
+# Kolom yang tetap boleh diubah setelah order dibayar (tidak memengaruhi uang).
+KOLOM_BEBAS_SETELAH_DIBAYAR = frozenset({"nama_pembeli", "warna", "catatan"})
+
+
+async def status_bayar_order(session: AsyncSession, order_ids: list[str] | None = None) -> tuple[set[str], set[str]]:
+    """(order yang ada di pembayaran tukang aktif, order yang ada di penerimaan penjual lain aktif) --
+    draf maupun terkirim (spesifikasi AB-OR-4, AB-KR-7)."""
+    q_tukang = (
+        select(BlPembayaranPemasokItem.order_id)
+        .join(BlPembayaranPemasok, BlPembayaranPemasok.id == BlPembayaranPemasokItem.pembayaran_id)
+        .where(BlPembayaranPemasok.dibatalkan.is_(False))
+    )
+    q_jual = (
+        select(BlPenerimaanResellerItem.order_id)
+        .join(BlPenerimaanReseller, BlPenerimaanReseller.id == BlPenerimaanResellerItem.penerimaan_id)
+        .where(BlPenerimaanReseller.dibatalkan.is_(False))
+    )
+    if order_ids is not None:
+        q_tukang = q_tukang.where(BlPembayaranPemasokItem.order_id.in_(order_ids))
+        q_jual = q_jual.where(BlPenerimaanResellerItem.order_id.in_(order_ids))
+    return set((await session.execute(q_tukang)).scalars()), set((await session.execute(q_jual)).scalars())
+
+
+async def lengkapi_status_bayar(session: AsyncSession, orders: list[BlOrder]) -> list[BlOrder]:
+    """Tempel badge dibayar_tukang / dibayar_penjual_lain (atribut sementara, dibaca OrderOut)."""
+    tukang, jual = await status_bayar_order(session, [o.id for o in orders])
+    for o in orders:
+        o.dibayar_tukang = o.id in tukang
+        o.dibayar_penjual_lain = o.id in jual
+    return orders
+
+
+def _pesan_terkunci(order: BlOrder) -> str:
+    asal = "pembayaran tukang/supplier" if order.dibayar_tukang else "penerimaan penjual lain"
+    return f"Order sudah masuk {asal}; keluarkan dulu dari draf (atau batalkan kirimannya) untuk mengubahnya"
+
+
+async def _cek_no_order(
+    session: AsyncSession, saluran: BlSaluran, no_order: str, tanggal_order: date, kecuali_id: str | None = None
+) -> None:
+    """Order marketplace wajib nomor pesanan, unik per saluran. Satu pesanan bisa berisi beberapa barang (beberapa
+    baris order): baris dengan nomor & tanggal order yang sama dianggap pesanan yang sama."""
+    if saluran.jenis != "marketplace":
+        return
+    if not no_order:
+        raise _bad(f"Nomor pesanan wajib diisi untuk order {saluran.nama}", 422)
+    stmt = select(BlOrder.tanggal_order).where(
+        BlOrder.saluran_id == saluran.id, BlOrder.no_order == no_order, BlOrder.status != STATUS_BATAL
+    )
+    if kecuali_id:
+        stmt = stmt.where(BlOrder.id != kecuali_id)
+    for (tgl,) in (await session.execute(stmt)).all():
+        if tgl != tanggal_order:
+            raise _bad(f"Nomor pesanan {no_order} sudah dipakai di {saluran.nama}", status.HTTP_409_CONFLICT)
+
+
 def alur_status(produk: BlProduk, butuh_cat: bool) -> tuple[str, ...]:
     if produk.jenis_produk == "non_kayu":
         return STATUS_ORDER_NON_KAYU
@@ -310,10 +372,12 @@ async def create_order(session: AsyncSession, payload: OrderIn) -> BlOrder:
         butuh_cat = False
     if not butuh_cat:
         harga_cat_jasa = Decimal("0")  # order polos: tidak ada komponen cat
+    tanggal_order = payload.tanggal_order or _hari_ini()
+    await _cek_no_order(session, saluran, payload.no_order.strip(), tanggal_order)
 
     order = BlOrder(
         no_order=payload.no_order.strip(),
-        tanggal_order=payload.tanggal_order or _hari_ini(),
+        tanggal_order=tanggal_order,
         saluran_id=saluran.id,
         pelanggan_id=payload.pelanggan_id,
         nama_pembeli=payload.nama_pembeli.strip(),
@@ -334,6 +398,7 @@ async def create_order(session: AsyncSession, payload: OrderIn) -> BlOrder:
     )
     session.add(order)
     await session.flush()
+    order.dibayar_tukang = order.dibayar_penjual_lain = False
     return order
 
 
@@ -341,6 +406,7 @@ async def get_order(session: AsyncSession, order_id: str) -> BlOrder:
     order = await session.get(BlOrder, order_id)
     if order is None:
         raise _bad("Order tidak ditemukan", status.HTTP_404_NOT_FOUND)
+    await lengkapi_status_bayar(session, [order])
     return order
 
 
@@ -367,7 +433,7 @@ async def list_order(
         stmt = stmt.where(BlOrder.tanggal_order >= dari)
     if sampai:
         stmt = stmt.where(BlOrder.tanggal_order <= sampai)
-    return list((await session.execute(stmt)).scalars())
+    return await lengkapi_status_bayar(session, list((await session.execute(stmt)).scalars()))
 
 
 async def update_order(session: AsyncSession, order_id: str, payload: OrderPatch) -> BlOrder:
@@ -375,6 +441,23 @@ async def update_order(session: AsyncSession, order_id: str, payload: OrderPatch
     if order.status in ("selesai", STATUS_BATAL):
         raise _bad("Order yang sudah selesai/batal tidak bisa diubah", status.HTTP_409_CONFLICT)
     data = payload.model_dump(exclude_unset=True)
+    if order.dibayar_tukang or order.dibayar_penjual_lain:
+        def _berubah(kolom, nilai):
+            lama = getattr(order, kolom)
+            if isinstance(nilai, str):
+                nilai = nilai.strip()
+            if isinstance(lama, Decimal) and nilai is not None:
+                return Decimal(lama) != Decimal(nilai)
+            return lama != nilai
+        terkunci = [
+            k for k, v in data.items()
+            if k not in KOLOM_BEBAS_SETELAH_DIBAYAR and (v is not None or k == "pemasok_id") and _berubah(k, v)
+        ]
+        if terkunci:
+            raise _bad(_pesan_terkunci(order), status.HTTP_409_CONFLICT)
+    if data.get("no_order") is not None:
+        saluran = await session.get(BlSaluran, order.saluran_id)
+        await _cek_no_order(session, saluran, data["no_order"].strip(), order.tanggal_order, kecuali_id=order.id)
     produk = await session.get(BlProduk, order.produk_id)
     if "pemasok_id" in data:
         await _cek_pemasok(session, produk, data["pemasok_id"])
@@ -411,6 +494,8 @@ async def ubah_status_order(session: AsyncSession, order_id: str, payload: Order
     if order.status in ("selesai", STATUS_BATAL):
         raise _bad("Order sudah selesai/batal", status.HTTP_409_CONFLICT)
     if payload.status == STATUS_BATAL:
+        if order.dibayar_tukang or order.dibayar_penjual_lain:
+            raise _bad(_pesan_terkunci(order), status.HTTP_409_CONFLICT)
         order.status = STATUS_BATAL
         await session.flush()
         return order

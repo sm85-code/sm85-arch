@@ -7,7 +7,7 @@ from fastapi import HTTPException
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker, create_async_engine
 
-from tenants.bumi_lestari.modules.bumi_lestari.application import services
+from tenants.bumi_lestari.modules.bumi_lestari.application import kiriman_services, services
 from tenants.bumi_lestari.modules.bumi_lestari.application.schemas import (
     AkunKasIn,
     ChangePasswordIn,
@@ -64,7 +64,7 @@ async def _isi_kas_utama(session, owner, jumlah):
     ku = await _akun(session, "KAS_UTAMA")
     await services.create_transaksi(
         session, owner,
-        TransaksiIn(akun_id=ku.id, kategori_id=(await _kat(session, "Penjualan marketplace")).id, jenis="masuk", jumlah=jumlah),
+        TransaksiIn(akun_id=ku.id, kategori_id=(await _kat(session, "Pemasukan lain")).id, jenis="masuk", jumlah=jumlah),
     )
     return ku
 
@@ -104,7 +104,7 @@ async def test_transaksi_jenis_must_match_kategori(session):
     with pytest.raises(HTTPException) as exc:
         await services.create_transaksi(
             session, owner,
-            TransaksiIn(akun_id=ku.id, kategori_id=(await _kat(session, "Penjualan marketplace")).id, jenis="keluar", jumlah=Decimal("1")),
+            TransaksiIn(akun_id=ku.id, kategori_id=(await _kat(session, "Pemasukan lain")).id, jenis="keluar", jumlah=Decimal("1")),
         )
     assert exc.value.status_code == 400
 
@@ -120,7 +120,7 @@ async def test_transfer_needs_enough_balance(session):
     assert exc.value.status_code == 400
     await services.create_transaksi(
         session, owner,
-        TransaksiIn(akun_id=shopee.id, kategori_id=(await _kat(session, "Penjualan marketplace")).id, jenis="masuk", jumlah=Decimal("500000")),
+        TransaksiIn(akun_id=shopee.id, kategori_id=(await _kat(session, "Pemasukan lain")).id, jenis="masuk", jumlah=Decimal("500000")),
     )
     await services.create_transfer(session, owner, TransferIn(dari_akun_id=shopee.id, ke_akun_id=ku.id, jumlah=Decimal("500000")))
     assert await services.saldo_akun(session, shopee) == 0
@@ -146,6 +146,10 @@ async def test_kas_kecil_imprest_refill_to_plafon(session):
 
     transfer = await services.catat_pengisian_kas_kecil(session, owner)
     assert transfer.jumlah == Decimal("400000") and transfer.jenis == "pengisian_kas_kecil"
+    # Pengeluaran staf masih draf: uang fisik kembali ke plafon, saldo resmi menunggu "Kirim ke laporan keuangan".
+    assert await services.saldo_akun(session, kk, termasuk_draf=True) == Decimal("3000000")
+    assert await services.saldo_akun(session, kk) == Decimal("3400000")
+    await kiriman_services.kirim(session, owner, "kas_kecil")
     assert await services.saldo_akun(session, kk) == Decimal("3000000")
     assert await services.saldo_akun(session, ku) == Decimal("1600000")
 
@@ -174,7 +178,7 @@ async def test_staf_hanya_pengeluaran_kas_kecil(session):
 
     for payload in (
         TransaksiIn(akun_id=ku.id, kategori_id=ops.id, jenis="keluar", jumlah=Decimal("1000")),
-        TransaksiIn(akun_id=kk.id, kategori_id=(await _kat(session, "Penjualan marketplace")).id, jenis="masuk", jumlah=Decimal("1000")),
+        TransaksiIn(akun_id=kk.id, kategori_id=(await _kat(session, "Pemasukan lain")).id, jenis="masuk", jumlah=Decimal("1000")),
     ):
         with pytest.raises(HTTPException) as exc:
             await services.create_transaksi(session, staf, payload)
@@ -188,7 +192,7 @@ async def test_staf_hanya_pengeluaran_kas_kecil(session):
     assert exc.value.status_code == 400
 
     # staf hanya melihat akun & transaksi kas kecil
-    assert [a.kode for a, _ in await services.list_akun(session, staf)] == ["KAS_KECIL"]
+    assert [a.kode for a, *_ in await services.list_akun(session, staf)] == ["KAS_KECIL"]
     assert {t.akun_id for t in await services.list_transaksi(session, staf, akun_id=ku.id)} <= {kk.id}
 
 
@@ -203,6 +207,9 @@ async def test_kas_kecil_expense_shows_in_general_ledger(session):
         session, staf,
         TransaksiIn(akun_id=kk.id, kategori_id=(await _kat(session, "Transport")).id, jenis="keluar", jumlah=Decimal("50000")),
     )
+    assert not any(t.akun_id == kk.id for t in await services.list_transaksi(session, owner))  # masih draf
+    assert any(t.akun_id == kk.id for t in await services.list_transaksi(session, owner, termasuk_draf=True))
+    await kiriman_services.kirim(session, owner, "kas_kecil")
     semua = await services.list_transaksi(session, owner)
     assert any(t.akun_id == kk.id and t.jenis == "keluar" for t in semua)
 
@@ -277,9 +284,14 @@ async def test_kas_iklan_imprest_weekly_refill_to_plafon_admin_only(session):
         )
     assert exc.value.status_code == 400
 
-    assert "KAS_IKLAN" in [a.kode for a, _ in await services.list_akun(session, admin)]
+    assert "KAS_IKLAN" in [a.kode for a, *_ in await services.list_akun(session, admin)]
     for pelaku in (owner, staf):
-        assert "KAS_IKLAN" not in [a.kode for a, _ in await services.list_akun(session, pelaku)]
+        assert "KAS_IKLAN" not in [a.kode for a, *_ in await services.list_akun(session, pelaku)]
+    assert len(await services.list_transaksi(session, admin, akun_id=iklan.id, termasuk_draf=True)) == 1
+    with pytest.raises(HTTPException) as exc:  # kiriman kas iklan hanya admin
+        await kiriman_services.kirim(session, owner, "kas_iklan")
+    assert exc.value.status_code == 403
+    await kiriman_services.kirim(session, admin, "kas_iklan")
     assert len(await services.list_transaksi(session, admin, akun_id=iklan.id)) == 1
     assert all(t.akun_id != iklan.id for t in await services.list_transaksi(session, owner))
     with pytest.raises(HTTPException) as exc:
@@ -309,7 +321,7 @@ async def test_list_transfer_dan_batal(session):
     ku, shopee = await _akun(session, "KAS_UTAMA"), await _akun(session, "SALDO_SHOPEE")
     await services.create_transaksi(
         session, owner,
-        TransaksiIn(akun_id=shopee.id, kategori_id=(await _kat(session, "Penjualan marketplace")).id, jenis="masuk", jumlah=Decimal("900000")),
+        TransaksiIn(akun_id=shopee.id, kategori_id=(await _kat(session, "Pemasukan lain")).id, jenis="masuk", jumlah=Decimal("900000")),
     )
     t1 = await services.create_transfer(session, owner, TransferIn(dari_akun_id=shopee.id, ke_akun_id=ku.id, jumlah=Decimal("400000")))
     await services.create_transfer(session, owner, TransferIn(dari_akun_id=shopee.id, ke_akun_id=ku.id, jumlah=Decimal("100000")))
@@ -345,7 +357,7 @@ async def test_router_list_transfer_serializes(session):
     ku, shopee = await _akun(session, "KAS_UTAMA"), await _akun(session, "SALDO_SHOPEE")
     await services.create_transaksi(
         session, owner,
-        TransaksiIn(akun_id=shopee.id, kategori_id=(await _kat(session, "Penjualan marketplace")).id, jenis="masuk", jumlah=Decimal("300000")),
+        TransaksiIn(akun_id=shopee.id, kategori_id=(await _kat(session, "Pemasukan lain")).id, jenis="masuk", jumlah=Decimal("300000")),
     )
     await services.create_transfer(session, owner, TransferIn(dari_akun_id=shopee.id, ke_akun_id=ku.id, jumlah=Decimal("300000")))
     hasil = await router.list_transfer(session=session, user=owner)

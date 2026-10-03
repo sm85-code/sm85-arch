@@ -34,14 +34,21 @@ REF_SISIHAN = "sisihan"
 REF_TAGIHAN = "tagihan"
 
 
+class _Kirim:
+    """Status posting berkelompok (draf/terkirim) untuk sumber uang dari order (spesifikasi 8.14)."""
+
+    status_kirim: Mapped[str] = mapped_column(String(16), nullable=False, default="draf", server_default="terkirim")
+    kiriman_id: Mapped[Optional[str]] = mapped_column(String(64), nullable=True, index=True)
+
+
 class _Batal:
     dibatalkan: Mapped[bool] = mapped_column(Boolean, nullable=False, default=False)
     dibatalkan_at: Mapped[Optional[datetime]] = mapped_column(DateTime(timezone=True), nullable=True)
     alasan_batal: Mapped[Optional[str]] = mapped_column(Text, nullable=True)
 
 
-class BlPembayaranPemasok(_Batal, BumiLestariBase):
-    """Satu pembayaran per Selasa ke tukang kayu + supplier (dicatat 1 kali tiap Selasa)."""
+class BlPembayaranPemasok(_Kirim, _Batal, BumiLestariBase):
+    """Pembayaran ke tukang kayu + supplier untuk satu Selasa acuan (boleh lebih dari satu per minggu)."""
 
     __tablename__ = "bl_pembayaran_pemasok"
 
@@ -64,7 +71,7 @@ class BlPembayaranPemasokItem(BumiLestariBase):
     jumlah: Mapped[Decimal] = mapped_column(Numeric(14, 2), nullable=False)
 
 
-class BlPenerimaanReseller(_Batal, BumiLestariBase):
+class BlPenerimaanReseller(_Kirim, _Batal, BumiLestariBase):
     """Pembayaran dari penjual lain (reseller), biasanya tiap Selasa, untuk satu atau beberapa order."""
 
     __tablename__ = "bl_penerimaan_reseller"

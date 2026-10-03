@@ -11,7 +11,7 @@ from datetime import date, datetime, timezone
 from decimal import Decimal
 from typing import Optional
 
-from sqlalchemy import Boolean, Date, DateTime, ForeignKey, Integer, Numeric, String, Text, UniqueConstraint
+from sqlalchemy import Boolean, Date, DateTime, ForeignKey, Index, Integer, Numeric, String, Text, UniqueConstraint
 from sqlalchemy.orm import Mapped, mapped_column
 
 from tenants.bumi_lestari.modules.bumi_lestari.infrastructure.database import BumiLestariBase
@@ -36,6 +36,7 @@ STATUS_BATAL = "batal"
 
 class BlProduk(BumiLestariBase):
     __tablename__ = "bl_produk"
+    __table_args__ = (Index("uq_bl_produk_sumber", "sumber_sistem", "sumber_ref", unique=True),)
 
     id: Mapped[str] = mapped_column(String(64), primary_key=True, default=_uuid)
     sku: Mapped[str] = mapped_column(String(128), nullable=False, unique=True, index=True)
@@ -45,6 +46,9 @@ class BlProduk(BumiLestariBase):
     harga_jual: Mapped[Decimal] = mapped_column(Numeric(14, 2), nullable=False, default=Decimal("0"))
     biaya_pokok_default: Mapped[Decimal] = mapped_column(Numeric(14, 2), nullable=False, default=Decimal("0"))
     aktif: Mapped[bool] = mapped_column(Boolean, nullable=False, default=True)
+    # Referensi produk di sistem asal (store / marketplace_erp); pencocokan utama tetap lewat SKU.
+    sumber_sistem: Mapped[Optional[str]] = mapped_column(String(32), nullable=True)
+    sumber_ref: Mapped[Optional[str]] = mapped_column(String(255), nullable=True)
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=_utcnow)
 
 
@@ -109,6 +113,7 @@ class BlHargaGrosir(BumiLestariBase):
 
 class BlOrder(BumiLestariBase):
     __tablename__ = "bl_order"
+    __table_args__ = (Index("uq_bl_order_sumber", "sumber_sistem", "sumber_ref", unique=True),)
 
     id: Mapped[str] = mapped_column(String(64), primary_key=True, default=_uuid)
     no_order: Mapped[str] = mapped_column(String(128), nullable=False, default="", index=True)
@@ -139,4 +144,7 @@ class BlOrder(BumiLestariBase):
     tgl_dikirim: Mapped[Optional[date]] = mapped_column(Date, nullable=True)
     tgl_selesai: Mapped[Optional[date]] = mapped_column(Date, nullable=True)
     catatan: Mapped[str] = mapped_column(Text, nullable=False, default="")
+    # Referensi sistem asal (store / marketplace_erp) untuk sinkronisasi idempoten; lihat INTEGRASI.md.
+    sumber_sistem: Mapped[Optional[str]] = mapped_column(String(32), nullable=True)
+    sumber_ref: Mapped[Optional[str]] = mapped_column(String(255), nullable=True)
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=_utcnow)

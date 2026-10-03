@@ -13,6 +13,7 @@ class PembayaranPemasokIn(BaseModel):
     tanggal: Optional[date] = None
     akun_id: Optional[str] = None  # kosong -> Kas utama
     order_ids: Optional[list[str]] = None  # kosong -> semua yang siap dibayar
+    pemasok_id: Optional[str] = None  # isi -> hanya order pemasok ini (bayar per tukang/supplier)
 
 
 class ItemSiapBayarOut(BaseModel):
@@ -36,8 +37,9 @@ class PemasokSiapBayarOut(BaseModel):
 class SiapBayarOut(BaseModel):
     selasa: date
     batas_diambil: date  # Sabtu sebelum Selasa: order diambil s.d. tanggal ini ikut dibayar
-    sudah_dicatat_id: Optional[str]
-    total: Decimal
+    sudah_dicatat_id: Optional[str]  # pembayaran terakhir untuk Selasa ini (boleh lebih dari satu)
+    pembayaran_ids: list[str] = []
+    total: Decimal  # sisa yang belum dibayar
     pemasok: list[PemasokSiapBayarOut]
 
 
@@ -48,6 +50,8 @@ class PembayaranPemasokOut(BaseModel):
     akun_id: str
     total: Decimal
     dibatalkan: bool
+    status_kirim: str = "terkirim"
+    kiriman_id: Optional[str] = None
     model_config = ConfigDict(from_attributes=True)
 
 
@@ -80,7 +84,9 @@ class PiutangItemOut(BaseModel):
     order_id: str
     no_order: str
     tanggal_order: date
+    tgl_dikirim: Optional[date] = None
     jumlah: Decimal
+    terlambat: bool = False  # dikirim sebelum minggu tagihan (Senin-Sabtu minggu lalu)
 
 
 class PiutangPelangganOut(BaseModel):
@@ -97,6 +103,8 @@ class PenerimaanResellerOut(BaseModel):
     akun_id: str
     total: Decimal
     dibatalkan: bool
+    status_kirim: str = "terkirim"
+    kiriman_id: Optional[str] = None
     model_config = ConfigDict(from_attributes=True)
 
 

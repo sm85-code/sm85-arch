@@ -13,6 +13,7 @@ from fastapi import APIRouter, Depends, HTTPException, Request, Response, status
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from tenants.bumi_lestari.adapters.api.v1.bumi_lestari_dokumen_router import dokumen_router
+from tenants.bumi_lestari.adapters.api.v1.bumi_lestari_kiriman_router import kiriman_router
 from tenants.bumi_lestari.adapters.api.v1.bumi_lestari_laporan_router import laporan_router
 from tenants.bumi_lestari.adapters.api.v1.bumi_lestari_order_router import order_router
 from tenants.bumi_lestari.adapters.api.v1.bumi_lestari_pembayaran_router import pembayaran_router
@@ -55,6 +56,7 @@ bumi_lestari_router.include_router(order_router)
 bumi_lestari_router.include_router(pembayaran_router)
 bumi_lestari_router.include_router(dokumen_router)
 bumi_lestari_router.include_router(laporan_router)
+bumi_lestari_router.include_router(kiriman_router)
 
 OWNER_ONLY = ("admin", "owner")  # admin berada di atas owner: semua akses owner + kelola akun owner
 OWNER_OR_STAFF = ("admin", "owner", "staff")
@@ -90,7 +92,7 @@ async def authorize_bumi_lestari_seed(
     return user
 
 
-@bumi_lestari_router.get("/seed-now")
+@bumi_lestari_router.post("/seed-now")
 async def seed_now(
     session: AsyncSession = Depends(get_db_bumi_lestari),
     _: BlUser | None = Depends(authorize_bumi_lestari_seed),
@@ -113,6 +115,19 @@ async def login(payload: LoginIn, response: Response, session: AsyncSession = De
 
 @bumi_lestari_router.post("/auth/logout")
 async def logout(response: Response):
+    clear_bumi_lestari_cookie(response)
+    return {"ok": True}
+
+
+@bumi_lestari_router.post("/auth/logout-semua")
+async def logout_semua(
+    response: Response,
+    session: AsyncSession = Depends(get_db_bumi_lestari),
+    user: BlUser = Depends(get_current_user_bumi_lestari),
+):
+    """Keluar dari semua perangkat: semua token pengguna ini dicabut."""
+    services.naikkan_versi_sesi(user)
+    await session.flush()
     clear_bumi_lestari_cookie(response)
     return {"ok": True}
 
@@ -174,10 +189,11 @@ async def reset_user_password(
 # --- Akun kas ------------------------------------------------------------------
 
 
-def _akun_out(akun, saldo) -> AkunKasOut:
+def _akun_out(akun, saldo, saldo_setelah_draf=None) -> AkunKasOut:
     return AkunKasOut(
         id=akun.id, kode=akun.kode, nama=akun.nama, jenis=akun.jenis, saldo_awal=akun.saldo_awal,
         plafon=akun.plafon, aktif=akun.aktif, saldo=saldo,
+        saldo_setelah_draf=saldo if saldo_setelah_draf is None else saldo_setelah_draf,
     )
 
 
@@ -187,7 +203,7 @@ async def list_akun_kas(
     user: BlUser = Depends(require_roles_bumi_lestari(*OWNER_OR_STAFF)),
 ):
     rows = await services.list_akun(session, user)
-    return [_akun_out(a, saldo) for a, saldo in rows]
+    return [_akun_out(a, saldo, fisik) for a, saldo, fisik in rows]
 
 
 @bumi_lestari_router.post("/akun-kas", response_model=AkunKasOut, status_code=status.HTTP_201_CREATED)
@@ -229,11 +245,14 @@ async def list_transaksi(
     dari: date | None = None,
     sampai: date | None = None,
     termasuk_batal: bool = False,
+    termasuk_draf: bool = False,
+    hanya_draf: bool = False,
     session: AsyncSession = Depends(get_db_bumi_lestari),
     user: BlUser = Depends(require_roles_bumi_lestari(*OWNER_OR_STAFF)),
 ):
     return await services.list_transaksi(
-        session, user, akun_id=akun_id, dari=dari, sampai=sampai, termasuk_batal=termasuk_batal
+        session, user, akun_id=akun_id, dari=dari, sampai=sampai, termasuk_batal=termasuk_batal,
+        termasuk_draf=termasuk_draf, hanya_draf=hanya_draf,
     )
 
 
@@ -251,9 +270,9 @@ async def batalkan_transaksi(
     transaksi_id: str,
     payload: BatalIn,
     session: AsyncSession = Depends(get_db_bumi_lestari),
-    _: BlUser = Depends(require_roles_bumi_lestari(*OWNER_ONLY)),
+    user: BlUser = Depends(require_roles_bumi_lestari(*OWNER_ONLY)),  # staf tidak bisa membatalkan
 ):
-    return await services.batalkan_transaksi(session, transaksi_id, payload.alasan)
+    return await services.batalkan_transaksi(session, transaksi_id, payload.alasan, user)
 
 
 # --- Transfer & kas kecil ----------------------------------------------------------
@@ -299,10 +318,11 @@ async def hitung_pengisian(
 
 @bumi_lestari_router.post("/kas-kecil/pengisian", response_model=TransferOut, status_code=status.HTTP_201_CREATED)
 async def catat_pengisian(
+    tanggal: date | None = None,
     session: AsyncSession = Depends(get_db_bumi_lestari),
     user: BlUser = Depends(require_roles_bumi_lestari(*OWNER_ONLY)),
 ):
-    return await services.catat_pengisian_kas_kecil(session, user)
+    return await services.catat_pengisian_kas_kecil(session, user, tanggal)
 
 
 @bumi_lestari_router.get("/kas-iklan/pengisian", response_model=PengisianKasKecilOut)
@@ -315,10 +335,11 @@ async def hitung_pengisian_iklan(
 
 @bumi_lestari_router.post("/kas-iklan/pengisian", response_model=TransferOut, status_code=status.HTTP_201_CREATED)
 async def catat_pengisian_iklan(
+    tanggal: date | None = None,
     session: AsyncSession = Depends(get_db_bumi_lestari),
     user: BlUser = Depends(require_roles_bumi_lestari("admin")),  # kas iklan: hanya admin
 ):
-    return await services.catat_pengisian(session, user, "kas_iklan")
+    return await services.catat_pengisian(session, user, "kas_iklan", tanggal)
 
 
 # --- Profil UMKM & proporsi bagi hasil -------------------------------------------------

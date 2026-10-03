@@ -7,8 +7,10 @@ Rp 3.000.000) and default kategori.
 from __future__ import annotations
 
 import os
+from datetime import date
+from decimal import Decimal
 
-from sqlalchemy import select
+from sqlalchemy import select, text
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from shared.security import hash_password
@@ -28,6 +30,7 @@ from tenants.bumi_lestari.modules.bumi_lestari.infrastructure.models import (
     BlAkunKas,
     BlKategori,
     BlProporsiBagiHasil,
+    BlTransaksi,
     BlUser,
 )
 
@@ -59,12 +62,54 @@ DEFAULT_KATEGORI = (
     ("Langganan & utilitas", "pengeluaran"),
     ("Prive", "pengeluaran"),
     ("Pengeluaran lain", "pengeluaran"),
+    # Fase 1 (spesifikasi 6.2)
+    ("Setoran modal", "pemasukan"),
+    ("Biaya marketplace", "pengeluaran"),
+    ("Kerugian retur", "pengeluaran"),
 )
+
+# Entri pembuka modal Owner (spesifikasi AB-MD-1): dicatat sekali oleh seed.
+SETORAN_MODAL_AWAL = Decimal("20000000")
+TANGGAL_SETORAN_MODAL_AWAL = date(2026, 9, 1)
+
+# Kolom yang ditambahkan setelah tabel pertama kali dibuat. create_all tidak mengubah tabel yang sudah ada,
+# jadi Postgres yang sudah berjalan disusulkan lewat ALTER idempoten (pola sama dengan tenant store).
+_ALTER_POSTGRES = (
+    "ALTER TABLE bl_users ADD COLUMN IF NOT EXISTS session_version INTEGER NOT NULL DEFAULT 0",
+    "ALTER TABLE bl_transaksi ADD COLUMN IF NOT EXISTS status_kirim VARCHAR(16) NOT NULL DEFAULT 'terkirim'",
+    "ALTER TABLE bl_transaksi ADD COLUMN IF NOT EXISTS kiriman_id VARCHAR(64)",
+    "ALTER TABLE bl_transaksi ADD COLUMN IF NOT EXISTS sumber_sistem VARCHAR(32)",
+    "ALTER TABLE bl_transaksi ADD COLUMN IF NOT EXISTS sumber_ref VARCHAR(255)",
+    "ALTER TABLE bl_pembayaran_pemasok ADD COLUMN IF NOT EXISTS status_kirim VARCHAR(16) NOT NULL DEFAULT 'terkirim'",
+    "ALTER TABLE bl_pembayaran_pemasok ADD COLUMN IF NOT EXISTS kiriman_id VARCHAR(64)",
+    "ALTER TABLE bl_penerimaan_reseller ADD COLUMN IF NOT EXISTS status_kirim VARCHAR(16) NOT NULL DEFAULT 'terkirim'",
+    "ALTER TABLE bl_penerimaan_reseller ADD COLUMN IF NOT EXISTS kiriman_id VARCHAR(64)",
+    "ALTER TABLE bl_order ADD COLUMN IF NOT EXISTS sumber_sistem VARCHAR(32)",
+    "ALTER TABLE bl_order ADD COLUMN IF NOT EXISTS sumber_ref VARCHAR(255)",
+    "ALTER TABLE bl_produk ADD COLUMN IF NOT EXISTS sumber_sistem VARCHAR(32)",
+    "ALTER TABLE bl_produk ADD COLUMN IF NOT EXISTS sumber_ref VARCHAR(255)",
+    "CREATE INDEX IF NOT EXISTS ix_bl_transaksi_status_kirim ON bl_transaksi (status_kirim)",
+    "CREATE INDEX IF NOT EXISTS ix_bl_transaksi_kiriman_id ON bl_transaksi (kiriman_id)",
+    "CREATE INDEX IF NOT EXISTS ix_bl_pembayaran_pemasok_kiriman_id ON bl_pembayaran_pemasok (kiriman_id)",
+    "CREATE INDEX IF NOT EXISTS ix_bl_penerimaan_reseller_kiriman_id ON bl_penerimaan_reseller (kiriman_id)",
+    "CREATE UNIQUE INDEX IF NOT EXISTS uq_bl_transaksi_sumber ON bl_transaksi (sumber_sistem, sumber_ref)",
+    "CREATE UNIQUE INDEX IF NOT EXISTS uq_bl_order_sumber ON bl_order (sumber_sistem, sumber_ref)",
+    "CREATE UNIQUE INDEX IF NOT EXISTS uq_bl_produk_sumber ON bl_produk (sumber_sistem, sumber_ref)",
+)
+
+
+async def _self_heal_columns(conn) -> None:
+    """Tambahkan kolom/indeks baru ke tabel lama (Postgres; idempoten)."""
+    if conn.dialect.name != "postgresql":
+        return
+    for stmt in _ALTER_POSTGRES:
+        await conn.execute(text(stmt))
 
 
 async def _create_schema(engine) -> None:
     async with engine.begin() as conn:
         await conn.run_sync(BumiLestariBase.metadata.create_all)
+        await _self_heal_columns(conn)
 
 
 async def ensure_bumi_lestari_schema() -> None:
@@ -124,6 +169,28 @@ async def seed_bumi_lestari(session: AsyncSession) -> dict[str, str]:
     if (await session.execute(select(BlProporsiBagiHasil.id))).first() is None:
         for penerima, persen in (("admin", 40), ("owner", 60)):
             session.add(BlProporsiBagiHasil(penerima=penerima, persen=persen))
+    await session.flush()
+    await _seed_setoran_modal(session, owner)
     await session.commit()
     return {"owner_email": email, "status": "ok"}
+
+
+async def _seed_setoran_modal(session: AsyncSession, owner: BlUser) -> None:
+    """Setoran modal Owner Rp 20 juta, 1 Sep 2026, ke Kas utama -- hanya bila belum ada setoran modal sama sekali."""
+    kategori = (await session.execute(select(BlKategori).where(BlKategori.nama == "Setoran modal"))).scalar_one()
+    sudah = (
+        await session.execute(
+            select(BlTransaksi.id).where(BlTransaksi.kategori_id == kategori.id, BlTransaksi.dibatalkan.is_(False))
+        )
+    ).first()
+    if sudah:
+        return
+    kas = (await session.execute(select(BlAkunKas).where(BlAkunKas.kode == KODE_KAS_UTAMA))).scalar_one()
+    session.add(
+        BlTransaksi(
+            tanggal=TANGGAL_SETORAN_MODAL_AWAL, akun_id=kas.id, kategori_id=kategori.id, jenis="masuk",
+            jumlah=SETORAN_MODAL_AWAL, keterangan="Setoran modal Owner (entri pembuka)", dibuat_oleh=owner.id,
+            status_kirim="terkirim",
+        )
+    )
 

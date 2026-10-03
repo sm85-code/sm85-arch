@@ -9,7 +9,8 @@ from sqlalchemy import func, or_, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from tenants.bumi_lestari.modules.bumi_lestari.application.provisi_core import beban_provisi
-from tenants.bumi_lestari.modules.bumi_lestari.infrastructure.models import BlKategori, BlTransaksi
+from tenants.bumi_lestari.modules.bumi_lestari.application.kategori_core import KATEGORI_SETORAN_MODAL
+from tenants.bumi_lestari.modules.bumi_lestari.infrastructure.models import STATUS_TERKIRIM, BlKategori, BlTransaksi
 from tenants.bumi_lestari.modules.bumi_lestari.infrastructure.models_pembayaran import REF_GAJI
 
 KATEGORI_BAGI_HASIL = "Bagi hasil"
@@ -50,6 +51,7 @@ async def _per_kategori(session: AsyncSession, jenis: str, awal: date, akhir: da
         .join(BlKategori, BlKategori.id == BlTransaksi.kategori_id)
         .where(
             BlTransaksi.jenis == jenis, BlTransaksi.dibatalkan.is_(False),
+            BlTransaksi.status_kirim == STATUS_TERKIRIM,  # draf belum masuk laporan
             BlTransaksi.tanggal >= awal, BlTransaksi.tanggal <= akhir,
         )
         .group_by(BlKategori.nama)
@@ -65,10 +67,11 @@ async def _per_kategori(session: AsyncSession, jenis: str, awal: date, akhir: da
 
 
 async def ringkasan_laba(session: AsyncSession, awal: date, akhir: date) -> RingkasanLaba:
-    """Laba = pemasukan - biaya. Transfer tidak dihitung. Gaji diakui lewat cicilan mingguan (bukan saat
+    """Laba = pemasukan - biaya (hanya entri terkirim). Transfer dan setoran modal tidak dihitung. Gaji diakui lewat cicilan mingguan (bukan saat
     dibayar), jadi transaksi pembayaran gaji dikecualikan; langganan diakui saat dibayar."""
     hasil = RingkasanLaba()
-    hasil.pemasukan = await _per_kategori(session, "masuk", awal, akhir)
+    # Setoran modal bukan pendapatan (spesifikasi 8.12).
+    hasil.pemasukan = await _per_kategori(session, "masuk", awal, akhir, kecuali=(KATEGORI_SETORAN_MODAL,))
     hasil.biaya = await _per_kategori(session, "keluar", awal, akhir, kecuali=KATEGORI_BUKAN_BIAYA, kecuali_ref=(REF_GAJI,))
     cicilan = await beban_provisi(session, awal, akhir)
     if cicilan != 0:

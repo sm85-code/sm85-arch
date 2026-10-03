@@ -11,7 +11,7 @@ from datetime import date, datetime, timezone
 from decimal import Decimal
 from typing import Optional
 
-from sqlalchemy import Boolean, Date, DateTime, ForeignKey, Numeric, String, Text
+from sqlalchemy import JSON, Boolean, Date, DateTime, ForeignKey, Index, Integer, Numeric, String, Text
 from sqlalchemy.orm import Mapped, mapped_column
 
 from tenants.bumi_lestari.modules.bumi_lestari.infrastructure.database import BumiLestariBase
@@ -42,6 +42,12 @@ KODE_KAS_IKLAN = "KAS_IKLAN"
 KODE_DANA_CADANGAN = "DANA_CADANGAN"  # gaji & langganan disisihkan mingguan, dibayar awal bulan
 PLAFON_KAS_IKLAN_DEFAULT = Decimal("2000000")
 
+# Posting berkelompok (spesifikasi 8.14): entri sumber berstatus draf sampai "Kirim ke laporan keuangan".
+STATUS_DRAF = "draf"
+STATUS_TERKIRIM = "terkirim"
+STATUS_KIRIMAN_DIBATALKAN = "dibatalkan"
+SUMBER_KIRIMAN = ("kas_kecil", "kas_iklan", "penerimaan_reseller", "pembayaran_pemasok")
+
 
 class BlUser(BumiLestariBase):
     __tablename__ = "bl_users"
@@ -53,6 +59,9 @@ class BlUser(BumiLestariBase):
     role: Mapped[str] = mapped_column(String(32), nullable=False, default="staff")
     must_change_password: Mapped[bool] = mapped_column(Boolean, nullable=False, default=False)
     aktif: Mapped[bool] = mapped_column(Boolean, nullable=False, default=True)
+    # Naik setiap ganti/reset password, ganti role, nonaktif, atau "keluar dari semua perangkat";
+    # token lama (sv berbeda) ditolak.
+    session_version: Mapped[int] = mapped_column(Integer, nullable=False, default=0, server_default="0")
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=_utcnow)
 
 
@@ -81,6 +90,7 @@ class BlKategori(BumiLestariBase):
 
 class BlTransaksi(BumiLestariBase):
     __tablename__ = "bl_transaksi"
+    __table_args__ = (Index("uq_bl_transaksi_sumber", "sumber_sistem", "sumber_ref", unique=True),)
 
     id: Mapped[str] = mapped_column(String(64), primary_key=True, default=_uuid)
     tanggal: Mapped[date] = mapped_column(Date, nullable=False, index=True)
@@ -94,6 +104,14 @@ class BlTransaksi(BumiLestariBase):
     # supaya pembatalan sumber ikut membatalkan transaksinya.
     ref_jenis: Mapped[Optional[str]] = mapped_column(String(32), nullable=True, index=True)
     ref_id: Mapped[Optional[str]] = mapped_column(String(64), nullable=True, index=True)
+    # draf = belum masuk buku besar/laporan (kas kecil, kas iklan, uang dari order); terkirim = resmi.
+    status_kirim: Mapped[str] = mapped_column(
+        String(16), nullable=False, default=STATUS_TERKIRIM, server_default=STATUS_TERKIRIM, index=True
+    )
+    kiriman_id: Mapped[Optional[str]] = mapped_column(String(64), nullable=True, index=True)
+    # Referensi sistem asal untuk sinkronisasi idempoten (mis. "marketplace_erp" + id settlement); lihat INTEGRASI.md.
+    sumber_sistem: Mapped[Optional[str]] = mapped_column(String(32), nullable=True)
+    sumber_ref: Mapped[Optional[str]] = mapped_column(String(255), nullable=True)
     dibatalkan: Mapped[bool] = mapped_column(Boolean, nullable=False, default=False)
     dibatalkan_at: Mapped[Optional[datetime]] = mapped_column(DateTime(timezone=True), nullable=True)
     alasan_batal: Mapped[Optional[str]] = mapped_column(Text, nullable=True)
@@ -158,3 +176,51 @@ class BlProporsiBagiHasil(BumiLestariBase):
     id: Mapped[str] = mapped_column(String(64), primary_key=True, default=_uuid)
     penerima: Mapped[str] = mapped_column(String(16), nullable=False, unique=True)
     persen: Mapped[Decimal] = mapped_column(Numeric(5, 2), nullable=False)
+
+
+class BlKiriman(BumiLestariBase):
+    """Satu kali "Kirim ke laporan keuangan" untuk satu sumber (spesifikasi 8.14 AB-KR-3)."""
+
+    __tablename__ = "bl_kiriman"
+
+    id: Mapped[str] = mapped_column(String(64), primary_key=True, default=_uuid)
+    nomor: Mapped[str] = mapped_column(String(32), nullable=False, unique=True)  # KRM-YYYYMMDD-NNN
+    sumber: Mapped[str] = mapped_column(String(32), nullable=False, index=True)
+    sampai_tanggal: Mapped[Optional[date]] = mapped_column(Date, nullable=True)
+    jumlah_entri: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
+    total: Mapped[Decimal] = mapped_column(Numeric(14, 2), nullable=False, default=Decimal("0"))
+    status: Mapped[str] = mapped_column(String(16), nullable=False, default=STATUS_TERKIRIM, index=True)
+    dikirim_oleh: Mapped[str] = mapped_column(String(64), nullable=False)
+    dikirim_pada: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=_utcnow)
+    dibatalkan_oleh: Mapped[Optional[str]] = mapped_column(String(64), nullable=True)
+    dibatalkan_pada: Mapped[Optional[datetime]] = mapped_column(DateTime(timezone=True), nullable=True)
+    alasan_batal: Mapped[Optional[str]] = mapped_column(Text, nullable=True)
+    tutup_kas_mingguan_id: Mapped[Optional[str]] = mapped_column(String(64), nullable=True)
+
+
+class BlKirimanItem(BumiLestariBase):
+    __tablename__ = "bl_kiriman_item"
+
+    id: Mapped[str] = mapped_column(String(64), primary_key=True, default=_uuid)
+    kiriman_id: Mapped[str] = mapped_column(ForeignKey("bl_kiriman.id"), nullable=False, index=True)
+    ref_jenis: Mapped[str] = mapped_column(String(32), nullable=False)  # transaksi / pembayaran_pemasok / ...
+    ref_id: Mapped[str] = mapped_column(String(64), nullable=False, index=True)
+    transaksi_id: Mapped[str] = mapped_column(String(64), nullable=False)
+    tanggal: Mapped[date] = mapped_column(Date, nullable=False)
+    jumlah: Mapped[Decimal] = mapped_column(Numeric(14, 2), nullable=False)
+
+
+class BlAuditLog(BumiLestariBase):
+    """Log audit dasar (spesifikasi 8.13 AB-IN-6): siapa, kapan, aksi, entitas, sebelum/sesudah, alasan."""
+
+    __tablename__ = "bl_audit_log"
+
+    id: Mapped[str] = mapped_column(String(64), primary_key=True, default=_uuid)
+    waktu: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=_utcnow, index=True)
+    user_id: Mapped[Optional[str]] = mapped_column(String(64), nullable=True)
+    aksi: Mapped[str] = mapped_column(String(64), nullable=False, index=True)
+    entitas: Mapped[str] = mapped_column(String(64), nullable=False)
+    entitas_id: Mapped[Optional[str]] = mapped_column(String(64), nullable=True, index=True)
+    sebelum: Mapped[Optional[dict]] = mapped_column(JSON, nullable=True)
+    sesudah: Mapped[Optional[dict]] = mapped_column(JSON, nullable=True)
+    alasan: Mapped[Optional[str]] = mapped_column(Text, nullable=True)

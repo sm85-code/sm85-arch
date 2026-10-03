@@ -82,7 +82,7 @@ async def test_order_kayu_defaults_and_full_flow_with_cat(session, data):
 @pytest.mark.asyncio
 async def test_status_must_follow_flow_and_skip_cat_when_not_needed(session, data):
     o = await svc.create_order(
-        session, OrderIn(saluran_id=data.shopee.id, produk_id=data.partisi.id, butuh_cat=False, pemasok_id=data.tukang.id)
+        session, OrderIn(no_order="T1", saluran_id=data.shopee.id, produk_id=data.partisi.id, butuh_cat=False, pemasok_id=data.tukang.id)
     )
     with pytest.raises(HTTPException) as exc:
         await svc.ubah_status_order(session, o.id, OrderStatusIn(status="diambil"))  # lompat
@@ -93,18 +93,18 @@ async def test_status_must_follow_flow_and_skip_cat_when_not_needed(session, dat
 
 @pytest.mark.asyncio
 async def test_pemasok_required_and_must_match_product_type(session, data):
-    o = await svc.create_order(session, OrderIn(saluran_id=data.shopee.id, produk_id=data.partisi.id))
+    o = await svc.create_order(session, OrderIn(no_order="T2", saluran_id=data.shopee.id, produk_id=data.partisi.id))
     with pytest.raises(HTTPException):
         await svc.ubah_status_order(session, o.id, OrderStatusIn(status="dikerjakan"))  # belum ada pemasok
     with pytest.raises(HTTPException) as exc:  # supplier untuk produk kayu
-        await svc.create_order(session, OrderIn(saluran_id=data.shopee.id, produk_id=data.partisi.id, pemasok_id=data.supplier.id))
+        await svc.create_order(session, OrderIn(no_order="T3", saluran_id=data.shopee.id, produk_id=data.partisi.id, pemasok_id=data.supplier.id))
     assert exc.value.status_code == 400
 
 
 @pytest.mark.asyncio
 async def test_order_non_kayu_flow_has_no_cat(session, data):
     o = await svc.create_order(
-        session, OrderIn(saluran_id=data.shopee.id, produk_id=data.lampu.id, butuh_cat=True, pemasok_id=data.supplier.id)
+        session, OrderIn(no_order="T4", saluran_id=data.shopee.id, produk_id=data.lampu.id, butuh_cat=True, pemasok_id=data.supplier.id)
     )
     assert o.butuh_cat is False and o.biaya_pokok == Decimal("60000")
     o = await _maju(session, o, "diterima", "dikirim", "selesai")
@@ -126,14 +126,14 @@ async def test_reseller_order_uses_wholesale_price_and_requires_customer(session
     )
     assert o.harga_satuan == Decimal("720000")
     assert len(await svc.list_harga_grosir(session, data.rina.id)) == 1
-    eceran = await svc.create_order(session, OrderIn(saluran_id=data.shopee.id, produk_id=data.partisi.id))
+    eceran = await svc.create_order(session, OrderIn(no_order="T5", saluran_id=data.shopee.id, produk_id=data.partisi.id))
     assert eceran.harga_satuan == Decimal("850000")
 
 
 @pytest.mark.asyncio
 async def test_cancel_and_list_filters(session, data):
-    a = await svc.create_order(session, OrderIn(saluran_id=data.shopee.id, produk_id=data.partisi.id))
-    b = await svc.create_order(session, OrderIn(saluran_id=data.shopee.id, produk_id=data.lampu.id))
+    a = await svc.create_order(session, OrderIn(no_order="T6", saluran_id=data.shopee.id, produk_id=data.partisi.id))
+    b = await svc.create_order(session, OrderIn(no_order="T7", saluran_id=data.shopee.id, produk_id=data.lampu.id))
     await svc.ubah_status_order(session, a.id, OrderStatusIn(status="batal"))
     assert [o.id for o in await svc.list_order(session, status_order="batal")] == [a.id]
     assert [o.id for o in await svc.list_order(session, jenis_produk="non_kayu")] == [b.id]
@@ -204,7 +204,7 @@ async def test_biaya_proses_is_flat_per_order_and_configurable_in_profil(session
     assert (await svc.create_order(session, order(1))).biaya_proses == Decimal("12500")
     assert kecil.biaya_proses == Decimal("10000")  # order lama tidak berubah
 
-    eceran = await svc.create_order(session, OrderIn(saluran_id=data.shopee.id, produk_id=data.partisi.id))
+    eceran = await svc.create_order(session, OrderIn(no_order="T8", saluran_id=data.shopee.id, produk_id=data.partisi.id))
     assert eceran.biaya_proses == 0  # saluran lain: harga all-in
 
 
