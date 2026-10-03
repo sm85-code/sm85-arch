@@ -285,6 +285,22 @@ async def catat_pengisian(
     return await services.catat_pengisian_kas_kecil(session, user)
 
 
+@bumi_lestari_router.get("/kas-iklan/pengisian", response_model=PengisianKasKecilOut)
+async def hitung_pengisian_iklan(
+    session: AsyncSession = Depends(get_db_bumi_lestari),
+    _: BlUser = Depends(require_roles_bumi_lestari(*OWNER_ONLY)),
+):
+    return await services.hitung_pengisian(session, "kas_iklan")
+
+
+@bumi_lestari_router.post("/kas-iklan/pengisian", response_model=TransferOut, status_code=status.HTTP_201_CREATED)
+async def catat_pengisian_iklan(
+    session: AsyncSession = Depends(get_db_bumi_lestari),
+    user: BlUser = Depends(require_roles_bumi_lestari(*OWNER_ONLY)),
+):
+    return await services.catat_pengisian(session, user, "kas_iklan")
+
+
 # --- Profil UMKM & proporsi bagi hasil -------------------------------------------------
 
 

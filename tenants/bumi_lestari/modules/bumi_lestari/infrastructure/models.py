@@ -27,15 +27,19 @@ def _utcnow() -> datetime:
 
 # Plain string enums (not Postgres ENUM): adding a value needs no ALTER TYPE.
 ROLE_USER = ("owner", "staff")
-JENIS_AKUN = ("kas", "bank", "ewallet", "kas_kecil")
+JENIS_AKUN = ("kas", "bank", "ewallet", "kas_kecil", "kas_iklan")
+# Akun imprest: saldo dijaga di plafon lewat pengisian mingguan dari kas utama.
+JENIS_IMPRESET = ("kas_kecil", "kas_iklan")
 JENIS_KATEGORI = ("pemasukan", "pengeluaran")
 JENIS_TRANSAKSI = ("masuk", "keluar")
-JENIS_TRANSFER = ("biasa", "pengisian_kas_kecil")
+JENIS_TRANSFER = ("biasa", "pengisian_kas_kecil", "pengisian_kas_iklan")
 
 KODE_KAS_UTAMA = "KAS_UTAMA"
 KODE_SALDO_SHOPEE = "SALDO_SHOPEE"
 KODE_KAS_KECIL = "KAS_KECIL"
 PLAFON_KAS_KECIL_DEFAULT = Decimal("3000000")
+KODE_KAS_IKLAN = "KAS_IKLAN"
+PLAFON_KAS_IKLAN_DEFAULT = Decimal("2000000")
 
 
 class BlUser(BumiLestariBase):
@@ -59,7 +63,7 @@ class BlAkunKas(BumiLestariBase):
     nama: Mapped[str] = mapped_column(String(255), nullable=False)
     jenis: Mapped[str] = mapped_column(String(32), nullable=False, default="kas")
     saldo_awal: Mapped[Decimal] = mapped_column(Numeric(14, 2), nullable=False, default=Decimal("0"))
-    # Hanya untuk jenis "kas_kecil": saldo yang dijaga lewat pengisian mingguan.
+    # Hanya untuk akun imprest (kas_kecil, kas_iklan): saldo yang dijaga lewat pengisian mingguan.
     plafon: Mapped[Optional[Decimal]] = mapped_column(Numeric(14, 2), nullable=True)
     aktif: Mapped[bool] = mapped_column(Boolean, nullable=False, default=True)
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=_utcnow)

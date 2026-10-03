@@ -295,3 +295,12 @@ Backend menyusun **data** (JSON); tampilan/PDF (logo, tata letak) dibuat fronten
   `nama_usaha_lama`, `nama_usaha_berlaku_mulai`); dokumen bertanggal sebelum tanggal peralihan tetap mencetak
   nama lama. Nilai awal di atas bisa diubah admin.
 - Produk punya `ukuran` (mis. 100x20x200); varian ditulis di nama produk (mis. "Partisi Rak Tengah [2 rak]").
+
+## 10. Kas iklan (imprest, seperti kas kecil)
+
+Biaya iklan diambil dari modal dengan jatah **Rp 2.000.000 per bulan** dan **digenapkan lagi tiap minggu**:
+akun `KAS_IKLAN` (jenis `kas_iklan`, plafon 2.000.000), kategori pengeluaran "Biaya iklan". Cara kerjanya sama
+dengan kas kecil: pengeluaran dicatat di akun ini (tidak boleh minus), lalu tiap Selasa saldo dikembalikan ke
+plafon dengan transfer dari kas utama (`GET/POST /kas-iklan/pengisian`). Hanya admin/owner yang mengakses
+kas iklan; staf kas kecil tidak. Siklus Selasa: terima bayar reseller → tarik saldo toko → isi kas kecil →
+**isi kas iklan** → bayar tukang/supplier.

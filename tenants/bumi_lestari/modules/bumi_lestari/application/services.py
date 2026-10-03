@@ -25,6 +25,7 @@ from tenants.bumi_lestari.modules.bumi_lestari.application.schemas import (
 )
 from tenants.bumi_lestari.modules.bumi_lestari.infrastructure.models import (
     JENIS_AKUN,
+    JENIS_IMPRESET,
     JENIS_KATEGORI,
     JENIS_TRANSAKSI,
     KODE_KAS_UTAMA,
@@ -191,10 +192,10 @@ async def list_akun(session: AsyncSession, user: BlUser) -> list[tuple[BlAkunKas
 async def create_akun(session: AsyncSession, payload: AkunKasIn) -> BlAkunKas:
     if payload.jenis not in JENIS_AKUN:
         raise _bad(f"Jenis akun harus salah satu dari: {', '.join(JENIS_AKUN)}")
-    if payload.jenis == "kas_kecil" and payload.plafon is None:
-        raise _bad("Kas kecil wajib punya plafon")
-    if payload.jenis != "kas_kecil" and payload.plafon is not None:
-        raise _bad("Plafon hanya untuk akun kas kecil")
+    if payload.jenis in JENIS_IMPRESET and payload.plafon is None:
+        raise _bad("Akun kas kecil/kas iklan wajib punya plafon")
+    if payload.jenis not in JENIS_IMPRESET and payload.plafon is not None:
+        raise _bad("Plafon hanya untuk akun kas kecil/kas iklan")
     if (await session.execute(select(BlAkunKas.id).where(BlAkunKas.kode == payload.kode))).first():
         raise _bad("Kode akun sudah dipakai", status.HTTP_409_CONFLICT)
     akun = BlAkunKas(
@@ -249,8 +250,8 @@ async def create_transaksi(session: AsyncSession, user: BlUser, payload: Transak
         raise HTTPException(
             status_code=status.HTTP_403_FORBIDDEN, detail="Staf hanya boleh mencatat pengeluaran kas kecil"
         )
-    # Kas kecil adalah uang fisik dengan plafon: tidak boleh minus.
-    if akun.jenis == "kas_kecil" and payload.jenis == "keluar":
+    # Akun imprest (kas kecil, kas iklan) berplafon: tidak boleh minus.
+    if akun.jenis in JENIS_IMPRESET and payload.jenis == "keluar":
         await _pastikan_saldo_cukup(session, akun, payload.jumlah)
     trx = BlTransaksi(
         tanggal=payload.tanggal or _hari_ini(),
@@ -333,7 +334,7 @@ async def _buat_transfer(
 async def create_transfer(session: AsyncSession, user: BlUser, payload: TransferIn) -> BlTransfer:
     dari = await _akun_or_404(session, payload.dari_akun_id)
     ke = await _akun_or_404(session, payload.ke_akun_id)
-    jenis = "pengisian_kas_kecil" if ke.jenis == "kas_kecil" else "biasa"
+    jenis = f"pengisian_{ke.jenis}" if ke.jenis in JENIS_IMPRESET else "biasa"
     return await _buat_transfer(
         session, user, tanggal=payload.tanggal, dari=dari, ke=ke, jumlah=payload.jumlah,
         jenis=jenis, keterangan=payload.keterangan,
@@ -349,15 +350,25 @@ async def batalkan_transfer(session: AsyncSession, transfer_id: str, alasan: str
     return transfer
 
 
-async def hitung_pengisian_kas_kecil(session: AsyncSession) -> dict:
-    kas_kecil = await get_kas_kecil(session)
+async def _akun_imprest(session: AsyncSession, jenis: str) -> BlAkunKas:
+    akun = (
+        await session.execute(select(BlAkunKas).where(BlAkunKas.jenis == jenis, BlAkunKas.aktif.is_(True)))
+    ).scalars().first()
+    if not akun:
+        raise _bad(f"Akun {jenis} belum dibuat (jalankan seed-now)", status.HTTP_409_CONFLICT)
+    return akun
+
+
+async def hitung_pengisian(session: AsyncSession, jenis: str) -> dict:
+    """Berapa yang perlu diisi agar akun imprest (kas_kecil / kas_iklan) kembali ke plafon."""
+    akun = await _akun_imprest(session, jenis)
     kas_utama = await _akun_by_kode(session, KODE_KAS_UTAMA)
-    saldo = await saldo_akun(session, kas_kecil)
-    perlu = max(Decimal(kas_kecil.plafon) - saldo, Decimal("0"))
+    saldo = await saldo_akun(session, akun)
+    perlu = max(Decimal(akun.plafon) - saldo, Decimal("0"))
     saldo_utama = await saldo_akun(session, kas_utama)
     return {
-        "akun_id": kas_kecil.id,
-        "plafon": Decimal(kas_kecil.plafon),
+        "akun_id": akun.id,
+        "plafon": Decimal(akun.plafon),
         "saldo": saldo,
         "perlu_diisi": perlu,
         "saldo_kas_utama": saldo_utama,
@@ -365,17 +376,26 @@ async def hitung_pengisian_kas_kecil(session: AsyncSession) -> dict:
     }
 
 
-async def catat_pengisian_kas_kecil(session: AsyncSession, user: BlUser) -> BlTransfer:
-    """Kembalikan kas kecil ke plafon dengan transfer dari kas utama (owner)."""
-    info = await hitung_pengisian_kas_kecil(session)
+async def catat_pengisian(session: AsyncSession, user: BlUser, jenis: str) -> BlTransfer:
+    """Kembalikan akun imprest ke plafon dengan transfer dari kas utama (owner/admin)."""
+    info = await hitung_pengisian(session, jenis)
+    nama = "kas kecil" if jenis == "kas_kecil" else "kas iklan"
     if info["perlu_diisi"] <= 0:
-        raise _bad("Kas kecil sudah sesuai plafon, tidak perlu diisi")
-    kas_kecil = await get_kas_kecil(session)
+        raise _bad(f"{nama.capitalize()} sudah sesuai plafon, tidak perlu diisi")
+    akun = await _akun_imprest(session, jenis)
     kas_utama = await _akun_by_kode(session, KODE_KAS_UTAMA)
     return await _buat_transfer(
-        session, user, tanggal=None, dari=kas_utama, ke=kas_kecil, jumlah=info["perlu_diisi"],
-        jenis="pengisian_kas_kecil", keterangan=f"Pengisian kas kecil ke plafon ({_hari_ini():%d-%m-%Y})",
+        session, user, tanggal=None, dari=kas_utama, ke=akun, jumlah=info["perlu_diisi"],
+        jenis=f"pengisian_{jenis}", keterangan=f"Pengisian {nama} ke plafon ({_hari_ini():%d-%m-%Y})",
     )
+
+
+async def hitung_pengisian_kas_kecil(session: AsyncSession) -> dict:
+    return await hitung_pengisian(session, "kas_kecil")
+
+
+async def catat_pengisian_kas_kecil(session: AsyncSession, user: BlUser) -> BlTransfer:
+    return await catat_pengisian(session, user, "kas_kecil")
 
 
 # --- Profil UMKM & proporsi bagi hasil -----------------------------------------------

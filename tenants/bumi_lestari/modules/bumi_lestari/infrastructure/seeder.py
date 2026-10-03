@@ -17,9 +17,11 @@ from tenants.bumi_lestari.modules.bumi_lestari.infrastructure.database import Bu
 from tenants.bumi_lestari.modules.bumi_lestari.infrastructure.models_order import BlSaluran
 from tenants.bumi_lestari.modules.bumi_lestari.infrastructure import models_t3  # noqa: F401  (register tables)
 from tenants.bumi_lestari.modules.bumi_lestari.infrastructure.models import (
+    KODE_KAS_IKLAN,
     KODE_KAS_KECIL,
     KODE_KAS_UTAMA,
     KODE_SALDO_SHOPEE,
+    PLAFON_KAS_IKLAN_DEFAULT,
     PLAFON_KAS_KECIL_DEFAULT,
     BlAkunKas,
     BlKategori,
@@ -34,6 +36,7 @@ DEFAULT_AKUN = (
     (KODE_KAS_UTAMA, "Kas utama", "kas", None),
     (KODE_SALDO_SHOPEE, "Saldo Shopee", "ewallet", None),
     (KODE_KAS_KECIL, "Kas kecil", "kas_kecil", PLAFON_KAS_KECIL_DEFAULT),
+    (KODE_KAS_IKLAN, "Kas iklan", "kas_iklan", PLAFON_KAS_IKLAN_DEFAULT),
 )
 
 DEFAULT_KATEGORI = (
@@ -47,6 +50,7 @@ DEFAULT_KATEGORI = (
     ("Transport", "pengeluaran"),
     ("Packing", "pengeluaran"),
     ("Operasional", "pengeluaran"),
+    ("Biaya iklan", "pengeluaran"),
     ("Prive", "pengeluaran"),
     ("Pengeluaran lain", "pengeluaran"),
 )

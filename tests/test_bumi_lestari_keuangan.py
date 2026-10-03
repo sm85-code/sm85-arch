@@ -243,3 +243,35 @@ async def test_profil_and_proporsi_bagi_hasil_configurable(session):
         await services.set_proporsi(session, ProporsiIn(persen_admin=Decimal("50"), persen_owner=Decimal("60")))
     assert exc.value.status_code == 400
     assert (await services.get_proporsi(session))[0].persen == Decimal("30.5")  # gagal tidak mengubah apa pun
+
+
+@pytest.mark.asyncio
+async def test_kas_iklan_imprest_weekly_refill_to_plafon(session):
+    owner, staf = await _user(session, "owner"), await _user(session, "staff")
+    await _isi_kas_utama(session, owner, Decimal("5000000"))
+    iklan = (await session.execute(select(BlAkunKas).where(BlAkunKas.kode == "KAS_IKLAN"))).scalar_one()
+    assert (await services.hitung_pengisian(session, "kas_iklan"))["perlu_diisi"] == Decimal("2000000")
+
+    t = await services.catat_pengisian(session, owner, "kas_iklan")
+    assert t.jenis == "pengisian_kas_iklan" and await services.saldo_akun(session, iklan) == Decimal("2000000")
+
+    iklan_kat = await _kat(session, "Biaya iklan")
+    await services.create_transaksi(
+        session, owner, TransaksiIn(akun_id=iklan.id, kategori_id=iklan_kat.id, jenis="keluar", jumlah=Decimal("450000"))
+    )
+    with pytest.raises(HTTPException) as exc:  # tidak boleh melebihi saldo kas iklan
+        await services.create_transaksi(
+            session, owner, TransaksiIn(akun_id=iklan.id, kategori_id=iklan_kat.id, jenis="keluar", jumlah=Decimal("2000000"))
+        )
+    assert exc.value.status_code == 400
+    with pytest.raises(HTTPException) as exc:  # staf kas kecil tidak boleh mencatat iklan
+        await services.create_transaksi(
+            session, staf, TransaksiIn(akun_id=iklan.id, kategori_id=iklan_kat.id, jenis="keluar", jumlah=Decimal("1000"))
+        )
+    assert exc.value.status_code == 403
+    assert "KAS_IKLAN" not in [a.kode for a, _ in await services.list_akun(session, staf)]
+
+    info = await services.hitung_pengisian(session, "kas_iklan")
+    assert (info["saldo"], info["perlu_diisi"]) == (Decimal("1550000"), Decimal("450000"))
+    await services.catat_pengisian(session, owner, "kas_iklan")  # digenapkan lagi tiap minggu
+    assert await services.saldo_akun(session, iklan) == Decimal("2000000")
