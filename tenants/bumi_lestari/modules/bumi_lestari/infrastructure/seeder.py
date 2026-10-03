@@ -24,7 +24,11 @@ from tenants.bumi_lestari.modules.bumi_lestari.infrastructure.models import (
     KODE_KAS_IKLAN,
     KODE_KAS_KECIL,
     KODE_KAS_UTAMA,
+    KODE_SALDO_BLIBLI,
+    KODE_SALDO_IPAYMU,
+    KODE_SALDO_LAZADA,
     KODE_SALDO_SHOPEE,
+    KODE_SALDO_TIKTOK,
     PLAFON_KAS_IKLAN_DEFAULT,
     PLAFON_KAS_KECIL_DEFAULT,
     BlAkunKas,
@@ -40,9 +44,22 @@ DEFAULT_ADMIN_EMAIL = "admin@bumi-lestari.internal"
 DEFAULT_AKUN = (
     (KODE_KAS_UTAMA, "Kas utama", "kas", None),
     (KODE_SALDO_SHOPEE, "Saldo Shopee", "ewallet", None),
+    (KODE_SALDO_TIKTOK, "Saldo TikTok Shop", "ewallet", None),
+    (KODE_SALDO_LAZADA, "Saldo Lazada", "ewallet", None),
+    (KODE_SALDO_BLIBLI, "Saldo Blibli", "ewallet", None),
+    (KODE_SALDO_IPAYMU, "Saldo iPaymu", "ewallet", None),
     (KODE_KAS_KECIL, "Kas kecil", "kas_kecil", PLAFON_KAS_KECIL_DEFAULT),
     (KODE_KAS_IKLAN, "Kas iklan", "kas_iklan", PLAFON_KAS_IKLAN_DEFAULT),
     (KODE_DANA_CADANGAN, "Dana cadangan (gaji & langganan)", "kas", None),
+)
+
+# Saluran bawaan dan akun saldonya (spesifikasi 2.6). Saluran lain ditambah lewat POST /saluran.
+DEFAULT_SALURAN = (
+    ("Shopee", "marketplace", KODE_SALDO_SHOPEE),
+    ("TikTok Shop", "marketplace", KODE_SALDO_TIKTOK),
+    ("Lazada", "marketplace", KODE_SALDO_LAZADA),
+    ("Blibli", "marketplace", KODE_SALDO_BLIBLI),
+    ("Toko web", "web", KODE_SALDO_IPAYMU),
 )
 
 DEFAULT_LANGGANAN = ("Listrik", "Air", "Wifi", "Kebersihan", "Iuran BUMDES", "Langganan Komplace")
@@ -89,6 +106,15 @@ _ALTER_POSTGRES = (
     "ALTER TABLE bl_order ADD COLUMN IF NOT EXISTS sumber_ref VARCHAR(255)",
     "ALTER TABLE bl_produk ADD COLUMN IF NOT EXISTS sumber_sistem VARCHAR(32)",
     "ALTER TABLE bl_produk ADD COLUMN IF NOT EXISTS sumber_ref VARCHAR(255)",
+    "ALTER TABLE bl_order ADD COLUMN IF NOT EXISTS status_cair VARCHAR(16) NOT NULL DEFAULT 'belum'",
+    "ALTER TABLE bl_order ADD COLUMN IF NOT EXISTS tgl_cair DATE",
+    "ALTER TABLE bl_order ADD COLUMN IF NOT EXISTS pencairan_baris_id VARCHAR(64)",
+    "ALTER TABLE bl_order ADD COLUMN IF NOT EXISTS potongan_aktual NUMERIC(14, 2)",
+    "ALTER TABLE bl_order ADD COLUMN IF NOT EXISTS tgl_retur DATE",
+    "ALTER TABLE bl_order ADD COLUMN IF NOT EXISTS alasan_retur TEXT",
+    "ALTER TABLE bl_order ADD COLUMN IF NOT EXISTS kembali_stok BOOLEAN NOT NULL DEFAULT false",
+    "CREATE INDEX IF NOT EXISTS ix_bl_order_status_cair ON bl_order (status_cair)",
+    "CREATE INDEX IF NOT EXISTS ix_bl_order_pencairan_baris_id ON bl_order (pencairan_baris_id)",
     "CREATE INDEX IF NOT EXISTS ix_bl_transaksi_status_kirim ON bl_transaksi (status_kirim)",
     "CREATE INDEX IF NOT EXISTS ix_bl_transaksi_kiriman_id ON bl_transaksi (kiriman_id)",
     "CREATE INDEX IF NOT EXISTS ix_bl_pembayaran_pemasok_kiriman_id ON bl_pembayaran_pemasok (kiriman_id)",
@@ -161,11 +187,14 @@ async def seed_bumi_lestari(session: AsyncSession) -> dict[str, str]:
         for nama in DEFAULT_LANGGANAN:
             session.add(BlLangganan(nama=nama, jumlah_bulanan=0))
     await session.flush()
-    # Saluran awal; saluran lain (Tokopedia, penjual lain, dll.) ditambah lewat POST /saluran.
-    if (await session.execute(select(BlSaluran.id))).first() is None:
-        shopee = (await session.execute(select(BlAkunKas).where(BlAkunKas.kode == KODE_SALDO_SHOPEE))).scalar_one()
-        session.add(BlSaluran(nama="Shopee", jenis="marketplace", akun_id=shopee.id))
-        session.add(BlSaluran(nama="Toko web", jenis="web"))
+    # Saluran bawaan: dibuat bila belum ada; saluran lama tanpa akun saldo dihubungkan ke akunnya.
+    for nama, jenis, kode_akun in DEFAULT_SALURAN:
+        akun = (await session.execute(select(BlAkunKas).where(BlAkunKas.kode == kode_akun))).scalar_one()
+        saluran = (await session.execute(select(BlSaluran).where(BlSaluran.nama == nama))).scalar_one_or_none()
+        if saluran is None:
+            session.add(BlSaluran(nama=nama, jenis=jenis, akun_id=akun.id))
+        elif saluran.akun_id is None:
+            saluran.akun_id = akun.id
     # Nilai awal proporsi bagi hasil -- hanya dibuat sekali; selanjutnya diubah dari halaman profil UMKM.
     if (await session.execute(select(BlProporsiBagiHasil.id))).first() is None:
         for penerima, persen in (("admin", 40), ("owner", 60)):

@@ -71,3 +71,17 @@ Semua menerima `(session, user, ...)` dan tidak bergantung pada HTTP:
 - Data sinkron yang terlambat untuk bulan tertutup dicatat **di bulan berjalan** dengan `koreksi_periode = 'YYYY-MM'`
   (bulan asal); laporan bulan tertutup tetap memakai snapshot.
 - Bagi hasil hanya dari bulan tertutup, memakai `snapshot.laba_rugi.laba_bersih`.
+
+## Akun saldo saluran, status cair & retur (Fase 2.6/2.7)
+
+- Saluran bawaan dan akunnya: Shopee → `SALDO_SHOPEE`, TikTok Shop → `SALDO_TIKTOK`, Lazada → `SALDO_LAZADA`,
+  Blibli → `SALDO_BLIBLI`, Toko web → `SALDO_IPAYMU` (`seeder.DEFAULT_SALURAN`). Sinkronisasi memetakan platform
+  `marketplace_erp` (`shopee`, `tiktok`, …) ke saluran lewat nama/akun ini.
+- `bl_order.status_cair` (`belum`/`cair`), `tgl_cair`, `pencairan_baris_id`, `potongan_aktual` **hanya diisi oleh
+  pencairan** (unggah file, entri iPaymu, atau sinkronisasi settlement) — tidak ada endpoint untuk mengubahnya manual.
+- Retur sebelum cair: `order_services.retur_order` (status `retur`, `tgl_retur`, `alasan_retur`, `kembali_stok`).
+  Retur setelah cair datang dari baris `retur`/`penyesuaian` pencairan. Biaya tukang order retur dipindah dari HPP ke
+  "Kerugian retur" di laporan (`laba_core.reklas_retur`, bulan = yang lebih akhir antara tanggal retur dan tanggal
+  pembayaran tukang), jadi bulan yang sudah tutup buku tidak berubah.
+- Belum cair dihitung ulang per tanggal dari order (`laporan_services.belum_cair(session, per_tanggal)`): sudah dikirim,
+  belum cair per tanggal itu, belum retur per tanggal itu. Order hasil sinkronisasi ikut otomatis bila `tgl_dikirim` terisi.

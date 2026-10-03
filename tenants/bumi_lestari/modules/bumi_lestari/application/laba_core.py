@@ -9,9 +9,18 @@ from sqlalchemy import func, or_, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from tenants.bumi_lestari.modules.bumi_lestari.application.provisi_core import beban_provisi
-from tenants.bumi_lestari.modules.bumi_lestari.application.kategori_core import KATEGORI_SETORAN_MODAL
+from tenants.bumi_lestari.modules.bumi_lestari.application.kategori_core import (
+    KATEGORI_KERUGIAN_RETUR,
+    KATEGORI_PRODUKSI,
+    KATEGORI_SETORAN_MODAL,
+)
 from tenants.bumi_lestari.modules.bumi_lestari.infrastructure.models import STATUS_TERKIRIM, BlKategori, BlTransaksi
-from tenants.bumi_lestari.modules.bumi_lestari.infrastructure.models_pembayaran import REF_GAJI
+from tenants.bumi_lestari.modules.bumi_lestari.infrastructure.models_order import STATUS_RETUR, BlOrder
+from tenants.bumi_lestari.modules.bumi_lestari.infrastructure.models_pembayaran import (
+    REF_GAJI,
+    BlPembayaranPemasok,
+    BlPembayaranPemasokItem,
+)
 
 KATEGORI_BAGI_HASIL = "Bagi hasil"
 # Bukan biaya usaha: tidak mengurangi laba bersih yang dibagi.
@@ -66,6 +75,34 @@ async def _per_kategori(session: AsyncSession, jenis: str, awal: date, akhir: da
     return [Baris(n, Decimal(str(j)), int(c)) for n, j, c in (await session.execute(stmt)).all()]
 
 
+async def reklas_retur(session: AsyncSession, awal: date, akhir: date) -> Decimal:
+    """Biaya tukang/supplier untuk order retur yang pindah dari HPP ke Kerugian retur (AB-BC-3).
+
+    Diakui pada bulan yang lebih akhir antara tanggal retur dan tanggal pembayaran pemasok (terkirim), jadi bulan
+    yang sudah tutup buku tidak berubah. Laba bersih tetap; hanya kelompok biayanya yang berpindah."""
+    rows = (
+        await session.execute(
+            select(BlPembayaranPemasokItem.jumlah, BlOrder.tgl_retur, BlPembayaranPemasok.tanggal)
+            .join(BlPembayaranPemasok, BlPembayaranPemasok.id == BlPembayaranPemasokItem.pembayaran_id)
+            .join(BlOrder, BlOrder.id == BlPembayaranPemasokItem.order_id)
+            .where(
+                BlOrder.status == STATUS_RETUR, BlOrder.tgl_retur.is_not(None), BlOrder.tgl_retur <= akhir,
+                BlPembayaranPemasok.dibatalkan.is_(False), BlPembayaranPemasok.status_kirim == STATUS_TERKIRIM,
+                BlPembayaranPemasok.tanggal <= akhir,
+            )
+        )
+    ).all()
+    return sum((Decimal(j) for j, tr, tb in rows if awal <= max(tr, tb) <= akhir), Decimal("0"))
+
+
+def _geser(baris: list[Baris], kategori: str, delta: Decimal) -> None:
+    for b in baris:
+        if b.kategori == kategori:
+            b.jumlah += delta
+            return
+    baris.append(Baris(kategori, delta))
+
+
 async def ringkasan_laba(session: AsyncSession, awal: date, akhir: date) -> RingkasanLaba:
     """Laba = pemasukan - biaya (hanya entri terkirim). Transfer dan setoran modal tidak dihitung. Gaji diakui lewat cicilan mingguan (bukan saat
     dibayar), jadi transaksi pembayaran gaji dikecualikan; langganan diakui saat dibayar."""
@@ -73,6 +110,11 @@ async def ringkasan_laba(session: AsyncSession, awal: date, akhir: date) -> Ring
     # Setoran modal bukan pendapatan (spesifikasi 8.12).
     hasil.pemasukan = await _per_kategori(session, "masuk", awal, akhir, kecuali=(KATEGORI_SETORAN_MODAL,))
     hasil.biaya = await _per_kategori(session, "keluar", awal, akhir, kecuali=KATEGORI_BUKAN_BIAYA, kecuali_ref=(REF_GAJI,))
+    reklas = await reklas_retur(session, awal, akhir)
+    if reklas:
+        _geser(hasil.biaya, KATEGORI_PRODUKSI, -reklas)
+        _geser(hasil.biaya, KATEGORI_KERUGIAN_RETUR, reklas)
+        hasil.biaya.sort(key=lambda b: b.kategori)
     cicilan = await beban_provisi(session, awal, akhir)
     if cicilan != 0:
         hasil.biaya.append(Baris(LABEL_GAJI_CICILAN, cicilan))

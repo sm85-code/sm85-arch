@@ -21,7 +21,7 @@ from tenants.bumi_lestari.modules.bumi_lestari.application.audit_core import cat
 from tenants.bumi_lestari.modules.bumi_lestari.application.laba_core import ringkasan_laba
 from tenants.bumi_lestari.modules.bumi_lestari.application.laporan_services import (
     _baris,
-    belum_cair_sementara,
+    total_belum_cair,
     laporan_umum,
 )
 from tenants.bumi_lestari.modules.bumi_lestari.application.pembayaran_services import (
@@ -198,7 +198,7 @@ async def kesiapan(session: AsyncSession, periode: str, hari_ini: date | None = 
     return KesiapanOut(
         periode=periode, status=st,
         boleh_tutup=st != STATUS_DITUTUP and all(b.siap for b in butir if b.penghalang),
-        butir=butir, pratinjau=await _pratinjau(session, awal, akhir), belum_cair=await belum_cair_sementara(session),
+        butir=butir, pratinjau=await _pratinjau(session, awal, akhir), belum_cair=await total_belum_cair(session, akhir),
     )
 
 
@@ -213,7 +213,7 @@ async def _snapshot(session: AsyncSession, user: BlUser, periode: str, awal: dat
             {"akun_id": a.id, "kode": a.kode, "nama": a.nama, "jenis": a.jenis, "saldo": str(await saldo_akun(session, a, akhir))}
             for a in akun
         ],
-        "belum_cair": str(await belum_cair_sementara(session)),
+        "belum_cair": str(await total_belum_cair(session, akhir)),
         "dibuat_pada": datetime.now(timezone.utc).isoformat(),
     }
 

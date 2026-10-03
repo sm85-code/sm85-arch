@@ -17,7 +17,10 @@ _KOLOM_BARU = {
     "bl_transaksi": ("status_kirim", "kiriman_id", "sumber_sistem", "sumber_ref"),
     "bl_pembayaran_pemasok": ("status_kirim", "kiriman_id"),
     "bl_penerimaan_reseller": ("status_kirim", "kiriman_id"),
-    "bl_order": ("sumber_sistem", "sumber_ref"),
+    "bl_order": (
+        "sumber_sistem", "sumber_ref", "status_cair", "tgl_cair", "pencairan_baris_id", "potongan_aktual", "tgl_retur",
+        "alasan_retur", "kembali_stok",
+    ),
     "bl_produk": ("sumber_sistem", "sumber_ref"),
 }
 

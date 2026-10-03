@@ -42,6 +42,9 @@ class LaporanUmumOut(BaseModel):
     total_kas_akhir: Decimal
     # Draf yang belum dikirim ke laporan keuangan (tidak dihitung di atas), per sumber.
     draf_belum_dikirim: list[DrafSumberOut] = []
+    # Belum cair per tanggal `sampai` (AB-BC-2): tidak masuk laba; perkiraan laba jika semua cair hanya informasi.
+    belum_cair: Decimal = Decimal("0")
+    perkiraan_laba_jika_cair: Optional[Decimal] = None
     # Bulan tutup buku: angka diambil dari snapshot saat ditutup.
     dari_snapshot: bool = False
     ditutup_pada: Optional[datetime] = None
@@ -126,5 +129,37 @@ class DashboardOut(BaseModel):
     bagian_admin_pratinjau: Optional[Decimal] = None
     bagian_owner_pratinjau: Optional[Decimal] = None
     tagihan_penjual_lain_minggu_ini: Decimal = Decimal("0")  # kirim s.d. Sabtu lalu, belum dibayar
-    belum_cair_sementara: Decimal = Decimal("0")  # order marketplace berstatus dikirim (sementara, sebelum Fase 2)
+    belum_cair: Decimal = Decimal("0")  # perkiraan uang cair order marketplace/Toko web yang sudah dikirim, belum cair
+    belum_cair_sementara: Decimal = Decimal("0")  # nama lama (sama dengan belum_cair), dipertahankan untuk frontend lama
     draf_belum_dikirim: list[DrafSumberOut] = []  # hanya sumber yang punya draf
+
+
+class OrderBelumCairOut(BaseModel):
+    order_id: str
+    no_order: str
+    tgl_dikirim: date
+    penjualan: Decimal  # harga jual bruto
+    potongan: Decimal  # potongan aktual bila ada, selain itu perkiraan dari order
+    perkiraan_cair: Decimal
+    status: str
+
+
+class SaluranBelumCairOut(BaseModel):
+    saluran_id: str
+    nama: str
+    akun_id: Optional[str]
+    jumlah_order: int
+    total_penjualan: Decimal
+    total_perkiraan_cair: Decimal
+    tgl_kirim_tertua: Optional[date]
+    order: list[OrderBelumCairOut]
+
+
+class BelumCairOut(BaseModel):
+    """Piutang marketplace/Toko web berisiko retur (AB-BC-1): sudah dikirim, belum cair, belum retur."""
+    per_tanggal: date
+    jumlah_order: int
+    total_penjualan: Decimal
+    total_perkiraan_cair: Decimal
+    tgl_kirim_tertua: Optional[date]
+    per_saluran: list[SaluranBelumCairOut]

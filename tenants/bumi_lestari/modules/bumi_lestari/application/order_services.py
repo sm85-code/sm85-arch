@@ -12,6 +12,7 @@ from tenants.bumi_lestari.modules.bumi_lestari.application.schemas_order import 
     HargaGrosirIn,
     OrderIn,
     OrderPatch,
+    OrderReturIn,
     OrderStatusIn,
     PelangganIn,
     PelangganPatch,
@@ -22,7 +23,8 @@ from tenants.bumi_lestari.modules.bumi_lestari.application.schemas_order import 
     SaluranIn,
     SaluranPatch,
 )
-from tenants.bumi_lestari.modules.bumi_lestari.application.services import _hari_ini, get_profil
+from tenants.bumi_lestari.modules.bumi_lestari.application.audit_core import catat_audit
+from tenants.bumi_lestari.modules.bumi_lestari.application.services import _hari_ini, get_profil, pastikan_bulan_terbuka
 from tenants.bumi_lestari.modules.bumi_lestari.infrastructure.models import BlAkunKas
 from tenants.bumi_lestari.modules.bumi_lestari.infrastructure.models_pembayaran import (
     BlPembayaranPemasok,
@@ -35,7 +37,10 @@ from tenants.bumi_lestari.modules.bumi_lestari.infrastructure.models_order impor
     JENIS_PEMASOK,
     JENIS_PRODUK,
     JENIS_SALURAN,
+    JENIS_SALURAN_CAIR,
     STATUS_BATAL,
+    STATUS_CAIR_CAIR,
+    STATUS_RETUR,
     STATUS_ORDER_KAYU,
     STATUS_ORDER_NON_KAYU,
     BlHargaGrosir,
@@ -419,10 +424,13 @@ async def list_order(
     jenis_produk: str | None = None,
     dari: date | None = None,
     sampai: date | None = None,
+    status_cair: str | None = None,
 ) -> list[BlOrder]:
     stmt = select(BlOrder).order_by(BlOrder.tanggal_order.desc(), BlOrder.created_at.desc())
     if status_order:
         stmt = stmt.where(BlOrder.status == status_order)
+    if status_cair:
+        stmt = stmt.where(BlOrder.status_cair == status_cair)
     if saluran_id:
         stmt = stmt.where(BlOrder.saluran_id == saluran_id)
     if pelanggan_id:
@@ -438,8 +446,8 @@ async def list_order(
 
 async def update_order(session: AsyncSession, order_id: str, payload: OrderPatch) -> BlOrder:
     order = await get_order(session, order_id)
-    if order.status in ("selesai", STATUS_BATAL):
-        raise _bad("Order yang sudah selesai/batal tidak bisa diubah", status.HTTP_409_CONFLICT)
+    if order.status in ("selesai", STATUS_BATAL, STATUS_RETUR):
+        raise _bad("Order yang sudah selesai/batal/retur tidak bisa diubah", status.HTTP_409_CONFLICT)
     data = payload.model_dump(exclude_unset=True)
     if order.dibayar_tukang or order.dibayar_penjual_lain:
         def _berubah(kolom, nilai):
@@ -491,8 +499,8 @@ async def update_order(session: AsyncSession, order_id: str, payload: OrderPatch
 async def ubah_status_order(session: AsyncSession, order_id: str, payload: OrderStatusIn) -> BlOrder:
     """Majukan satu langkah sesuai alur produk, atau batalkan (sebelum selesai)."""
     order = await get_order(session, order_id)
-    if order.status in ("selesai", STATUS_BATAL):
-        raise _bad("Order sudah selesai/batal", status.HTTP_409_CONFLICT)
+    if order.status in ("selesai", STATUS_BATAL, STATUS_RETUR):
+        raise _bad("Order sudah selesai/batal/retur", status.HTTP_409_CONFLICT)
     if payload.status == STATUS_BATAL:
         if order.dibayar_tukang or order.dibayar_penjual_lain:
             raise _bad(_pesan_terkunci(order), status.HTTP_409_CONFLICT)
@@ -511,5 +519,39 @@ async def ubah_status_order(session: AsyncSession, order_id: str, payload: Order
     order.status = berikut
     if berikut in _KOLOM_TANGGAL:
         setattr(order, _KOLOM_TANGGAL[berikut], payload.tanggal or _hari_ini())
+    await session.flush()
+    return order
+
+
+async def retur_order(session: AsyncSession, order_id: str, payload: OrderReturIn, user_id: str | None = None) -> BlOrder:
+    """Retur sebelum cair (AB-BC-3): order keluar dari belum cair; biaya pokoknya dilaporkan sebagai Kerugian retur
+    (lihat laba_core.reklas_retur). Retur setelah cair datang dari baris retur/penyesuaian file pencairan."""
+    order = await get_order(session, order_id)
+    saluran = await session.get(BlSaluran, order.saluran_id)
+    if saluran is None or saluran.jenis not in JENIS_SALURAN_CAIR:
+        raise _bad("Retur hanya untuk order marketplace/Toko web")
+    if order.status == STATUS_RETUR:
+        raise _bad("Order sudah ditandai retur", status.HTTP_409_CONFLICT)
+    if order.status not in ("dikirim", "selesai"):
+        raise _bad("Order belum dikirim; batalkan saja bila tidak jadi", status.HTTP_409_CONFLICT)
+    if order.status_cair == STATUS_CAIR_CAIR:
+        raise _bad(
+            "Order sudah cair; retur setelah cair dicatat dari file pencairan (baris retur/penyesuaian)",
+            status.HTTP_409_CONFLICT,
+        )
+    tanggal = payload.tanggal or _hari_ini()
+    if order.tgl_dikirim and tanggal < order.tgl_dikirim:
+        raise _bad("Tanggal retur tidak boleh sebelum tanggal kirim")
+    await pastikan_bulan_terbuka(session, tanggal)
+    sebelum = {"status": order.status}
+    order.status = STATUS_RETUR
+    order.tgl_retur = tanggal
+    order.alasan_retur = payload.alasan.strip()
+    order.kembali_stok = payload.kembali_stok
+    await catat_audit(
+        session, user_id, "retur", "order", order.id, sebelum=sebelum,
+        sesudah={"status": STATUS_RETUR, "tgl_retur": tanggal, "kembali_stok": payload.kembali_stok},
+        alasan=order.alasan_retur,
+    )
     await session.flush()
     return order
