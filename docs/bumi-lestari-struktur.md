@@ -273,3 +273,25 @@ mengubah pengguna (`PATCH /users/{id}`: nama, email, role, aktif), dan mengatur 
 
 **Bagan akun (COA):** tidak perlu disiapkan. Akun kas + kategori yang di-seed berfungsi sebagai bagan akun
 sederhana; kategori baru ditambah dari halaman Master.
+
+## 9. Dokumen cetak: Purchase Order dan Invoice (cocok dengan contoh PDF)
+
+Backend menyusun **data** (JSON); tampilan/PDF (logo, tata letak) dibuat frontend. Logo ada di
+`docs/assets/bumi-lestari-logo.png`.
+
+- **Purchase Order ke tukang/supplier** (`GET /po/siap?tanggal=`, `GET /po/pembayaran/{id}`): satu PO per pemasok.
+  Nomor `PO/MG.{minggu}-{kode}/{bulan romawi}/{tahun}` (mis. `PO/MG.4-005/IX/2026`, kode 005 = kode tukang di
+  `bl_pemasok.kode`, otomatis dan bisa diubah). Isi: periode Senin–Sabtu, Tgl. Pembayaran = Selasa, kepada
+  (nama, bank, no. rekening), tabel Tanggal Selesai (+hari) / Kode Pesanan / Nama Barang / Ukuran / Qty / Harga
+  Barang / Total, serta grand total.
+- **Invoice ke penjual lain** (`GET /invoice-reseller?tanggal=&pelanggan_id=`): satu invoice per pelanggan.
+  Nomor `INV/MG.{minggu}-{kode}/{bulan romawi}/{tahun}` (`bl_pelanggan.kode`). Tgl. invoice = Senin setelah periode,
+  jatuh tempo = Selasa. Kolom: Tanggal (tanggal dikirim) / Nama Barang / Ukuran / Harga Barang / Biaya Jasa
+  Pengecatan (cat + jasa + packing) / Biaya Proses Pesanan / Total. Syarat pembayaran dan tujuan transfer
+  (`info_pembayaran` di profil, mis. "QRIS Pangeran Homeware").
+- **Minggu ke-N:** Senin–Sabtu; minggu pertama adalah minggu yang memuat tanggal 1, bulan mengikuti hari Sabtu
+  (21–26 September 2026 = Minggu ke-4 September; 28 Sep–3 Okt = Minggu ke-1 Oktober).
+- **Nama badan usaha:** CV sampai 3 Okt 2026, **PT mulai 4 Okt 2026**. Disimpan di profil UMKM (`nama_usaha`,
+  `nama_usaha_lama`, `nama_usaha_berlaku_mulai`); dokumen bertanggal sebelum tanggal peralihan tetap mencetak
+  nama lama. Nilai awal di atas bisa diubah admin.
+- Produk punya `ukuran` (mis. 100x20x200); varian ditulis di nama produk (mis. "Partisi Rak Tengah [2 rak]").

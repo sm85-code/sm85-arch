@@ -41,6 +41,7 @@ class BlProduk(BumiLestariBase):
     sku: Mapped[str] = mapped_column(String(128), nullable=False, unique=True, index=True)
     nama: Mapped[str] = mapped_column(String(255), nullable=False)
     jenis_produk: Mapped[str] = mapped_column(String(16), nullable=False, default="kayu")
+    ukuran: Mapped[str] = mapped_column(String(64), nullable=False, default="")  # mis. 100x20x200
     harga_jual: Mapped[Decimal] = mapped_column(Numeric(14, 2), nullable=False, default=Decimal("0"))
     biaya_pokok_default: Mapped[Decimal] = mapped_column(Numeric(14, 2), nullable=False, default=Decimal("0"))
     aktif: Mapped[bool] = mapped_column(Boolean, nullable=False, default=True)
@@ -53,7 +54,12 @@ class BlPemasok(BumiLestariBase):
     id: Mapped[str] = mapped_column(String(64), primary_key=True, default=_uuid)
     nama: Mapped[str] = mapped_column(String(255), nullable=False)
     jenis: Mapped[str] = mapped_column(String(16), nullable=False)
+    # Kode urut untuk nomor PO (PO/MG.4-005/IX/2026 -> "005"); otomatis, boleh diubah.
+    kode: Mapped[str] = mapped_column(String(16), nullable=False, default="")
     kontak: Mapped[str] = mapped_column(String(255), nullable=False, default="")
+    nama_bank: Mapped[str] = mapped_column(String(64), nullable=False, default="")
+    no_rekening: Mapped[str] = mapped_column(String(64), nullable=False, default="")
+    atas_nama: Mapped[str] = mapped_column(String(255), nullable=False, default="")
     catatan: Mapped[str] = mapped_column(Text, nullable=False, default="")
     aktif: Mapped[bool] = mapped_column(Boolean, nullable=False, default=True)
 
@@ -76,6 +82,9 @@ class BlPelanggan(BumiLestariBase):
 
     id: Mapped[str] = mapped_column(String(64), primary_key=True, default=_uuid)
     nama: Mapped[str] = mapped_column(String(255), nullable=False)
+    # Kode urut untuk nomor invoice (INV/MG.4-002/IX/2026 -> "002"); otomatis, boleh diubah.
+    kode: Mapped[str] = mapped_column(String(16), nullable=False, default="")
+    alamat: Mapped[str] = mapped_column(Text, nullable=False, default="")
     kontak: Mapped[str] = mapped_column(String(255), nullable=False, default="")
     catatan: Mapped[str] = mapped_column(Text, nullable=False, default="")
     aktif: Mapped[bool] = mapped_column(Boolean, nullable=False, default=True)

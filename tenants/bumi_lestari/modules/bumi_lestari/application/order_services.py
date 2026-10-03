@@ -82,7 +82,7 @@ async def create_produk(session: AsyncSession, payload: ProdukIn) -> BlProduk:
     sku = payload.sku.strip().upper()
     await _pastikan_unik(session, BlProduk, BlProduk.sku, sku, "SKU")
     produk = BlProduk(
-        sku=sku, nama=payload.nama.strip(), jenis_produk=payload.jenis_produk,
+        sku=sku, nama=payload.nama.strip(), jenis_produk=payload.jenis_produk, ukuran=payload.ukuran.strip(),
         harga_jual=payload.harga_jual, biaya_pokok_default=payload.biaya_pokok_default,
     )
     session.add(produk)
@@ -103,6 +103,13 @@ async def update_produk(session: AsyncSession, produk_id: str, payload: ProdukPa
 # --- Pemasok, saluran, pelanggan, harga grosir --------------------------------------------
 
 
+async def _kode_berikut(session: AsyncSession, model, *kondisi) -> str:
+    """Kode urut 3 digit berikutnya ("001", "002", ...) untuk nomor PO/invoice."""
+    stmt = select(model.kode).where(*kondisi)
+    angka = [int(k) for k in (await session.execute(stmt)).scalars() if k.isdigit()]
+    return f"{max(angka, default=0) + 1:03d}"
+
+
 async def list_pemasok(session: AsyncSession) -> list[BlPemasok]:
     stmt = select(BlPemasok).where(BlPemasok.aktif.is_(True)).order_by(BlPemasok.nama)
     return list((await session.execute(stmt)).scalars())
@@ -111,8 +118,11 @@ async def list_pemasok(session: AsyncSession) -> list[BlPemasok]:
 async def create_pemasok(session: AsyncSession, payload: PemasokIn) -> BlPemasok:
     if payload.jenis not in JENIS_PEMASOK:
         raise _bad(f"Jenis pemasok harus salah satu dari: {', '.join(JENIS_PEMASOK)}")
+    kode = payload.kode.strip() or await _kode_berikut(session, BlPemasok, BlPemasok.jenis == payload.jenis)
     pemasok = BlPemasok(
-        nama=payload.nama.strip(), jenis=payload.jenis, kontak=payload.kontak.strip(), catatan=payload.catatan.strip()
+        nama=payload.nama.strip(), jenis=payload.jenis, kode=kode, kontak=payload.kontak.strip(),
+        nama_bank=payload.nama_bank.strip(), no_rekening=payload.no_rekening.strip(),
+        atas_nama=payload.atas_nama.strip(), catatan=payload.catatan.strip(),
     )
     session.add(pemasok)
     await session.flush()
@@ -143,8 +153,9 @@ async def list_pelanggan(session: AsyncSession) -> list[BlPelanggan]:
 
 
 async def create_pelanggan(session: AsyncSession, payload: PelangganIn) -> BlPelanggan:
+    kode = payload.kode.strip() or await _kode_berikut(session, BlPelanggan)
     pelanggan = BlPelanggan(
-        nama=payload.nama.strip(), kontak=payload.kontak.strip(),
+        nama=payload.nama.strip(), kode=kode, alamat=payload.alamat.strip(), kontak=payload.kontak.strip(),
         catatan=payload.catatan.strip(),
     )
     session.add(pelanggan)

@@ -138,7 +138,7 @@ def total_order(order: BlOrder) -> Decimal:
 # --- Pembayaran pemasok (tukang kayu + supplier), tiap Selasa -------------------------------
 
 
-async def _order_sudah_dibayar_pemasok(session: AsyncSession) -> set[str]:
+async def order_sudah_dibayar_pemasok(session: AsyncSession) -> set[str]:
     stmt = (
         select(BlPembayaranPemasokItem.order_id)
         .join(BlPembayaranPemasok, BlPembayaranPemasok.id == BlPembayaranPemasokItem.pembayaran_id)
@@ -164,7 +164,7 @@ async def siap_bayar_pemasok(session: AsyncSession, tanggal: date | None = None)
     selasa = selasa_acuan(tanggal or _hari_ini())
     batas = selasa - timedelta(days=3)  # Sabtu
     awal = selasa - timedelta(days=8)  # Senin minggu sebelumnya
-    dibayar = await _order_sudah_dibayar_pemasok(session)
+    dibayar = await order_sudah_dibayar_pemasok(session)
     orders = (
         await session.execute(
             select(BlOrder, BlPemasok, BlProduk)
@@ -297,17 +297,18 @@ async def batalkan_pembayaran_pemasok(session: AsyncSession, pembayaran_id: str,
 # --- Penerimaan dari penjual lain (reseller) -----------------------------------------------
 
 
+async def order_sudah_dibayar_reseller(session: AsyncSession) -> set[str]:
+    stmt = (
+        select(BlPenerimaanResellerItem.order_id)
+        .join(BlPenerimaanReseller, BlPenerimaanReseller.id == BlPenerimaanResellerItem.penerimaan_id)
+        .where(BlPenerimaanReseller.dibatalkan.is_(False))
+    )
+    return set((await session.execute(stmt)).scalars())
+
+
 async def list_piutang_reseller(session: AsyncSession, pelanggan_id: str | None = None) -> list[PiutangPelangganOut]:
     """Order reseller yang sudah dikirim/selesai dan belum dibayar."""
-    dibayar = set(
-        (
-            await session.execute(
-                select(BlPenerimaanResellerItem.order_id)
-                .join(BlPenerimaanReseller, BlPenerimaanReseller.id == BlPenerimaanResellerItem.penerimaan_id)
-                .where(BlPenerimaanReseller.dibatalkan.is_(False))
-            )
-        ).scalars()
-    )
+    dibayar = await order_sudah_dibayar_reseller(session)
     stmt = (
         select(BlOrder, BlPelanggan)
         .join(BlSaluran, BlSaluran.id == BlOrder.saluran_id)

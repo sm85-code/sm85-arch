@@ -13,12 +13,14 @@ class ProdukIn(BaseModel):
     sku: str = Field(min_length=1, max_length=128)
     nama: str = Field(min_length=1, max_length=255)
     jenis_produk: str = "kayu"
+    ukuran: str = Field(default="", max_length=64)
     harga_jual: Decimal = Uang
     biaya_pokok_default: Decimal = Field(default=Decimal("0"), ge=0, max_digits=14, decimal_places=2)
 
 
 class ProdukPatch(BaseModel):
     nama: Optional[str] = Field(default=None, min_length=1, max_length=255)
+    ukuran: Optional[str] = Field(default=None, max_length=64)
     harga_jual: Optional[Decimal] = Field(default=None, ge=0, max_digits=14, decimal_places=2)
     biaya_pokok_default: Optional[Decimal] = Field(default=None, ge=0, max_digits=14, decimal_places=2)
     aktif: Optional[bool] = None
@@ -29,6 +31,7 @@ class ProdukOut(BaseModel):
     sku: str
     nama: str
     jenis_produk: str
+    ukuran: str
     harga_jual: Decimal
     biaya_pokok_default: Decimal
     aktif: bool
@@ -38,7 +41,11 @@ class ProdukOut(BaseModel):
 class PemasokIn(BaseModel):
     nama: str = Field(min_length=1, max_length=255)
     jenis: str
+    kode: str = Field(default="", max_length=16)  # kosong -> otomatis (urut per jenis pemasok)
     kontak: str = Field(default="", max_length=255)
+    nama_bank: str = Field(default="", max_length=64)
+    no_rekening: str = Field(default="", max_length=64)
+    atas_nama: str = Field(default="", max_length=255)
     catatan: str = Field(default="", max_length=1000)
 
 
@@ -62,6 +69,8 @@ class SaluranOut(SaluranIn):
 
 class PelangganIn(BaseModel):
     nama: str = Field(min_length=1, max_length=255)
+    kode: str = Field(default="", max_length=16)  # kosong -> otomatis (urut)
+    alamat: str = Field(default="", max_length=1000)
     kontak: str = Field(default="", max_length=255)
     catatan: str = Field(default="", max_length=1000)
 

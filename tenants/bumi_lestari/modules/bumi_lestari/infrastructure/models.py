@@ -121,11 +121,20 @@ class BlProfil(BumiLestariBase):
     __tablename__ = "bl_profil"
 
     id: Mapped[str] = mapped_column(String(64), primary_key=True, default=PROFIL_ID)
-    nama_usaha: Mapped[str] = mapped_column(String(255), nullable=False, default="Bumi Lestari")
-    alamat: Mapped[str] = mapped_column(Text, nullable=False, default="")
+    nama_usaha: Mapped[str] = mapped_column(String(255), nullable=False, default="PT. Bumi Lestari Indonesia")
+    # Perubahan badan usaha CV -> PT: dokumen bertanggal sebelum `nama_usaha_berlaku_mulai` tetap memakai
+    # nama lama (nilai awal; bisa diubah di halaman profil).
+    nama_usaha_lama: Mapped[str] = mapped_column(String(255), nullable=False, default="CV. Bumi Lestari Indonesia")
+    nama_usaha_berlaku_mulai: Mapped[Optional[date]] = mapped_column(Date, nullable=True, default=date(2026, 10, 4))
+    alamat: Mapped[str] = mapped_column(
+        Text, nullable=False,
+        default="Jl. Ampel Kuning, Padasuka, Desa Wonoharjo, Kec. Pangandaran, Kab. Pangandaran, Jawa Barat",
+    )
     telepon: Mapped[str] = mapped_column(String(64), nullable=False, default="")
     email: Mapped[str] = mapped_column(String(255), nullable=False, default="")
     catatan: Mapped[str] = mapped_column(Text, nullable=False, default="")
+    # Tujuan pembayaran yang dicetak di invoice, mis. "QRIS Pangeran Homeware" atau nomor rekening.
+    info_pembayaran: Mapped[str] = mapped_column(Text, nullable=False, default="")
     # Biaya proses pesanan untuk order penjual lain: flat per order, tidak tergantung ukuran barang.
     biaya_proses_order: Mapped[Decimal] = mapped_column(Numeric(14, 2), nullable=False, default=Decimal("10000"))
     updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=_utcnow, onupdate=_utcnow)

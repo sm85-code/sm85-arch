@@ -398,6 +398,14 @@ async def update_profil(session: AsyncSession, payload: ProfilIn) -> BlProfil:
     return profil
 
 
+def nama_usaha_pada(profil: BlProfil, tanggal: date) -> str:
+    """Nama badan usaha yang berlaku pada `tanggal` dokumen (CV sebelum tanggal peralihan, PT sesudahnya)."""
+    mulai = profil.nama_usaha_berlaku_mulai
+    if profil.nama_usaha_lama and mulai and tanggal < mulai:
+        return profil.nama_usaha_lama
+    return profil.nama_usaha
+
+
 PENERIMA_BAGI_HASIL = ("admin", "owner")
 
 

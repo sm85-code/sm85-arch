@@ -12,6 +12,7 @@ from datetime import date
 from fastapi import APIRouter, Depends, HTTPException, Request, Response, status
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from tenants.bumi_lestari.adapters.api.v1.bumi_lestari_dokumen_router import dokumen_router
 from tenants.bumi_lestari.adapters.api.v1.bumi_lestari_order_router import order_router
 from tenants.bumi_lestari.adapters.api.v1.bumi_lestari_t3_router import t3_router
 from tenants.bumi_lestari.modules.bumi_lestari.application import services
@@ -51,6 +52,7 @@ from tenants.bumi_lestari.modules.bumi_lestari.infrastructure.seeder import seed
 bumi_lestari_router = APIRouter()
 bumi_lestari_router.include_router(order_router)
 bumi_lestari_router.include_router(t3_router)
+bumi_lestari_router.include_router(dokumen_router)
 
 OWNER_ONLY = ("admin", "owner")  # admin berada di atas owner: semua akses owner + kelola akun owner
 OWNER_OR_STAFF = ("admin", "owner", "staff")
@@ -291,7 +293,9 @@ async def _profil_out(session: AsyncSession) -> ProfilOut:
     proporsi = [ProporsiItemOut.model_validate(p) for p in await services.get_proporsi(session)]
     return ProfilOut(
         nama_usaha=profil.nama_usaha, alamat=profil.alamat, telepon=profil.telepon,
-        email=profil.email, catatan=profil.catatan, biaya_proses_order=profil.biaya_proses_order, proporsi_bagi_hasil=proporsi,
+        email=profil.email, catatan=profil.catatan, biaya_proses_order=profil.biaya_proses_order,
+        info_pembayaran=profil.info_pembayaran,
+        nama_usaha_lama=profil.nama_usaha_lama, nama_usaha_berlaku_mulai=profil.nama_usaha_berlaku_mulai, proporsi_bagi_hasil=proporsi,
     )
 
 

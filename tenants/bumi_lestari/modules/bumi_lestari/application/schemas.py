@@ -195,6 +195,9 @@ class ProfilIn(BaseModel):
     email: str = Field(default="", max_length=255)
     catatan: str = Field(default="", max_length=2000)
     biaya_proses_order: Decimal = Field(default=Decimal("10000"), ge=0, max_digits=14, decimal_places=2)
+    info_pembayaran: str = Field(default="", max_length=1000)
+    nama_usaha_lama: str = Field(default="", max_length=255)
+    nama_usaha_berlaku_mulai: Optional[date] = None  # dokumen bertanggal sebelum ini memakai nama_usaha_lama
 
 
 class ProporsiItemOut(BaseModel):
@@ -218,4 +221,7 @@ class ProfilOut(BaseModel):
     email: str
     catatan: str
     biaya_proses_order: Decimal
+    info_pembayaran: str
+    nama_usaha_lama: str
+    nama_usaha_berlaku_mulai: Optional[date]
     proporsi_bagi_hasil: list[ProporsiItemOut]
