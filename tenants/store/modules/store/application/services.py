@@ -30,6 +30,7 @@ from tenants.store.modules.store.application.slug import slugify, with_suffix
 from tenants.store.modules.store.infrastructure.media_storage import media_url
 from tenants.store.modules.store.infrastructure.shipping_biteship import ItemKirim, berat_default
 from tenants.store.modules.store.infrastructure.shipping_biteship import buat_order as buat_order_kurir
+from tenants.store.modules.store.infrastructure.shipping_biteship import cek_ongkir as cek_ongkir_kurir
 from tenants.store.modules.store.infrastructure.shipping_biteship import lacak as lacak_kurir
 from tenants.store.modules.store.infrastructure.models import (
     ROLE_ADMIN,
@@ -905,6 +906,44 @@ async def buat_order_biteship(session: AsyncSession, pesanan_id: str) -> Pengiri
     pengiriman.tracking_id = order.waybill_id or pengiriman.tracking_id
     if "diproses" in _TRANSISI_STATUS.get(pesanan.status, set()):
         pesanan.status = "diproses"
+    await session.flush()
+    return pengiriman
+
+
+def _kurir_bisa_diganti(pesanan: PesananStore, pengiriman: PengirimanStore) -> None:
+    if pesanan.status not in ("dibayar", "diproses"):
+        raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail="Kurir hanya bisa diganti untuk pesanan yang sudah dibayar")
+    if pengiriman.biteship_order_id and pengiriman.status != "bermasalah":
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT, detail="Kurir sudah dipesan. Kurir baru bisa diganti bila pengiriman bermasalah."
+        )
+
+
+async def opsi_kurir_pesanan(session: AsyncSession, pesanan_id: str) -> list:
+    """Courier services the seller can still switch to for a paid order (prices are for reference)."""
+    pesanan = await get_pesanan(session, pesanan_id)
+    pengiriman = await get_pengiriman(session, pesanan_id)
+    _kurir_bisa_diganti(pesanan, pengiriman)
+    return await cek_ongkir_kurir(
+        kode_pos_tujuan=pengiriman.kode_pos_tujuan, items=await item_kirim_pesanan(session, pesanan)
+    )
+
+
+async def ganti_kurir(session: AsyncSession, pesanan_id: str, kurir: str, layanan: str) -> PengirimanStore:
+    """Switch the courier of a paid order. What the buyer paid for shipping stays as it is; a failed booking is cleared."""
+    opsi = await opsi_kurir_pesanan(session, pesanan_id)
+    pilihan = next((o for o in opsi if o.kurir == kurir.lower() and o.layanan == layanan), None)
+    if pilihan is None:
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Layanan kurir yang dipilih tidak tersedia")
+    pengiriman = await get_pengiriman(session, pesanan_id)
+    pengiriman.kurir = pilihan.kurir
+    pengiriman.layanan = pilihan.layanan
+    pengiriman.layanan_nama = pilihan.layanan_nama
+    if pengiriman.biteship_order_id:  # the earlier booking failed: start over with the new courier
+        pengiriman.biteship_order_id = None
+        pengiriman.biteship_tracking_id = None
+        pengiriman.tracking_id = None
+        pengiriman.status = "menunggu_pickup"
     await session.flush()
     return pengiriman
 

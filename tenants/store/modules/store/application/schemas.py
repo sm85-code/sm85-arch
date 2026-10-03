@@ -191,6 +191,11 @@ class PengirimanIn(BaseModel):
     _v_wilayah = field_validator("kode_wilayah_tujuan")(_validate_kode_wilayah)
 
 
+class KurirIn(BaseModel):
+    kurir: str
+    layanan: str
+
+
 class StatusPengirimanIn(BaseModel):
     status: str
     tracking_id: Optional[str] = None
