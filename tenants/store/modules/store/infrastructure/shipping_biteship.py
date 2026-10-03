@@ -24,6 +24,7 @@ from __future__ import annotations
 import asyncio
 import hmac
 import logging
+import math
 import os
 from dataclasses import dataclass
 from typing import Any
@@ -178,11 +179,32 @@ def _rates_sync(
     return data
 
 
+def biaya_cod_atas_total(fee_barang: int, nilai_barang: int, ongkir: int) -> int:
+    """The courier takes its COD percentage of everything it collects (items + shipping + the fee itself), but the
+    rates were asked for the items only. Work out the fee that covers the whole amount, so that the buyer really
+    pays it: with rate r = fee / items, collected = (items + shipping) / (1 - r) and fee = collected - items - shipping.
+    Rounded up, so the seller never pays the difference."""
+    if fee_barang <= 0 or nilai_barang <= 0:
+        return max(fee_barang, 0)
+    r = fee_barang / nilai_barang
+    if r >= 0.5:  # not a plausible percentage (e.g. a flat minimum fee on a tiny order): keep what the courier quoted
+        return fee_barang
+    dasar = nilai_barang + ongkir
+    return max(math.ceil(r * dasar / (1 - r)), fee_barang)
+
+
 async def cek_ongkir(
-    *, kode_pos_tujuan: str, items: list[ItemKirim], cod_nilai: int = 0, pengaturan: PengaturanKirim | None = None
+    *,
+    kode_pos_tujuan: str,
+    items: list[ItemKirim],
+    cod_nilai: int = 0,
+    pengaturan: PengaturanKirim | None = None,
+    cod_dari_barang: bool = True,
 ) -> list[OngkirOption]:
     """Rates for the items. With ``cod_nilai`` only the couriers that can collect that amount on delivery are
-    returned, and each option carries the COD fee (``biaya_cod``) apart from the shipping fee (``ongkir``)."""
+    returned, and each option carries the COD fee (``biaya_cod``) apart from the shipping fee (``ongkir``).
+    ``cod_dari_barang`` says ``cod_nilai`` is the items' value (the COD fee is then raised to cover the shipping and
+    the fee too); pass False when ``cod_nilai`` is already the whole amount to be collected."""
     if not aktif():
         raise BiteshipNotReady()
     if not items:
@@ -207,6 +229,8 @@ async def cek_ongkir(
                 harga = int(round(float(row["shipping_fee"])))
             except (KeyError, TypeError, ValueError):
                 harga = max(harga - fee_cod, 0)
+            if cod_dari_barang:
+                fee_cod = biaya_cod_atas_total(fee_cod, cod_nilai, harga)
         options.append(
             OngkirOption(
                 kurir=kurir,

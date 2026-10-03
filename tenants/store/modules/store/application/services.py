@@ -975,6 +975,7 @@ async def opsi_kurir_pesanan(session: AsyncSession, pesanan_id: str) -> list:
         items=await item_kirim_pesanan(session, pesanan),
         cod_nilai=int(pesanan.total) if pesanan.metode_pembayaran == "cod" else 0,
         pengaturan=await pengaturan_kirim(session),
+        cod_dari_barang=False,  # the order total is already everything the courier collects
     )
 
 
@@ -995,6 +996,31 @@ async def ganti_kurir(session: AsyncSession, pesanan_id: str, kurir: str, layana
         pengiriman.status = "menunggu_pickup"
     await session.flush()
     return pengiriman
+
+
+# Biteship's shipment statuses in Indonesian, for the tracking history shown to buyer and seller.
+LABEL_STATUS_KURIR = {
+    "confirmed": "Pesanan dikonfirmasi, kurir diberi tahu untuk menjemput paket",
+    "scheduled": "Penjemputan dijadwalkan",
+    "allocated": "Kurir sudah ditugaskan",
+    "picking_up": "Kurir menuju lokasi penjemputan",
+    "picked": "Paket sudah diambil kurir",
+    "dropping_off": "Paket dalam pengantaran ke penerima",
+    "delivered": "Paket sudah diterima",
+    "on_hold": "Pengiriman ditahan sementara",
+    "return_in_transit": "Paket sedang dikembalikan ke pengirim",
+    "returned": "Paket sudah dikembalikan ke pengirim",
+    "rejected": "Paket ditolak oleh penerima",
+    "disposed": "Paket dimusnahkan",
+    "courier_not_found": "Kurir belum ditemukan, pengiriman diproses ulang",
+    "cancelled": "Pengiriman dibatalkan",
+}
+
+
+def catatan_indonesia(status: str, catatan_asli: str) -> str:
+    """The courier's own note is English and free text: show our Indonesian wording for the statuses we know and keep
+    the original text for anything else."""
+    return LABEL_STATUS_KURIR.get(status) or catatan_asli or status
 
 
 _EVENT_WEBHOOK_BITESHIP = {"order.status", "order.waybill_id"}
@@ -1033,9 +1059,13 @@ async def lacak_pengiriman(session: AsyncSession, pesanan_id: str) -> dict:
     await session.flush()
     return {
         "status_kurir": hasil.status,
+        "status_kurir_label": LABEL_STATUS_KURIR.get(hasil.status, hasil.status),
         "status": pengiriman.status,
         "tracking_id": pengiriman.tracking_id,
-        "riwayat": [{"status": r.status, "catatan": r.catatan, "waktu": r.waktu} for r in hasil.riwayat],
+        "riwayat": [
+            {"status": r.status, "catatan": catatan_indonesia(r.status, r.catatan), "catatan_asli": r.catatan, "waktu": r.waktu}
+            for r in hasil.riwayat
+        ],
     }
 
 
