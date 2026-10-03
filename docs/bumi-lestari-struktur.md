@@ -128,6 +128,27 @@ Efek ke keuangan:
 - **bayar Selasa** → satu `bl_pembayaran_utang` melunasi banyak utang tukang
   sekaligus, menghasilkan transaksi keluar kategori "Biaya produksi (tukang)".
 
+## 3b. Gaji karyawan tetap dan bagi hasil
+
+**Gaji karyawan tetap** (biaya tetap bulanan):
+- `bl_karyawan`: nama, jabatan, gaji_bulanan, aktif, user_id (opsional, bila karyawan juga staf kas kecil).
+- `bl_gaji`: periode (YYYY-MM), karyawan_id, jumlah, tanggal_bayar, akun_id, transaksi_id.
+  Membayar gaji membuat satu transaksi keluar kategori **"Gaji karyawan"** dari kas utama.
+- Endpoint: `/karyawan` (CRUD, owner/admin), `POST /gaji/generate?periode=` (siapkan daftar
+  gaji bulan itu), `POST /gaji/{id}/bayar`.
+
+**Bagi hasil admin 40% : owner 60% dari laba bersih:**
+- `bl_pengaturan`: `persen_admin` = 40, `persen_owner` = 60 (harus berjumlah 100, hanya admin
+  yang boleh mengubah).
+- Laba bersih periode = semua pemasukan − semua pengeluaran periode itu (biaya produksi
+  tukang, gaji, operasional kas kecil, transport, packing, dll). **Tidak dihitung sebagai
+  biaya:** transfer antar akun, kategori "Prive" dan "Bagi hasil".
+- `bl_bagi_hasil`: periode, laba_bersih, bagian_admin, bagian_owner, status
+  (`draft` → `dibayar`). Menandai dibayar membuat transaksi keluar kategori "Bagi hasil"
+  untuk masing-masing penerima.
+- Endpoint: `GET /bagi-hasil/hitung?periode=` (pratinjau), `POST /bagi-hasil` (simpan
+  draft), `POST /bagi-hasil/{id}/bayar`. Laba negatif → bagian 0 (tidak ada pembayaran).
+
 ## 4. Endpoint (`/api/bumi-lestari`)
 
 - Auth: `POST /auth/login`, `/auth/logout`, `GET /auth/me`, `POST /auth/change-password`
@@ -164,5 +185,5 @@ Efek ke keuangan:
 - **T1 (selesai di kode: `tenants/bumi_lestari/`, modul tunggal `modules/bumi_lestari/` — dipecah per modul saat order ditambahkan)** — tenant + auth + akun kas + kategori + transaksi + transfer.
 - **T2** — katalog produk (SKU, harga), tukang, saluran, pelanggan/reseller, order + status.
 - **T3** — utang, batch bayar Selasa, integrasi order → transaksi.
-- **T4** — dashboard, laporan laba-rugi/arus kas, ekspor.
+- **T4** — gaji karyawan tetap, bagi hasil 40/60, dashboard, laporan laba-rugi/arus kas, ekspor.
 - **T5** — (opsional) tautan `marketplace_erp`, pengingat Selasa.
