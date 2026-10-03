@@ -160,7 +160,8 @@ Efek ke keuangan:
   (`draft` → `dibayar`). Menandai dibayar membuat transaksi keluar kategori "Bagi hasil"
   untuk masing-masing penerima.
 - Endpoint: `GET /bagi-hasil/hitung?periode=` (pratinjau), `POST /bagi-hasil` (simpan
-  draft), `POST /bagi-hasil/{id}/bayar`. Laba negatif → bagian 0 (tidak ada pembayaran).
+  draft), `POST /bagi-hasil/{id}/bayar`. Laba negatif → bagian 0 dan tidak ada pembayaran; kerugian tidak dibawa ke bulan berikutnya.
+- Admin dan owner **tidak bergaji**: penghasilan mereka hanya dari bagi hasil (bisa nol bila rugi). Daftar karyawan bergaji hanya untuk karyawan tetap lain.
 
 ## 4. Endpoint (`/api/bumi-lestari`)
 
