@@ -275,6 +275,17 @@ def _request_sync(method: str, path: str, body: dict[str, Any] | None = None) ->
     return data
 
 
+def asal_kirim(p: PengaturanKirim | None = None) -> dict[str, str]:
+    """The pickup contact, address and postal code in use (settings, else environment, else built-in)."""
+    lokasi = _lokasi_asal(p)
+    return {
+        "nama": str(lokasi["origin_contact_name"]),
+        "telepon": str(lokasi["origin_contact_phone"]),
+        "alamat": str(lokasi["origin_address"]),
+        "kode_pos": str(lokasi["origin_postal_code"]),
+    }
+
+
 def _lokasi_asal(p: PengaturanKirim | None = None) -> dict[str, Any]:
     def pilih(nilai: str | None, env: str, bawaan: str) -> str:
         return (nilai or "").strip() or os.getenv(env, "").strip() or bawaan

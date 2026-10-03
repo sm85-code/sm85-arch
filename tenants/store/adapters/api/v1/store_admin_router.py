@@ -286,6 +286,13 @@ async def ganti_kurir(
     return services.pengiriman_out(await services.ganti_kurir(session, pesanan_id, payload.kurir, payload.layanan))
 
 
+@store_admin_router.get("/pesanan/{pesanan_id}/pengiriman/label")
+async def label_pengiriman(
+    pesanan_id: str, session: AsyncSession = Depends(get_db_store), _user: AdminStore = Depends(admin_only)
+):
+    return await services.label_pengiriman(session, pesanan_id)
+
+
 @store_admin_router.post("/pesanan/{pesanan_id}/pengiriman/biteship")
 async def buat_pengiriman_biteship(
     pesanan_id: str, session: AsyncSession = Depends(get_db_store), _user: AdminStore = Depends(admin_only)

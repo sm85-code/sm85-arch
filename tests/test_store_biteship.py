@@ -537,3 +537,21 @@ def test_free_text_courier_notes_are_translated_by_phrase():
     assert services.catatan_indonesia("", "Item is on the way to destination") == "Paket dalam perjalanan menuju tujuan"
     assert services.catatan_indonesia("whatever", "Shipment OUT FOR DELIVERY at hub") == "Paket dalam pengantaran ke penerima"
     assert services.catatan_indonesia("whatever", "Barang sedang disortir") == "Barang sedang disortir"  # unknown text kept
+
+
+@pytest.mark.asyncio
+async def test_label_data_has_waybill_recipient_sender_items_and_cod(session, monkeypatch):
+    _user, pesanan = await _dengan_pengiriman(session)
+    with pytest.raises(HTTPException) as exc:  # no waybill yet
+        await services.label_pengiriman(session, pesanan.id)
+    assert exc.value.status_code == 409
+    monkeypatch.setattr(bs, "_request_sync", lambda m, p, b=None: ORDER_OK)
+    await services.buat_order_biteship(session, pesanan.id)
+    label = await services.label_pengiriman(session, pesanan.id)
+    assert label["resi"] == "JNE123" and label["kurir"] == "jne" and label["cod"] == 0
+    assert label["penerima"]["nama"] == "A" and label["penerima"]["kode_pos"] == "40115"
+    assert label["pengirim"]["kode_pos"] == "46396" and label["pengirim"]["nama"]
+    assert label["barang"] == [{"nama": "Rak", "qty": 2, "berat_gram": 500}] and label["berat_gram"] == 1000
+    pesanan.metode_pembayaran = "cod"
+    await session.flush()
+    assert (await services.label_pengiriman(session, pesanan.id))["cod"] == int(pesanan.total)
