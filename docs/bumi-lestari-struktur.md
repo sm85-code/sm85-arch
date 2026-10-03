@@ -41,7 +41,7 @@ pengeluaran yang tidak berhubungan dengan order.
 |---|---|
 | `bl_users` | nama, email, password_hash, role (owner/staff), must_change_password |
 | `bl_akun_kas` | nama (Kas tunai, BCA, Saldo Shopee…), jenis (kas/bank/ewallet), saldo_awal |
-| `bl_kategori` | nama, jenis (pemasukan/pengeluaran), mis. Penjualan, Bahan, Upah tukang, Transport, Packing, Operasional, Prive |
+| `bl_kategori` | nama, jenis (pemasukan/pengeluaran), mis. Penjualan, Biaya produksi (tukang), Transport, Packing, Operasional, Prive |
 | `bl_transaksi` | tanggal, akun_id, kategori_id, jenis (masuk/keluar), jumlah, keterangan, order_id (opsional), pembayaran_id (opsional) |
 | `bl_transfer` | tanggal, dari_akun_id, ke_akun_id, jumlah (mis. tarik saldo Shopee ke bank) |
 | `bl_utang` | pihak (tukang/supplier/lain), keterangan, jumlah, jatuh_tempo, status, order_id (opsional) |
@@ -56,7 +56,7 @@ laporan laba-rugi dan arus kas per periode, ekspor CSV.
 |---|---|
 | `bl_produk` | nama, sku, harga_jual_default, biaya_produksi_default, aktif |
 | `bl_tukang` | nama, kontak, catatan, aktif |
-| `bl_order` | no_order_shopee, tanggal_order, nama_pembeli, status, produk_id, qty, harga_jual, potongan_marketplace, ongkir, tukang_id, biaya_tukang, tgl_pesan_tukang, tgl_diambil, tgl_selesai, catatan |
+| `bl_order` | no_order_shopee, tanggal_order, nama_pembeli, status, produk_id, qty, harga_jual, potongan_marketplace, ongkir, tukang_id, biaya_tukang (1 harga borongan: bahan + jasa), tgl_pesan_tukang, tgl_diambil, tgl_selesai, catatan |
 
 Status: `dipesan → dikerjakan → diambil → dikirim → selesai` (+ `batal`).
 
@@ -64,7 +64,7 @@ Efek ke keuangan:
 - **diambil** → buat `bl_utang` ke tukang sebesar `biaya_tukang`.
 - **selesai** (Shopee cair) → buat transaksi masuk ke akun "Saldo Shopee".
 - **bayar Selasa** → satu `bl_pembayaran_utang` melunasi banyak utang tukang
-  sekaligus, menghasilkan transaksi keluar kategori "Upah tukang".
+  sekaligus, menghasilkan transaksi keluar kategori "Biaya produksi (tukang)".
 
 ## 4. Endpoint (`/api/bumi-lestari`)
 
@@ -92,7 +92,7 @@ Efek ke keuangan:
 
 1. Nama tenant `bumi_lestari` (prefix tabel `bl_`, route `/api/bumi-lestari`).
 2. Order Shopee **diinput manual** dulu; tautan ke sinkron di `marketplace_erp` ditunda.
-3. Biaya tukang per order (borongan).
+3. Biaya tukang per order, **satu harga borongan sudah termasuk bahan dan jasa**. Tidak ada pencatatan bahan terpisah per order; laba per order = harga jual bersih − biaya tukang.
 4. Pencatatan sederhana (kas masuk/keluar + utang), **bukan** akuntansi double-entry penuh. Cukup, atau perlu neraca/jurnal?
 5. Satu usaha dan satu pemilik; belum multi-cabang. Staff opsional.
 6. Database Postgres baru lewat `DATABASE_URL_BUMI_LESTARI`.
