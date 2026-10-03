@@ -157,9 +157,10 @@ admin/owner/staf. Karyawan tanpa login cukup tercatat untuk gaji.
 
 Dampak ke desain order dan katalog:
 - Katalog produk punya `jenis_produk`: `kayu` atau `non_kayu` (filter di daftar order).
+- Produk non kayu **dibeli dari supplier**: `bl_pemasok` (jenis `tukang_kayu` atau `supplier`) menggantikan tabel tukang; order non kayu: `dipesan → diterima → dikirim → selesai`, `biaya_pokok` = harga beli dari supplier.
 - Order kayu punya langkah **pengecatan** setelah barang diambil dari tukang kayu
   (`diambil → dicat → dikirim`); langkah ini dilewati untuk order non kayu.
-- Biaya cat (bahan cat, thinner, kuas) dicatat sebagai pengeluaran kategori "Bahan cat",
+- Tidak ada biaya jasa cat per order (tukang cat dan asisten sudah bergaji tetap). Biaya cat (bahan cat, thinner, kuas) dicatat sebagai pengeluaran kategori "Bahan cat",
   bukan biaya per order, karena upah tukang cat sudah masuk gaji tetap.
 
 **Bagi hasil admin 40% : owner 60% dari laba bersih:**

@@ -12,6 +12,7 @@ from datetime import date
 from fastapi import APIRouter, Depends, HTTPException, Request, Response, status
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from tenants.bumi_lestari.adapters.api.v1.bumi_lestari_order_router import order_router
 from tenants.bumi_lestari.modules.bumi_lestari.application import services
 from tenants.bumi_lestari.modules.bumi_lestari.application.schemas import (
     AkunKasIn,
@@ -45,6 +46,7 @@ from tenants.bumi_lestari.modules.bumi_lestari.infrastructure.models import BlUs
 from tenants.bumi_lestari.modules.bumi_lestari.infrastructure.seeder import seed_bumi_lestari
 
 bumi_lestari_router = APIRouter()
+bumi_lestari_router.include_router(order_router)
 
 OWNER_ONLY = ("admin", "owner")  # admin berada di atas owner: semua akses owner + kelola akun owner
 OWNER_OR_STAFF = ("admin", "owner", "staff")

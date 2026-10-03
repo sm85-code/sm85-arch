@@ -14,6 +14,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from shared.security import hash_password
 from tenants.bumi_lestari.modules.bumi_lestari.infrastructure import database as bl_database
 from tenants.bumi_lestari.modules.bumi_lestari.infrastructure.database import BumiLestariBase
+from tenants.bumi_lestari.modules.bumi_lestari.infrastructure.models_order import BlSaluran
 from tenants.bumi_lestari.modules.bumi_lestari.infrastructure.models import (
     KODE_KAS_KECIL,
     KODE_KAS_UTAMA,
@@ -96,6 +97,12 @@ async def seed_bumi_lestari(session: AsyncSession) -> dict[str, str]:
     for nama, jenis in DEFAULT_KATEGORI:
         if (await session.execute(select(BlKategori.id).where(BlKategori.nama == nama))).first() is None:
             session.add(BlKategori(nama=nama, jenis=jenis))
+    await session.flush()
+    # Saluran awal; saluran lain (Tokopedia, penjual lain, dll.) ditambah lewat POST /saluran.
+    if (await session.execute(select(BlSaluran.id))).first() is None:
+        shopee = (await session.execute(select(BlAkunKas).where(BlAkunKas.kode == KODE_SALDO_SHOPEE))).scalar_one()
+        session.add(BlSaluran(nama="Shopee", jenis="marketplace", akun_id=shopee.id))
+        session.add(BlSaluran(nama="Toko web", jenis="web"))
     # Nilai awal proporsi bagi hasil -- hanya dibuat sekali; selanjutnya diubah dari halaman profil UMKM.
     if (await session.execute(select(BlProporsiBagiHasil.id))).first() is None:
         for penerima, persen in (("admin", 40), ("owner", 60)):
