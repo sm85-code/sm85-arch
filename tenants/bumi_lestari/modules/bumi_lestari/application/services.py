@@ -56,7 +56,10 @@ async def authenticate_user(session: AsyncSession, payload: LoginIn) -> BlUser:
     return user
 
 
-async def create_user(session: AsyncSession, payload: UserCreateIn) -> BlUser:
+async def create_user(session: AsyncSession, actor: BlUser, payload: UserCreateIn) -> BlUser:
+    # Hanya admin yang boleh membuat akun admin/owner; owner hanya membuat staf.
+    if payload.role in ("admin", "owner") and (actor.role or "").strip().lower() != "admin":
+        raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="Hanya admin yang boleh membuat akun admin/owner")
     exists = (await session.execute(select(BlUser.id).where(BlUser.email == payload.email))).first()
     if exists:
         raise _bad("Email sudah terdaftar", status.HTTP_409_CONFLICT)

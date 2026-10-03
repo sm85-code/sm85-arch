@@ -1,7 +1,7 @@
 """HTTP surface for bumi_lestari -- Tahap 1 (auth, akun kas, kategori, transaksi, transfer, kas kecil).
 
 Mounted in main.py as prefix=/api/bumi-lestari.
-Peran: owner = akses penuh; staff (pemegang kas kecil) = hanya pengeluaran & riwayat kas kecil.
+Peran: admin (di atas owner) = akses owner + boleh membuat akun admin/owner; owner = akses penuh keuangan; staff (pemegang kas kecil) = hanya pengeluaran & riwayat kas kecil.
 """
 from __future__ import annotations
 
@@ -42,8 +42,8 @@ from tenants.bumi_lestari.modules.bumi_lestari.infrastructure.seeder import seed
 
 bumi_lestari_router = APIRouter()
 
-OWNER_ONLY = ("owner",)
-OWNER_OR_STAFF = ("owner", "staff")
+OWNER_ONLY = ("admin", "owner")  # admin berada di atas owner: semua akses owner + kelola akun owner
+OWNER_OR_STAFF = ("admin", "owner", "staff")
 
 
 # --- Seed (owner login OR secret header; never anonymous in production) -----------
@@ -71,7 +71,7 @@ async def authorize_bumi_lestari_seed(
                 detail="seed-now dinonaktifkan untuk publik di production. Login sebagai owner atau pakai seed secret.",
             )
         raise
-    if (user.role or "").strip().lower() != "owner":
+    if (user.role or "").strip().lower() not in OWNER_ONLY:
         raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="Akses ditolak")
     return user
 
@@ -132,9 +132,9 @@ async def list_users(
 async def create_user(
     payload: UserCreateIn,
     session: AsyncSession = Depends(get_db_bumi_lestari),
-    _: BlUser = Depends(require_roles_bumi_lestari(*OWNER_ONLY)),
+    actor: BlUser = Depends(require_roles_bumi_lestari(*OWNER_ONLY)),
 ):
-    return await services.create_user(session, payload)
+    return await services.create_user(session, actor, payload)
 
 
 # --- Akun kas ------------------------------------------------------------------

@@ -8,7 +8,7 @@ from pydantic import BaseModel, ConfigDict, EmailStr, Field, field_validator
 
 PASSWORD_MIN_LENGTH = 8
 PASSWORD_MAX_BYTES = 72  # bcrypt only reads the first 72 bytes
-USER_ROLES = ("owner", "staff")
+USER_ROLES = ("admin", "owner", "staff")  # admin > owner > staff
 Uang = Decimal
 
 

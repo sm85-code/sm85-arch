@@ -45,9 +45,16 @@ async def _kat(session, nama):
     return (await session.execute(select(BlKategori).where(BlKategori.nama == nama))).scalar_one()
 
 
+async def _admin_actor(session):
+    from tenants.bumi_lestari.modules.bumi_lestari.infrastructure.models import BlUser
+
+    return BlUser(id="admin-test", nama="Admin", email="a@t.com", password_hash="x", role="admin")
+
+
 async def _user(session, role, email=None):
+    actor = await _admin_actor(session)
     return await services.create_user(
-        session, UserCreateIn(nama=role, email=email or f"{role}@test.com", password="rahasia123", role=role)
+        session, actor, UserCreateIn(nama=role, email=email or f"{role}@test.com", password="rahasia123", role=role)
     )
 
 
@@ -206,3 +213,15 @@ async def test_create_akun_rules(session):
         await services.create_akun(session, AkunKasIn(kode="KAS_UTAMA", nama="Dup"))
     akun = await services.create_akun(session, AkunKasIn(kode="bca", nama="BCA", jenis="bank", saldo_awal=Decimal("10")))
     assert akun.kode == "BCA"
+
+
+@pytest.mark.asyncio
+async def test_admin_above_owner_for_account_management(session):
+    admin = await _user(session, "admin")
+    owner = await _user(session, "owner")
+    with pytest.raises(HTTPException) as exc:  # owner tidak boleh membuat owner/admin
+        await services.create_user(session, owner, UserCreateIn(nama="X", email="x@t.com", password="rahasia123", role="owner"))
+    assert exc.value.status_code == 403
+    staf = await services.create_user(session, owner, UserCreateIn(nama="S", email="s@t.com", password="rahasia123", role="staff"))
+    assert staf.role == "staff"
+    await services.create_user(session, admin, UserCreateIn(nama="O2", email="o2@t.com", password="rahasia123", role="owner"))

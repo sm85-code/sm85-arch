@@ -76,7 +76,8 @@ Cara kerja:
 Halaman "Selasa" di web menampilkan ketiga langkah ini berurutan dengan angkanya.
 
 ### Peran
-- **owner (Anda):** akses penuh.
+- **admin:** di atas owner. Semua akses owner, plus satu-satunya yang boleh membuat akun admin/owner.
+- **owner (Anda):** akses penuh keuangan dan order; hanya boleh membuat akun staf.
 - **staf (pemegang kas kecil):** hanya bisa mencatat pengeluaran di akun kas kecil, melihat
   laporan kas kecil, dan mengajukan angka pengisian. Tidak bisa melihat kas utama, order,
   utang, atau laporan umum, dan tidak bisa menghapus/membatalkan transaksi. Pengisian

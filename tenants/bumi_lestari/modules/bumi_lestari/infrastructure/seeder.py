@@ -25,6 +25,7 @@ from tenants.bumi_lestari.modules.bumi_lestari.infrastructure.models import (
 )
 
 DEFAULT_OWNER_EMAIL = "owner@bumi-lestari.internal"
+DEFAULT_ADMIN_EMAIL = "admin@bumi-lestari.internal"
 
 DEFAULT_AKUN = (
     (KODE_KAS_UTAMA, "Kas utama", "kas", None),
@@ -72,6 +73,19 @@ async def seed_bumi_lestari(session: AsyncSession) -> dict[str, str]:
             nama="Owner", email=email, password_hash=hash_password(password), role="owner", must_change_password=True
         )
         session.add(owner)
+
+    # Admin (di atas owner): dibuat hanya bila BUMI_LESTARI_SEED_ADMIN_PASSWORD diisi.
+    admin_email = (os.getenv("BUMI_LESTARI_SEED_ADMIN_EMAIL") or DEFAULT_ADMIN_EMAIL).strip()
+    admin_password = os.getenv("BUMI_LESTARI_SEED_ADMIN_PASSWORD") or ""
+    if len(admin_password) >= 8 and (
+        await session.execute(select(BlUser.id).where(BlUser.email == admin_email))
+    ).first() is None:
+        session.add(
+            BlUser(
+                nama="Admin", email=admin_email, password_hash=hash_password(admin_password),
+                role="admin", must_change_password=True,
+            )
+        )
 
     for kode, nama, jenis, plafon in DEFAULT_AKUN:
         if (await session.execute(select(BlAkunKas.id).where(BlAkunKas.kode == kode))).first() is None:
