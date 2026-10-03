@@ -164,15 +164,17 @@ class StatusPesananIn(BaseModel):
 
 
 class CekOngkirIn(BaseModel):
-    kode_pos_asal: str
+    """Only the destination: weight, value and origin are worked out on the server."""
+
     kode_pos_tujuan: str
-    berat_gram: int = 1000
-    nilai_barang: Decimal = Decimal("0")
+
+    _v_kodepos = field_validator("kode_pos_tujuan")(_validate_kode_pos)
 
 
 class PengirimanIn(BaseModel):
     kurir: str
     layanan: str
+    layanan_nama: str = ""
     ongkir: Decimal = Decimal("0")
     nama_penerima: str
     telepon_penerima: str

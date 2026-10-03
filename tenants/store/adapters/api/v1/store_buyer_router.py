@@ -8,6 +8,7 @@ read or change their own cart, addresses, orders and chat.
 from __future__ import annotations
 
 import os
+from dataclasses import asdict
 from decimal import Decimal
 
 from fastapi import APIRouter, Depends, File, Form, HTTPException, Request, Response, UploadFile, status
@@ -39,6 +40,7 @@ from tenants.store.modules.store.infrastructure.models import PembeliStore
 from tenants.store.modules.store.infrastructure.payment_ipaymu import ItemBayar
 from tenants.store.modules.store.infrastructure.payment_ipaymu import create_payment as ipaymu_create_payment
 from tenants.store.modules.store.infrastructure.payment_ipaymu import verify_webhook as ipaymu_verify_webhook
+from tenants.store.modules.store.infrastructure import shipping_biteship
 from tenants.store.modules.store.infrastructure.shipping_biteship import cek_ongkir as biteship_cek_ongkir
 
 store_buyer_router = APIRouter()
@@ -220,6 +222,8 @@ async def mulai_pembayaran(
             status_code=status.HTTP_409_CONFLICT,
             detail=f"Pesanan berstatus '{pesanan.status}', tidak bisa dibayar ulang",
         )
+    if shipping_biteship.aktif():
+        await services.get_pengiriman(session, pesanan.id)  # 404 until the buyer has chosen a courier
     api = _url_publik("API_PUBLIC_URL", "https://api.ampelkuning.com")
     situs = _url_publik("SITE_PUBLIC_URL", "https://ampelkuning.com")
     result = await ipaymu_create_payment(
@@ -278,13 +282,14 @@ async def payment_callback(request: Request, session: AsyncSession = Depends(get
 
 
 @store_buyer_router.post("/pengiriman/cek-ongkir")
-async def cek_ongkir(payload: CekOngkirIn, _user: PembeliStore = Depends(get_current_buyer)):
-    return await biteship_cek_ongkir(
-        kode_pos_asal=payload.kode_pos_asal,
-        kode_pos_tujuan=payload.kode_pos_tujuan,
-        berat_gram=payload.berat_gram,
-        nilai_barang=str(payload.nilai_barang),
+async def cek_ongkir(
+    payload: CekOngkirIn, session: AsyncSession = Depends(get_db_store), user: PembeliStore = Depends(get_current_buyer)
+):
+    """Shipping options for what is in the buyer's cart, to the given postal code."""
+    options = await biteship_cek_ongkir(
+        kode_pos_tujuan=payload.kode_pos_tujuan, items=await services.item_kirim_keranjang(session, user.id)
     )
+    return [asdict(o) for o in options]
 
 
 @store_buyer_router.post("/pesanan/{pesanan_id}/pengiriman")
@@ -294,10 +299,26 @@ async def isi_alamat_pengiriman(
     session: AsyncSession = Depends(get_db_store),
     user: PembeliStore = Depends(get_current_buyer),
 ):
-    await _pesanan_milik(session, pesanan_id, user)
-    # The buyer must not set their own shipping price: ongkir stays 0 here
-    # and becomes server-computed once the Biteship adapter is live.
-    payload = payload.model_copy(update={"ongkir": Decimal("0")})
+    pesanan = await _pesanan_milik(session, pesanan_id, user)
+    # The buyer must not set their own shipping price: it is always worked out here.
+    payload = payload.model_copy(update={"ongkir": Decimal("0"), "layanan_nama": ""})
+    if shipping_biteship.aktif():
+        options = await biteship_cek_ongkir(
+            kode_pos_tujuan=payload.kode_pos_tujuan, items=await services.item_kirim_pesanan(session, pesanan)
+        )
+        pilihan = next((o for o in options if o.kurir == payload.kurir.lower() and o.layanan == payload.layanan), None)
+        if pilihan is None:
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST, detail="Layanan pengiriman yang dipilih tidak tersedia. Pilih ulang."
+            )
+        payload = payload.model_copy(
+            update={
+                "kurir": pilihan.kurir,
+                "layanan": pilihan.layanan,
+                "layanan_nama": pilihan.layanan_nama,
+                "ongkir": Decimal(pilihan.ongkir),
+            }
+        )
     return services.pengiriman_out(await services.buat_pengiriman_lokal(session, pesanan_id, payload))
 
 
