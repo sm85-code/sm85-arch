@@ -305,6 +305,7 @@ class PengirimanStore(StoreBase):
     )
     kurir: Mapped[str] = mapped_column(String(64), nullable=False, default="")
     layanan: Mapped[str] = mapped_column(String(64), nullable=False, default="")
+    layanan_nama: Mapped[str] = mapped_column(String(128), nullable=False, default="", server_default="")
     ongkir: Mapped[Decimal] = mapped_column(Numeric(20, 2), nullable=False, default=Decimal("0"))
     nama_penerima: Mapped[str] = mapped_column(String(255), nullable=False)
     telepon_penerima: Mapped[str] = mapped_column(String(32), nullable=False)

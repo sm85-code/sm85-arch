@@ -299,7 +299,9 @@ async def test_ipaymu_and_biteship_placeholders_return_501():
         )
     assert exc.value.status_code == 501
     with pytest.raises(HTTPException) as exc:
-        await shipping_biteship.cek_ongkir(kode_pos_asal="1", kode_pos_tujuan="2", berat_gram=1, nilai_barang="1")
+        await shipping_biteship.cek_ongkir(
+            kode_pos_tujuan="46396", items=[shipping_biteship.ItemKirim(nama="x", nilai=1, qty=1, berat_gram=1)]
+        )
     assert exc.value.status_code == 501
 
 

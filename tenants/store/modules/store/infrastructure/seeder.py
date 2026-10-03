@@ -103,6 +103,9 @@ async def ensure_store_schema() -> None:
                 "ON store_item_keranjang (user_id, produk_id, COALESCE(varian_id, ''))"
             )
         )
+        await conn.execute(
+            text("ALTER TABLE store_pengiriman ADD COLUMN IF NOT EXISTS layanan_nama VARCHAR(128) NOT NULL DEFAULT ''")
+        )
         for column, ddl in (
             ("varian_id", "VARCHAR(64) REFERENCES store_produk_varian(id) ON DELETE SET NULL"),
             ("nama_varian", "VARCHAR(120) NOT NULL DEFAULT ''"),

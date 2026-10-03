@@ -28,6 +28,7 @@ if TYPE_CHECKING:
     from tenants.store.modules.store.application.schemas import StaffIn, StaffPatch
 from tenants.store.modules.store.application.slug import slugify, with_suffix
 from tenants.store.modules.store.infrastructure.media_storage import media_url
+from tenants.store.modules.store.infrastructure.shipping_biteship import ItemKirim, berat_default
 from tenants.store.modules.store.infrastructure.models import (
     ROLE_ADMIN,
     ROLE_OWNER,
@@ -781,6 +782,7 @@ def pengiriman_out(pengiriman: PengirimanStore) -> dict:
         "pesanan_id": pengiriman.pesanan_id,
         "kurir": pengiriman.kurir,
         "layanan": pengiriman.layanan,
+        "layanan_nama": pengiriman.layanan_nama,
         "ongkir": str(pengiriman.ongkir),
         "nama_penerima": pengiriman.nama_penerima,
         "telepon_penerima": pengiriman.telepon_penerima,
@@ -810,8 +812,49 @@ async def buat_pengiriman_lokal(session: AsyncSession, pesanan_id: str, payload:
 
     pengiriman = PengirimanStore(pesanan_id=pesanan_id, **payload.model_dump())
     session.add(pengiriman)
+    # The order total is items + shipping; the price was set by the server, never by the buyer.
+    pesanan = await get_pesanan(session, pesanan_id)
+    if payload.ongkir > 0 and pesanan.status != "menunggu_pembayaran":
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT, detail=f"Pesanan berstatus '{pesanan.status}', ongkir tidak bisa diubah"
+        )
+    pesanan.total = sum((it.subtotal for it in pesanan.items), Decimal("0")) + payload.ongkir
     await session.flush()
     return pengiriman
+
+
+def _item_kirim(produk: ProdukStore, varian: VarianProduk | None, qty: int, harga: Decimal, nama: str) -> ItemKirim:
+    def pilih(nama_kolom: str):
+        nilai = getattr(varian, nama_kolom) if varian is not None else None
+        return nilai if nilai else getattr(produk, nama_kolom)
+
+    return ItemKirim(
+        nama=nama,
+        nilai=int(harga),
+        qty=qty,
+        berat_gram=int(pilih("berat_gram") or 0) or berat_default(),
+        panjang_cm=int(pilih("panjang_cm") or 0),
+        lebar_cm=int(pilih("lebar_cm") or 0),
+        tinggi_cm=int(pilih("tinggi_cm") or 0),
+    )
+
+
+async def item_kirim_keranjang(session: AsyncSession, user_id: str) -> list[ItemKirim]:
+    return [
+        _item_kirim(it.produk, it.varian, it.qty, harga_efektif(it.produk, it.varian), _nama_baris(it))
+        for it in await get_keranjang(session, user_id)
+    ]
+
+
+async def item_kirim_pesanan(session: AsyncSession, pesanan: PesananStore) -> list[ItemKirim]:
+    hasil: list[ItemKirim] = []
+    for it in pesanan.items:
+        produk = await session.get(ProdukStore, it.produk_id)
+        if produk is None:
+            continue
+        varian = await session.get(VarianProduk, it.varian_id) if it.varian_id else None
+        hasil.append(_item_kirim(produk, varian, it.qty, it.harga_satuan, it.nama_produk))
+    return hasil
 
 
 async def get_pengiriman(session: AsyncSession, pesanan_id: str) -> PengirimanStore:
