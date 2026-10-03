@@ -317,6 +317,9 @@ class PengirimanStore(StoreBase):
     kelurahan_tujuan: Mapped[str] = mapped_column(String(128), nullable=False, default="", server_default="")
     kode_wilayah_tujuan: Mapped[str] = mapped_column(String(16), nullable=False, default="", server_default="")
     tracking_id: Mapped[Optional[str]] = mapped_column(String(128), nullable=True)
+    # Biteship order created from the admin: its id and the tracking id used to follow the parcel.
+    biteship_order_id: Mapped[Optional[str]] = mapped_column(String(64), nullable=True)
+    biteship_tracking_id: Mapped[Optional[str]] = mapped_column(String(128), nullable=True)
     status: Mapped[str] = mapped_column(String(32), nullable=False, default="menunggu_pickup", index=True)
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=_utcnow)
     updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=_utcnow, onupdate=_utcnow)

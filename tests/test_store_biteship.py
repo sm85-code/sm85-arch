@@ -163,3 +163,83 @@ async def test_without_biteship_the_old_behaviour_stays(session, monkeypatch):
     out = await buyer_module.isi_alamat_pengiriman(pesanan.id, _form(kurir="Menunggu konfirmasi", layanan="-"), session, user)
     assert Decimal(out["ongkir"]) == 0
     assert (await services.get_pesanan(session, pesanan.id)).total == Decimal("200000")
+
+
+ORDER_OK = {"success": True, "id": "bo-1", "status": "confirmed", "courier": {"tracking_id": "trk-1", "waybill_id": "JNE123"}}
+
+
+async def _dengan_pengiriman(session, status="dibayar"):
+    user, pesanan = await _order(session)
+    await services.buat_pengiriman_lokal(session, pesanan.id, _form(ongkir=Decimal("18000")))
+    pesanan.status = status
+    await session.flush()
+    return user, pesanan
+
+
+@pytest.mark.asyncio
+async def test_booking_the_courier_saves_the_waybill_and_moves_the_order_on(session, monkeypatch):
+    _user, pesanan = await _dengan_pengiriman(session)
+    sent = {}
+
+    def fake(method, path, body=None):
+        sent.update(method=method, path=path, body=body)
+        return ORDER_OK
+
+    monkeypatch.setattr(bs, "_request_sync", fake)
+    out = await services.buat_order_biteship(session, pesanan.id)
+    assert out.tracking_id == "JNE123" and out.biteship_order_id == "bo-1" and out.biteship_tracking_id == "trk-1"
+    assert sent["method"] == "POST" and sent["path"] == "/orders"
+    assert sent["body"]["courier_company"] == "jne" and sent["body"]["courier_type"] == "reg"
+    assert sent["body"]["destination_postal_code"] == 40115 and sent["body"]["items"][0]["quantity"] == 2
+    assert (await services.get_pesanan(session, pesanan.id)).status == "diproses"
+
+
+@pytest.mark.asyncio
+async def test_booking_is_refused_for_unpaid_orders_and_a_second_time(session, monkeypatch):
+    monkeypatch.setattr(bs, "_request_sync", lambda m, p, b=None: ORDER_OK)
+    _user, belum = await _dengan_pengiriman(session, status="menunggu_pembayaran")
+    with pytest.raises(HTTPException) as exc:
+        await services.buat_order_biteship(session, belum.id)
+    assert exc.value.status_code == 409
+    belum.status = "dibayar"
+    await services.buat_order_biteship(session, belum.id)
+    with pytest.raises(HTTPException) as exc:
+        await services.buat_order_biteship(session, belum.id)
+    assert exc.value.status_code == 409
+
+
+@pytest.mark.asyncio
+async def test_tracking_walks_the_shipment_and_order_status_forward(session, monkeypatch):
+    _user, pesanan = await _dengan_pengiriman(session)
+    monkeypatch.setattr(bs, "_request_sync", lambda m, p, b=None: ORDER_OK)
+    await services.buat_order_biteship(session, pesanan.id)
+    riwayat = {
+        "success": True,
+        "status": "delivered",
+        "waybill_id": "JNE123",
+        "history": [
+            {"status": "picked", "note": "Diambil", "updated_at": "2026-10-04T08:00:00Z"},
+            {"status": "delivered", "note": "Diterima", "updated_at": "2026-10-05T09:00:00Z"},
+        ],
+    }
+    monkeypatch.setattr(bs, "_request_sync", lambda m, p, b=None: riwayat)
+    out = await services.lacak_pengiriman(session, pesanan.id)
+    assert out["status"] == "diterima" and out["riwayat"][0]["catatan"] == "Diterima"
+    assert (await services.get_pesanan(session, pesanan.id)).status == "selesai"
+
+
+@pytest.mark.asyncio
+async def test_tracking_without_a_booking_is_404(session):
+    _user, pesanan = await _dengan_pengiriman(session)
+    with pytest.raises(HTTPException) as exc:
+        await services.lacak_pengiriman(session, pesanan.id)
+    assert exc.value.status_code == 404
+
+
+@pytest.mark.asyncio
+async def test_admin_can_still_add_shipping_to_a_paid_order_without_changing_the_total(session):
+    user, pesanan = await _order(session)
+    pesanan.status = "dibayar"
+    await session.flush()
+    await services.buat_pengiriman_lokal(session, pesanan.id, _form(ongkir=Decimal("18000")))
+    assert (await services.get_pesanan(session, pesanan.id)).total == Decimal("200000")

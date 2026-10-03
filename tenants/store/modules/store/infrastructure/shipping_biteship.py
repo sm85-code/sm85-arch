@@ -6,6 +6,7 @@ Environment:
   BITESHIP_ORIGIN_POSTAL  postal code the parcels leave from (default: the shop's, Pangandaran 46396)
   BITESHIP_COURIERS       comma separated Biteship courier codes to quote (default: the common ones)
   BITESHIP_DEFAULT_WEIGHT_GRAM  weight used for a product that has none recorded (default 500)
+  BITESHIP_ORIGIN_NAME / _PHONE / _ADDRESS  the pickup contact and address printed on the shipment
 
 Until BITESHIP_API_KEY is set every entry point answers HTTP 501 (never 503: DigitalOcean App Platform replaces
 an application 503 with its own HTML 504 page) instead of inventing a price.
@@ -56,6 +57,27 @@ class OngkirOption:
     layanan_nama: str
     ongkir: str  # rupiah, whole number
     estimasi: str
+
+
+@dataclass
+class OrderBiteship:
+    order_id: str
+    tracking_id: str
+    waybill_id: str
+
+
+@dataclass
+class RiwayatLacak:
+    status: str
+    catatan: str
+    waktu: str
+
+
+@dataclass
+class HasilLacak:
+    status: str  # Biteship's own status, e.g. "picking_up", "delivered"
+    waybill_id: str
+    riwayat: list[RiwayatLacak]
 
 
 def _api_key() -> str:
@@ -150,3 +172,99 @@ async def cek_ongkir(*, kode_pos_tujuan: str, items: list[ItemKirim]) -> list[On
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Belum ada kurir yang melayani alamat ini")
     options.sort(key=lambda o: int(o.ongkir))
     return options
+
+
+def _headers() -> dict[str, str]:
+    return {"Authorization": _api_key()}  # Biteship takes the bare key, no "Bearer"
+
+
+def _request_sync(method: str, path: str, body: dict[str, Any] | None = None) -> dict[str, Any]:
+    try:
+        resp = requests.request(method, f"{_BASE_URL}{path}", json=body, headers=_headers(), timeout=_TIMEOUT)
+    except requests.RequestException as exc:
+        logger.warning("Biteship %s %s failed: %s", method, path, exc)
+        raise HTTPException(
+            status_code=status.HTTP_424_FAILED_DEPENDENCY, detail="Layanan pengiriman sedang tidak bisa dihubungi. Coba lagi sebentar."
+        ) from exc
+    try:
+        data = resp.json()
+    except ValueError:
+        data = {}
+    if not isinstance(data, dict):
+        data = {}
+    if resp.status_code not in (200, 201) or data.get("success") is False:
+        logger.warning("Biteship %s %s answered %s: %s", method, path, resp.status_code, str(data)[:300])
+        pesan = str(data.get("error") or "").strip()
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST, detail=f"Biteship menolak permintaan. {pesan}".strip()
+        )
+    return data
+
+
+def _lokasi_asal() -> dict[str, Any]:
+    return {
+        "origin_contact_name": os.getenv("BITESHIP_ORIGIN_NAME", "AmpelKuning").strip() or "AmpelKuning",
+        "origin_contact_phone": os.getenv("BITESHIP_ORIGIN_PHONE", "081313511101").strip(),
+        "origin_address": os.getenv(
+            "BITESHIP_ORIGIN_ADDRESS",
+            "Jl. Ampelkuning, Dusun Padasuka RT 003 RW 019, Desa Wonoharjo, Kec. Pangandaran, Kab. Pangandaran, Jawa Barat",
+        ).strip(),
+        "origin_postal_code": int(os.getenv("BITESHIP_ORIGIN_POSTAL", _DEFAULT_ORIGIN_POSTAL).strip() or _DEFAULT_ORIGIN_POSTAL),
+    }
+
+
+async def buat_order(
+    *,
+    kurir: str,
+    layanan: str,
+    nama_penerima: str,
+    telepon_penerima: str,
+    alamat_tujuan: str,
+    kode_pos_tujuan: str,
+    items: list[ItemKirim],
+    catatan: str = "",
+) -> OrderBiteship:
+    """Book the parcel with the courier (a testing key only simulates it: no courier comes)."""
+    if not aktif():
+        raise BiteshipNotReady()
+    if not kode_pos_tujuan.isdigit() or len(kode_pos_tujuan) != 5:
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Kode pos alamat tujuan harus 5 angka")
+    body: dict[str, Any] = {
+        **_lokasi_asal(),
+        "destination_contact_name": nama_penerima,
+        "destination_contact_phone": telepon_penerima,
+        "destination_address": alamat_tujuan,
+        "destination_postal_code": int(kode_pos_tujuan),
+        "courier_company": kurir,
+        "courier_type": layanan,
+        "delivery_type": "now",
+        "order_note": catatan[:200],
+        "items": [_item_payload(i) for i in items],
+    }
+    data = await asyncio.to_thread(_request_sync, "POST", "/orders", body)
+    kurir_data = data.get("courier") if isinstance(data.get("courier"), dict) else {}
+    order_id = str(data.get("id") or "")
+    if not order_id:
+        raise HTTPException(status_code=status.HTTP_424_FAILED_DEPENDENCY, detail="Biteship tidak mengembalikan nomor pesanan")
+    return OrderBiteship(
+        order_id=order_id,
+        tracking_id=str(kurir_data.get("tracking_id") or ""),
+        waybill_id=str(kurir_data.get("waybill_id") or ""),
+    )
+
+
+async def lacak(tracking_id: str) -> HasilLacak:
+    if not aktif():
+        raise BiteshipNotReady()
+    data = await asyncio.to_thread(_request_sync, "GET", f"/trackings/{tracking_id}")
+    riwayat = [
+        RiwayatLacak(
+            status=str(h.get("status") or ""),
+            catatan=str(h.get("note") or ""),
+            waktu=str(h.get("updated_at") or ""),
+        )
+        for h in (data.get("history") or [])
+        if isinstance(h, dict)
+    ]
+    riwayat.sort(key=lambda r: r.waktu, reverse=True)
+    return HasilLacak(status=str(data.get("status") or ""), waybill_id=str(data.get("waybill_id") or ""), riwayat=riwayat)

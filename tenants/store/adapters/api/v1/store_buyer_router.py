@@ -322,6 +322,14 @@ async def isi_alamat_pengiriman(
     return services.pengiriman_out(await services.buat_pengiriman_lokal(session, pesanan_id, payload))
 
 
+@store_buyer_router.get("/pesanan/{pesanan_id}/pengiriman/lacak")
+async def lacak_pengiriman(
+    pesanan_id: str, session: AsyncSession = Depends(get_db_store), user: PembeliStore = Depends(get_current_buyer)
+):
+    await _pesanan_milik(session, pesanan_id, user)
+    return await services.lacak_pengiriman(session, pesanan_id)
+
+
 @store_buyer_router.get("/pesanan/{pesanan_id}/pengiriman")
 async def get_pengiriman(
     pesanan_id: str, session: AsyncSession = Depends(get_db_store), user: PembeliStore = Depends(get_current_buyer)
