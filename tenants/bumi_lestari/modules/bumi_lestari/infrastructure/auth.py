@@ -60,7 +60,28 @@ async def get_current_user_bumi_lestari(
     # Token lama tanpa "sv" dianggap versi 0, jadi sesi yang ada tetap berlaku sampai versi pengguna naik.
     if int(payload.get("sv") or 0) != int(user.session_version or 0):
         raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="Sesi berakhir, silakan login lagi")
+    await _pasang_konteks_kolom(session, user)
     return user
+
+
+async def _pasang_konteks_kolom(session: AsyncSession, user: BlUser) -> None:
+    from sqlalchemy import select
+
+    from tenants.bumi_lestari.modules.bumi_lestari.infrastructure.kolom_konteks import KUNCI_STAF, PERAN
+    from tenants.bumi_lestari.modules.bumi_lestari.infrastructure.models_kolom import BlDefinisiKolom
+
+    peran = (user.role or "").strip().lower()
+    PERAN.set(peran)
+    if peran == "staff":
+        kunci = (
+            await session.execute(
+                select(BlDefinisiKolom.kunci).where(
+                    BlDefinisiKolom.entitas == "transaksi", BlDefinisiKolom.lapisan == "tambahan",
+                    BlDefinisiKolom.aktif.is_(True), BlDefinisiKolom.tampil_staf.is_(True),
+                )
+            )
+        ).scalars()
+        KUNCI_STAF.set(frozenset(kunci))
 
 
 def require_roles_bumi_lestari(*roles: str) -> Callable:

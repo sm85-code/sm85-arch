@@ -14,7 +14,7 @@ from typing import Optional
 from sqlalchemy import JSON, Boolean, Date, DateTime, ForeignKey, Index, Integer, Numeric, String, Text, false
 from sqlalchemy.orm import Mapped, mapped_column
 
-from tenants.bumi_lestari.modules.bumi_lestari.infrastructure.database import BumiLestariBase
+from tenants.bumi_lestari.modules.bumi_lestari.infrastructure.database import BumiLestariBase, kolom_tambahan_column
 
 
 def _uuid() -> str:
@@ -130,6 +130,7 @@ class BlTransaksi(BumiLestariBase):
     dibatalkan_at: Mapped[Optional[datetime]] = mapped_column(DateTime(timezone=True), nullable=True)
     alasan_batal: Mapped[Optional[str]] = mapped_column(Text, nullable=True)
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=_utcnow)
+    kolom_tambahan: Mapped[dict] = kolom_tambahan_column()
 
 
 class BlTransfer(BumiLestariBase):

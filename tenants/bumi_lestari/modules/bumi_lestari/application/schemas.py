@@ -6,6 +6,8 @@ from typing import Optional
 
 from pydantic import BaseModel, ConfigDict, EmailStr, Field, computed_field, field_validator
 
+from tenants.bumi_lestari.modules.bumi_lestari.application.schemas_kolom import KolomTambahanIn, KolomTambahanOut
+
 from tenants.bumi_lestari.modules.bumi_lestari.application import kategori_core
 
 PASSWORD_MIN_LENGTH = 8
@@ -155,6 +157,7 @@ class KategoriOut(BaseModel):
 
 
 class TransaksiIn(BaseModel):
+    kolom_tambahan: KolomTambahanIn = None
     tanggal: Optional[date] = None
     akun_id: str
     kategori_id: str
@@ -172,6 +175,7 @@ class TransaksiIn(BaseModel):
 
 
 class TransaksiOut(BaseModel):
+    kolom_tambahan: KolomTambahanOut = {}
     id: str
     tanggal: date
     akun_id: str

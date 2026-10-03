@@ -10,6 +10,7 @@ from sqlalchemy import func, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from shared.security import hash_password, verify_password
+from tenants.bumi_lestari.modules.bumi_lestari.application import kolom_core
 from tenants.bumi_lestari.modules.bumi_lestari.application import iklan_core, kategori_core
 from tenants.bumi_lestari.modules.bumi_lestari.application.audit_core import (
     bulan_tertutup,
@@ -377,12 +378,15 @@ async def create_transaksi(session: AsyncSession, user: BlUser, payload: Transak
         raise _bad("Platform iklan hanya untuk pengeluaran kas iklan")
     # Akun imprest (kas kecil, kas iklan) berplafon: tidak boleh minus. Kekurangannya boleh dicatat sebagai
     # talangan atas nama seseorang (AB-TL-1): biaya tetap penuh, bagian akun asal hanya sebesar saldonya.
+    kt = await kolom_core.nilai_baru(session, "transaksi", payload.kolom_tambahan, user=user)
     if akun.jenis in JENIS_IMPRESET and payload.jenis == "keluar":
         saldo = await saldo_akun(session, akun, termasuk_draf=True)
         if saldo < payload.jumlah:
             if not (payload.talangan_oleh or "").strip():
                 raise _bad(f"Saldo {akun.nama} tidak cukup")
-            return await _catat_dengan_talangan(session, user, payload, akun, kategori, tanggal, max(saldo, Decimal("0")), iklan)
+            return await _catat_dengan_talangan(
+                session, user, payload, akun, kategori, tanggal, max(saldo, Decimal("0")), iklan, kt,
+            )
     elif payload.talangan_oleh:
         raise _bad("Talangan hanya untuk pengeluaran kas kecil/kas iklan")
     trx = BlTransaksi(
@@ -395,6 +399,7 @@ async def create_transaksi(session: AsyncSession, user: BlUser, payload: Transak
         dibuat_oleh=user.id,
         status_kirim=status_awal_transaksi(akun),
         koreksi_periode=payload.koreksi_periode,
+        kolom_tambahan=kt,
         **iklan,
     )
     session.add(trx)
@@ -446,7 +451,7 @@ async def list_transaksi(
 
 async def _catat_dengan_talangan(
     session: AsyncSession, user: BlUser, payload: TransaksiIn, akun: BlAkunKas, kategori: BlKategori,
-    tanggal: date, saldo: Decimal, iklan: dict | None = None,
+    tanggal: date, saldo: Decimal, iklan: dict | None = None, kt: dict | None = None,
 ) -> BlTransaksi:
     """Pecah pengeluaran: `saldo` dari akun asal + kekurangannya di akun TALANGAN (keduanya biaya, keduanya draf
     dan ikut kiriman sumber akun asal). Mengembalikan transaksi akun asal (atau transaksi talangan bila saldo 0)."""
@@ -464,6 +469,9 @@ async def _catat_dengan_talangan(
 
     utama = baris(akun.id, saldo, ket, False) if saldo > 0 else None
     bagian = baris(talangan_akun.id, kurang, f"{ket} (talangan oleh {nama})".strip(), True)
+    for x in (utama, bagian):
+        if x is not None:
+            x.kolom_tambahan = dict(kt or {})
     session.add_all([x for x in (utama, bagian) if x is not None])
     await session.flush()
     tl = BlTalangan(

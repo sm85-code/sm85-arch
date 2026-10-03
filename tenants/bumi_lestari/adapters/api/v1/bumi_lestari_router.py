@@ -19,6 +19,7 @@ from tenants.bumi_lestari.adapters.api.v1.bumi_lestari_order_router import order
 from tenants.bumi_lestari.adapters.api.v1.bumi_lestari_pembayaran_router import pembayaran_router
 from tenants.bumi_lestari.adapters.api.v1.bumi_lestari_pencairan_router import pencairan_router
 from tenants.bumi_lestari.adapters.api.v1.bumi_lestari_iklan_router import iklan_router
+from tenants.bumi_lestari.adapters.api.v1.bumi_lestari_kolom_router import kolom_router
 from tenants.bumi_lestari.adapters.api.v1.bumi_lestari_talangan_router import talangan_router
 from tenants.bumi_lestari.adapters.api.v1.bumi_lestari_tutup_buku_router import tutup_buku_router
 from tenants.bumi_lestari.modules.bumi_lestari.application import services
@@ -65,6 +66,7 @@ bumi_lestari_router.include_router(tutup_buku_router)
 bumi_lestari_router.include_router(pencairan_router)
 bumi_lestari_router.include_router(talangan_router)
 bumi_lestari_router.include_router(iklan_router)
+bumi_lestari_router.include_router(kolom_router)
 
 OWNER_ONLY = ("admin", "owner")  # admin berada di atas owner: semua akses owner + kelola akun owner
 OWNER_OR_STAFF = ("admin", "owner", "staff")

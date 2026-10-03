@@ -98,3 +98,10 @@ Semua menerima `(session, user, ...)` dan tidak bergantung pada HTTP:
 - Pembukuan terjadi saat "Kirim ke laporan keuangan" (sumber kiriman `pencairan`): transaksi resmi + order cair
   (`setelah_kirim`); batal kiriman memulihkan (`setelah_batal_kirim`).
 - Format Shopee bawaan adalah **SEMENTARA** (draf v1, belum diuji dengan file asli).
+
+## Kolom tambahan (Fase 2.14/2.15)
+
+`bl_order`, `bl_produk`, `bl_pemasok`, `bl_pelanggan`, `bl_transaksi`, `bl_karyawan` punya `kolom_tambahan` (JSONB,
+kunci = `bl_definisi_kolom.kunci`). Sinkronisasi boleh mengirim objek `kolom_tambahan` di payload yang sama; nilainya
+divalidasi dengan aturan definisi (jenis data, pilihan, wajib) dan **tidak pernah** dibaca rumus keuangan. Kunci yang
+tidak dikenal/nonaktif ditolak (422), jadi definisi perlu dibuat dulu di Data master.

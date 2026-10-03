@@ -6,6 +6,8 @@ from typing import Optional
 
 from pydantic import BaseModel, ConfigDict, Field, computed_field
 
+from tenants.bumi_lestari.modules.bumi_lestari.application.schemas_kolom import KolomTambahanIn, KolomTambahanOut
+
 Periode = Field(pattern=r"^\d{4}-(0[1-9]|1[0-2])$", description="YYYY-MM")
 
 
@@ -109,6 +111,7 @@ class PenerimaanResellerOut(BaseModel):
 
 
 class KaryawanIn(BaseModel):
+    kolom_tambahan: KolomTambahanIn = None
     nama: str = Field(min_length=1, max_length=255)
     peran: str = "lainnya"
     gaji_bulanan: Decimal = Field(ge=0, max_digits=14, decimal_places=2)
@@ -116,6 +119,7 @@ class KaryawanIn(BaseModel):
 
 
 class KaryawanPatch(BaseModel):
+    kolom_tambahan: KolomTambahanIn = None
     nama: Optional[str] = Field(default=None, min_length=1, max_length=255)
     peran: Optional[str] = None
     gaji_bulanan: Optional[Decimal] = Field(default=None, ge=0, max_digits=14, decimal_places=2)
@@ -124,6 +128,7 @@ class KaryawanPatch(BaseModel):
 
 
 class KaryawanOut(BaseModel):
+    kolom_tambahan: KolomTambahanOut = {}
     id: str
     nama: str
     peran: str
