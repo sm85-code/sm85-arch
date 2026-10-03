@@ -1,6 +1,6 @@
 """FastAPI application entrypoint (modular monolith).
 
-Serves the madrasah, marketplace_erp and store tenants.
+Serves the madrasah, marketplace_erp, store and bumi_lestari tenants.
 SIABUMDES moved to its own service: sm85-code/backend-siabumdes.
 """
 from __future__ import annotations
@@ -17,6 +17,9 @@ from fastapi.responses import JSONResponse
 from sqlalchemy import text
 from starlette.middleware.base import BaseHTTPMiddleware
 
+from tenants.bumi_lestari.adapters.api.v1.bumi_lestari_router import bumi_lestari_router
+from tenants.bumi_lestari.modules.bumi_lestari.infrastructure import database as bumi_lestari_database
+from tenants.bumi_lestari.modules.bumi_lestari.infrastructure.seeder import ensure_bumi_lestari_schema
 from tenants.madrasah.adapters.api.v1.madrasah_router import madrasah_router
 from tenants.madrasah.modules.madrasah.infrastructure import database as madrasah_database
 from tenants.madrasah.modules.madrasah.infrastructure.seeder import ensure_madrasah_schema
@@ -59,6 +62,10 @@ async def lifespan(_: FastAPI):
         await ensure_store_schema()
     except Exception:
         logger.exception("store schema repair failed — app continues")
+    try:
+        await ensure_bumi_lestari_schema()
+    except Exception:
+        logger.exception("bumi_lestari schema repair failed — app continues")
     # Marketplace ERP: pull Shopee orders in the background (SHOPEE_AUTO_SYNC_MINUTES, 0 = off).
     tugas_sinkron = None
     interval = marketplace_erp_auto_sync.interval_seconds()
@@ -88,6 +95,7 @@ app.add_middleware(
 
 app.include_router(madrasah_router, prefix="/api/madrasah", tags=["Madrasah"])
 app.include_router(marketplace_erp_router, prefix="/api/marketplace-erp", tags=["Marketplace ERP"])
+app.include_router(bumi_lestari_router, prefix="/api/bumi-lestari", tags=["Bumi Lestari"])
 app.include_router(store_admin_router, prefix="/api/store/admin", tags=["Store Admin"])
 app.include_router(store_buyer_router, prefix="/api/store/buyer", tags=["Store Buyer"])
 
@@ -167,6 +175,7 @@ _TENANT_DB_MODULES = {
     "madrasah": madrasah_database,
     "marketplace_erp": marketplace_erp_database,
     "store": store_database,
+    "bumi_lestari": bumi_lestari_database,
 }
 _HEALTH_DB_TIMEOUT_SECONDS = 3.0
 
