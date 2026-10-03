@@ -32,7 +32,10 @@ JENIS_AKUN = ("kas", "bank", "ewallet", "kas_kecil", "kas_iklan")
 JENIS_IMPRESET = ("kas_kecil", "kas_iklan")
 JENIS_KATEGORI = ("pemasukan", "pengeluaran")
 JENIS_TRANSAKSI = ("masuk", "keluar")
-JENIS_TRANSFER = ("biasa", "pengisian_kas_kecil", "pengisian_kas_iklan", "sisihan_dana")
+JENIS_TRANSFER = ("biasa", "pengisian_kas_kecil", "pengisian_kas_iklan", "sisihan_dana", "pelunasan_talangan")
+# Akun kewajiban virtual (bukan kas): tidak tampil di daftar akun/total kas, tidak bisa dipakai transaksi manual.
+JENIS_KEWAJIBAN = "kewajiban"
+KODE_TALANGAN = "TALANGAN"
 
 KODE_KAS_UTAMA = "KAS_UTAMA"
 KODE_SALDO_SHOPEE = "SALDO_SHOPEE"
@@ -138,6 +141,9 @@ class BlTransfer(BumiLestariBase):
     dibatalkan: Mapped[bool] = mapped_column(Boolean, nullable=False, default=False)
     dibatalkan_at: Mapped[Optional[datetime]] = mapped_column(DateTime(timezone=True), nullable=True)
     alasan_batal: Mapped[Optional[str]] = mapped_column(Text, nullable=True)
+    # Isi ulang kas kecil/kas iklan di luar jadwal Selasa (AB-TL-3): wajib alasan.
+    di_luar_jadwal: Mapped[bool] = mapped_column(Boolean, nullable=False, default=False)
+    alasan_luar_jadwal: Mapped[Optional[str]] = mapped_column(Text, nullable=True)
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=_utcnow)
 
 

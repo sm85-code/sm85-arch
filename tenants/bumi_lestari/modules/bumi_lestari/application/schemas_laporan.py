@@ -132,6 +132,7 @@ class DashboardOut(BaseModel):
     belum_cair: Decimal = Decimal("0")  # perkiraan uang cair order marketplace/Toko web yang sudah dikirim, belum cair
     belum_cair_sementara: Decimal = Decimal("0")  # nama lama (sama dengan belum_cair), dipertahankan untuk frontend lama
     draf_belum_dikirim: list[DrafSumberOut] = []  # hanya sumber yang punya draf
+    talangan_belum_lunas: Decimal = Decimal("0")  # utang usaha ke perorangan (AB-TL-1); kas iklan hanya untuk admin
 
 
 class OrderBelumCairOut(BaseModel):

@@ -165,6 +165,8 @@ class TransaksiIn(BaseModel):
     konfirmasi_setoran_modal_kedua: bool = False
     # Koreksi atas bulan yang sudah tutup buku (YYYY-MM); dicatat & dihitung di bulan berjalan (AB-TB-4).
     koreksi_periode: Optional[str] = Field(default=None, pattern=r"^\d{4}-(0[1-9]|1[0-2])$")
+    # Kas kecil/kas iklan kurang: kekurangannya dicatat sebagai talangan oleh orang ini (AB-TL-1).
+    talangan_oleh: Optional[str] = Field(default=None, max_length=128)
 
 
 class TransaksiOut(BaseModel):
@@ -206,6 +208,8 @@ class TransferOut(BaseModel):
     dibuat_oleh: str
     dibatalkan: bool
     alasan_batal: Optional[str] = None
+    di_luar_jadwal: bool = False
+    alasan_luar_jadwal: Optional[str] = None
     created_at: datetime
     model_config = ConfigDict(from_attributes=True)
 
