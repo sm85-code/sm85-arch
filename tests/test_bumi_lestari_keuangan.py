@@ -14,7 +14,6 @@ from tenants.bumi_lestari.modules.bumi_lestari.application.schemas import (
     LoginIn,
     ProfilIn,
     ProporsiIn,
-    ProporsiItemIn,
     TransaksiIn,
     TransferIn,
     UserCreateIn,
@@ -235,15 +234,12 @@ async def test_profil_and_proporsi_bagi_hasil_configurable(session):
     profil = await services.update_profil(session, ProfilIn(nama_usaha=" Bumi Lestari ", alamat="Jl. Kayu 1"))
     assert profil.nama_usaha == "Bumi Lestari"
 
-    def items(*pairs):
-        return ProporsiIn(items=[ProporsiItemIn(label=nama, persen=Decimal(persen)) for nama, persen in pairs])
+    rows = await services.set_proporsi(session, ProporsiIn(persen_admin=Decimal("40"), persen_owner=Decimal("60")))
+    assert [(r.penerima, r.persen) for r in rows] == [("admin", 40), ("owner", 60)]
+    rows = await services.set_proporsi(session, ProporsiIn(persen_admin=Decimal("30.5"), persen_owner=Decimal("69.5")))
+    assert [(r.penerima, r.persen) for r in await services.get_proporsi(session)] == [("admin", Decimal("30.5")), ("owner", Decimal("69.5"))]
 
-    rows = await services.set_proporsi(session, items(("Admin", "40"), ("Owner", "60")))
-    assert [(r.label, r.persen) for r in rows] == [("Admin", 40), ("Owner", 60)]
-    rows = await services.set_proporsi(session, items(("Admin", "35"), ("Owner", "55"), ("Dana cadangan", "10")))
-    assert [r.label for r in await services.get_proporsi(session)] == ["Admin", "Owner", "Dana cadangan"]
-    for bad in (items(("Admin", "50"), ("Owner", "60")), items(("Admin", "50"), ("admin", "50"))):
-        with pytest.raises(HTTPException) as exc:
-            await services.set_proporsi(session, bad)
-        assert exc.value.status_code == 400
-    assert len(await services.get_proporsi(session)) == 3  # gagal tidak mengubah apa pun
+    with pytest.raises(HTTPException) as exc:
+        await services.set_proporsi(session, ProporsiIn(persen_admin=Decimal("50"), persen_owner=Decimal("60")))
+    assert exc.value.status_code == 400
+    assert (await services.get_proporsi(session))[0].persen == Decimal("30.5")  # gagal tidak mengubah apa pun

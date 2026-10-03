@@ -365,26 +365,25 @@ async def update_profil(session: AsyncSession, payload: ProfilIn) -> BlProfil:
     return profil
 
 
+PENERIMA_BAGI_HASIL = ("admin", "owner")
+
+
 async def get_proporsi(session: AsyncSession) -> list[BlProporsiBagiHasil]:
-    stmt = select(BlProporsiBagiHasil).order_by(BlProporsiBagiHasil.urutan)
-    return list((await session.execute(stmt)).scalars())
+    rows = list((await session.execute(select(BlProporsiBagiHasil))).scalars())
+    return sorted(rows, key=lambda r: PENERIMA_BAGI_HASIL.index(r.penerima))
 
 
 async def set_proporsi(session: AsyncSession, payload: ProporsiIn) -> list[BlProporsiBagiHasil]:
-    """Ganti seluruh proporsi bagi hasil (admin). Total persen harus tepat 100."""
-    total = sum((item.persen for item in payload.items), Decimal("0"))
+    """Ubah proporsi bagi hasil admin/owner (hanya admin). Total persen harus tepat 100."""
+    total = payload.persen_admin + payload.persen_owner
     if total != Decimal("100"):
         raise _bad(f"Total proporsi harus 100%, sekarang {total}%")
-    labels = [i.label.strip().lower() for i in payload.items]
-    if len(set(labels)) != len(labels):
-        raise _bad("Label penerima tidak boleh sama")
-    for lama in await get_proporsi(session):
-        await session.delete(lama)
+    nilai = {"admin": payload.persen_admin, "owner": payload.persen_owner}
+    ada = {r.penerima: r for r in await get_proporsi(session)}
+    for penerima, persen in nilai.items():
+        if penerima in ada:
+            ada[penerima].persen = persen
+        else:
+            session.add(BlProporsiBagiHasil(penerima=penerima, persen=persen))
     await session.flush()
-    baru = [
-        BlProporsiBagiHasil(urutan=i, label=item.label.strip(), user_id=item.user_id, persen=item.persen)
-        for i, item in enumerate(payload.items)
-    ]
-    session.add_all(baru)
-    await session.flush()
-    return baru
+    return await get_proporsi(session)

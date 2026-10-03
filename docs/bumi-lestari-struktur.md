@@ -138,10 +138,10 @@ Efek ke keuangan:
   gaji bulan itu), `POST /gaji/{id}/bayar`.
 
 **Bagi hasil admin 40% : owner 60% dari laba bersih:**
-- **Tidak di-hardcode.** Proporsi disimpan di `bl_proporsi_bagi_hasil` (label, user_id opsional,
+- **Tidak di-hardcode.** Proporsi disimpan di `bl_proporsi_bagi_hasil` (penerima `admin`/`owner`,
   persen; total harus tepat 100) dan diubah dari **halaman Profil UMKM**
   (`GET/PUT /profil`, `PUT /profil/proporsi-bagi-hasil`, perubahan proporsi hanya admin).
-  Nilai awal Admin 40 / Owner 60 hanya data seed. Penerima bisa ditambah (mis. dana cadangan).
+  Nilai awal Admin 40 / Owner 60 hanya data seed. Penerima bagi hasil hanya dua orang: admin dan owner.
 - Setiap perhitungan bagi hasil menyimpan **snapshot** proporsi saat dihitung, jadi mengubah
   proporsi tidak mengubah periode yang sudah dihitung.
 - Periode bagi hasil: **bulanan** (`periode` = `YYYY-MM`, satu perhitungan per bulan).

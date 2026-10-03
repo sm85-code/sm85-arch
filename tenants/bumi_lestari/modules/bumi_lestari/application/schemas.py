@@ -167,19 +167,18 @@ class ProfilIn(BaseModel):
     catatan: str = Field(default="", max_length=2000)
 
 
-class ProporsiItemIn(BaseModel):
-    label: str = Field(min_length=1, max_length=128)
-    user_id: Optional[str] = None
-    persen: Decimal = Field(ge=0, le=100, max_digits=5, decimal_places=2)
-
-
-class ProporsiItemOut(ProporsiItemIn):
+class ProporsiItemOut(BaseModel):
     id: str
+    penerima: str
+    persen: Decimal
     model_config = ConfigDict(from_attributes=True)
 
 
 class ProporsiIn(BaseModel):
-    items: list[ProporsiItemIn] = Field(min_length=1, max_length=20)
+    """Bagi hasil hanya untuk dua orang: admin dan owner. Total harus 100."""
+
+    persen_admin: Decimal = Field(ge=0, le=100, max_digits=5, decimal_places=2)
+    persen_owner: Decimal = Field(ge=0, le=100, max_digits=5, decimal_places=2)
 
 
 class ProfilOut(BaseModel):

@@ -11,7 +11,7 @@ from datetime import date, datetime, timezone
 from decimal import Decimal
 from typing import Optional
 
-from sqlalchemy import Boolean, Date, DateTime, ForeignKey, Integer, Numeric, String, Text
+from sqlalchemy import Boolean, Date, DateTime, ForeignKey, Numeric, String, Text
 from sqlalchemy.orm import Mapped, mapped_column
 
 from tenants.bumi_lestari.modules.bumi_lestari.infrastructure.database import BumiLestariBase
@@ -125,16 +125,15 @@ class BlProfil(BumiLestariBase):
 
 
 class BlProporsiBagiHasil(BumiLestariBase):
-    """Proporsi bagi hasil dari laba bersih. Jumlah persen semua baris harus 100.
+    """Proporsi bagi hasil dari laba bersih: tepat dua penerima, "admin" dan "owner".
 
-    Diubah dari halaman profil UMKM; perhitungan bagi hasil periode menyalin (snapshot)
-    proporsi yang berlaku saat dihitung, jadi perubahan tidak mengubah periode lama.
+    Total persen harus 100. Diubah dari halaman profil UMKM; perhitungan bagi hasil
+    periode menyalin (snapshot) proporsi yang berlaku saat dihitung, jadi perubahan
+    tidak mengubah periode lama.
     """
 
     __tablename__ = "bl_proporsi_bagi_hasil"
 
     id: Mapped[str] = mapped_column(String(64), primary_key=True, default=_uuid)
-    urutan: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
-    label: Mapped[str] = mapped_column(String(128), nullable=False)
-    user_id: Mapped[Optional[str]] = mapped_column(String(64), nullable=True)
+    penerima: Mapped[str] = mapped_column(String(16), nullable=False, unique=True)
     persen: Mapped[Decimal] = mapped_column(Numeric(5, 2), nullable=False)

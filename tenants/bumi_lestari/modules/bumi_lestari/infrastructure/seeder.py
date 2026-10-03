@@ -98,8 +98,8 @@ async def seed_bumi_lestari(session: AsyncSession) -> dict[str, str]:
             session.add(BlKategori(nama=nama, jenis=jenis))
     # Nilai awal proporsi bagi hasil -- hanya dibuat sekali; selanjutnya diubah dari halaman profil UMKM.
     if (await session.execute(select(BlProporsiBagiHasil.id))).first() is None:
-        for urutan, (label, persen) in enumerate((("Admin", 40), ("Owner", 60))):
-            session.add(BlProporsiBagiHasil(urutan=urutan, label=label, persen=persen))
+        for penerima, persen in (("admin", 40), ("owner", 60)):
+            session.add(BlProporsiBagiHasil(penerima=penerima, persen=persen))
     await session.commit()
     return {"owner_email": email, "status": "ok"}
 
