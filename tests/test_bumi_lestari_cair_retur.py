@@ -68,12 +68,17 @@ async def test_seed_menghubungkan_saluran_ke_akun_saldo(monkeypatch):
         await seeder.seed_bumi_lestari(s)
         await seeder.seed_bumi_lestari(s)  # idempoten
         akun = {a.id: a.kode for a in (await s.execute(select(BlAkunKas))).scalars()}
+        from tenants.bumi_lestari.modules.bumi_lestari.infrastructure.models_pencairan import BlFormatPenghasilan
+
+        formats = (await s.execute(select(BlFormatPenghasilan))).scalars().all()
         saluran = {x.nama: akun.get(x.akun_id) for x in (await s.execute(select(BlSaluran))).scalars()}
     await engine.dispose()
     assert saluran == {
         "Shopee": "SALDO_SHOPEE", "TikTok Shop": "SALDO_TIKTOK", "Lazada": "SALDO_LAZADA", "Blibli": "SALDO_BLIBLI",
         "Toko web": "SALDO_IPAYMU",
     }
+    # Format Shopee sementara (2.5a): draf v1, ditandai SEMENTARA, sekali saja.
+    assert [(f.versi, f.status) for f in formats] == [(1, "draf")] and "SEMENTARA" in formats[0].nama
 
 
 @pytest.mark.asyncio

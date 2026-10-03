@@ -39,18 +39,22 @@ from tenants.bumi_lestari.modules.bumi_lestari.infrastructure.models_pembayaran 
     BlPembayaranPemasok,
     BlPenerimaanReseller,
 )
+from tenants.bumi_lestari.modules.bumi_lestari.infrastructure.models_pencairan import REF_PENCAIRAN, BlPencairanUnggahan
 
 LABEL_SUMBER = {
     "kas_kecil": "Kas kecil",
     "kas_iklan": "Kas iklan",
     "penerimaan_reseller": "Penerimaan penjual lain",
     "pembayaran_pemasok": "Pembayaran tukang & supplier",
+    "pencairan": "Pencairan marketplace & iPaymu",
 }
 REF_TRANSAKSI = "transaksi"
 _MODEL_SUMBER = {
     "pembayaran_pemasok": (BlPembayaranPemasok, REF_PEMBAYARAN_PEMASOK, "keluar"),
     "penerimaan_reseller": (BlPenerimaanReseller, REF_PENERIMAAN_RESELLER, "masuk"),
+    "pencairan": (BlPencairanUnggahan, REF_PENCAIRAN, "masuk"),
 }
+_REF_MODEL = {ref: model for model, ref, _j in _MODEL_SUMBER.values()}
 
 
 def _bad(detail: str, code: int = status.HTTP_400_BAD_REQUEST) -> HTTPException:
@@ -185,6 +189,11 @@ async def kirim(
                     tanggal=trx.tanggal, jumlah=trx.jumlah,
                 )
             )
+    if sumber == "pencairan":
+        from tenants.bumi_lestari.modules.bumi_lestari.application import pencairan_services
+
+        for e in entri:
+            await pencairan_services.setelah_kirim(session, e.sumber_row)
     await catat_audit(
         session, user.id, "kirim", "kiriman", kiriman.id,
         sesudah={"nomor": kiriman.nomor, "sumber": sumber, "jumlah_entri": len(entri), "total": kiriman.total},
@@ -231,12 +240,15 @@ async def batal_kiriman(session: AsyncSession, user: BlUser, kiriman_id: str, al
         if trx is not None and trx.kiriman_id == kiriman.id:
             trx.status_kirim = STATUS_DRAF
             trx.kiriman_id = None
-        if item.ref_jenis in (REF_PEMBAYARAN_PEMASOK, REF_PENERIMAAN_RESELLER):
-            model = BlPembayaranPemasok if item.ref_jenis == REF_PEMBAYARAN_PEMASOK else BlPenerimaanReseller
-            row = await session.get(model, item.ref_id)
+        if item.ref_jenis in _REF_MODEL:
+            row = await session.get(_REF_MODEL[item.ref_jenis], item.ref_id)
             if row is not None and row.kiriman_id == kiriman.id:
                 row.status_kirim = STATUS_DRAF
                 row.kiriman_id = None
+                if item.ref_jenis == REF_PENCAIRAN:
+                    from tenants.bumi_lestari.modules.bumi_lestari.application import pencairan_services
+
+                    await pencairan_services.setelah_batal_kirim(session, row)
     kiriman.status = STATUS_KIRIMAN_DIBATALKAN
     kiriman.dibatalkan_oleh = user.id
     kiriman.dibatalkan_pada = datetime.now(timezone.utc)

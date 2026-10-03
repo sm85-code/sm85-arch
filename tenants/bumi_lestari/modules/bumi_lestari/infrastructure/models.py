@@ -50,7 +50,7 @@ PLAFON_KAS_IKLAN_DEFAULT = Decimal("2000000")
 STATUS_DRAF = "draf"
 STATUS_TERKIRIM = "terkirim"
 STATUS_KIRIMAN_DIBATALKAN = "dibatalkan"
-SUMBER_KIRIMAN = ("kas_kecil", "kas_iklan", "penerimaan_reseller", "pembayaran_pemasok")
+SUMBER_KIRIMAN = ("kas_kecil", "kas_iklan", "penerimaan_reseller", "pembayaran_pemasok", "pencairan")
 
 
 class BlUser(BumiLestariBase):

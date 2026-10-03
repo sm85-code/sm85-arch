@@ -19,6 +19,10 @@ from tenants.bumi_lestari.modules.bumi_lestari.infrastructure.database import Bu
 from tenants.bumi_lestari.modules.bumi_lestari.infrastructure.models_order import BlSaluran
 from tenants.bumi_lestari.modules.bumi_lestari.infrastructure import models_pembayaran  # noqa: F401  (register tables)
 from tenants.bumi_lestari.modules.bumi_lestari.infrastructure.models_pembayaran import BlLangganan
+from tenants.bumi_lestari.modules.bumi_lestari.infrastructure.models_pencairan import (
+    BlFormatPenghasilan,
+    BlFormatPenghasilanKolom,
+)
 from tenants.bumi_lestari.modules.bumi_lestari.infrastructure.models import (
     KODE_DANA_CADANGAN,
     KODE_KAS_IKLAN,
@@ -84,6 +88,40 @@ DEFAULT_KATEGORI = (
     ("Biaya marketplace", "pengeluaran"),
     ("Kerugian retur", "pengeluaran"),
 )
+
+# Format Shopee "Penghasilan Saya" SEMENTARA (spesifikasi 2.5a). Belum ada contoh file asli: nama kolom diambil dari
+# ekspor Seller Center yang umum dan HARUS diuji dengan file asli (Data master > Format file penghasilan > Uji) sebelum
+# diaktifkan; bila kolom berbeda, ubah pemetaan (versi draf) lalu uji lagi.
+FORMAT_SHOPEE_SEMENTARA = {
+    "nama": "Shopee Penghasilan Saya (SEMENTARA)",
+    "jenis_file": "xlsx",
+    "nama_sheet": None,
+    "baris_header": 6,
+    "format_tanggal": "yyyy-mm-dd",
+    "pemisah_desimal": ",",
+    "pemisah_ribuan": ".",
+    "aturan_tanda": "mutlak",
+    "satuan_baris": "per_pesanan",
+    "aturan_jenis_baris": {"kolom": None, "retur": ["Pengembalian"], "penyesuaian": ["Penyesuaian"], "negatif_penyesuaian": True},
+    "aturan_abaikan": {"kode_kosong": True, "berisi": ["Total"]},
+    "catatan": (
+        "SEMENTARA — dibuat tanpa contoh file asli. Unggah file Keuangan > Penghasilan Saya > Sudah Dilepas > Export "
+        "di tombol Uji; periksa baris judul (bawaan baris 6) dan nama kolom, sesuaikan, lalu aktifkan."
+    ),
+    "kolom": [
+        ("kode_pesanan", "No. Pesanan", "ambil", None),
+        ("tanggal_cair", "Tanggal Dana Dilepaskan", "ambil", None),
+        ("jumlah_cair", "Total Penghasilan", "ambil", None),
+        ("harga_jual", "Harga Asli Produk", "jumlahkan", None),
+        ("harga_jual", "Total Diskon Produk", "jumlahkan", None),
+        ("potongan_biaya", "Biaya Administrasi", "mutlak", "Biaya administrasi"),
+        ("potongan_biaya", "Biaya Layanan", "mutlak", "Biaya layanan"),
+        ("potongan_biaya", "Biaya Proses Pesanan", "mutlak", "Biaya proses pesanan"),
+        ("potongan_biaya", "Biaya Komisi AMS", "mutlak", "Komisi AMS"),
+        ("potongan_biaya", "Voucher disponsor oleh Penjual", "mutlak", "Voucher penjual"),
+        ("potongan_biaya", "Ongkos Kirim Pengembalian Barang", "mutlak", "Ongkir retur"),
+    ],
+}
 
 # Entri pembuka modal Owner (spesifikasi AB-MD-1): dicatat sekali oleh seed.
 SETORAN_MODAL_AWAL = Decimal("20000000")
@@ -200,6 +238,7 @@ async def seed_bumi_lestari(session: AsyncSession) -> dict[str, str]:
         for penerima, persen in (("admin", 40), ("owner", 60)):
             session.add(BlProporsiBagiHasil(penerima=penerima, persen=persen))
     await session.flush()
+    await _seed_format_shopee(session)
     await _seed_setoran_modal(session, owner)
     await session.commit()
     return {"owner_email": email, "status": "ok"}
@@ -224,3 +263,22 @@ async def _seed_setoran_modal(session: AsyncSession, owner: BlUser) -> None:
         )
     )
 
+
+async def _seed_format_shopee(session: AsyncSession) -> None:
+    """Format Shopee sementara sebagai v1 draf -- hanya bila Shopee belum punya format sama sekali."""
+    shopee = (await session.execute(select(BlSaluran).where(BlSaluran.nama == "Shopee"))).scalar_one_or_none()
+    if shopee is None or (
+        await session.execute(select(BlFormatPenghasilan.id).where(BlFormatPenghasilan.saluran_id == shopee.id))
+    ).first():
+        return
+    data = dict(FORMAT_SHOPEE_SEMENTARA)
+    kolom = data.pop("kolom")
+    fmt = BlFormatPenghasilan(saluran_id=shopee.id, versi=1, status="draf", **data)
+    session.add(fmt)
+    await session.flush()
+    for i, (tujuan, sumber, operasi, rincian) in enumerate(kolom):
+        session.add(
+            BlFormatPenghasilanKolom(
+                format_id=fmt.id, kolom_tujuan=tujuan, kolom_sumber=sumber, operasi=operasi, nama_rincian=rincian, urutan=i
+            )
+        )

@@ -20,6 +20,7 @@ google-auth-httplib2==0.4.2
 google-auth-oauthlib==1.4.1
 boto3==1.43.106
 reportlab==5.0.1  # PDF invoice/PO tenant bumi_lestari
+openpyxl==3.1.5  # impor file penghasilan marketplace (xlsx) tenant bumi_lestari
 
 # Dev / test
 pytest==9.1.1

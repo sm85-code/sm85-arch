@@ -54,7 +54,10 @@ class RingkasanLaba:
         return self.total_pemasukan - self.total_biaya
 
 
-async def _per_kategori(session: AsyncSession, jenis: str, awal: date, akhir: date, *, dalam=None, kecuali=None, kecuali_ref=()):
+async def _per_kategori(
+    session: AsyncSession, jenis: str, awal: date, akhir: date, *, dalam=None, kecuali=None, kecuali_ref=(), jenis_kategori=None,
+    bukan_jenis_kategori=None,
+):
     stmt = (
         select(BlKategori.nama, func.coalesce(func.sum(BlTransaksi.jumlah), 0), func.count(BlTransaksi.id))
         .join(BlKategori, BlKategori.id == BlTransaksi.kategori_id)
@@ -72,6 +75,10 @@ async def _per_kategori(session: AsyncSession, jenis: str, awal: date, akhir: da
         stmt = stmt.where(BlKategori.nama.not_in(kecuali))
     if kecuali_ref:
         stmt = stmt.where(or_(BlTransaksi.ref_jenis.is_(None), BlTransaksi.ref_jenis.not_in(kecuali_ref)))
+    if jenis_kategori:
+        stmt = stmt.where(BlKategori.jenis == jenis_kategori)
+    if bukan_jenis_kategori:
+        stmt = stmt.where(BlKategori.jenis != bukan_jenis_kategori)
     return [Baris(n, Decimal(str(j)), int(c)) for n, j, c in (await session.execute(stmt)).all()]
 
 
@@ -109,7 +116,13 @@ async def ringkasan_laba(session: AsyncSession, awal: date, akhir: date) -> Ring
     hasil = RingkasanLaba()
     # Setoran modal bukan pendapatan (spesifikasi 8.12).
     hasil.pemasukan = await _per_kategori(session, "masuk", awal, akhir, kecuali=(KATEGORI_SETORAN_MODAL,))
-    hasil.biaya = await _per_kategori(session, "keluar", awal, akhir, kecuali=KATEGORI_BUKAN_BIAYA, kecuali_ref=(REF_GAJI,))
+    # Uang keluar berkategori pemasukan (retur/penyesuaian negatif dari pencairan, AB-BC-4) mengurangi pemasukannya.
+    for b in await _per_kategori(session, "keluar", awal, akhir, kecuali=(KATEGORI_SETORAN_MODAL,), jenis_kategori="pemasukan"):
+        _geser(hasil.pemasukan, b.kategori, -b.jumlah)
+    hasil.biaya = await _per_kategori(
+        session, "keluar", awal, akhir, kecuali=KATEGORI_BUKAN_BIAYA, kecuali_ref=(REF_GAJI,),
+        bukan_jenis_kategori="pemasukan",
+    )
     reklas = await reklas_retur(session, awal, akhir)
     if reklas:
         _geser(hasil.biaya, KATEGORI_PRODUKSI, -reklas)

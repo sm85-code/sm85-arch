@@ -85,3 +85,16 @@ Semua menerima `(session, user, ...)` dan tidak bergantung pada HTTP:
   pembayaran tukang), jadi bulan yang sudah tutup buku tidak berubah.
 - Belum cair dihitung ulang per tanggal dari order (`laporan_services.belum_cair(session, per_tanggal)`): sudah dikirim,
   belum cair per tanggal itu, belum retur per tanggal itu. Order hasil sinkronisasi ikut otomatis bila `tgl_dikirim` terisi.
+
+## Pencairan & format file penghasilan (Fase 2.4/2.5/2.8)
+
+- Mesin format murni (`application/pencairan_format.py`, tanpa DB): file → `BarisStandar`. Adapter kode cadangan
+  didaftarkan di `application/pencairan_adapter.ADAPTER[nama_saluran]` dengan keluaran yang sama.
+- **Titik masuk sinkronisasi settlement `marketplace_erp`:** bangun `BarisStandar` dari `mpe_settlement`
+  (`gross_sales` → `harga_jual`, `fee_*`/`ongkir_subsidi`/`penalti` → `rincian_biaya`, `net` → `jumlah_cair`), lalu
+  `pencairan_services.cocokkan(...)` + `simpan_baris(..., sumber_sistem="marketplace_erp", sumber_ref=<settlement id>)`.
+  `kunci_unik` (saluran|kode|jenis|tanggal|jumlah) mencegah dobel dengan unggahan Excel untuk pesanan yang sama;
+  `bl_pencairan_unggahan (sumber_sistem, sumber_ref)` unik untuk idempotensi per batch.
+- Pembukuan terjadi saat "Kirim ke laporan keuangan" (sumber kiriman `pencairan`): transaksi resmi + order cair
+  (`setelah_kirim`); batal kiriman memulihkan (`setelah_batal_kirim`).
+- Format Shopee bawaan adalah **SEMENTARA** (draf v1, belum diuji dengan file asli).

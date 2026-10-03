@@ -273,7 +273,7 @@ async def test_kirim_semua_sumber_order_dan_owner_tanpa_kas_iklan(c):
     bayar = await pembayaran.buat_pembayaran_pemasok(c.s, c.admin, PembayaranPemasokIn(tanggal=SELASA))
     assert bayar.status_kirim == "draf"
 
-    assert [d.sumber for d in await kirim.ringkasan_draf(c.s, c.owner)] == ["kas_kecil", "penerimaan_reseller", "pembayaran_pemasok"]
+    assert [d.sumber for d in await kirim.ringkasan_draf(c.s, c.owner)] == ["kas_kecil", "penerimaan_reseller", "pembayaran_pemasok", "pencairan"]
     assert await _kode(c, kirim.ringkasan_draf, c.s, c.owner, "kas_iklan") == 403
     hasil = await kirim.kirim_semua(c.s, c.admin, tutup_kas_mingguan_id="tkm-2026-09-29")
     assert sorted(k.sumber for k in hasil) == ["kas_iklan", "pembayaran_pemasok", "penerimaan_reseller"]
