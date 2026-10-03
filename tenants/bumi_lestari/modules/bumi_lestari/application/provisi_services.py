@@ -16,7 +16,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from tenants.bumi_lestari.modules.bumi_lestari.application.provisi_core import (
     batalkan_provisi_sumber,
 )
-from tenants.bumi_lestari.modules.bumi_lestari.application.schemas_t3 import (
+from tenants.bumi_lestari.modules.bumi_lestari.application.schemas_pembayaran import (
     LanggananIn,
     LanggananPatch,
     SisihanItemOut,
@@ -32,7 +32,7 @@ from tenants.bumi_lestari.modules.bumi_lestari.application.services import (
     batalkan_transfer,
     saldo_akun,
 )
-from tenants.bumi_lestari.modules.bumi_lestari.application.t3_services import (
+from tenants.bumi_lestari.modules.bumi_lestari.application.pembayaran_services import (
     KATEGORI_TAGIHAN,
     _akun_bayar,
     _batalkan_transaksi_ref,
@@ -45,7 +45,7 @@ from tenants.bumi_lestari.modules.bumi_lestari.infrastructure.models import (
     KODE_KAS_UTAMA,
     BlUser,
 )
-from tenants.bumi_lestari.modules.bumi_lestari.infrastructure.models_t3 import (
+from tenants.bumi_lestari.modules.bumi_lestari.infrastructure.models_pembayaran import (
     REF_SISIHAN,
     REF_TAGIHAN,
     BlLangganan,

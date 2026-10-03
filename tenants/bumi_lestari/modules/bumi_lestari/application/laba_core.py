@@ -10,7 +10,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from tenants.bumi_lestari.modules.bumi_lestari.application.provisi_core import beban_provisi
 from tenants.bumi_lestari.modules.bumi_lestari.infrastructure.models import BlKategori, BlTransaksi
-from tenants.bumi_lestari.modules.bumi_lestari.infrastructure.models_t3 import REF_GAJI
+from tenants.bumi_lestari.modules.bumi_lestari.infrastructure.models_pembayaran import REF_GAJI
 
 KATEGORI_BAGI_HASIL = "Bagi hasil"
 # Bukan biaya usaha: tidak mengurangi laba bersih yang dibagi.

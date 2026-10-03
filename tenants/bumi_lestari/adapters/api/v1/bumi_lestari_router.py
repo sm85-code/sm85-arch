@@ -15,7 +15,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from tenants.bumi_lestari.adapters.api.v1.bumi_lestari_dokumen_router import dokumen_router
 from tenants.bumi_lestari.adapters.api.v1.bumi_lestari_laporan_router import laporan_router
 from tenants.bumi_lestari.adapters.api.v1.bumi_lestari_order_router import order_router
-from tenants.bumi_lestari.adapters.api.v1.bumi_lestari_t3_router import t3_router
+from tenants.bumi_lestari.adapters.api.v1.bumi_lestari_pembayaran_router import pembayaran_router
 from tenants.bumi_lestari.modules.bumi_lestari.application import services
 from tenants.bumi_lestari.modules.bumi_lestari.application.schemas import (
     AkunKasIn,
@@ -52,7 +52,7 @@ from tenants.bumi_lestari.modules.bumi_lestari.infrastructure.seeder import seed
 
 bumi_lestari_router = APIRouter()
 bumi_lestari_router.include_router(order_router)
-bumi_lestari_router.include_router(t3_router)
+bumi_lestari_router.include_router(pembayaran_router)
 bumi_lestari_router.include_router(dokumen_router)
 bumi_lestari_router.include_router(laporan_router)
 

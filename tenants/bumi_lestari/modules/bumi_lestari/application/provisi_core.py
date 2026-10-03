@@ -1,4 +1,4 @@
-"""Inti pencatatan beban cicilan (provisi) gaji & langganan -- tanpa ketergantungan ke t3_services."""
+"""Inti pencatatan beban cicilan (provisi) gaji & langganan -- tanpa ketergantungan ke pembayaran_services."""
 from __future__ import annotations
 
 from datetime import date
@@ -8,7 +8,7 @@ from sqlalchemy import func, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from tenants.bumi_lestari.modules.bumi_lestari.application.services import _batalkan
-from tenants.bumi_lestari.modules.bumi_lestari.infrastructure.models_t3 import BlProvisi
+from tenants.bumi_lestari.modules.bumi_lestari.infrastructure.models_pembayaran import BlProvisi
 
 
 async def terkumpul(session: AsyncSession, periode: str, *, jenis: str, karyawan_id: str | None = None) -> Decimal:

@@ -19,7 +19,7 @@ from tenants.bumi_lestari.modules.bumi_lestari.application.schemas_order import 
     SaluranIn,
 )
 from tenants.bumi_lestari.modules.bumi_lestari.application.services import update_profil
-from tenants.bumi_lestari.modules.bumi_lestari.infrastructure import models_t3  # noqa: F401
+from tenants.bumi_lestari.modules.bumi_lestari.infrastructure import models_pembayaran  # noqa: F401
 from tenants.bumi_lestari.modules.bumi_lestari.infrastructure.database import BumiLestariBase
 
 SELASA = date(2026, 9, 29)  # Tgl. Pembayaran / Jatuh Tempo di contoh; periode Senin 21 - Sabtu 26 September

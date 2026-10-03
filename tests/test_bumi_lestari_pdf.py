@@ -21,7 +21,7 @@ from tenants.bumi_lestari.modules.bumi_lestari.application.schemas_order import 
     ProdukIn,
     SaluranIn,
 )
-from tenants.bumi_lestari.modules.bumi_lestari.infrastructure import models_t3  # noqa: F401
+from tenants.bumi_lestari.modules.bumi_lestari.infrastructure import models_pembayaran  # noqa: F401
 from tenants.bumi_lestari.modules.bumi_lestari.infrastructure.database import BumiLestariBase
 from tenants.bumi_lestari.modules.bumi_lestari.infrastructure.models import BlUser
 
@@ -112,7 +112,7 @@ async def test_share_validation_unknown_token_and_expiry(ctx):
 
     out = await dok.bagikan_dokumen(ctx.session, ctx.user, BagikanIn(jenis="invoice", pelanggan_id=ctx.rina.id, tanggal=SELASA), "https://x")
     token = out.url.rsplit("/", 1)[1]
-    row = (await ctx.session.execute(select(models_t3.BlDokumenBagikan))).scalar_one()
+    row = (await ctx.session.execute(select(models_pembayaran.BlDokumenBagikan))).scalar_one()
     row.kedaluwarsa = datetime.now(timezone.utc) - timedelta(days=1)
     await ctx.session.flush()
     with pytest.raises(HTTPException) as exc:
