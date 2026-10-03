@@ -140,8 +140,10 @@ async def po_dari_pembayaran(session: AsyncSession, pembayaran_id: str) -> list[
 async def invoice_reseller(
     session: AsyncSession, tanggal: date | None = None, pelanggan_id: str | None = None
 ) -> list[InvoiceOut]:
-    """Invoice mingguan per penjual lain: order reseller yang diserahkan (dikirim) s.d. Sabtu sebelum Selasa
-    acuan dan belum dibayar. Tgl. invoice = Senin setelah periode, jatuh tempo = Selasa."""
+    """Invoice mingguan per penjual lain: order reseller yang barangnya jadi dan sudah diambil dari tukang
+    (tgl_diambil, sama dengan "Tanggal Selesai" di PO) s.d. Sabtu sebelum Selasa acuan dan belum dibayar.
+    Seluruh prosesnya (ambil, cat, tempel resi, kirim) dikerjakan UMKM; penjual lain hanya mengirim resi.
+    Tgl. invoice = Senin setelah periode, jatuh tempo = Selasa."""
     selasa = selasa_acuan(tanggal or _hari_ini())
     minggu, _, _ = info_minggu(selasa)
     dibayar = await order_sudah_dibayar_reseller(session)
@@ -152,11 +154,11 @@ async def invoice_reseller(
         .join(BlPelanggan, BlPelanggan.id == BlOrder.pelanggan_id)
         .where(
             BlSaluran.jenis == "reseller",
-            BlOrder.status.in_(("dikirim", "selesai")),
-            BlOrder.tgl_dikirim.is_not(None),
-            BlOrder.tgl_dikirim <= minggu.periode_akhir,
+            BlOrder.status != "batal",
+            BlOrder.tgl_diambil.is_not(None),
+            BlOrder.tgl_diambil <= minggu.periode_akhir,
         )
-        .order_by(BlPelanggan.nama, BlOrder.tgl_dikirim, BlOrder.no_order)
+        .order_by(BlPelanggan.nama, BlOrder.tgl_diambil, BlOrder.no_order)
     )
     if pelanggan_id:
         stmt = stmt.where(BlOrder.pelanggan_id == pelanggan_id)
@@ -170,10 +172,10 @@ async def invoice_reseller(
         proses = Decimal(order.biaya_proses)
         per_pelanggan.setdefault(pelanggan.id, (pelanggan, []))[1].append(
             InvoiceItemOut(
-                order_id=order.id, tanggal=order.tgl_dikirim, hari=HARI[order.tgl_dikirim.weekday()],
+                order_id=order.id, tanggal=order.tgl_diambil, hari=HARI[order.tgl_diambil.weekday()],
                 nama_barang=produk.nama, ukuran=produk.ukuran, qty=qty, harga_barang=barang,
                 biaya_jasa_pengecatan=jasa, biaya_proses=proses, total=barang + jasa + proses,
-                terlambat=order.tgl_dikirim < minggu.periode_awal,
+                terlambat=order.tgl_diambil < minggu.periode_awal,
             )
         )
     profil = await get_profil(session)

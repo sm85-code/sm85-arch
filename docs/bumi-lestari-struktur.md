@@ -286,7 +286,7 @@ Backend menyusun **data** (JSON); tampilan/PDF (logo, tata letak) dibuat fronten
   Barang / Total, serta grand total.
 - **Invoice ke penjual lain** (`GET /invoice-reseller?tanggal=&pelanggan_id=`): satu invoice per pelanggan.
   Nomor `INV/MG.{minggu}-{kode}/{bulan romawi}/{tahun}` (`bl_pelanggan.kode`). Tgl. invoice = Senin setelah periode,
-  jatuh tempo = Selasa. Kolom: Tanggal (tanggal dikirim) / Nama Barang / Ukuran / Harga Barang / Biaya Jasa
+  jatuh tempo = Selasa. Kolom: Tanggal (**tanggal barang jadi dan diambil dari tukang**, sama dengan "Tanggal Selesai" di PO) / Nama Barang / Ukuran / Harga Barang / Biaya Jasa
   Pengecatan (cat + jasa + packing) / Biaya Proses Pesanan / Total. Syarat pembayaran dan tujuan transfer
   (`info_pembayaran` di profil, mis. "QRIS Pangeran Homeware").
 - **Minggu ke-N:** Senin–Sabtu; minggu pertama adalah minggu yang memuat tanggal 1, bulan mengikuti hari Sabtu
@@ -322,3 +322,8 @@ nilai awal 0 = belum disisihkan).
 - Siklus Selasa: terima bayar reseller → tarik saldo toko → isi kas kecil → isi kas iklan →
   **sisihkan dana gaji & langganan** → bayar tukang/supplier.
 - Semua bisa dibatalkan (transfer, beban, dan transaksi ikut dibatalkan).
+
+**Catatan proses penjual lain:** seluruh pengerjaan dilakukan UMKM (ambil dari tukang → cat oleh karyawan → tempel
+resi → kirim); penjual lain hanya mengirim resi ke UMKM (disimpan di `bl_order.resi`). Karena itu order sudah
+**bisa ditagih sejak barang jadi dan diambil dari tukang** (`tgl_diambil`), tidak menunggu dicat atau dikirim.
+Satu order = satu baris (di PO dan invoice, jumlah order = jumlah baris).

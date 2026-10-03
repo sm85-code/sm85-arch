@@ -315,13 +315,13 @@ async def order_sudah_dibayar_reseller(session: AsyncSession) -> set[str]:
 
 
 async def list_piutang_reseller(session: AsyncSession, pelanggan_id: str | None = None) -> list[PiutangPelangganOut]:
-    """Order reseller yang sudah dikirim/selesai dan belum dibayar."""
+    """Order reseller yang barangnya sudah jadi dan diambil dari tukang (tgl_diambil) dan belum dibayar."""
     dibayar = await order_sudah_dibayar_reseller(session)
     stmt = (
         select(BlOrder, BlPelanggan)
         .join(BlSaluran, BlSaluran.id == BlOrder.saluran_id)
         .join(BlPelanggan, BlPelanggan.id == BlOrder.pelanggan_id)
-        .where(BlSaluran.jenis == "reseller", BlOrder.status.in_(("dikirim", "selesai")))
+        .where(BlSaluran.jenis == "reseller", BlOrder.status != "batal", BlOrder.tgl_diambil.is_not(None))
         .order_by(BlPelanggan.nama, BlOrder.tanggal_order)
     )
     if pelanggan_id:

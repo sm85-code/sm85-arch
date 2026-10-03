@@ -178,8 +178,8 @@ async def test_reseller_piutang_and_payment(session, ctx):
     o = await osvc.create_order(
         session, OrderIn(saluran_id=ctx.res_saluran.id, pelanggan_id=ctx.rina.id, produk_id=ctx.partisi.id, qty=2, pemasok_id=ctx.tukang.id, butuh_cat=False)
     )
-    assert await t3.list_piutang_reseller(session) == []  # belum dikirim
-    for s in ("dikerjakan", "diambil", "dikirim"):
+    assert await t3.list_piutang_reseller(session) == []  # barang belum jadi/diambil dari tukang
+    for s in ("dikerjakan", "diambil"):  # diambil = barang jadi -> sudah bisa ditagih, walau belum dicat/dikirim
         await osvc.ubah_status_order(session, o.id, OrderStatusIn(status=s))
     piutang = await t3.list_piutang_reseller(session)
     assert piutang[0].subtotal == Decimal("1250000")  # (600rb + 20rb) x 2 + 10rb

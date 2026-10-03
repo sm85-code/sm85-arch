@@ -118,6 +118,7 @@ class OrderIn(BaseModel):
     # Kosong -> biaya pokok default katalog x qty.
     biaya_pokok: Optional[Decimal] = Field(default=None, ge=0, max_digits=14, decimal_places=2)
     butuh_cat: Optional[bool] = None  # kosong -> True untuk produk kayu, False untuk non kayu
+    resi: str = Field(default="", max_length=128)
     catatan: str = Field(default="", max_length=1000)
 
 
@@ -133,6 +134,7 @@ class OrderPatch(BaseModel):
     pemasok_id: Optional[str] = None
     biaya_pokok: Optional[Decimal] = Field(default=None, ge=0, max_digits=14, decimal_places=2)
     butuh_cat: Optional[bool] = None
+    resi: Optional[str] = Field(default=None, max_length=128)
     catatan: Optional[str] = Field(default=None, max_length=1000)
 
 
@@ -166,6 +168,7 @@ class OrderOut(BaseModel):
     tgl_dicat: Optional[date]
     tgl_dikirim: Optional[date]
     tgl_selesai: Optional[date]
+    resi: str
     catatan: str
     model_config = ConfigDict(from_attributes=True)
 
