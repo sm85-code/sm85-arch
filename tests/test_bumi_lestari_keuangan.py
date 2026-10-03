@@ -290,3 +290,14 @@ async def test_kas_iklan_imprest_weekly_refill_to_plafon_admin_only(session):
     assert (info["saldo"], info["perlu_diisi"]) == (Decimal("1550000"), Decimal("450000"))
     await services.catat_pengisian(session, admin, "kas_iklan")  # digenapkan lagi tiap minggu
     assert await services.saldo_akun(session, iklan) == Decimal("2000000")
+
+
+@pytest.mark.asyncio
+async def test_router_list_akun_kas_serializes_saldo(session):
+    """Regresi: GET /akun-kas gagal ValidationError (saldo) di lapisan router."""
+    from tenants.bumi_lestari.adapters.api.v1 import bumi_lestari_router as router
+
+    admin = await _user(session, "admin")
+    hasil = await router.list_akun_kas(session=session, user=admin)
+    assert {a.kode for a in hasil} >= {k for k, *_ in DEFAULT_AKUN}
+    assert all(a.saldo == a.saldo_awal for a in hasil)

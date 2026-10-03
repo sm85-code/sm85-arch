@@ -174,13 +174,20 @@ async def reset_user_password(
 # --- Akun kas ------------------------------------------------------------------
 
 
+def _akun_out(akun, saldo) -> AkunKasOut:
+    return AkunKasOut(
+        id=akun.id, kode=akun.kode, nama=akun.nama, jenis=akun.jenis, saldo_awal=akun.saldo_awal,
+        plafon=akun.plafon, aktif=akun.aktif, saldo=saldo,
+    )
+
+
 @bumi_lestari_router.get("/akun-kas", response_model=list[AkunKasOut])
 async def list_akun_kas(
     session: AsyncSession = Depends(get_db_bumi_lestari),
     user: BlUser = Depends(require_roles_bumi_lestari(*OWNER_OR_STAFF)),
 ):
     rows = await services.list_akun(session, user)
-    return [AkunKasOut.model_validate(a).model_copy(update={"saldo": saldo}) for a, saldo in rows]
+    return [_akun_out(a, saldo) for a, saldo in rows]
 
 
 @bumi_lestari_router.post("/akun-kas", response_model=AkunKasOut, status_code=status.HTTP_201_CREATED)
@@ -190,7 +197,7 @@ async def create_akun_kas(
     _: BlUser = Depends(require_roles_bumi_lestari(*OWNER_ONLY)),
 ):
     akun = await services.create_akun(session, payload)
-    return AkunKasOut.model_validate(akun).model_copy(update={"saldo": akun.saldo_awal})
+    return _akun_out(akun, akun.saldo_awal)
 
 
 # --- Kategori ------------------------------------------------------------------
