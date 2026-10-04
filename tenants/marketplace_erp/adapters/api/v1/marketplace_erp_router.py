@@ -962,11 +962,22 @@ async def terima_push_shopee(
     push = shopee_push.urai(badan)
     ringkas = shopee_push.ringkas(push or {})
     urls = shopee_push.kandidat_url(str(request.url), {k.lower(): v for k, v in request.headers.items()})
-    valid, diagnosis = shopee_push.verifikasi(shopee_push.push_key(), urls, badan, request.headers.get("authorization"))
-    if ringkas["kode"] is None:
-        # Not a push (an empty or odd body): what Open Platform's "Verify" button or a browser probe sends. It changes
-        # nothing, so it is answered 200 (the URL is reachable) and logged; a real push always carries a code.
-        await services.catat_push(session, valid=False, ringkas=ringkas, hasil="probe", badan=badan[:500])
+    from tenants.marketplace_erp.modules.marketplace_erp.infrastructure.adapters import erp_shopee
+
+    valid, diagnosis = shopee_push.verifikasi(
+        shopee_push.push_key(),
+        urls,
+        badan,
+        request.headers.get("authorization"),
+        kunci_lain={"partner_key": erp_shopee.SHOPEE_PARTNER_KEY},
+    )
+    if not ringkas["kode"]:
+        # Not a push: an empty/odd body, or code 0 = the test push of Open Platform's "Verify" button (real pushes have
+        # code 1 and up). It changes nothing, so it is answered 200 (the URL is reachable) and logged with how its
+        # signature compared, which shows how Shopee signs.
+        import json as _json
+
+        await services.catat_push(session, valid=False, ringkas=ringkas, hasil="probe", catatan=_json.dumps(diagnosis), badan=badan[:500])
         await session.commit()
         return {"ok": True, "catatan": "Bukan push Shopee; tidak diproses"}
     if not valid:

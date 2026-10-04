@@ -48,17 +48,34 @@ def test_signature_is_hmac_sha256_of_url_pipe_body_and_the_diagnosis_never_holds
     body = _body()
     sah = shopee_push.tanda_tangan(KEY, URL, body)
     ok, diag = shopee_push.verifikasi(KEY, [URL], body, sah)
-    assert ok and diag["cocok_url"] == URL
+    assert ok and "url|badan" in diag["cocok"] and URL in diag["cocok"]
     assert shopee_push.verifikasi(KEY, [URL], body, sah.upper())[0]  # case does not matter
     assert not shopee_push.verifikasi(KEY, [URL], body + b" ", sah)[0]  # body changed
     assert not shopee_push.verifikasi("lain", [URL], body, sah)[0]  # other key
-    assert not shopee_push.verifikasi(KEY, [URL + "/x"], body, sah)[0]  # other url
+    assert not shopee_push.verifikasi(KEY, [URL + "/x"], body, sah)[0]  # other url (a trailing slash alone is tolerated)
     ok, diag = shopee_push.verifikasi("", [URL], body, sah)
     assert not ok and diag["ada_key"] is False
     ok, diag = shopee_push.verifikasi(KEY, [URL], body, None)
     assert not ok and diag["ada_authorization"] is False
     ok, diag = shopee_push.verifikasi(KEY, [URL], body, "x" * 64)
     assert not ok and KEY not in json.dumps(diag) and len(diag["diterima"]) == 8
+
+
+def test_near_variants_made_with_the_same_secret_are_accepted_and_other_keys_are_only_reported():
+    import hashlib
+    import hmac
+
+    body = _body()
+    mac = lambda key, pesan: hmac.new(key, pesan, hashlib.sha256).hexdigest()  # noqa: E731
+    assert shopee_push.verifikasi(KEY, [URL], body, shopee_push.tanda_tangan(KEY, URL + "/", body))[0]  # trailing slash
+    assert shopee_push.verifikasi(KEY, [URL], body, mac(KEY.encode(), body))[0]  # body only
+    assert shopee_push.verifikasi(KEY, [URL], body, mac(KEY.encode(), URL.encode() + body))[0]  # no pipe
+    hex_key = "ab" * 16
+    assert shopee_push.verifikasi(hex_key, [URL], body, mac(bytes.fromhex(hex_key), URL.encode() + b"|" + body))[0]  # raw bytes
+    # signed with the app partner key: NOT accepted, but the diagnosis says which key Shopee used
+    sah = shopee_push.tanda_tangan("kunci-partner", URL, body)
+    ok, diag = shopee_push.verifikasi(KEY, [URL], body, sah, kunci_lain={"partner_key": "kunci-partner"})
+    assert not ok and "partner_key" in diag["cocok_kunci_lain"] and "kunci-partner" not in json.dumps(diag)
 
 
 def test_callback_url_candidates_cover_the_proxy_and_the_configured_url(monkeypatch):
@@ -121,12 +138,12 @@ async def test_without_a_configured_key_nothing_is_accepted(session, monkeypatch
 async def test_a_probe_without_a_push_code_is_answered_200_logged_and_does_nothing(session, monkeypatch):
     """What the Verify button of Open Platform (or a browser) sends: reachable, but never processed."""
     monkeypatch.setenv("SHOPEE_PUSH_KEY", KEY)
-    for badan in (b"", b"halo", b"[1]", b'{"hello": 1}'):
+    for badan in (b"", b"halo", b"[1]", b'{"hello": 1}', b'{"code": 0, "data": {}, "timestamp": 1}'):  # code 0 = Verify
         latar = BackgroundTasks()
         out = await router.terima_push_shopee(_request(badan, None), latar, session)
         assert out["ok"] is True and latar.tasks == []
     log = await services.list_push(session)
-    assert len(log) == 4 and {r["hasil"] for r in log} == {"probe"} and not any(r["valid"] for r in log)
+    assert len(log) == 5 and {r["hasil"] for r in log} == {"probe"} and not any(r["valid"] for r in log)
 
 
 @pytest.mark.asyncio
