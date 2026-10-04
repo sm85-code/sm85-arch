@@ -127,8 +127,12 @@ async def _kode_berikut(session: AsyncSession, model, *kondisi) -> str:
     return f"{max(angka, default=0) + 1:03d}"
 
 
-async def list_pemasok(session: AsyncSession) -> list[BlPemasok]:
+async def list_pemasok(session: AsyncSession, jenis: str | None = None) -> list[BlPemasok]:
+    """Tukang & supplier aktif; `jenis` (tukang/tukang_kayu/supplier) untuk tab Tukang atau Supplier di Data master."""
     stmt = select(BlPemasok).where(BlPemasok.aktif.is_(True)).order_by(BlPemasok.nama)
+    if jenis:
+        j = jenis.strip().lower()
+        stmt = stmt.where(BlPemasok.jenis == ("tukang_kayu" if j == "tukang" else j))
     return list((await session.execute(stmt)).scalars())
 
 

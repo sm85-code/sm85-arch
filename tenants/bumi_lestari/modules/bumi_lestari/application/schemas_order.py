@@ -4,7 +4,7 @@ from datetime import date
 from decimal import Decimal
 from typing import Optional
 
-from pydantic import BaseModel, ConfigDict, Field, computed_field
+from pydantic import BaseModel, ConfigDict, Field, computed_field, field_validator
 
 from tenants.bumi_lestari.modules.bumi_lestari.application.schemas_kolom import KolomTambahanIn, KolomTambahanOut
 
@@ -43,10 +43,19 @@ class ProdukOut(BaseModel):
     model_config = ConfigDict(from_attributes=True)
 
 
+def _jenis_pemasok(v: object) -> object:
+    """'tukang' diterima sebagai nama pendek 'tukang_kayu' (nilai tersimpan tidak berubah)."""
+    if isinstance(v, str):
+        v = v.strip().lower()
+        return "tukang_kayu" if v == "tukang" else v
+    return v
+
+
 class PemasokIn(BaseModel):
     kolom_tambahan: KolomTambahanIn = None
     nama: str = Field(min_length=1, max_length=255)
-    jenis: str
+    jenis: str = "tukang_kayu"  # tukang_kayu (alias "tukang") | supplier; kosong = tukang
+    _jenis = field_validator("jenis", mode="before")(_jenis_pemasok)
     kode: str = Field(default="", max_length=16)  # kosong -> otomatis (urut per jenis pemasok)
     kontak: str = Field(default="", max_length=255)
     no_wa: str = Field(default="", max_length=32)

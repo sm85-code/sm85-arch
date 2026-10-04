@@ -93,6 +93,7 @@ async def test_laporan_tidak_rusak_dan_margin_dari_harga_file(c):
     m = await keu.hpp_margin(c.s, "2026-10")
     t = m.total
     assert (t.penjualan, t.potongan, t.hpp, t.laba_kotor) == (D("900000"), D("60000"), D("300000"), D("540000"))
+    assert (t.margin_kotor, t.margin_kotor_persen, t.margin_persen) == (D("600000"), D("66.7"), D("60.0"))  # kotor vs bersih saluran
     await keu.laba_rugi(c.s, "2026-10")
 
 
@@ -187,3 +188,29 @@ async def test_penjualan_marketplace_tidak_lewat_catat_manual_kas(c):
     with pytest.raises(HTTPException) as exc:
         await _trx(c, c.admin, "SALDO_SHOPEE", "Penjualan marketplace", "masuk", "100000")
     assert exc.value.status_code == 422 and "Pencairan > Catat manual" in exc.value.detail
+
+
+@pytest.mark.asyncio
+async def test_pemasok_jenis_tukang_supplier_dan_utang_per_jenis(c):
+    from tenants.bumi_lestari.modules.bumi_lestari.application.schemas_order import PemasokIn, PemasokOut
+
+    # Kompatibel: "tukang" = "tukang_kayu"; tanpa jenis = tukang; nilai lama tetap diterima.
+    a = await osvc.create_pemasok(c.s, PemasokIn(nama="Pak Darto", jenis="tukang"))
+    b = await osvc.create_pemasok(c.s, PemasokIn(nama="Pak Eko"))
+    sup = await osvc.create_pemasok(c.s, PemasokIn(nama="Toko Lampu", jenis="supplier"))
+    assert a.jenis == b.jenis == "tukang_kayu" and sup.jenis == "supplier"
+    assert PemasokOut.model_validate(a).jenis == "tukang_kayu"
+    tukang = {p.nama for p in await osvc.list_pemasok(c.s, "tukang")}
+    assert {"Pak Budi", "Pak Asep", "Pak Darto", "Pak Eko"} <= tukang and "Toko Lampu" not in tukang
+    assert [p.nama for p in await osvc.list_pemasok(c.s, "supplier")] == ["Toko Lampu"]
+    assert len(await osvc.list_pemasok(c.s)) == len(tukang) + 1
+    assert await _kode(c, osvc.create_pemasok, c.s, PemasokIn(nama="X", jenis="kurir")) == 400
+
+    lampu = await osvc.create_produk(c.s, ProdukIn(sku="LMP", nama="Lampu", jenis_produk="non_kayu", biaya_pokok_default=D("60000")))
+    await _order_tukang(c, c.tukang, date(2026, 9, 20), "SHP-70")  # diambil -> utang tukang (harga beli 500rb)
+    o = await osvc.create_order(c.s, OrderIn(no_order="SHP-71", saluran_id=c.shopee.id, produk_id=lampu.id, pemasok_id=sup.id))
+    await osvc.ubah_status_order(c.s, o.id, OrderStatusIn(status="diterima", tanggal=date(2026, 9, 21)))
+    n = await keu.neraca(c.s, date(2026, 9, 30))
+    jenis = {b.label: (b.jumlah, [r.label for r in b.rincian]) for b in n.utang_per_jenis}
+    assert jenis == {"Tukang": (D("500000"), ["Pak Budi"]), "Supplier": (D("60000"), ["Toko Lampu"])}
+    assert sum(b.jumlah for b in n.utang_pemasok) == D("560000")  # daftar lama tetap ada, total sama

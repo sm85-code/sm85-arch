@@ -266,10 +266,12 @@ async def _harga_dari_file(session: AsyncSession, orders: list[BlOrder]) -> dict
 
 
 def _baris_margin(label: str, d: dict) -> MarginBaris:
-    laba = d["penjualan"] - d["potongan"] - d["hpp"]
+    kotor = d["penjualan"] - d["hpp"]  # margin kotor
+    laba = kotor - d["potongan"]  # margin bersih saluran
     return MarginBaris(
         label=label, qty=d["qty"], jumlah_order=d["order"], penjualan=d["penjualan"], potongan=d["potongan"], hpp=d["hpp"],
-        laba_kotor=laba, margin_persen=_margin(laba, d["penjualan"]), biaya_proses=d["proses"],
+        laba_kotor=laba, margin_persen=_margin(laba, d["penjualan"]), margin_kotor=kotor,
+        margin_kotor_persen=_margin(kotor, d["penjualan"]), biaya_proses=d["proses"],
     )
 
 
@@ -347,19 +349,42 @@ async def _piutang_reseller(session: AsyncSession, per: date) -> Decimal:
     return sum((tagihan_order(o) for o in orders), _NOL)
 
 
-async def _utang_pemasok(session: AsyncSession, per: date) -> dict[str, Decimal]:
+LABEL_JENIS_PEMASOK = {"tukang_kayu": "Tukang", "supplier": "Supplier"}
+
+
+async def _utang_pemasok_rinci(session: AsyncSession, per: date) -> list[tuple[str, str, Decimal]]:
+    """(jenis, nama, utang) per tukang/supplier yang barangnya sudah diambil/diterima dan belum dibayar."""
     dibayar = select(BlPembayaranPemasokItem.order_id).join(
         BlPembayaranPemasok, BlPembayaranPemasok.id == BlPembayaranPemasokItem.pembayaran_id
     ).where(BlPembayaranPemasok.dibatalkan.is_(False), BlPembayaranPemasok.tanggal <= per)
     rows = (
         await session.execute(
-            select(BlPemasok.nama, func.sum(BlOrder.biaya_pokok)).join(BlPemasok, BlPemasok.id == BlOrder.pemasok_id).where(
+            select(BlPemasok.jenis, BlPemasok.nama, func.sum(BlOrder.biaya_pokok)).join(BlPemasok, BlPemasok.id == BlOrder.pemasok_id).where(
                 BlOrder.status != STATUS_BATAL, BlOrder.tgl_diambil.is_not(None), BlOrder.tgl_diambil <= per,
                 BlOrder.biaya_pokok > 0, BlOrder.id.not_in(dibayar),
-            ).group_by(BlPemasok.nama)
+            ).group_by(BlPemasok.jenis, BlPemasok.nama)
         )
     ).all()
-    return {n: Decimal(str(j)) for n, j in rows}
+    return [(jenis, n, Decimal(str(j))) for jenis, n, j in rows]
+
+
+async def _utang_pemasok(session: AsyncSession, per: date) -> dict[str, Decimal]:
+    hasil: dict[str, Decimal] = defaultdict(lambda: _NOL)
+    for _jenis, nama, jml in await _utang_pemasok_rinci(session, per):
+        hasil[nama] += jml
+    return dict(hasil)
+
+
+def _utang_per_jenis(rinci: list[tuple[str, str, Decimal]]) -> list[BarisNilai]:
+    """Utang dikelompokkan Tukang / Supplier (rincian per nama). Harga beli tetap satu angka per order."""
+    grup: dict[str, dict[str, Decimal]] = defaultdict(lambda: defaultdict(lambda: _NOL))
+    for jenis, nama, jml in rinci:
+        grup[LABEL_JENIS_PEMASOK.get(jenis, jenis)][nama] += jml
+    return [
+        BarisNilai(label=label, jumlah=sum(d.values(), _NOL), rincian=_urut(d))
+        for label in ("Tukang", "Supplier", *sorted(set(grup) - {"Tukang", "Supplier"}))
+        if (d := grup.get(label)) and sum(d.values(), _NOL)
+    ]
 
 
 async def _talangan_per_orang(session: AsyncSession, per: date) -> dict[str, Decimal]:
@@ -408,7 +433,10 @@ async def neraca(session: AsyncSession, per_tanggal: date | None = None) -> Nera
     belum = [BarisNilai(label=g.nama, jumlah=g.total_perkiraan_cair) for g in bc.per_saluran]
     total_aset = sum((b.jumlah for b in aset_kas), _NOL) + piutang + bc.total_perkiraan_cair
 
-    utang = await _utang_pemasok(session, per)
+    rinci_utang = await _utang_pemasok_rinci(session, per)
+    utang: dict[str, Decimal] = defaultdict(lambda: _NOL)
+    for _jenis, nama, jml in rinci_utang:
+        utang[nama] += jml
     gaji = await _dana_gaji_belum_dibayar(session, per)
     talangan = await _talangan_per_orang(session, per)
     total_kewajiban = sum(utang.values(), _NOL) + gaji + sum(talangan.values(), _NOL)
@@ -429,7 +457,7 @@ async def neraca(session: AsyncSession, per_tanggal: date | None = None) -> Nera
     total_modal = sum((m.jumlah for m in modal), _NOL)
     return NeracaOut(
         per_tanggal=per, aset_kas=aset_kas, piutang_penjual_lain=piutang, belum_cair=belum, total_aset=total_aset,
-        utang_pemasok=_urut(utang), dana_gaji_belum_dibayar=gaji, talangan=_urut(talangan), total_kewajiban=total_kewajiban,
+        utang_pemasok=_urut(utang), utang_per_jenis=_utang_per_jenis(rinci_utang), dana_gaji_belum_dibayar=gaji, talangan=_urut(talangan), total_kewajiban=total_kewajiban,
         modal=modal, total_modal=total_modal, selisih=total_aset - total_kewajiban - total_modal,
     )
 
