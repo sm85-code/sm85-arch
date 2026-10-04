@@ -224,7 +224,11 @@ async def seed_bumi_lestari(session: AsyncSession) -> dict[str, str]:
     engine = bl_database.engine
     if engine is None:
         raise RuntimeError("DATABASE_URL_BUMI_LESTARI is not configured")
-    await _create_schema(engine)
+    # Skema dibuat/diperbaiki di startup (ensure_bumi_lestari_schema). Jangan jalankan DDL di sini:
+    # sesi request ini sudah membaca bl_users (cek login) dan menahan lock, sehingga ALTER TABLE di
+    # koneksi lain menunggu selamanya (seed-now macet). Di luar Postgres (tes SQLite) tetap aman.
+    if engine.dialect.name != "postgresql":
+        await _create_schema(engine)
 
     email = (os.getenv("BUMI_LESTARI_SEED_OWNER_EMAIL") or DEFAULT_OWNER_EMAIL).strip()
     owner = (await session.execute(select(BlUser).where(BlUser.email == email))).scalar_one_or_none()
