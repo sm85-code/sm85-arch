@@ -979,7 +979,8 @@ async def terima_push_shopee(
 
         await services.catat_push(session, valid=False, ringkas=ringkas, hasil="probe", catatan=_json.dumps(diagnosis), badan=badan[:500])
         await session.commit()
-        return {"ok": True, "catatan": "Bukan push Shopee; tidak diproses"}
+        # Verify only passes on 2xx with an empty body (developer guide 18).
+        return Response(status_code=status.HTTP_200_OK)
     if not valid:
         import json as _json
 
@@ -993,7 +994,7 @@ async def terima_push_shopee(
         latar.add_task(_proses_push_di_latar, ringkas["shop_id"])
     else:
         await services.catat_push(session, valid=True, ringkas=ringkas, hasil="dicatat", badan=badan)
-    return {"ok": True}
+    return Response(status_code=status.HTTP_200_OK)
 
 
 @marketplace_erp_router.get("/shopee/push/log")
