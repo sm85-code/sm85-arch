@@ -391,7 +391,17 @@ async def update_produk(session: AsyncSession, produk_id: str, payload: ProdukPa
 
 
 async def delete_produk(session: AsyncSession, produk_id: str) -> None:
+    """Delete a product with its stock history, reservations and listings. Order lines that pointed at it keep
+    their text and simply lose the link. (Done in bulk: letting the ORM delete the product would try to detach
+    the stock ledger rows instead, and ``produk_id`` there is NOT NULL.)"""
     produk = await get_produk(session, produk_id)
+    listing_ids = select(ProdukListing.id).where(ProdukListing.produk_id == produk_id)
+    await session.execute(update(ItemPesanan).where(ItemPesanan.listing_id.in_(listing_ids)).values(listing_id=None))
+    await session.execute(update(ItemPesanan).where(ItemPesanan.produk_id == produk_id).values(produk_id=None))
+    await session.execute(delete(StokLedger).where(StokLedger.produk_id == produk_id))
+    await session.execute(delete(StokReservasi).where(StokReservasi.produk_id == produk_id))
+    await session.execute(delete(ProdukListing).where(ProdukListing.produk_id == produk_id))
+    await session.refresh(produk)
     await session.delete(produk)
     await session.flush()
 
