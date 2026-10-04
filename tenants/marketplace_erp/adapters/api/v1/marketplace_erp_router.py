@@ -942,6 +942,12 @@ async def _proses_push_di_latar(shop_id: str) -> None:
         logger.exception("sinkron karena push gagal (toko %s)", shop_id)
 
 
+@marketplace_erp_router.get("/shopee/push")
+async def cek_penerima_push_shopee():
+    """Reachability check for the callback URL (open it in a browser): says nothing about keys or data."""
+    return {"ok": True, "pesan": "Penerima push Shopee aktif"}
+
+
 @marketplace_erp_router.post("/shopee/push")
 async def terima_push_shopee(
     request: Request,
@@ -957,10 +963,12 @@ async def terima_push_shopee(
     ringkas = shopee_push.ringkas(push or {})
     urls = shopee_push.kandidat_url(str(request.url), {k.lower(): v for k, v in request.headers.items()})
     valid, diagnosis = shopee_push.verifikasi(shopee_push.push_key(), urls, badan, request.headers.get("authorization"))
-    if push is None:
-        await services.catat_push(session, valid=False, ringkas=ringkas, hasil="bukan_json", badan=badan)
+    if ringkas["kode"] is None:
+        # Not a push (an empty or odd body): what Open Platform's "Verify" button or a browser probe sends. It changes
+        # nothing, so it is answered 200 (the URL is reachable) and logged; a real push always carries a code.
+        await services.catat_push(session, valid=False, ringkas=ringkas, hasil="probe", badan=badan[:500])
         await session.commit()
-        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Isi push bukan JSON")
+        return {"ok": True, "catatan": "Bukan push Shopee; tidak diproses"}
     if not valid:
         import json as _json
 

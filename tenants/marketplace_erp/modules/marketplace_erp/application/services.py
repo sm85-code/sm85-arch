@@ -2290,11 +2290,16 @@ async def ringkasan_settlement_pesanan(
 # --- Shopee Push Mechanism (webhook) ----------------------------------------------
 
 PUSH_SIMPAN_HARI = 14
+PUSH_SIMPAN_MAKS = 2000
 
 
 async def catat_push(session: AsyncSession, *, valid: bool, ringkas: dict, hasil: str, catatan: str = "", badan: bytes = b"") -> ShopeePush:
     """Write one line of the push log and drop lines older than PUSH_SIMPAN_HARI."""
-    await session.execute(delete(ShopeePush).where(ShopeePush.diterima_at < datetime.now(timezone.utc) - timedelta(days=PUSH_SIMPAN_HARI)))
+    await session.execute(
+        delete(ShopeePush)
+        .where(ShopeePush.diterima_at < datetime.now(timezone.utc) - timedelta(days=PUSH_SIMPAN_HARI))
+        .execution_options(synchronize_session=False)
+    )
     baris = ShopeePush(
         valid=valid,
         kode=ringkas.get("kode"),
@@ -2308,6 +2313,14 @@ async def catat_push(session: AsyncSession, *, valid: bool, ringkas: dict, hasil
     )
     session.add(baris)
     await session.flush()
+    # The endpoint is public: bound the log by count as well as by age.
+    jumlah = int((await session.execute(select(func.count()).select_from(ShopeePush))).scalar_one())
+    if jumlah > PUSH_SIMPAN_MAKS:
+        batas = (
+            await session.execute(select(ShopeePush.diterima_at).order_by(ShopeePush.diterima_at.desc()).offset(PUSH_SIMPAN_MAKS - 1).limit(1))
+        ).scalar_one_or_none()
+        if batas is not None:
+            await session.execute(delete(ShopeePush).where(ShopeePush.diterima_at < batas).execution_options(synchronize_session=False))
     return baris
 
 
