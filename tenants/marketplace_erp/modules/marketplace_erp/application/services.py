@@ -2418,6 +2418,27 @@ async def simpan_iklan_harian_toko(session: AsyncSession, akun: AkunMarketplace,
 IKLAN_HARI_MAKS = 180
 
 
+
+async def saran_iklan(session: AsyncSession, akun: AkunMarketplace, item_id: int) -> dict:
+    from tenants.marketplace_erp.modules.marketplace_erp.infrastructure.adapters import erp_shopee
+    return await erp_shopee.iklan_saran(session, akun, item_id)
+
+
+async def buat_iklan_produk(session: AsyncSession, akun: AkunMarketplace, body: dict) -> dict:
+    from tenants.marketplace_erp.modules.marketplace_erp.infrastructure.adapters import erp_shopee
+    return await erp_shopee.buat_iklan_produk(session, akun, body)
+
+
+async def ubah_iklan_produk(session: AsyncSession, akun: AkunMarketplace, body: dict) -> dict:
+    from tenants.marketplace_erp.modules.marketplace_erp.infrastructure.adapters import erp_shopee
+    return await erp_shopee.ubah_iklan_produk(session, akun, body)
+
+
+async def ubah_kata_kunci_iklan(session: AsyncSession, akun: AkunMarketplace, body: dict) -> dict:
+    from tenants.marketplace_erp.modules.marketplace_erp.infrastructure.adapters import erp_shopee
+    return await erp_shopee.ubah_kata_kunci_iklan(session, akun, body)
+
+
 async def sinkron_iklan_akun(session: AsyncSession, akun: AkunMarketplace, hari: int = 30) -> dict:
     """Pull the last ``hari`` days (1..180, Shopee keeps 6 months) of this shop's Shopee Ads performance."""
     from tenants.marketplace_erp.modules.marketplace_erp.infrastructure.adapters import erp_shopee
