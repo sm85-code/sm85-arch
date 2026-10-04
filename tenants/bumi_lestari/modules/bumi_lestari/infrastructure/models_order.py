@@ -86,6 +86,8 @@ class BlSaluran(BumiLestariBase):
     jenis: Mapped[str] = mapped_column(String(16), nullable=False)
     # Akun kas tujuan uang saluran ini (mis. Saldo Shopee). Dipakai pada T3.
     akun_id: Mapped[Optional[str]] = mapped_column(ForeignKey("bl_akun_kas.id"), nullable=True)
+    # Toko marketplace_erp yang pencairannya masuk saluran ini. Kosong = tidak ditarik.
+    akun_erp_id: Mapped[Optional[str]] = mapped_column(String(64), nullable=True, index=True)
     aktif: Mapped[bool] = mapped_column(Boolean, nullable=False, default=True)
 
 

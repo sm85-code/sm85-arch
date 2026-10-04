@@ -1,7 +1,7 @@
 """HTTP: format file penghasilan (Data master, admin) & pencairan marketplace/iPaymu (spesifikasi 8.3, 10.6)."""
 from __future__ import annotations
 
-from fastapi import APIRouter, Depends, File, Form, HTTPException, UploadFile, status
+from fastapi import APIRouter, Body, Depends, File, Form, HTTPException, UploadFile, status
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from tenants.bumi_lestari.modules.bumi_lestari.application import pencairan_services as svc
@@ -138,3 +138,31 @@ async def batal(unggahan_id: str, payload: BatalIn, session: AsyncSession = _db(
 @pencairan_router.post("/pencairan/baris/{baris_id}/hubungkan", response_model=PencairanBarisOut)
 async def hubungkan(baris_id: str, payload: HubungkanIn, session: AsyncSession = _db(), user: BlUser = _guard()):
     return await svc.hubungkan(session, user, baris_id, payload.order_id)
+
+
+@pencairan_router.get("/pencairan/erp/toko")
+async def toko_erp(_: BlUser = _guard()):
+    """Toko Shopee di ERP, plus saran mana yang masuk Bumi Lestari."""
+    from tenants.bumi_lestari.modules.bumi_lestari.application import erp_pencairan
+    from tenants.marketplace_erp.modules.marketplace_erp.infrastructure.database import SessionLocal
+
+    async with SessionLocal() as erp:
+        return await erp_pencairan.daftar_toko(erp)
+
+
+@pencairan_router.post("/pencairan/erp/pasang")
+async def pasang_erp(payload: dict = Body(), session: AsyncSession = _db(), _: BlUser = _guard()):
+    from tenants.bumi_lestari.modules.bumi_lestari.application import erp_pencairan
+
+    saluran = await erp_pencairan.pasangkan(session, payload["saluran_id"], payload.get("akun_erp_id"))
+    return {"saluran_id": saluran.id, "nama": saluran.nama, "akun_erp_id": saluran.akun_erp_id}
+
+
+@pencairan_router.post("/pencairan/erp/tarik")
+async def tarik_erp(hari: int = 15, session: AsyncSession = _db(), user: BlUser = _guard()):
+    """Salin pencairan toko yang sudah dipasangkan menjadi draf. Tidak mengirim ke laporan."""
+    from tenants.bumi_lestari.modules.bumi_lestari.application import erp_pencairan
+    from tenants.marketplace_erp.modules.marketplace_erp.infrastructure.database import SessionLocal
+
+    async with SessionLocal() as erp:
+        return await erp_pencairan.tarik(session, erp, user, hari=hari)
