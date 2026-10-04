@@ -906,6 +906,7 @@ async def list_katalog_shopee(
     akun_id: str | None = Query(None, description="kosong = semua toko"),
     q: str | None = Query(None, max_length=100),
     belum_dikirim: bool = Query(False),
+    urut: str = Query("toko", description="toko | nama | harga_naik | harga_turun | stok | terbaru"),
     halaman: int = Query(1, ge=1),
     per_halaman: int = Query(48, ge=1, le=100),
     session: AsyncSession = Depends(get_db_marketplace_erp),
@@ -913,7 +914,7 @@ async def list_katalog_shopee(
 ):
     """Products pulled from the Shopee shops, each row tagged with its shop. Never merged across shops."""
     return await services.list_katalog_shopee(
-        session, akun_id=akun_id, q=q, belum_dikirim=belum_dikirim, halaman=halaman, per_halaman=per_halaman
+        session, akun_id=akun_id, q=q, belum_dikirim=belum_dikirim, urut=urut, halaman=halaman, per_halaman=per_halaman
     )
 
 

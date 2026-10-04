@@ -190,3 +190,27 @@ async def test_sending_to_the_store_makes_a_draft_with_zero_stock_photos_and_var
     assert lagi["hasil"][0]["hasil"] == "dilewati"
     await store_session.refresh(p)
     assert p.nama == "Meja (diedit di admin)"
+
+
+@pytest.mark.asyncio
+async def test_list_rows_carry_what_is_needed_to_compare_and_can_be_sorted(session):
+    a, b = await _toko(session, "Toko A"), await _toko(session, "Toko B")
+    panjang = "x" * 500
+    await services.simpan_katalog_shopee(
+        session, a, [erp_shopee.normalisasi_katalog(_item(1, "Kursi", 300, description=panjang)), erp_shopee.normalisasi_katalog(_item(2, "Alas", 100))]
+    )
+    await services.simpan_katalog_shopee(session, b, [erp_shopee.normalisasi_katalog(_item(9, "Kursi", 200))])
+
+    baris = (await services.list_katalog_shopee(session, urut="nama"))["items"]
+    # Same title from different shops sit next to each other, and the shop is always named.
+    assert [(i["nama"], i["nama_toko"]) for i in baris] == [("Alas", "Toko A"), ("Kursi", "Toko A"), ("Kursi", "Toko B")]
+    kursi_a = baris[1]
+    assert len(kursi_a["deskripsi_ringkas"]) == 300 and kursi_a["berat_gram"] == 350
+    assert kursi_a["foto"] == ["https://img.example/1-1", "https://img.example/1-2"]
+    assert (kursi_a["panjang_cm"], kursi_a["lebar_cm"], kursi_a["tinggi_cm"]) == (Decimal("20"), Decimal("10"), Decimal("5"))
+    assert "deskripsi" not in kursi_a  # the full text only comes with the detail
+
+    murah = (await services.list_katalog_shopee(session, urut="harga_naik"))["items"]
+    assert [i["harga_min"] for i in murah] == [Decimal("100"), Decimal("200"), Decimal("300")]
+    with pytest.raises(Exception):
+        await services.list_katalog_shopee(session, urut="acak")

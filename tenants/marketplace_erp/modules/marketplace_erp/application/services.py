@@ -661,6 +661,11 @@ async def simpan_katalog_shopee(session: AsyncSession, akun: AkunMarketplace, en
     return {"katalog_baru": baru, "katalog_diperbarui": diperbarui, "katalog_dihapus": dihapus}
 
 
+KATALOG_FOTO_DAFTAR = 5
+KATALOG_DESKRIPSI_DAFTAR = 300
+KATALOG_URUTAN = ("toko", "nama", "harga_naik", "harga_turun", "stok", "terbaru")
+
+
 def katalog_out(k: KatalogShopee, nama_toko: str | None = None, *, lengkap: bool = False) -> dict:
     import json
 
@@ -681,17 +686,17 @@ def katalog_out(k: KatalogShopee, nama_toko: str | None = None, *, lengkap: bool
         "status": k.status,
         "dikirim_toko_id": k.dikirim_toko_id,
         "dikirim_at": k.dikirim_at,
+        # Enough to compare rows side by side in the list view; the full text and photos are in the detail.
+        "foto": foto[:KATALOG_FOTO_DAFTAR],
+        "deskripsi_ringkas": (k.deskripsi or "")[:KATALOG_DESKRIPSI_DAFTAR],
+        "berat_gram": k.berat_gram,
+        "panjang_cm": k.panjang_cm,
+        "lebar_cm": k.lebar_cm,
+        "tinggi_cm": k.tinggi_cm,
+        "diambil_at": k.diambil_at,
     }
     if lengkap:
-        out.update(
-            deskripsi=k.deskripsi,
-            foto=foto,
-            varian=json.loads(k.varian_json or "[]"),
-            berat_gram=k.berat_gram,
-            panjang_cm=k.panjang_cm,
-            lebar_cm=k.lebar_cm,
-            tinggi_cm=k.tinggi_cm,
-        )
+        out.update(deskripsi=k.deskripsi, foto=foto, varian=json.loads(k.varian_json or "[]"))
     return out
 
 
@@ -701,10 +706,22 @@ async def list_katalog_shopee(
     akun_id: str | None = None,
     q: str | None = None,
     belum_dikirim: bool = False,
+    urut: str = "toko",
     halaman: int = 1,
     per_halaman: int = 48,
 ) -> dict:
-    """Catalogue rows across all shops (``akun_id`` None) or one shop, newest pull first, with shop name."""
+    """Catalogue rows across all shops (``akun_id`` None) or one shop, with shop name. ``urut`` picks the order
+    (by name puts the same title from different shops next to each other, for comparing)."""
+    if urut not in KATALOG_URUTAN:
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=f"urut harus salah satu dari {KATALOG_URUTAN}")
+    urutan = {
+        "toko": (AkunMarketplace.nama_toko, KatalogShopee.nama),
+        "nama": (func.lower(KatalogShopee.nama), AkunMarketplace.nama_toko),
+        "harga_naik": (KatalogShopee.harga_min.asc(), func.lower(KatalogShopee.nama)),
+        "harga_turun": (KatalogShopee.harga_min.desc(), func.lower(KatalogShopee.nama)),
+        "stok": (KatalogShopee.stok_shopee.desc(), func.lower(KatalogShopee.nama)),
+        "terbaru": (KatalogShopee.diambil_at.desc(), func.lower(KatalogShopee.nama)),
+    }[urut]
     cond = []
     if akun_id:
         cond.append(KatalogShopee.akun_id == akun_id)
@@ -718,7 +735,7 @@ async def list_katalog_shopee(
         select(KatalogShopee, AkunMarketplace.nama_toko)
         .join(AkunMarketplace, AkunMarketplace.id == KatalogShopee.akun_id)
         .where(*cond)
-        .order_by(AkunMarketplace.nama_toko, KatalogShopee.nama, KatalogShopee.id)
+        .order_by(*urutan, KatalogShopee.id)
         .offset((max(halaman, 1) - 1) * per_halaman)
         .limit(per_halaman)
     )
