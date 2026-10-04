@@ -118,11 +118,36 @@ async def test_without_a_configured_key_nothing_is_accepted(session, monkeypatch
 
 
 @pytest.mark.asyncio
-async def test_a_body_that_is_not_json_is_a_400(session, monkeypatch):
+async def test_a_probe_without_a_push_code_is_answered_200_logged_and_does_nothing(session, monkeypatch):
+    """What the Verify button of Open Platform (or a browser) sends: reachable, but never processed."""
+    monkeypatch.setenv("SHOPEE_PUSH_KEY", KEY)
+    for badan in (b"", b"halo", b"[1]", b'{"hello": 1}'):
+        latar = BackgroundTasks()
+        out = await router.terima_push_shopee(_request(badan, None), latar, session)
+        assert out["ok"] is True and latar.tasks == []
+    log = await services.list_push(session)
+    assert len(log) == 4 and {r["hasil"] for r in log} == {"probe"} and not any(r["valid"] for r in log)
+
+
+@pytest.mark.asyncio
+async def test_a_push_shaped_body_still_needs_a_valid_signature(session, monkeypatch):
     monkeypatch.setenv("SHOPEE_PUSH_KEY", KEY)
     with pytest.raises(HTTPException) as exc:
-        await router.terima_push_shopee(_request(b"halo", "x"), BackgroundTasks(), session)
-    assert exc.value.status_code == 400 and (await services.list_push(session))[0]["hasil"] == "bukan_json"
+        await router.terima_push_shopee(_request(_body(), None), BackgroundTasks(), session)
+    assert exc.value.status_code == 401
+
+
+@pytest.mark.asyncio
+async def test_the_browser_check_says_the_receiver_is_up():
+    assert (await router.cek_penerima_push_shopee())["ok"] is True
+
+
+@pytest.mark.asyncio
+async def test_the_push_log_is_also_bounded_by_count(session, monkeypatch):
+    monkeypatch.setattr(services, "PUSH_SIMPAN_MAKS", 5)
+    for _ in range(9):
+        await services.catat_push(session, valid=False, ringkas={}, hasil="probe")
+    assert len(await services.list_push(session)) <= 5
 
 
 @pytest.mark.asyncio
