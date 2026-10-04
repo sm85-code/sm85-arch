@@ -79,10 +79,12 @@ def test_near_variants_made_with_the_same_secret_are_accepted_and_other_keys_are
     assert shopee_push.verifikasi(KEY, [URL], body, mac(KEY.encode(), URL.encode() + body))[0]  # no pipe
     hex_key = "ab" * 16
     assert shopee_push.verifikasi(hex_key, [URL], body, mac(bytes.fromhex(hex_key), URL.encode() + b"|" + body))[0]  # raw bytes
-    # signed with the app partner key: NOT accepted, but the diagnosis says which key Shopee used
+    # App partner key is the key the developer guide says to use, so it is accepted.
     sah = shopee_push.tanda_tangan("kunci-partner", URL, body)
     ok, diag = shopee_push.verifikasi(KEY, [URL], body, sah, kunci_lain={"partner_key": "kunci-partner"})
-    assert not ok and "partner_key" in diag["cocok_kunci_lain"] and "kunci-partner" not in json.dumps(diag)
+    assert ok and "partner_key" in diag["cocok"] and "kunci-partner" not in json.dumps(diag)
+    ok, diag = shopee_push.verifikasi("", [URL], body, sah, kunci_lain={"partner_key": "kunci-partner"})
+    assert ok and diag["ada_key"] is True
 
 
 def test_callback_url_candidates_cover_the_proxy_and_the_configured_url(monkeypatch):
@@ -106,7 +108,7 @@ async def test_valid_order_push_is_logged_and_starts_the_pull(session, monkeypat
     body = _body()
     latar = BackgroundTasks()
     out = await router.terima_push_shopee(_request(body, shopee_push.tanda_tangan(KEY, URL, body)), latar, session)
-    assert out == {"ok": True}
+    assert out.status_code == 200 and out.body == b""
     assert [(t.func.__name__, t.args) for t in latar.tasks] == [("_proses_push_di_latar", ("727720655",))]
     log = await services.list_push(session)
     assert len(log) == 1 and log[0]["valid"] is True and log[0]["hasil"] == "diproses" and log[0]["order_sn"] == "220810QSK8S7BX"
@@ -135,6 +137,8 @@ async def test_a_wrong_signature_is_rejected_logged_with_a_diagnosis_and_starts_
 @pytest.mark.asyncio
 async def test_without_a_configured_key_nothing_is_accepted(session, monkeypatch):
     monkeypatch.delenv("SHOPEE_PUSH_KEY", raising=False)
+    from tenants.marketplace_erp.modules.marketplace_erp.infrastructure.adapters import erp_shopee
+    monkeypatch.setattr(erp_shopee, "SHOPEE_PARTNER_KEY", "")
     body = _body()
     with pytest.raises(HTTPException) as exc:
         await router.terima_push_shopee(_request(body, shopee_push.tanda_tangan(KEY, URL, body)), BackgroundTasks(), session)
@@ -148,7 +152,7 @@ async def test_a_probe_without_a_push_code_is_answered_200_logged_and_does_nothi
     for badan in (b"", b"halo", b"[1]", b'{"hello": 1}', b'{"code": 0, "data": {}, "timestamp": 1}'):  # code 0 = Verify
         latar = BackgroundTasks()
         out = await router.terima_push_shopee(_request(badan, None), latar, session)
-        assert out["ok"] is True and latar.tasks == []
+        assert out.status_code == 200 and out.body == b"" and latar.tasks == []
     log = await services.list_push(session)
     assert len(log) == 5 and {r["hasil"] for r in log} == {"probe"} and not any(r["valid"] for r in log)
 

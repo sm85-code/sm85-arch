@@ -5,9 +5,9 @@ Facts from the Open Platform docs (push category + each push's page): every push
 after 5 min, 30 min and 3 h when it does not get a success; order_status_push is code 3, order_trackingno_push 4,
 shop authorization 1, authorization cancelled 2, authorization expiry 12, return updates 29.
 
-The Authorization header is the HMAC-SHA256 (hex) of ``<callback url>|<raw body>`` with the Live Push Partner Key.
-That scheme is checked against Shopee's Test Push (every verification attempt is logged, see ``diagnosis``), so a
-mismatch shows up in the push log instead of silently dropping events.
+The Authorization header is the HMAC-SHA256 (hex) of ``<callback url>|<raw body>`` with the App partner key
+(Open Platform developer guide 18). A separate SHOPEE_PUSH_KEY is accepted too when set. The raw body is used
+as received; it is not re-serialized. Every attempt is logged (see ``diagnosis``).
 """
 from __future__ import annotations
 
@@ -99,33 +99,30 @@ def _kunci_varian(key: str) -> dict[str, bytes]:
 def verifikasi(
     key: str, urls: list[str], body: bytes, authorization: str | None, kunci_lain: dict[str, str] | None = None
 ) -> tuple[bool, dict[str, Any]]:
-    """(valid, diagnosis). A push is valid when its Authorization is the HMAC-SHA256 (hex) of ``<url>|<body>`` (the
-    documented form) made with the push key; a few near variants made with the SAME secret key are accepted too (a
-    signature needs the secret either way). ``kunci_lain`` (e.g. the app partner key) is only tried to tell which
-    key Shopee used: a match there is reported in the diagnosis but never accepted. The diagnosis holds the first
-    8 characters of signatures, never a key."""
-    diagnosis: dict[str, Any] = {"ada_key": bool(key), "ada_authorization": bool(authorization), "url_dicoba": urls}
+    """(valid, diagnosis). A push is valid when its Authorization is the HMAC-SHA256 (hex) of ``<url>|<body>``
+    (developer guide 18) made with the App partner key or SHOPEE_PUSH_KEY. Near variants of the same secret
+    (trailing slash, body only) are accepted too. The diagnosis holds the first 8 characters of signatures, never a key."""
+    kunci = {}
     if key:
-        # So the owner can compare with the key shown in Open Platform without the key itself being logged.
+        kunci["push_key"] = key
+    for label, lain in (kunci_lain or {}).items():
+        if lain:
+            kunci[label] = lain
+    diagnosis: dict[str, Any] = {"ada_key": bool(kunci), "ada_authorization": bool(authorization), "url_dicoba": urls}
+    if key:
         diagnosis["kunci_server"] = sidik_jari_kunci(key)
-    if not key or not authorization:
+    if not kunci or not authorization:
         return False, diagnosis
     diterima = authorization.strip().lower()
     diagnosis["diterima"] = diterima[:8]
-    diagnosis["hitung"] = {urls[0]: tanda_tangan(key, urls[0], body)[:8]} if urls else {}
-    for nama_kunci, kb in _kunci_varian(key).items():
-        for nama, sah in _skema(kb, urls, body).items():
-            if hmac.compare_digest(sah, diterima):
-                diagnosis["cocok"] = f"kunci {nama_kunci}, {nama}"
-                return True, diagnosis
-    for label, lain in (kunci_lain or {}).items():
-        if not lain:
-            continue
-        for nama_kunci, kb in _kunci_varian(lain).items():
+    utama = key or next(iter(kunci.values()))
+    diagnosis["hitung"] = {urls[0]: tanda_tangan(utama, urls[0], body)[:8]} if urls else {}
+    for label, rahasia in kunci.items():
+        for nama_kunci, kb in _kunci_varian(rahasia).items():
             for nama, sah in _skema(kb, urls, body).items():
                 if hmac.compare_digest(sah, diterima):
-                    diagnosis["cocok_kunci_lain"] = f"{label} (kunci {nama_kunci}), {nama}"
-                    return False, diagnosis
+                    diagnosis["cocok"] = f"{label} (kunci {nama_kunci}), {nama}"
+                    return True, diagnosis
     return False, diagnosis
 
 
