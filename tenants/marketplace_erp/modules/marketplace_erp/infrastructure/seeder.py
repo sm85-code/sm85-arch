@@ -52,6 +52,8 @@ _SELF_HEAL_COLUMNS = (
     "ALTER TABLE IF EXISTS mpe_pesanan ADD COLUMN IF NOT EXISTS kurir VARCHAR(64) NULL",
     "ALTER TABLE IF EXISTS mpe_pesanan ADD COLUMN IF NOT EXISTS nomor_resi VARCHAR(128) NULL",
     "ALTER TABLE IF EXISTS mpe_pesanan ADD COLUMN IF NOT EXISTS tanggal_kirim TIMESTAMPTZ NULL",
+    "ALTER TABLE IF EXISTS mpe_pesanan ADD COLUMN IF NOT EXISTS dipesan_at TIMESTAMPTZ NULL",
+    "CREATE INDEX IF NOT EXISTS ix_mpe_pesanan_dipesan_at ON mpe_pesanan (dipesan_at)",
     # Product weight/size and lead time.
     "ALTER TABLE IF EXISTS mpe_produk ADD COLUMN IF NOT EXISTS berat_gram INTEGER NOT NULL DEFAULT 0",
     "ALTER TABLE IF EXISTS mpe_produk ADD COLUMN IF NOT EXISTS panjang_cm NUMERIC(8,1) NOT NULL DEFAULT 0",

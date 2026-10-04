@@ -548,6 +548,50 @@ async def remove_staff_akun(
 # --- Tahap 2: Orders OMS -----------------------------------------------------
 
 
+@marketplace_erp_router.get("/pesanan/daftar")
+async def daftar_pesanan(
+    akun_id: str | None = None,
+    tahap: str | None = Query(None, description="belum_bayar | perlu_diproses | menunggu_kurir | dikirim | selesai | dibatalkan"),
+    resi: str | None = Query(None, description="belum | sudah (resi dicetak), hanya pesanan yang resinya bisa dicetak"),
+    q: str | None = Query(None, max_length=100, description="nomor pesanan, pembeli, nomor resi atau nama produk"),
+    dari: datetime | None = None,
+    sampai: datetime | None = None,
+    urut: str = Query("terbaru", description="terbaru | terlama | total_besar | total_kecil"),
+    halaman: int = Query(1, ge=1),
+    per_halaman: int = Query(50, ge=1, le=200),
+    session: AsyncSession = Depends(get_db_marketplace_erp),
+    user: UserMarketplaceErp = Depends(require_roles_marketplace_erp(*OWNER_OR_STAFF)),
+):
+    """Orders for the Pesanan page: filtered, sorted and paged on the server (response: total + one page)."""
+    if akun_id:
+        await pastikan_akses_akun(user, session, akun_id)
+    hasil = await services.daftar_pesanan(
+        session,
+        akun_id=akun_id, akun_diizinkan=await akun_ids_diizinkan(user, session), tahap=tahap, resi=resi, q=q,
+        dari=dari, sampai=sampai, urut=urut, halaman=halaman, per_halaman=per_halaman,
+    )
+    hasil["items"] = [PesananOut.model_validate(p) for p in hasil["items"]]
+    return hasil
+
+
+@marketplace_erp_router.get("/pesanan/ringkasan")
+async def ringkasan_pesanan(
+    akun_id: str | None = None,
+    tahap: str | None = None,
+    q: str | None = Query(None, max_length=100),
+    dari: datetime | None = None,
+    sampai: datetime | None = None,
+    session: AsyncSession = Depends(get_db_marketplace_erp),
+    user: UserMarketplaceErp = Depends(require_roles_marketplace_erp(*OWNER_OR_STAFF)),
+):
+    """Counts behind the status and shop filter chips (each row ignores its own filter)."""
+    if akun_id:
+        await pastikan_akses_akun(user, session, akun_id)
+    return await services.ringkasan_pesanan(
+        session, akun_id=akun_id, tahap=tahap, akun_diizinkan=await akun_ids_diizinkan(user, session), q=q, dari=dari, sampai=sampai
+    )
+
+
 @marketplace_erp_router.get("/pesanan", response_model=list[PesananOut])
 async def list_pesanan(
     platform: str | None = None,
@@ -1101,6 +1145,20 @@ async def laporan_ringkas(
     if sampai < dari:
         raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="sampai sebelum dari")
     return await services.laporan_ringkas(session, dari=dari, sampai=sampai, batas_stok_kritis=batas_stok_kritis)
+
+
+@marketplace_erp_router.get("/laporan/dashboard")
+async def laporan_dashboard(
+    dari: datetime = Query(...),
+    sampai: datetime = Query(...),
+    batas_stok_kritis: int = Query(5, ge=0, le=100000),
+    session: AsyncSession = Depends(get_db_marketplace_erp),
+    _: UserMarketplaceErp = Depends(require_roles_marketplace_erp(*OWNER_ONLY)),
+):
+    """The tables of the dashboard (per shop, per stage, best sellers, per day, low stock) for one period."""
+    if sampai < dari:
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="sampai sebelum dari")
+    return await services.laporan_dashboard(session, dari=dari, sampai=sampai, batas_stok_kritis=batas_stok_kritis)
 
 
 # --- Tahap 4: Iklan (ads) -------------------------------------------------------
