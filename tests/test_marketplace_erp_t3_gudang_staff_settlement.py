@@ -54,7 +54,7 @@ async def _akun(session, platform="shopee", nama="Toko A"):
 
 async def _staff(session, email="staff@test.com"):
     return await services.create_user(
-        session, UserCreateIn(nama="Staff", email=email, password="rahasia123", role="staff")
+        session, UserCreateIn(nama="Staff", username=email.split("@")[0], email=email, password="rahasia123", role="staff")
     )
 
 
@@ -159,7 +159,7 @@ async def test_pastikan_akses_akun_rejects_unassigned_shop(session):
 @pytest.mark.asyncio
 async def test_owner_is_never_scoped(session):
     owner = await services.create_user(
-        session, UserCreateIn(nama="Owner2", email="owner2@test.com", password="rahasia123", role="owner")
+        session, UserCreateIn(nama="Owner2", username="owner2", email="owner2@test.com", password="rahasia123", role="owner")
     )
     akun = await _akun(session)
     assert await akun_ids_diizinkan(owner, session) is None

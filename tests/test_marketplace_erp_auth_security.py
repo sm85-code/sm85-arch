@@ -17,6 +17,7 @@ from __future__ import annotations
 from types import SimpleNamespace
 
 import pytest
+from sqlalchemy import select
 import pytest_asyncio
 from fastapi import HTTPException, Response
 from pydantic import ValidationError
@@ -169,7 +170,7 @@ async def test_require_owner_rejects_staff():
 @pytest.mark.asyncio
 async def test_owner_creates_staff_with_forced_password_change(session):
     user = await router_module.create_user(
-        UserCreateIn(nama="Staf Gudang", email="staf@example.com", password="sementara123"),
+        UserCreateIn(nama="Staf Gudang", username="staf.gudang", email="staf@example.com", password="sementara123"),
         session=session, _=SimpleNamespace(role="owner"),
     )
     assert user.role == "staff"
@@ -182,7 +183,7 @@ async def test_owner_creates_staff_with_forced_password_change(session):
 @pytest.mark.asyncio
 async def test_owner_can_create_another_owner(session):
     user = await services.create_user(
-        session, UserCreateIn(nama="Owner 2", email="owner2@example.com", password="sementara123", role="OWNER")
+        session, UserCreateIn(nama="Owner 2", username="owner2", email="owner2@example.com", password="sementara123", role="OWNER")
     )
     assert user.role == "owner"
 
@@ -192,18 +193,18 @@ async def test_create_user_rejects_duplicate_email(session):
     await _make_user(session, email="dup@example.com")
     with pytest.raises(HTTPException) as exc:
         await services.create_user(
-            session, UserCreateIn(nama="Dup", email="dup@example.com", password="sementara123")
+            session, UserCreateIn(nama="Dup", username="dup2", email="dup@example.com", password="sementara123")
         )
     assert exc.value.status_code == 409
 
 
 def test_user_create_schema_validation():
     with pytest.raises(ValidationError):
-        UserCreateIn(nama="X", email="x@example.com", password="short")
+        UserCreateIn(nama="X", username="xxx", email="x@example.com", password="short")
     with pytest.raises(ValidationError):
-        UserCreateIn(nama="X", email="x@example.com", password="panjang1234", role="superadmin")
+        UserCreateIn(nama="X", username="xxx", email="x@example.com", password="panjang1234", role="superadmin")
     with pytest.raises(ValidationError):
-        UserCreateIn(nama="X", email="x@example.com", password="a" * 73)
+        UserCreateIn(nama="X", username="xxx", email="x@example.com", password="a" * 73)
 
 
 @pytest.mark.asyncio
@@ -310,8 +311,11 @@ async def test_me_exposes_must_change_password_via_token(session, monkeypatch):
 async def test_seed_creates_owner_flagged_for_password_change(session):
     result = await seeder.seed_marketplace_erp(session)
     owner = await session.get(UserMarketplaceErp, result["owner_id"])
-    assert owner.role == "owner"
+    assert owner.role == "owner" and owner.username == "owner"
     assert owner.must_change_password is True
+    # ... and the ERP always gets an admin, which must change its temporary password too.
+    admin = (await session.execute(select(UserMarketplaceErp).where(UserMarketplaceErp.role == "admin"))).scalar_one()
+    assert admin.username == "admin" and admin.must_change_password is True
     assert verify_password(seeder.DEFAULT_PASSWORD, owner.password_hash)
 
 

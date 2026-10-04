@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import re
 from datetime import datetime
 from decimal import Decimal
 from typing import Optional
@@ -15,7 +16,9 @@ PASSWORD_MIN_LENGTH = 8
 # releases raise instead of silently truncating) -- cap it explicitly.
 PASSWORD_MAX_BYTES = 72
 
-USER_ROLES = ("owner", "staff")
+# admin (everything, incl. other users' usernames and roles) > owner (everything except that) > staff (scoped to
+# the shops it is assigned to).
+USER_ROLES = ("admin", "owner", "staff")
 
 
 def _validate_new_password(value: str) -> str:
@@ -40,12 +43,18 @@ class RegisterIn(BaseModel):
 
 
 class UserCreateIn(BaseModel):
-    """Owner-only account creation (replaces public self-registration)."""
+    """Account creation by an admin (any role) or an owner (staff). The username is required, the email optional."""
 
     nama: str = Field(min_length=1, max_length=255)
-    email: EmailStr
+    username: str
+    email: Optional[EmailStr] = None
     password: str
     role: str = "staff"
+
+    @field_validator("username")
+    @classmethod
+    def _username_ok(cls, value: str) -> str:
+        return normalisasi_username(value)
 
     @field_validator("password")
     @classmethod
@@ -61,9 +70,44 @@ class UserCreateIn(BaseModel):
         return role
 
 
+USERNAME_RE = re.compile(r"^[a-z0-9][a-z0-9._-]{2,31}$")
+USERNAME_PESAN = "Username 3-32 karakter: huruf, angka, titik, garis bawah, atau strip; diawali huruf atau angka"
+
+
+def normalisasi_username(value: str) -> str:
+    """Usernames are free text but stored lower-case, so "Budi" and "budi" are the same login."""
+    username = (value or "").strip().lower()
+    if not USERNAME_RE.match(username):
+        raise ValueError(USERNAME_PESAN)
+    return username
+
+
+def periksa_format_email(value: str) -> str:
+    """Syntax check only (no network); the deliverability check happens in the service."""
+    from email_validator import EmailNotValidError, validate_email
+
+    try:
+        return validate_email(value.strip(), check_deliverability=False).normalized.lower()
+    except EmailNotValidError as exc:
+        raise ValueError(f"Format email tidak valid: {exc}") from exc
+
+
 class LoginIn(BaseModel):
-    email: EmailStr
+    """Login with the username or the email. ``email`` is still accepted as the field name for older clients."""
+
+    username: Optional[str] = None
+    email: Optional[str] = None
     password: str
+
+    @model_validator(mode="after")
+    def _ada_identitas(self):
+        if not ((self.username or "").strip() or (self.email or "").strip()):
+            raise ValueError("Isi username atau email")
+        return self
+
+    @property
+    def identitas(self) -> str:
+        return ((self.username or "").strip() or (self.email or "").strip()).lower()
 
 
 class ChangePasswordIn(BaseModel):
@@ -76,10 +120,51 @@ class ChangePasswordIn(BaseModel):
         return _validate_new_password(value)
 
 
+class UserUpdateIn(BaseModel):
+    """Admin edits an account: username, display name and role. All optional."""
+
+    nama: Optional[str] = Field(None, min_length=1, max_length=255)
+    username: Optional[str] = None
+    role: Optional[str] = None
+
+    @field_validator("username")
+    @classmethod
+    def _username_ok(cls, value: Optional[str]) -> Optional[str]:
+        return None if value is None else normalisasi_username(value)
+
+    @field_validator("role")
+    @classmethod
+    def _role_ok(cls, value: Optional[str]) -> Optional[str]:
+        if value is None:
+            return None
+        role = value.strip().lower()
+        if role not in USER_ROLES:
+            raise ValueError(f"Role harus salah satu dari: {', '.join(USER_ROLES)}")
+        return role
+
+
+class ProfilUpdateIn(BaseModel):
+    """What a user may change about themselves: display name and contact email (null/empty removes it). Not the
+    username and not the role; sending those is rejected rather than silently ignored. Only the fields sent change."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    nama: Optional[str] = Field(None, min_length=1, max_length=255)
+    email: Optional[str] = None
+
+    @field_validator("email")
+    @classmethod
+    def _email_ok(cls, value: Optional[str]) -> Optional[str]:
+        if value is None or not value.strip():
+            return None
+        return periksa_format_email(value)
+
+
 class UserOut(BaseModel):
     id: str
     nama: str
-    email: str
+    username: Optional[str] = None
+    email: Optional[str] = None
     role: str
     # True for the seeded default-password owner (and accounts an owner
     # created with a temporary password) until they call
