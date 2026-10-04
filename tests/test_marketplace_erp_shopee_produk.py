@@ -123,7 +123,7 @@ async def test_sync_produk_pages_and_batches(live, monkeypatch):
     assert len(rows) == 61 and rows[-1]["id_eksternal"] == "61:5"
     list_calls = [p for path, p in calls if path == erp_shopee._PATH_ITEM_LIST]
     assert [c["offset"] for c in list_calls] == [0, 60]
-    assert list_calls[0]["item_status"] == ["NORMAL", "UNLIST"]
+    assert list_calls[0]["item_status"] == ["NORMAL", "UNLIST", "BANNED", "REVIEWING"]
     assert [len(p["item_id_list"].split(",")) for path, p in calls if path == erp_shopee._PATH_ITEM_BASE] == [50, 11]
 
 
