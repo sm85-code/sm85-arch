@@ -17,7 +17,7 @@ class ProdukIn(BaseModel):
     nama: str = Field(min_length=1, max_length=255)
     jenis_produk: str = "kayu"
     ukuran: str = Field(default="", max_length=64)
-    harga_jual: Decimal = Uang
+    harga_jual: Optional[Decimal] = Field(default=None, ge=0, max_digits=14, decimal_places=2)  # harga acuan, opsional
     biaya_pokok_default: Decimal = Field(default=Decimal("0"), ge=0, max_digits=14, decimal_places=2)
 
 
@@ -37,7 +37,7 @@ class ProdukOut(BaseModel):
     nama: str
     jenis_produk: str
     ukuran: str
-    harga_jual: Decimal
+    harga_jual: Optional[Decimal] = None
     biaya_pokok_default: Decimal
     aktif: bool
     model_config = ConfigDict(from_attributes=True)
@@ -239,12 +239,19 @@ class OrderOut(BaseModel):
 
     @computed_field
     @property
-    def total_penjualan(self) -> Decimal:
-        # (barang + cat/jasa + packing) per unit x qty + biaya proses flat per order.
+    def pendapatan_produk(self) -> Decimal:
+        # Dasar margin produk: (barang + cat/jasa + packing) per unit x qty. Biaya proses TIDAK termasuk.
         # Order polos: cat/jasa = 0, tetapi packing tetap dibayar.
-        return (self.harga_satuan + self.harga_cat_jasa + self.harga_packing) * self.qty + self.biaya_proses
+        return (self.harga_satuan + self.harga_cat_jasa + self.harga_packing) * self.qty
+
+    @computed_field
+    @property
+    def total_penjualan(self) -> Decimal:
+        # Tagihan/penjualan: pendapatan produk + biaya proses flat per order (khusus penjual lain).
+        return self.pendapatan_produk + self.biaya_proses
 
     @computed_field
     @property
     def laba_kotor(self) -> Decimal:
-        return self.total_penjualan - self.potongan_marketplace - self.biaya_pokok
+        # Margin produk: tanpa biaya proses (pendapatan terpisah, lihat laporan HPP & margin).
+        return self.pendapatan_produk - self.potongan_marketplace - self.biaya_pokok

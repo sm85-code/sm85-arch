@@ -175,6 +175,7 @@ _ALTER_POSTGRES = (
     "ALTER TABLE bl_profil ADD COLUMN IF NOT EXISTS porsi_iklan_internal NUMERIC(5, 2) NOT NULL DEFAULT 25",
     "ALTER TABLE bl_profil ADD COLUMN IF NOT EXISTS porsi_iklan_eksternal NUMERIC(5, 2) NOT NULL DEFAULT 75",
     "ALTER TABLE bl_profil ADD COLUMN IF NOT EXISTS budget_iklan_bulanan NUMERIC(14, 2)",
+    "ALTER TABLE bl_produk ALTER COLUMN harga_jual DROP NOT NULL",
     "ALTER TABLE bl_order ADD COLUMN IF NOT EXISTS kolom_tambahan JSONB NOT NULL DEFAULT '{}'",
     "CREATE INDEX IF NOT EXISTS ix_bl_order_kolom_tambahan ON bl_order USING GIN (kolom_tambahan)",
     "ALTER TABLE bl_produk ADD COLUMN IF NOT EXISTS kolom_tambahan JSONB NOT NULL DEFAULT '{}'",

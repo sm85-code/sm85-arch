@@ -49,7 +49,8 @@ class BlProduk(BumiLestariBase):
     nama: Mapped[str] = mapped_column(String(255), nullable=False)
     jenis_produk: Mapped[str] = mapped_column(String(16), nullable=False, default="kayu")
     ukuran: Mapped[str] = mapped_column(String(64), nullable=False, default="")  # mis. 100x20x200
-    harga_jual: Mapped[Decimal] = mapped_column(Numeric(14, 2), nullable=False, default=Decimal("0"))
+    # Harga acuan (opsional): harga marketplace berubah-ubah, nilai final mengikuti file penghasilan.
+    harga_jual: Mapped[Optional[Decimal]] = mapped_column(Numeric(14, 2), nullable=True, default=None)
     biaya_pokok_default: Mapped[Decimal] = mapped_column(Numeric(14, 2), nullable=False, default=Decimal("0"))
     aktif: Mapped[bool] = mapped_column(Boolean, nullable=False, default=True)
     # Referensi produk di sistem asal (store / marketplace_erp); pencocokan utama tetap lewat SKU.

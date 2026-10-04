@@ -107,10 +107,10 @@ async def pratinjau(
 @pencairan_router.post("/pencairan", response_model=PencairanUnggahanOut, status_code=status.HTTP_201_CREATED)
 async def simpan(
     saluran_id: str = Form(...), format_id: str | None = Form(None), file: UploadFile = File(...),
-    session: AsyncSession = _db(), user: BlUser = _guard(),
+    ganti_manual: bool = Form(False), session: AsyncSession = _db(), user: BlUser = _guard(),
 ):
     isi, nama = await _isi(file)
-    return await svc.simpan(session, user, saluran_id, isi, nama, format_id or None)
+    return await svc.simpan(session, user, saluran_id, isi, nama, format_id or None, ganti_manual=ganti_manual)
 
 
 @pencairan_router.post("/pencairan/manual", response_model=PencairanUnggahanOut, status_code=status.HTTP_201_CREATED)

@@ -166,7 +166,7 @@ async def test_reseller_three_price_components_polos_and_color(session, data):
         600000, 100000, 20000, 10000,  # biaya proses flat Rp 10.000 per order dari profil
     )
     assert out.total_penjualan == Decimal("1450000")  # (600rb + 100rb + packing biasa 20rb) x 2 + 10rb
-    assert out.laba_kotor == Decimal("450000")  # - biaya pokok 2 x 500rb
+    assert out.laba_kotor == Decimal("440000")  # margin produk: 1.440rb (tanpa biaya proses) - biaya pokok 2 x 500rb
 
     polos = await svc.create_order(session, order(qty=2, butuh_cat=False))
     assert polos.harga_cat_jasa == 0 and polos.butuh_cat is False

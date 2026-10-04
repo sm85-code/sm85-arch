@@ -355,7 +355,8 @@ async def create_order(session: AsyncSession, payload: OrderIn) -> BlOrder:
         await _get_or_404(session, BlPelanggan, payload.pelanggan_id, "Pelanggan")
     await _cek_pemasok(session, produk, payload.pemasok_id)
 
-    # Harga: nilai eksplisit > harga grosir pelanggan (barang, cat+jasa, biaya proses) > harga katalog.
+    # Harga: nilai eksplisit > harga grosir pelanggan (barang, cat+jasa, biaya proses) > harga acuan produk > 0.
+    # Marketplace/Toko web boleh 0: uangnya mengikuti file penghasilan saat pencairan.
     grosir = None
     if payload.pelanggan_id:
         grosir = (
@@ -367,7 +368,17 @@ async def create_order(session: AsyncSession, payload: OrderIn) -> BlOrder:
         ).scalar_one_or_none()
     harga = payload.harga_satuan
     if harga is None:
-        harga = Decimal(grosir.harga) if grosir else Decimal(produk.harga_jual)
+        if grosir:
+            harga = Decimal(grosir.harga)
+        elif produk.harga_jual is not None:
+            harga = Decimal(produk.harga_jual)
+        elif saluran.jenis == "reseller":
+            raise _bad(
+                f"Harga untuk {produk.nama} belum ada: isi harga satuan, atau atur harga grosir penjual lain ini di Data master",
+                422,
+            )
+        else:
+            harga = Decimal("0")  # mengikuti file penghasilan
     harga_cat_jasa = payload.harga_cat_jasa
     if harga_cat_jasa is None:
         harga_cat_jasa = Decimal(grosir.harga_cat_jasa) if grosir else Decimal("0")
