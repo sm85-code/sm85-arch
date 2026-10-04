@@ -308,8 +308,12 @@ async def _cek_kategori_manual(
     """Aturan kategori entri manual (spesifikasi 6.2, 8.6, 8.7, 8.12)."""
     nama = kategori.nama
     if kategori_core.is_sistem(nama):
+        lewat = (
+            " Pemasukan marketplace/Toko web dicatat lewat Pencairan > Catat manual."
+            if nama in (kategori_core.KATEGORI_PENJUALAN_MARKETPLACE, kategori_core.KATEGORI_PENJUALAN_WEB) else ""
+        )
         raise _bad(
-            f"Kategori '{nama}' diisi otomatis oleh aplikasi dan tidak bisa dipakai di catatan manual",
+            f"Kategori '{nama}' diisi otomatis oleh aplikasi dan tidak bisa dipakai di catatan manual.{lewat}",
             422,
         )
     if _is_staff(user) and not kategori_core.untuk_staf(nama):

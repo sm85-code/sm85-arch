@@ -98,6 +98,10 @@ class BarisStandarOut(BaseModel):
     order_id: Optional[str] = None
     perkiraan_cair: Optional[Decimal] = None  # harapan aplikasi (penjualan − potongan tercatat)
     selisih: Decimal = Decimal("0")
+    # Kode pesanan ini sudah dicatat lewat Catat manual: dilewati, kecuali dipilih "ganti entri manual".
+    dicatat_manual: bool = False
+    manual_unggahan_id: Optional[str] = None
+    manual_bisa_diganti: bool = False  # entri manual masih draf
     alasan: str = ""  # untuk tidak cocok / duplikat
 
 
@@ -128,6 +132,8 @@ class PratinjauOut(BaseModel):
     jumlah_disimpan: int  # baris baru (cocok, selisih, penyesuaian, tidak cocok) yang akan tersimpan
     total_dibukukan: Decimal  # total jumlah cair yang akan dibukukan (tanpa baris tidak cocok)
     neto: bool  # ada baris tanpa rincian biaya (dicatat neto)
+    sudah_manual: int = 0  # baris yang sudah dicatat manual (dilewati)
+    manual_bisa_diganti: int = 0  # dari jumlah itu, yang entri manualnya masih draf (bisa diganti isi file)
 
 
 class PencairanBarisOut(BaseModel):
@@ -165,6 +171,7 @@ class PencairanUnggahanOut(BaseModel):
     status_kirim: str
     kiriman_id: Optional[str]
     diunggah_oleh: str
+    sumber_sistem: Optional[str] = None  # "manual" = Catat manual; kosong = file
     dibatalkan: bool
     alasan_batal: Optional[str]
     created_at: datetime
@@ -176,7 +183,8 @@ class PencairanDetailOut(PencairanUnggahanOut):
 
 
 class PencairanManualIn(BaseModel):
-    """Entri manual per order, khusus Toko web/iPaymu (AB-MP-9)."""
+    """Catat manual per order untuk semua saluran marketplace & Toko web (masa transisi / file belum ada).
+    Dicatat bruto (harga jual + potongan biaya), masuk tabel pencairan sebagai draf, lalu Kirim ke laporan keuangan."""
     saluran_id: str
     kode_pesanan: str = Field(min_length=1, max_length=128)
     tanggal_cair: date

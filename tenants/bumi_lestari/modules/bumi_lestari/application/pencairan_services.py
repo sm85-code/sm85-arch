@@ -11,7 +11,7 @@ from datetime import datetime, timezone
 from decimal import Decimal
 
 from fastapi import HTTPException, status
-from sqlalchemy import func, select
+from sqlalchemy import func, or_, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from tenants.bumi_lestari.modules.bumi_lestari.application import pencairan_format as pf
@@ -43,6 +43,7 @@ from tenants.bumi_lestari.modules.bumi_lestari.application.schemas_pencairan imp
 from tenants.bumi_lestari.modules.bumi_lestari.application.services import pastikan_bulan_terbuka
 from tenants.bumi_lestari.modules.bumi_lestari.infrastructure.models import STATUS_DRAF, BlAkunKas, BlUser
 from tenants.bumi_lestari.modules.bumi_lestari.infrastructure.models_order import (
+    JENIS_SALURAN_CAIR,
     STATUS_BATAL,
     STATUS_CAIR_BELUM,
     STATUS_CAIR_CAIR,
@@ -59,6 +60,8 @@ from tenants.bumi_lestari.modules.bumi_lestari.infrastructure.models_pencairan i
 )
 
 _NOL = Decimal("0")
+SUMBER_MANUAL = "manual"
+NAMA_MANUAL_LAMA = "Entri manual iPaymu"  # entri manual sebelum sumber_sistem dipakai
 DIBUKUKAN = ("cocok", "selisih", "penyesuaian")
 ALASAN_RETUR_FILE = "Retur dari file pencairan"
 
@@ -328,6 +331,8 @@ class Cocok:
     perkiraan: Decimal | None = None
     selisih: Decimal = _NOL
     alasan: str = ""
+    manual_unggahan_id: str | None = None
+    manual_draf: bool = False
 
 
 def kunci_unik(saluran_id: str, b: pf.BarisStandar) -> str:
@@ -351,6 +356,26 @@ async def _grup_order(session: AsyncSession, saluran_id: str, kode: list[str]) -
     return grup
 
 
+async def _sudah_manual(session: AsyncSession, saluran_id: str, kode: list[str]) -> dict[str, tuple[str, str]]:
+    """Kode pesanan (huruf besar) yang sudah dicatat lewat Catat manual -> (unggahan_id, status kirim)."""
+    if not kode:
+        return {}
+    rows = (
+        await session.execute(
+            select(BlPencairanBaris.kode_pesanan, BlPencairanUnggahan.id, BlPencairanUnggahan.status_kirim)
+            .join(BlPencairanUnggahan, BlPencairanUnggahan.id == BlPencairanBaris.unggahan_id)
+            .where(
+                BlPencairanBaris.saluran_id == saluran_id, BlPencairanBaris.dibatalkan.is_(False),
+                BlPencairanBaris.jenis_baris == "pesanan", BlPencairanBaris.status_cocok.in_(DIBUKUKAN),
+                BlPencairanUnggahan.dibatalkan.is_(False),
+                or_(BlPencairanUnggahan.sumber_sistem == SUMBER_MANUAL, BlPencairanUnggahan.nama_file == NAMA_MANUAL_LAMA),
+                func.upper(BlPencairanBaris.kode_pesanan).in_([k.strip().upper() for k in kode]),
+            )
+        )
+    ).all()
+    return {k.strip().upper(): (uid, st) for k, uid, st in rows}
+
+
 def _perkiraan(orders: list[BlOrder]) -> Decimal:
     return sum((OrderOut.model_validate(o).total_penjualan - Decimal(o.potongan_marketplace) for o in orders), _NOL)
 
@@ -369,9 +394,18 @@ async def cocokkan(session: AsyncSession, saluran: BlSaluran, baris: list[pf.Bar
         ).scalars()
     )
     grup = await _grup_order(session, saluran.id, [b.kode_pesanan for b in baris])
+    manual = await _sudah_manual(session, saluran.id, [b.kode_pesanan for b in baris if b.jenis_baris == "pesanan"])
     hasil: list[Cocok] = []
     dilihat: set[str] = set()
     for b, k in zip(baris, kunci):
+        m = manual.get(b.kode_pesanan.strip().upper()) if b.jenis_baris == "pesanan" else None
+        if m:  # jangan dihitung dua kali: dilewati, kecuali entri manual diganti (simpan ganti_manual)
+            draf = m[1] == STATUS_DRAF
+            alasan = "sudah dicatat manual" + ("" if draf else " (sudah dikirim; batalkan kirimannya dulu bila ingin diganti)")
+            hasil.append(Cocok(b, "duplikat", k, [o.id for o in grup.get(b.kode_pesanan.strip().upper(), [])],
+                               alasan=alasan, manual_unggahan_id=m[0], manual_draf=draf))
+            dilihat.add(k)
+            continue
         if k in ada or k in dilihat:
             hasil.append(Cocok(b, "duplikat", k, alasan="sudah pernah diunggah"))
             continue
@@ -394,7 +428,7 @@ async def cocokkan(session: AsyncSession, saluran: BlSaluran, baris: list[pf.Bar
             hasil.append(Cocok(b, "duplikat", k, ids, alasan="order sudah cair"))
         else:
             harap = _perkiraan(orders)
-            beda = b.jumlah_cair - harap
+            beda = b.jumlah_cair - harap if harap else _NOL  # harga order 0 = mengikuti file penghasilan
             hasil.append(Cocok(b, "cocok" if beda == 0 else "selisih", k, ids, harap, beda))
     return hasil
 
@@ -410,10 +444,12 @@ def _ringkas(saluran: BlSaluran, fmt, nama_file: str, hasil: pf.HasilFormat, coc
         nama_file=nama_file, kelompok=kelompok, bermasalah=len(hasil.masalah),
         baris=[
             _baris_out(c.baris, c.kelompok, order_id=c.order_ids[0] if c.order_ids else None, perkiraan_cair=c.perkiraan,
-                       selisih=c.selisih, alasan=c.alasan)
+                       selisih=c.selisih, alasan=c.alasan, dicatat_manual=bool(c.manual_unggahan_id),
+                       manual_unggahan_id=c.manual_unggahan_id, manual_bisa_diganti=c.manual_draf)
             for c in cocok
         ],
         masalah=_masalah_out(hasil.masalah), jumlah_disimpan=len(simpan),
+        sudah_manual=sum(1 for c in cocok if c.manual_unggahan_id), manual_bisa_diganti=sum(1 for c in cocok if c.manual_draf),
         total_dibukukan=sum((c.baris.jumlah_cair for c in simpan if c.kelompok in DIBUKUKAN), _NOL),
         neto=any(c.baris.mode_catat == "neto" for c in simpan),
     )
@@ -561,31 +597,58 @@ async def simpan_baris(
 
 
 async def simpan(
-    session: AsyncSession, user: BlUser, saluran_id: str, isi: bytes, nama_file: str, format_id: str | None = None
+    session: AsyncSession, user: BlUser, saluran_id: str, isi: bytes, nama_file: str, format_id: str | None = None,
+    ganti_manual: bool = False,
 ) -> BlPencairanUnggahan:
+    """Simpan file. Baris yang sudah dicatat manual dilewati; dengan ganti_manual=True entri manual yang masih draf
+    dibatalkan dan diganti baris file (yang sudah dikirim tetap dilewati)."""
     saluran = await _saluran(session, saluran_id)
     hasil, fmt = await baca_file_pencairan(session, saluran, isi, nama_file, format_id)
-    return await simpan_baris(session, user, saluran, await cocokkan(session, saluran, hasil.baris), nama_file=nama_file, fmt=fmt)
+    cocok = await cocokkan(session, saluran, hasil.baris)
+    ganti = {c.manual_unggahan_id for c in cocok if c.manual_draf} if ganti_manual else set()
+    if ganti:
+        for uid in sorted(ganti):
+            await batal_unggahan(session, user, uid, f"Diganti file {nama_file}")
+        cocok = await cocokkan(session, saluran, hasil.baris)
+    return await simpan_baris(session, user, saluran, cocok, nama_file=nama_file, fmt=fmt)
 
 
 async def entri_manual(session: AsyncSession, user: BlUser, payload: PencairanManualIn) -> BlPencairanUnggahan:
-    """Khusus Toko web/iPaymu (AB-MP-9): satu order per entri, dicatat bruto; harus cocok dengan order Toko web."""
+    """Catat manual per order untuk marketplace & Toko web (masa transisi / file belum ada): dicatat bruto, masuk tabel
+    pencairan sebagai draf bersumber "manual", lalu lewat Kirim ke laporan keuangan. Harus cocok dengan order."""
     saluran = await _saluran(session, payload.saluran_id)
-    if saluran.jenis != "web":
-        raise _bad("Entri manual hanya untuk Toko web (iPaymu); pencairan marketplace lewat unggah file")
+    if saluran.jenis not in JENIS_SALURAN_CAIR:
+        raise _bad("Catat manual pencairan hanya untuk saluran marketplace dan Toko web; penjual lain lewat Penerimaan")
+    kode = payload.kode_pesanan.strip()
+    ada = (
+        await session.execute(
+            select(BlPencairanUnggahan.nama_file)
+            .join(BlPencairanBaris, BlPencairanBaris.unggahan_id == BlPencairanUnggahan.id)
+            .where(
+                BlPencairanBaris.saluran_id == saluran.id, BlPencairanBaris.dibatalkan.is_(False),
+                BlPencairanBaris.jenis_baris == "pesanan", BlPencairanBaris.status_cocok.in_(DIBUKUKAN),
+                BlPencairanUnggahan.dibatalkan.is_(False), func.upper(BlPencairanBaris.kode_pesanan) == kode.upper(),
+            )
+        )
+    ).scalars().first()
+    if ada is not None:
+        raise _bad(f"Pencairan order {kode} sudah tercatat ({ada})", status.HTTP_409_CONFLICT)
     harga, pot = payload.harga_jual, payload.potongan
     cair = payload.jumlah_cair if payload.jumlah_cair is not None else harga - pot
     b = pf.BarisStandar(
-        baris_file=None, kode_pesanan=payload.kode_pesanan.strip(), tanggal_cair=payload.tanggal_cair, jumlah_cair=cair,
-        harga_jual=harga, potongan_biaya=pot, rincian_biaya={"Potongan iPaymu": pot} if pot else {},
+        baris_file=None, kode_pesanan=kode, tanggal_cair=payload.tanggal_cair, jumlah_cair=cair,
+        harga_jual=harga, potongan_biaya=pot,
+        rincian_biaya={("Potongan iPaymu" if saluran.jenis == "web" else "Potongan biaya"): pot} if pot else {},
         catatan=[] if harga - pot == cair else [f"harga jual − potongan ({harga - pot}) ≠ jumlah cair ({cair})"],
     )
     [c] = await cocokkan(session, saluran, [b])
     if c.kelompok == "duplikat":
         raise _bad(f"Pencairan order {b.kode_pesanan} sudah tercatat ({c.alasan})", status.HTTP_409_CONFLICT)
     if c.kelompok == "tidak_cocok":
-        raise _bad(f"Order Toko web {b.kode_pesanan} tidak bisa dicocokkan: {c.alasan}")
-    return await simpan_baris(session, user, saluran, [c], nama_file="Entri manual iPaymu")
+        raise _bad(f"Order {saluran.nama} {b.kode_pesanan} tidak bisa dicocokkan: {c.alasan}")
+    return await simpan_baris(
+        session, user, saluran, [c], nama_file=f"Catat manual {saluran.nama}", sumber_sistem=SUMBER_MANUAL,
+    )
 
 
 async def list_unggahan(session: AsyncSession, saluran_id: str | None = None) -> list[BlPencairanUnggahan]:
@@ -649,7 +712,8 @@ async def hubungkan(session: AsyncSession, user: BlUser, baris_id: str, order_id
         if any(o.status_cair == STATUS_CAIR_CAIR for o in grup):
             raise _bad("Order sudah cair", status.HTTP_409_CONFLICT)
         await pastikan_bulan_terbuka(session, r.tanggal_cair)
-        r.selisih = Decimal(r.jumlah_cair) - _perkiraan(grup)
+        harap = _perkiraan(grup)
+        r.selisih = Decimal(r.jumlah_cair) - harap if harap else _NOL
         r.status_cocok = "cocok" if r.selisih == 0 else "selisih"
     else:
         r.status_cocok = "cocok"
@@ -682,7 +746,11 @@ async def setelah_kirim(session: AsyncSession, unggahan: BlPencairanUnggahan) ->
         if r.jenis_baris == "pesanan":
             jual = [OrderOut.model_validate(o).total_penjualan for o in grup]
             total_jual = sum(jual, _NOL)
-            potongan = (Decimal(r.potongan_biaya) if r.potongan_biaya is not None else total_jual - Decimal(r.jumlah_cair))
+            if r.potongan_biaya is not None:
+                potongan = Decimal(r.potongan_biaya)
+            else:  # harga order 0 (mengikuti file): pakai harga jual dari file bila ada
+                acuan = total_jual or (Decimal(r.harga_jual) if r.harga_jual is not None else _NOL)
+                potongan = acuan - Decimal(r.jumlah_cair) if acuan else _NOL
             sisa = potongan
             for i, (o, j) in enumerate(zip(grup, jual)):
                 bagian = sisa if i == len(grup) - 1 else (potongan * j / total_jual).quantize(Decimal("0.01")) if total_jual else _NOL

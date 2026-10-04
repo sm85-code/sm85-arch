@@ -75,6 +75,7 @@ _NOL = Decimal("0")
 AWAL_BUKU = date(2000, 1, 1)
 KATEGORI_PENJUALAN = (KATEGORI_PENJUALAN_MARKETPLACE, KATEGORI_PENJUALAN_WEB, KATEGORI_RESELLER)
 LABEL_PENJUAL_LAIN = "Penjual lain"
+LABEL_BIAYA_PROSES = "Pendapatan biaya proses"
 LABEL_KAS_KECIL = "Kas kecil (transport, packing, operasional, lainnya)"
 
 
@@ -172,10 +173,15 @@ async def laba_rugi(session: AsyncSession, periode: str) -> LabaRugiOut:
     laba_bersih = laba_kotor - total_op + sum((b.jumlah for b in pendapatan_lain), _NOL)
 
     bc = await belum_cair(session, akhir)
-    margin = await hpp_margin(session, periode)
+    margin, proses = await _hpp_margin(session, periode)
+    # Biaya proses penjual lain: tetap bagian total penjualan, tetapi tampil sebagai baris tersendiri.
+    proses = min(proses, max(jual.get(LABEL_PENJUAL_LAIN, _NOL), _NOL))
+    if proses:
+        jual[LABEL_PENJUAL_LAIN] -= proses
+    baris_jual = _urut(jual) + ([BarisNilai(label=LABEL_BIAYA_PROSES, jumlah=proses)] if proses else [])
     return LabaRugiOut(
         periode=periode, sementara=await _sementara(session, periode),
-        penjualan=_urut(jual), total_penjualan=total_jual, biaya_marketplace=biaya_rows, total_biaya_marketplace=total_mp,
+        penjualan=baris_jual, total_penjualan=total_jual, pendapatan_biaya_proses=proses, biaya_marketplace=biaya_rows, total_biaya_marketplace=total_mp,
         penjualan_bersih=total_jual - total_mp, hpp=hpp, laba_kotor=laba_kotor, margin_persen=_margin(laba_kotor, total_jual),
         biaya_operasional=operasional, total_biaya_operasional=total_op, pendapatan_lain=pendapatan_lain,
         laba_bersih=laba_bersih, hpp_dicocokkan=margin.total.hpp,
@@ -223,25 +229,76 @@ async def _order_diakui(session: AsyncSession, awal: date, akhir: date) -> list[
     return [(o, s, p, True) for o, s, p in cair] + [(o, s, p, False) for o, s, p in diterima]
 
 
+async def _harga_dari_file(session: AsyncSession, orders: list[BlOrder]) -> dict[str, Decimal]:
+    """Pendapatan margin order marketplace/Toko web dari harga jual di baris pencairan (file atau entri manual).
+
+    Satu baris bisa mencakup beberapa order (nomor pesanan sama): dibagi menurut pendapatan produk tiap order, atau
+    rata bila semuanya 0. Baris tanpa harga jual: hanya dipakai untuk order berharga 0 (jumlah cair + potongan)."""
+    per_baris: dict[str, list[BlOrder]] = defaultdict(list)
+    for o in orders:
+        if o.pencairan_baris_id:
+            per_baris[o.pencairan_baris_id].append(o)
+    if not per_baris:
+        return {}
+    rows = (await session.execute(select(BlPencairanBaris).where(BlPencairanBaris.id.in_(list(per_baris))))).scalars()
+    hasil: dict[str, Decimal] = {}
+    for b in rows:
+        grup = per_baris[b.id]
+        dasar = [OrderOut.model_validate(o).pendapatan_produk for o in grup]
+        if b.harga_jual is not None:
+            nilai = Decimal(b.harga_jual)
+        elif not any(dasar):
+            nilai = Decimal(b.jumlah_cair) + Decimal(b.potongan_biaya or 0)
+        else:
+            continue  # file tanpa harga jual: pakai harga order
+        total_dasar = sum(dasar, _NOL)
+        sisa = nilai
+        for i, (o, d) in enumerate(zip(grup, dasar)):
+            if i == len(grup) - 1:
+                bagian = sisa
+            elif total_dasar:
+                bagian = (nilai * d / total_dasar).quantize(Decimal("0.01"))
+            else:
+                bagian = (nilai / len(grup)).quantize(Decimal("0.01"))
+            sisa -= bagian
+            hasil[o.id] = bagian
+    return hasil
+
+
 def _baris_margin(label: str, d: dict) -> MarginBaris:
-    laba = d["penjualan"] - d["potongan"] - d["hpp"]
+    kotor = d["penjualan"] - d["hpp"]  # margin kotor
+    laba = kotor - d["potongan"]  # margin bersih saluran
     return MarginBaris(
         label=label, qty=d["qty"], jumlah_order=d["order"], penjualan=d["penjualan"], potongan=d["potongan"], hpp=d["hpp"],
-        laba_kotor=laba, margin_persen=_margin(laba, d["penjualan"]),
+        laba_kotor=laba, margin_persen=_margin(laba, d["penjualan"]), margin_kotor=kotor,
+        margin_kotor_persen=_margin(kotor, d["penjualan"]), biaya_proses=d["proses"],
     )
 
 
-async def hpp_margin(session: AsyncSession, periode: str) -> HppMarginOut:
+async def _hpp_margin(session: AsyncSession, periode: str) -> tuple[HppMarginOut, Decimal]:
+    """Margin produk = (barang x qty + cat/jasa + packing) − potongan − biaya tukang & supplier. Biaya proses penjual
+    lain dicatat terpisah (bukan margin produk). Marketplace/Toko web: pendapatan dari harga jual file pencairan bila ada.
+    Mengembalikan juga biaya proses order penjual lain (untuk memecah baris penjualan di laba rugi)."""
     awal, akhir = _rentang_periode(periode)
 
     def kosong():
-        return {"qty": 0, "order": 0, "penjualan": _NOL, "potongan": _NOL, "hpp": _NOL}
+        return {"qty": 0, "order": 0, "penjualan": _NOL, "potongan": _NOL, "hpp": _NOL, "proses": _NOL}
 
     produk: dict[str, dict] = defaultdict(kosong)
     saluran: dict[str, dict] = defaultdict(kosong)
     total = kosong()
-    for o, sal, prod, marketplace in await _order_diakui(session, awal, akhir):
-        jual = OrderOut.model_validate(o).total_penjualan if marketplace else tagihan_order(o)
+    proses_penjual_lain = _NOL
+    diakui = await _order_diakui(session, awal, akhir)
+    file_jual = await _harga_dari_file(session, [o for o, _s, _p, m in diakui if m])
+    for o, sal, prod, marketplace in diakui:
+        out = OrderOut.model_validate(o)
+        proses = Decimal(o.biaya_proses or 0)
+        if marketplace and o.id in file_jual:
+            jual, proses = file_jual[o.id], _NOL  # harga jual file sudah mencakup semuanya
+        else:
+            jual = out.pendapatan_produk
+        if not marketplace:
+            proses_penjual_lain += proses
         potong = Decimal(o.potongan_aktual if o.potongan_aktual is not None else o.potongan_marketplace) if marketplace else _NOL
         for d in (produk[prod.nama], saluran[sal.nama], total):
             d["qty"] += o.qty
@@ -249,12 +306,18 @@ async def hpp_margin(session: AsyncSession, periode: str) -> HppMarginOut:
             d["penjualan"] += jual
             d["potongan"] += potong
             d["hpp"] += Decimal(o.biaya_pokok)
-    return HppMarginOut(
+            d["proses"] += proses
+    out = HppMarginOut(
         periode=periode, sementara=await _sementara(session, periode),
         per_produk=sorted((_baris_margin(k, v) for k, v in produk.items()), key=lambda b: -b.laba_kotor),
         per_saluran=[_baris_margin(k, v) for k, v in sorted(saluran.items())],
-        total=_baris_margin("Total", total),
+        total=_baris_margin("Total", total), pendapatan_biaya_proses=total["proses"],
     )
+    return out, proses_penjual_lain
+
+
+async def hpp_margin(session: AsyncSession, periode: str) -> HppMarginOut:
+    return (await _hpp_margin(session, periode))[0]
 
 
 # --- Neraca sederhana (9.2) ---
@@ -286,19 +349,42 @@ async def _piutang_reseller(session: AsyncSession, per: date) -> Decimal:
     return sum((tagihan_order(o) for o in orders), _NOL)
 
 
-async def _utang_pemasok(session: AsyncSession, per: date) -> dict[str, Decimal]:
+LABEL_JENIS_PEMASOK = {"tukang_kayu": "Tukang", "supplier": "Supplier"}
+
+
+async def _utang_pemasok_rinci(session: AsyncSession, per: date) -> list[tuple[str, str, Decimal]]:
+    """(jenis, nama, utang) per tukang/supplier yang barangnya sudah diambil/diterima dan belum dibayar."""
     dibayar = select(BlPembayaranPemasokItem.order_id).join(
         BlPembayaranPemasok, BlPembayaranPemasok.id == BlPembayaranPemasokItem.pembayaran_id
     ).where(BlPembayaranPemasok.dibatalkan.is_(False), BlPembayaranPemasok.tanggal <= per)
     rows = (
         await session.execute(
-            select(BlPemasok.nama, func.sum(BlOrder.biaya_pokok)).join(BlPemasok, BlPemasok.id == BlOrder.pemasok_id).where(
+            select(BlPemasok.jenis, BlPemasok.nama, func.sum(BlOrder.biaya_pokok)).join(BlPemasok, BlPemasok.id == BlOrder.pemasok_id).where(
                 BlOrder.status != STATUS_BATAL, BlOrder.tgl_diambil.is_not(None), BlOrder.tgl_diambil <= per,
                 BlOrder.biaya_pokok > 0, BlOrder.id.not_in(dibayar),
-            ).group_by(BlPemasok.nama)
+            ).group_by(BlPemasok.jenis, BlPemasok.nama)
         )
     ).all()
-    return {n: Decimal(str(j)) for n, j in rows}
+    return [(jenis, n, Decimal(str(j))) for jenis, n, j in rows]
+
+
+async def _utang_pemasok(session: AsyncSession, per: date) -> dict[str, Decimal]:
+    hasil: dict[str, Decimal] = defaultdict(lambda: _NOL)
+    for _jenis, nama, jml in await _utang_pemasok_rinci(session, per):
+        hasil[nama] += jml
+    return dict(hasil)
+
+
+def _utang_per_jenis(rinci: list[tuple[str, str, Decimal]]) -> list[BarisNilai]:
+    """Utang dikelompokkan Tukang / Supplier (rincian per nama). Harga beli tetap satu angka per order."""
+    grup: dict[str, dict[str, Decimal]] = defaultdict(lambda: defaultdict(lambda: _NOL))
+    for jenis, nama, jml in rinci:
+        grup[LABEL_JENIS_PEMASOK.get(jenis, jenis)][nama] += jml
+    return [
+        BarisNilai(label=label, jumlah=sum(d.values(), _NOL), rincian=_urut(d))
+        for label in ("Tukang", "Supplier", *sorted(set(grup) - {"Tukang", "Supplier"}))
+        if (d := grup.get(label)) and sum(d.values(), _NOL)
+    ]
 
 
 async def _talangan_per_orang(session: AsyncSession, per: date) -> dict[str, Decimal]:
@@ -347,7 +433,10 @@ async def neraca(session: AsyncSession, per_tanggal: date | None = None) -> Nera
     belum = [BarisNilai(label=g.nama, jumlah=g.total_perkiraan_cair) for g in bc.per_saluran]
     total_aset = sum((b.jumlah for b in aset_kas), _NOL) + piutang + bc.total_perkiraan_cair
 
-    utang = await _utang_pemasok(session, per)
+    rinci_utang = await _utang_pemasok_rinci(session, per)
+    utang: dict[str, Decimal] = defaultdict(lambda: _NOL)
+    for _jenis, nama, jml in rinci_utang:
+        utang[nama] += jml
     gaji = await _dana_gaji_belum_dibayar(session, per)
     talangan = await _talangan_per_orang(session, per)
     total_kewajiban = sum(utang.values(), _NOL) + gaji + sum(talangan.values(), _NOL)
@@ -368,7 +457,7 @@ async def neraca(session: AsyncSession, per_tanggal: date | None = None) -> Nera
     total_modal = sum((m.jumlah for m in modal), _NOL)
     return NeracaOut(
         per_tanggal=per, aset_kas=aset_kas, piutang_penjual_lain=piutang, belum_cair=belum, total_aset=total_aset,
-        utang_pemasok=_urut(utang), dana_gaji_belum_dibayar=gaji, talangan=_urut(talangan), total_kewajiban=total_kewajiban,
+        utang_pemasok=_urut(utang), utang_per_jenis=_utang_per_jenis(rinci_utang), dana_gaji_belum_dibayar=gaji, talangan=_urut(talangan), total_kewajiban=total_kewajiban,
         modal=modal, total_modal=total_modal, selisih=total_aset - total_kewajiban - total_modal,
     )
 

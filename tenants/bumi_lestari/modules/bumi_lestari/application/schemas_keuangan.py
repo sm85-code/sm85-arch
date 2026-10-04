@@ -37,6 +37,8 @@ class LabaRugiOut(BaseModel):
     total_biaya_operasional: Decimal
     pendapatan_lain: list[BarisNilai]
     laba_bersih: Decimal
+    # Bagian penjualan penjual lain yang berasal dari biaya proses (sudah termasuk di total_penjualan).
+    pendapatan_biaya_proses: Decimal = Decimal("0")
     hpp_dicocokkan: Decimal  # info: biaya pokok order yang penjualannya diakui bulan ini (lihat /laporan/hpp-margin)
     belum_cair: CatatanBelumCair
     di_luar_laba: list[BarisNilai]  # Prive, Bagi hasil
@@ -49,6 +51,7 @@ class NeracaOut(BaseModel):
     belum_cair: list[BarisNilai]  # per saluran, nilai perkiraan cair
     total_aset: Decimal
     utang_pemasok: list[BarisNilai]  # per tukang/supplier
+    utang_per_jenis: list[BarisNilai] = []  # Tukang / Supplier, rincian per nama (jumlahnya sama dengan utang_pemasok)
     dana_gaji_belum_dibayar: Decimal
     talangan: list[BarisNilai]  # per orang
     total_kewajiban: Decimal
@@ -63,9 +66,13 @@ class MarginBaris(BaseModel):
     jumlah_order: int = 0
     penjualan: Decimal
     potongan: Decimal
-    hpp: Decimal
-    laba_kotor: Decimal
+    hpp: Decimal  # harga beli (biaya tukang & supplier)
+    laba_kotor: Decimal  # margin bersih saluran = penjualan produk − harga beli − potongan marketplace
     margin_persen: Optional[Decimal]
+    margin_kotor: Decimal = Decimal("0")  # penjualan produk (barang + cat/jasa + packing) − harga beli
+    margin_kotor_persen: Optional[Decimal] = None
+    # Biaya proses (penjual lain) di luar margin produk; ditampilkan sebagai pendapatan terpisah.
+    biaya_proses: Decimal = Decimal("0")
 
 
 class HppMarginOut(BaseModel):
@@ -74,6 +81,7 @@ class HppMarginOut(BaseModel):
     per_produk: list[MarginBaris]
     per_saluran: list[MarginBaris]
     total: MarginBaris
+    pendapatan_biaya_proses: Decimal = Decimal("0")
 
 
 class TrenBulan(BaseModel):

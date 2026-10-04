@@ -244,7 +244,7 @@ async def test_entri_manual_ipaymu(c):
     assert await _kode(c, svc.entri_manual, c.s, c.admin, PencairanManualIn(**{**data, "saluran_id": c.shopee.id})) == 400
     assert await _kode(c, svc.entri_manual, c.s, c.admin, PencairanManualIn(**{**data, "kode_pesanan": "WEB-X"})) == 400
     u = await svc.entri_manual(c.s, c.admin, PencairanManualIn(**data))
-    assert u.total == Decimal("841500") and u.nama_file == "Entri manual iPaymu"
+    assert u.total == Decimal("841500") and u.nama_file == "Catat manual Toko web" and u.sumber_sistem == "manual"
     assert await _kode(c, svc.entri_manual, c.s, c.admin, PencairanManualIn(**data)) == 409
     await kirim.kirim(c.s, c.admin, "pencairan")
     laba = await ringkasan_laba(c.s, *OKT)

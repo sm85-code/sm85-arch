@@ -60,8 +60,8 @@ async def update_produk(produk_id: str, payload: ProdukPatch, session: AsyncSess
 
 
 @order_router.get("/pemasok", response_model=list[PemasokOut])
-async def list_pemasok(session: AsyncSession = _db(), _: BlUser = _guard()):
-    return await svc.list_pemasok(session)
+async def list_pemasok(jenis: str | None = None, session: AsyncSession = _db(), _: BlUser = _guard()):
+    return await svc.list_pemasok(session, jenis)
 
 
 @order_router.post("/pemasok", response_model=PemasokOut, status_code=status.HTTP_201_CREATED)
