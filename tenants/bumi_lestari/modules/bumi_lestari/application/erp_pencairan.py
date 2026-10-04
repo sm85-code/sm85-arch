@@ -167,14 +167,18 @@ async def tarik_order(session: AsyncSession, erp: AsyncSession, *, hari: int = 3
     for sal in saluran:
         pesanan = (
             await erp.execute(
-                select(Pesanan).where(Pesanan.akun_id == sal.akun_erp_id, Pesanan.dipesan_at >= sejak).options(selectinload(Pesanan.items))
+                select(Pesanan)
+                .where(Pesanan.akun_id == sal.akun_erp_id, Pesanan.dipesan_at >= sejak)
+                .options(selectinload(Pesanan.items))
             )
         ).scalars().all()
         for pesan in pesanan:
             item = pesan.items or [None]
             for baris in item:
                 ref = f"mpe_item_pesanan:{baris.id if baris else pesan.id}"
-                sudah = (await session.execute(select(BlOrder.id).where(BlOrder.sumber_ref == ref))).scalar_one_or_none()
+                sudah = (
+                    await session.execute(select(BlOrder.id).where(BlOrder.sumber_ref == ref))
+                ).scalar_one_or_none()
                 if sudah:
                     continue
                 order = await order_services.create_order(session, OrderIn(
