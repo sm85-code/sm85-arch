@@ -166,3 +166,13 @@ async def tarik_erp(hari: int = 15, session: AsyncSession = _db(), user: BlUser 
 
     async with SessionLocal() as erp:
         return await erp_pencairan.tarik(session, erp, user, hari=hari)
+
+
+@pencairan_router.post("/pencairan/erp/order")
+async def order_erp(hari: int = 30, session: AsyncSession = _db(), _: BlUser = _guard()):
+    """Buat order dari pesanan ERP, lalu hubungkan baris pencairan yang menunggu."""
+    from tenants.bumi_lestari.modules.bumi_lestari.application import erp_pencairan
+    from tenants.marketplace_erp.modules.marketplace_erp.infrastructure.database import SessionLocal
+
+    async with SessionLocal() as erp:
+        return await erp_pencairan.tarik_order(session, erp, hari=hari)
