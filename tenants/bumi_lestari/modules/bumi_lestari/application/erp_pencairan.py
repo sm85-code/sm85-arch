@@ -182,15 +182,17 @@ async def tarik_order(session: AsyncSession, erp: AsyncSession, *, hari: int = 3
                 ).scalar_one_or_none()
                 if sudah:
                     continue
+                nama = (baris.nama_produk if baris else "") or "dari ERP"
+                produk_id = await _produk_dari_peta(session, nama) or produk.id
                 order = await order_services.create_order(session, OrderIn(
                     no_order=pesan.id_eksternal,
                     tanggal_order=(pesan.dipesan_at or pesan.created_at).date(),
                     saluran_id=sal.id,
                     nama_pembeli=pesan.nama_pembeli or "",
-                    produk_id=produk.id,
+                    produk_id=produk_id,
                     qty=baris.qty if baris else 1,
                     harga_satuan=baris.harga_satuan if baris else pesan.total,
-                    catatan=baris.nama_produk if baris else "dari ERP",
+                    catatan=nama,
                 ))
                 order.sumber_sistem = SUMBER
                 order.sumber_ref = ref
@@ -219,3 +221,40 @@ async def tarik_order(session: AsyncSession, erp: AsyncSession, *, hari: int = 3
                     r.status_cocok = "cocok"
     await session.flush()
     return {"order": dibuat}
+
+
+async def _produk_dari_peta(session: AsyncSession, nama: str) -> str | None:
+    from tenants.bumi_lestari.modules.bumi_lestari.infrastructure.models_order import BlPetaNama
+    baris = (await session.execute(select(BlPetaNama).where(BlPetaNama.nama == nama.strip()))).scalar_one_or_none()
+    return baris.produk_id if baris else None
+
+
+async def daftar_belum_peta(session: AsyncSession) -> list[dict]:
+    from tenants.bumi_lestari.modules.bumi_lestari.infrastructure.models_order import BlPetaNama
+    sementara = await _produk_sementara(session)
+    baris = (await session.execute(select(BlOrder).where(BlOrder.produk_id == sementara.id))).scalars().all()
+    hitung: dict[str, int] = {}
+    for o in baris:
+        nama = (o.catatan or "").strip() or "tanpa nama"
+        hitung[nama] = hitung.get(nama, 0) + 1
+    return [{"nama": n, "jumlah": j} for n, j in sorted(hitung.items())]
+
+
+async def simpan_peta(session: AsyncSession, nama: str, produk_id: str) -> dict:
+    from tenants.bumi_lestari.modules.bumi_lestari.infrastructure.models_order import BlPetaNama, BlProduk
+    produk = await session.get(BlProduk, produk_id)
+    if not produk or produk.sku == SKU_BELUM:
+        raise ValueError("Pilih jenis katalog, bukan produk sementara")
+    ada = (await session.execute(select(BlPetaNama).where(BlPetaNama.nama == nama.strip()))).scalar_one_or_none()
+    if ada:
+        ada.produk_id = produk_id
+    else:
+        session.add(BlPetaNama(nama=nama.strip(), produk_id=produk_id))
+    sementara = await _produk_sementara(session)
+    orders = (await session.execute(select(BlOrder).where(BlOrder.produk_id == sementara.id, BlOrder.catatan == nama.strip()))).scalars().all()
+    for o in orders:
+        o.produk_id = produk_id
+        if produk.jenis_produk != "kayu":
+            o.butuh_cat = False
+    await session.flush()
+    return {"nama": nama.strip(), "order": len(orders), "jenis": produk.jenis_produk}

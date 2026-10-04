@@ -176,3 +176,19 @@ async def order_erp(hari: int = 30, session: AsyncSession = _db(), _: BlUser = _
 
     async with SessionLocal() as erp:
         return await erp_pencairan.tarik_order(session, erp, hari=hari)
+
+
+@pencairan_router.get("/order/belum-peta")
+async def belum_peta(session: AsyncSession = _db(), _: BlUser = _guard()):
+    from tenants.bumi_lestari.modules.bumi_lestari.application import erp_pencairan
+    return await erp_pencairan.daftar_belum_peta(session)
+
+
+@pencairan_router.post("/order/peta")
+async def simpan_peta(payload: dict, session: AsyncSession = _db(), _: BlUser = _guard()):
+    from tenants.bumi_lestari.modules.bumi_lestari.application import erp_pencairan
+    try:
+        return await erp_pencairan.simpan_peta(session, str(payload.get("nama") or ""), str(payload.get("produk_id") or ""))
+    except ValueError as exc:
+        from fastapi import HTTPException
+        raise HTTPException(422, str(exc)) from exc

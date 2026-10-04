@@ -171,3 +171,13 @@ class BlOrder(BumiLestariBase):
     sumber_ref: Mapped[Optional[str]] = mapped_column(String(255), nullable=True)
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=_utcnow)
     kolom_tambahan: Mapped[dict] = kolom_tambahan_column()
+
+
+class BlPetaNama(BumiLestariBase):
+    """Nama barang di Shopee yang sudah dicocokkan ke jenis katalog. Tidak menebak nama mirip."""
+
+    __tablename__ = "bl_peta_nama"
+
+    id: Mapped[str] = mapped_column(String(64), primary_key=True, default=_uuid)
+    nama: Mapped[str] = mapped_column(String(255), nullable=False, unique=True)
+    produk_id: Mapped[str] = mapped_column(ForeignKey("bl_produk.id"), nullable=False)
