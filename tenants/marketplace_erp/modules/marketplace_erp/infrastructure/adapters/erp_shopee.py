@@ -777,6 +777,109 @@ async def sync_pesanan(
     return rows
 
 
+# --- Payment: what Shopee released (settlement) -------------------------------------
+
+_PATH_ESCROW_LIST = "/api/v2/payment/get_escrow_list"
+_PATH_ESCROW_DETAIL = "/api/v2/payment/get_escrow_detail"
+_ESCROW_PAGE_SIZE = 100
+_ESCROW_MAX_PAGES = 50
+# The docs state no limit for release_time_from/to; windows of ~15 days (like the order list) keep each call narrow.
+ESCROW_WINDOW_SECONDS = 15 * 24 * 3600 - 60
+
+
+def _uang(value: Any) -> Decimal:
+    try:
+        return Decimal(str(value if value not in (None, "") else 0))
+    except Exception:  # noqa: BLE001 - a malformed number from Shopee must not stop a whole sync
+        return Decimal("0")
+
+
+def normalisasi_escrow(order_sn: str, dirilis: datetime | None, payout: Any, detail: dict | None) -> dict:
+    """get_escrow_list entry + get_escrow_detail response -> neutral dict for services.simpan_settlement_pesanan.
+
+    ``detail`` is the ``response`` object of get_escrow_detail (``order_income`` inside). Fees are costs
+    (positive); ``ongkir`` is final_shipping_fee as Shopee reports it (negative = borne by the seller)."""
+    import json
+
+    inc = dict((detail or {}).get("order_income") or {})
+    inc.pop("items", None)
+    ringkas = {k: v for k, v in inc.items() if not isinstance(v, (list, dict))}
+    escrow = inc.get("escrow_amount_after_adjustment", inc.get("escrow_amount"))
+    return {
+        "order_sn": str(order_sn),
+        "dirilis_at": dirilis,
+        "jumlah_cair": _uang(payout if payout is not None else escrow),
+        "penjualan": _uang(inc.get("order_original_price", inc.get("original_price"))),
+        "voucher_penjual": _uang(inc.get("voucher_from_seller")),
+        "komisi": _uang(inc.get("commission_fee")),
+        "layanan": _uang(inc.get("service_fee")),
+        "transaksi": _uang(inc.get("seller_transaction_fee")),
+        "ongkir": _uang(inc.get("final_shipping_fee")),
+        "subsidi_ongkir": _uang(inc.get("shopee_shipping_rebate")),
+        "penyesuaian": _uang(inc.get("total_adjustment_amount")),
+        "escrow": _uang(escrow),
+        "rincian": json.dumps(ringkas, ensure_ascii=False, default=str),
+    }
+
+
+async def daftar_escrow(session: Any, akun: Any, dari: int, sampai: int) -> list[dict]:
+    """Orders whose money was released between two unix times (get_escrow_list, all pages, windows of ~15 days)."""
+    keluar: list[dict] = []
+    awal = dari
+    while awal < sampai:
+        akhir = min(awal + ESCROW_WINDOW_SECONDS, sampai)
+        for halaman in range(1, _ESCROW_MAX_PAGES + 1):
+            data = await signed_shop_request(
+                session,
+                akun,
+                _PATH_ESCROW_LIST,
+                params={"release_time_from": awal, "release_time_to": akhir, "page_size": _ESCROW_PAGE_SIZE, "page_no": halaman},
+            )
+            resp = data.get("response") or {}
+            for e in resp.get("escrow_list") or []:
+                keluar.append(
+                    {"order_sn": str(e["order_sn"]), "payout": e.get("payout_amount"), "dirilis": _waktu_epoch(e.get("escrow_release_time"))}
+                )
+            if not resp.get("more"):
+                break
+        awal = akhir
+    return keluar
+
+
+async def sync_settlement(
+    session: Any,
+    akun: Any,
+    dari: int,
+    sampai: int,
+    sudah: frozenset[str] | set[str] = frozenset(),
+    *,
+    maks_detail: int = 150,
+    batas_detik: float = 40.0,
+) -> dict:
+    """Pull what Shopee released in [dari, sampai]. Orders in ``sudah`` (already stored) are not read again;
+    at most ``maks_detail`` new ones are fetched within ``batas_detik`` seconds, the rest is reported as ``sisa``
+    so the next pull continues. Returns {"rows": [...], "ditemukan": n, "sisa": n}."""
+    import asyncio
+
+    if not live_sync_enabled() or not _akun_configured(akun):
+        raise ShopeeNotConfigured("Shopee live sync nonaktif atau akun belum terhubung.")
+    daftar = await daftar_escrow(session, akun, dari, sampai)
+    baru = [e for e in {e["order_sn"]: e for e in daftar}.values() if e["order_sn"] not in sudah]
+    mulai = time.monotonic()
+    gate = asyncio.Semaphore(_MODEL_CONCURRENCY)
+    rows: list[dict] = []
+
+    async def _satu(e: dict) -> None:
+        async with gate:
+            if time.monotonic() - mulai > batas_detik:
+                return
+            data = await signed_shop_request(session, akun, _PATH_ESCROW_DETAIL, params={"order_sn": e["order_sn"]})
+            rows.append(normalisasi_escrow(e["order_sn"], e["dirilis"], e["payout"], data.get("response")))
+
+    await asyncio.gather(*(_satu(e) for e in baru[:maks_detail]))
+    return {"rows": rows, "ditemukan": len(daftar), "sisa": len(baru) - len(rows)}
+
+
 # --- Logistics: arrange shipment + shipping label ---------------------------------
 
 _PATH_SHIP_PARAM = "/api/v2/logistics/get_shipping_parameter"

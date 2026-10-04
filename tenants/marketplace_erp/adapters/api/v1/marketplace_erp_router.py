@@ -928,6 +928,28 @@ async def sync_pesanan_akun(
     )
 
 
+@marketplace_erp_router.post("/akun/{akun_id}/sync/settlement")
+async def sync_settlement_akun(
+    akun_id: str,
+    hari: int = Query(15, ge=1, le=90, description="berapa hari ke belakang"),
+    session: AsyncSession = Depends(get_db_marketplace_erp),
+    _: UserMarketplaceErp = Depends(require_roles_marketplace_erp(*OWNER_ONLY)),
+):
+    """Pull what Shopee released to this shop (money per order). Already stored orders are not read again;
+    ``sisa`` > 0 means more is waiting: pull again."""
+    akun = await services.get_akun_marketplace(session, akun_id)
+    if akun.platform == "shopee":
+        try:
+            hasil = await services.sinkron_settlement_akun(session, akun, hari)
+        except NotImplementedError as exc:
+            raise HTTPException(status_code=status.HTTP_501_NOT_IMPLEMENTED, detail=str(exc)) from exc
+        return {"ok": True, **hasil}
+    raise HTTPException(
+        status_code=status.HTTP_501_NOT_IMPLEMENTED,
+        detail=f"Settlement untuk platform '{akun.platform}' belum tersedia (Shopee first)",
+    )
+
+
 @marketplace_erp_router.post("/akun/{akun_id}/sync/produk")
 async def sync_produk_akun(
     akun_id: str,
@@ -1111,6 +1133,36 @@ async def list_settlement(
     _: UserMarketplaceErp = Depends(require_roles_marketplace_erp(*OWNER_ONLY)),
 ):
     return await services.list_settlement(session, akun_id=akun_id, status_filter=status_filter)
+
+
+@marketplace_erp_router.get("/settlement-pesanan/ringkasan")
+async def ringkasan_settlement_pesanan(
+    dari: datetime | None = None,
+    sampai: datetime | None = None,
+    q: str | None = Query(None, max_length=64),
+    session: AsyncSession = Depends(get_db_marketplace_erp),
+    _: UserMarketplaceErp = Depends(require_roles_marketplace_erp(*OWNER_ONLY)),
+):
+    """Money released by Shopee, totals per shop for the period (by release date)."""
+    return await services.ringkasan_settlement_pesanan(session, dari=dari, sampai=sampai, q=q)
+
+
+@marketplace_erp_router.get("/settlement-pesanan")
+async def list_settlement_pesanan(
+    akun_id: str | None = Query(None, description="kosong = semua toko"),
+    dari: datetime | None = None,
+    sampai: datetime | None = None,
+    q: str | None = Query(None, max_length=64),
+    urut: str = Query("dirilis:desc", description="<kolom>:asc|desc, kolom: dirilis pesanan toko penjualan komisi layanan ongkir cair"),
+    halaman: int = Query(1, ge=1),
+    per_halaman: int = Query(50, ge=1, le=200),
+    session: AsyncSession = Depends(get_db_marketplace_erp),
+    _: UserMarketplaceErp = Depends(require_roles_marketplace_erp(*OWNER_ONLY)),
+):
+    """Money released by Shopee per order, with the shop name on every row."""
+    return await services.list_settlement_pesanan(
+        session, akun_id=akun_id, dari=dari, sampai=sampai, q=q, urut=urut, halaman=halaman, per_halaman=per_halaman
+    )
 
 
 @marketplace_erp_router.post("/settlement", response_model=SettlementOut, status_code=status.HTTP_201_CREATED)

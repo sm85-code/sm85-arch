@@ -53,6 +53,7 @@ from tenants.marketplace_erp.modules.marketplace_erp.infrastructure.models impor
     Produk,
     ProdukListing,
     Settlement,
+    SettlementPesanan,
     StaffAkunMarketplace,
     StokLedger,
     StokReservasi,
@@ -366,6 +367,7 @@ async def delete_akun_marketplace(session: AsyncSession, akun_id: str, *, hapus_
     )
     await session.execute(delete(ProdukListing).where(ProdukListing.akun_id == akun_id))
     await session.execute(delete(KatalogShopee).where(KatalogShopee.akun_id == akun_id))
+    await session.execute(delete(SettlementPesanan).where(SettlementPesanan.akun_id == akun_id))
     await session.refresh(akun)
     await session.delete(akun)
     await session.flush()
@@ -2116,6 +2118,147 @@ async def laporan_dashboard(
         ],
         "stok_kritis": stok_kritis,
     }
+
+
+# --- Settlement per order, pulled from Shopee (get_escrow_list / get_escrow_detail) -------------
+
+KUNCI_URUT_SETTLEMENT = ("dirilis", "pesanan", "toko", "penjualan", "komisi", "layanan", "ongkir", "cair")
+_KOLOM_UANG_SETTLEMENT = (
+    "jumlah_cair", "penjualan", "voucher_penjual", "komisi", "layanan", "transaksi", "ongkir", "subsidi_ongkir", "penyesuaian",
+)
+SETTLEMENT_HARI_MAKS = 90
+
+
+def settlement_pesanan_out(r: SettlementPesanan, nama_toko: str | None = None) -> dict:
+    return {
+        "id": r.id,
+        "akun_id": r.akun_id,
+        "nama_toko": nama_toko,
+        "order_sn": r.order_sn,
+        "dirilis_at": r.dirilis_at,
+        **{k: getattr(r, k) for k in _KOLOM_UANG_SETTLEMENT},
+    }
+
+
+async def simpan_settlement_pesanan(session: AsyncSession, akun: AkunMarketplace, rows: list[dict]) -> dict:
+    """Insert released-order rows for one shop; a stored (shop, order) is refreshed, never duplicated."""
+    ada = {
+        r.order_sn: r
+        for r in (
+            await session.execute(
+                select(SettlementPesanan).where(
+                    SettlementPesanan.akun_id == akun.id, SettlementPesanan.order_sn.in_([x["order_sn"] for x in rows] or [""])
+                )
+            )
+        ).scalars()
+    }
+    baru = diperbarui = 0
+    for row in rows:
+        rec = ada.get(row["order_sn"])
+        if rec is None:
+            session.add(SettlementPesanan(akun_id=akun.id, **row))
+            baru += 1
+        else:
+            for k, v in row.items():
+                setattr(rec, k, v)
+            diperbarui += 1
+    await session.flush()
+    return {"baru": baru, "diperbarui": diperbarui}
+
+
+async def sinkron_settlement_akun(session: AsyncSession, akun: AkunMarketplace, hari: int = 15) -> dict:
+    """Pull what Shopee released to this shop in the last ``hari`` days (1..90). Orders already stored are not
+    read again; a big backlog is taken in parts (``sisa`` > 0 means: pull again)."""
+    from tenants.marketplace_erp.modules.marketplace_erp.infrastructure.adapters import erp_shopee
+
+    if not 1 <= hari <= SETTLEMENT_HARI_MAKS:
+        raise HTTPException(status_code=400, detail=f"hari harus 1 sampai {SETTLEMENT_HARI_MAKS}")
+    sekarang = int(time.time())
+    sudah = set(
+        (await session.execute(select(SettlementPesanan.order_sn).where(SettlementPesanan.akun_id == akun.id))).scalars()
+    )
+    hasil = await erp_shopee.sync_settlement(session, akun, sekarang - hari * 86400, sekarang, sudah)
+    simpan = await simpan_settlement_pesanan(session, akun, hasil["rows"])
+    return {"ditemukan": hasil["ditemukan"], "sisa": hasil["sisa"], **simpan}
+
+
+def _kondisi_settlement(akun_id: str | None, dari: datetime | None, sampai: datetime | None, q: str | None) -> list:
+    cond = []
+    if akun_id:
+        cond.append(SettlementPesanan.akun_id == akun_id)
+    if dari:
+        cond.append(SettlementPesanan.dirilis_at >= dari)
+    if sampai:
+        cond.append(SettlementPesanan.dirilis_at <= sampai)
+    if q and q.strip():
+        cond.append(func.lower(SettlementPesanan.order_sn).like(f"%{q.strip().lower()}%"))
+    return cond
+
+
+async def list_settlement_pesanan(
+    session: AsyncSession,
+    *,
+    akun_id: str | None = None,
+    dari: datetime | None = None,
+    sampai: datetime | None = None,
+    q: str | None = None,
+    urut: str = "dirilis:desc",
+    halaman: int = 1,
+    per_halaman: int = 50,
+) -> dict:
+    kunci, turun = _urut_kunci(urut, sah=KUNCI_URUT_SETTLEMENT)
+    kolom = {
+        "dirilis": SettlementPesanan.dirilis_at,
+        "pesanan": SettlementPesanan.order_sn,
+        "toko": func.lower(AkunMarketplace.nama_toko),
+        "penjualan": SettlementPesanan.penjualan,
+        "komisi": SettlementPesanan.komisi,
+        "layanan": SettlementPesanan.layanan,
+        "ongkir": SettlementPesanan.ongkir,
+        "cair": SettlementPesanan.jumlah_cair,
+    }[kunci]
+    cond = _kondisi_settlement(akun_id, dari, sampai, q)
+    total = int((await session.execute(select(func.count()).select_from(SettlementPesanan).where(*cond))).scalar_one())
+    stmt = (
+        select(SettlementPesanan, AkunMarketplace.nama_toko)
+        .join(AkunMarketplace, AkunMarketplace.id == SettlementPesanan.akun_id)
+        .where(*cond)
+        .order_by((kolom.desc() if turun else kolom.asc()).nulls_last(), SettlementPesanan.id)
+        .offset((max(halaman, 1) - 1) * per_halaman)
+        .limit(per_halaman)
+    )
+    rows = (await session.execute(stmt)).all()
+    return {
+        "total": total,
+        "halaman": halaman,
+        "per_halaman": per_halaman,
+        "items": [settlement_pesanan_out(r, n) for r, n in rows],
+    }
+
+
+async def ringkasan_settlement_pesanan(
+    session: AsyncSession, *, dari: datetime | None = None, sampai: datetime | None = None, q: str | None = None
+) -> dict:
+    """Totals per shop (and overall) for the released orders in the period: the table above the order list."""
+    cond = _kondisi_settlement(None, dari, sampai, q)
+    jumlah = [func.coalesce(func.sum(getattr(SettlementPesanan, k)), 0) for k in _KOLOM_UANG_SETTLEMENT]
+    stmt = (
+        select(SettlementPesanan.akun_id, AkunMarketplace.nama_toko, func.count(), *jumlah, func.max(SettlementPesanan.dirilis_at))
+        .join(AkunMarketplace, AkunMarketplace.id == SettlementPesanan.akun_id)
+        .where(*cond)
+        .group_by(SettlementPesanan.akun_id, AkunMarketplace.nama_toko)
+        .order_by(func.lower(AkunMarketplace.nama_toko))
+    )
+    toko = []
+    total = {"pesanan": 0, **{k: Decimal("0") for k in _KOLOM_UANG_SETTLEMENT}}
+    for akun_id, nama, n, *angka, terakhir in (await session.execute(stmt)).all():
+        baris = {"akun_id": akun_id, "nama_toko": nama, "pesanan": int(n), "dirilis_terakhir": terakhir}
+        for k, v in zip(_KOLOM_UANG_SETTLEMENT, angka):
+            baris[k] = Decimal(str(v))
+            total[k] += baris[k]
+        total["pesanan"] += baris["pesanan"]
+        toko.append(baris)
+    return {"toko": toko, "total": total}
 
 
 # --- Tahap 4: Iklan (ads) -------------------------------------------------------
