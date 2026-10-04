@@ -607,3 +607,13 @@ class IklanLaporanOut(BaseModel):
     total_biaya: Decimal
     omzet_atribusi: Decimal
     roas: Optional[Decimal]
+
+
+class KatalogKirimIn(BaseModel):
+    """Send chosen Shopee catalogue items to the online store (as drafts unless ``aktif``)."""
+
+    ids: list[str] = Field(..., min_length=1, max_length=20)
+    # Drafts by default: the store owner reviews and activates each product in the admin dashboard.
+    aktif: bool = False
+    # An item already sent is skipped (the store copy may have been edited); true refreshes it from Shopee.
+    timpa: bool = False
