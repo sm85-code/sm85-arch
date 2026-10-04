@@ -1079,6 +1079,33 @@ async def ubah_kata_kunci_akun(
     return await services.ubah_kata_kunci_iklan(session, akun, payload)
 
 
+
+@marketplace_erp_router.post("/akun/{akun_id}/iklan/shopee/{aksi}")
+async def iklan_shopee(
+    akun_id: str,
+    aksi: str,
+    payload: dict = Body(default={}),
+    session: AsyncSession = Depends(get_db_marketplace_erp),
+    _: UserMarketplaceErp = Depends(require_roles_marketplace_erp(*OWNER_ONLY)),
+):
+    """Semua API iklan Shopee yang terdokumentasi. `params` untuk GET, `body` untuk POST."""
+    from tenants.marketplace_erp.modules.marketplace_erp.infrastructure import shopee_iklan
+
+    akun = await services.get_akun_marketplace(session, akun_id)
+    try:
+        return await shopee_iklan.panggil(
+            session, akun, aksi, params=payload.get("params") or None, body=payload.get("body") or None
+        )
+    except ValueError as exc:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=str(exc)) from exc
+
+
+@marketplace_erp_router.get("/iklan/shopee/aksi")
+async def daftar_aksi_iklan(_: UserMarketplaceErp = Depends(require_roles_marketplace_erp(*OWNER_ONLY))):
+    from tenants.marketplace_erp.modules.marketplace_erp.infrastructure import shopee_iklan
+    return [{"aksi": k, "method": v[0], "path": v[1]} for k, v in shopee_iklan.IKLAN_API.items()]
+
+
 @marketplace_erp_router.post("/akun/{akun_id}/sync/iklan")
 async def sync_iklan_akun(
     akun_id: str,
