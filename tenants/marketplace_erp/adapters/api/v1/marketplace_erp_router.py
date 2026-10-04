@@ -18,7 +18,7 @@ import secrets as pysecrets
 from types import SimpleNamespace
 from datetime import datetime, timezone
 
-from fastapi import APIRouter, Depends, HTTPException, Query, Request, Response, status
+from fastapi import APIRouter, BackgroundTasks, Depends, HTTPException, Query, Request, Response, status
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from tenants.marketplace_erp.modules.marketplace_erp.application import services
@@ -926,6 +926,65 @@ async def sync_pesanan_akun(
         status_code=status.HTTP_501_NOT_IMPLEMENTED,
         detail=f"Sync pesanan untuk platform '{akun.platform}' belum tersedia (Shopee first)",
     )
+
+
+async def _proses_push_di_latar(shop_id: str) -> None:
+    """After the answer is sent (Shopee waits 3 s only): pull that shop's order changes."""
+    from tenants.marketplace_erp.modules.marketplace_erp.infrastructure import database as erp_database
+
+    if erp_database.SessionLocal is None:
+        return
+    try:
+        async with erp_database.SessionLocal() as session:
+            await services.sinkron_karena_push(session, shop_id)
+            await session.commit()
+    except Exception:  # noqa: BLE001 -- the periodic sync still catches the change
+        logger.exception("sinkron karena push gagal (toko %s)", shop_id)
+
+
+@marketplace_erp_router.post("/shopee/push")
+async def terima_push_shopee(
+    request: Request,
+    latar: BackgroundTasks,
+    session: AsyncSession = Depends(get_db_marketplace_erp),
+):
+    """Shopee Push Mechanism callback (no login: the Authorization signature proves it is Shopee). A valid order push
+    makes the ERP pull that shop's changes at once; every push, accepted or not, is written to the push log."""
+    from tenants.marketplace_erp.modules.marketplace_erp.infrastructure import shopee_push
+
+    badan = await request.body()
+    push = shopee_push.urai(badan)
+    ringkas = shopee_push.ringkas(push or {})
+    urls = shopee_push.kandidat_url(str(request.url), {k.lower(): v for k, v in request.headers.items()})
+    valid, diagnosis = shopee_push.verifikasi(shopee_push.push_key(), urls, badan, request.headers.get("authorization"))
+    if push is None:
+        await services.catat_push(session, valid=False, ringkas=ringkas, hasil="bukan_json", badan=badan)
+        await session.commit()
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Isi push bukan JSON")
+    if not valid:
+        import json as _json
+
+        hasil = "key_belum_diatur" if not diagnosis["ada_key"] else "tanda_tangan_salah"
+        await services.catat_push(session, valid=False, ringkas=ringkas, hasil=hasil, catatan=_json.dumps(diagnosis), badan=badan)
+        await session.commit()  # the log must survive the 401
+        raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="Tanda tangan push tidak valid")
+    if ringkas["kode"] in shopee_push.KODE_PESANAN and ringkas["shop_id"]:
+        await services.catat_push(session, valid=True, ringkas=ringkas, hasil="diproses", badan=badan)
+        await session.commit()  # logged before the background pull starts
+        latar.add_task(_proses_push_di_latar, ringkas["shop_id"])
+    else:
+        await services.catat_push(session, valid=True, ringkas=ringkas, hasil="dicatat", badan=badan)
+    return {"ok": True}
+
+
+@marketplace_erp_router.get("/shopee/push/log")
+async def log_push_shopee(
+    limit: int = Query(50, ge=1, le=200),
+    session: AsyncSession = Depends(get_db_marketplace_erp),
+    _: UserMarketplaceErp = Depends(require_roles_marketplace_erp(*OWNER_ONLY)),
+):
+    """The latest pushes Shopee sent (newest first): what arrived, from which shop, and what the ERP did with it."""
+    return await services.list_push(session, limit)
 
 
 @marketplace_erp_router.post("/akun/{akun_id}/sync/settlement")
