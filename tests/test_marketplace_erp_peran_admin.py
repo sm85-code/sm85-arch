@@ -232,3 +232,36 @@ async def test_accounts_from_before_usernames_get_one_from_their_email(session):
     nama = {u.nama: u.username for u in (await session.execute(select(UserMarketplaceErp))).scalars()}
     assert nama["C"] == "sudah.ada" and {nama["A"], nama["B"]} == {"budi.santoso", "budi.santoso2"}
     assert seeder.basis_username("!!") == "pengguna" or len(seeder.basis_username("!!")) >= 3
+
+
+@pytest.mark.asyncio
+async def test_admin_deletes_an_account_with_its_shop_assignments_but_never_itself_or_the_last_admin(session):
+    from sqlalchemy import select
+
+    from tenants.marketplace_erp.modules.marketplace_erp.application.schemas import AkunMarketplaceIn, StaffAkunIn
+    from tenants.marketplace_erp.modules.marketplace_erp.infrastructure.models import StaffAkunMarketplace
+
+    admin = await _user(session, "a@x.id", "admin")
+    staff = await _user(session, "s@x.id", "staff")
+    akun = await services.create_akun_marketplace(session, AkunMarketplaceIn(platform="shopee", nama_toko="T"))
+    await services.assign_staff_akun(session, StaffAkunIn(user_id=staff.id, akun_id=akun.id))
+
+    for target, kode in ((admin.id, 409), ("nope", 404)):  # yourself / unknown
+        with pytest.raises(HTTPException) as exc:
+            await services.hapus_user(session, target, admin)
+        assert exc.value.status_code == kode
+
+    await services.hapus_user(session, staff.id, admin)
+    assert await session.get(UserMarketplaceErp, staff.id) is None
+    assert (await session.execute(select(StaffAkunMarketplace))).scalars().all() == []
+
+    owner = await _user(session, "o@x.id", "owner")  # the only admin cannot be removed by anyone else either
+    with pytest.raises(HTTPException) as exc:
+        await services.hapus_user(session, admin.id, owner)
+    assert exc.value.status_code == 409
+
+
+def test_only_an_admin_may_delete_users():
+    import inspect
+
+    assert "ADMIN_ONLY" in inspect.getsource(router.delete_user)

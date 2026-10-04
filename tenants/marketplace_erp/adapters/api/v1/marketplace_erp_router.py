@@ -264,6 +264,16 @@ async def update_user(
     return await services.update_user(session, user_id, payload)
 
 
+@marketplace_erp_router.delete("/users/{user_id}", status_code=status.HTTP_204_NO_CONTENT)
+async def delete_user(
+    user_id: str,
+    session: AsyncSession = Depends(get_db_marketplace_erp),
+    admin: UserMarketplaceErp = Depends(require_roles_marketplace_erp(*ADMIN_ONLY)),
+):
+    """Admin only: delete another account (and its shop assignments). Not yourself, not the last admin."""
+    await services.hapus_user(session, user_id, admin)
+
+
 # --- Akun Marketplace ------------------------------------------------------
 
 

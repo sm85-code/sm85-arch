@@ -207,6 +207,25 @@ async def update_user(session: AsyncSession, user_id: str, payload) -> UserMarke
     return user
 
 
+async def hapus_user(session: AsyncSession, user_id: str, oleh: UserMarketplaceErp) -> None:
+    """Admin-only: delete an account together with its shop assignments. Nobody can delete their own account
+    (they would lock themselves out) and the last admin always stays."""
+    user = await session.get(UserMarketplaceErp, user_id)
+    if user is None:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Pengguna tidak ditemukan")
+    if user.id == oleh.id:
+        raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail="Akun Anda sendiri tidak bisa dihapus")
+    if user.role == "admin":
+        jumlah_admin = (
+            await session.execute(select(func.count()).select_from(UserMarketplaceErp).where(UserMarketplaceErp.role == "admin"))
+        ).scalar_one()
+        if jumlah_admin <= 1:
+            raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail="Admin terakhir tidak bisa dihapus")
+    await session.execute(delete(StaffAkunMarketplace).where(StaffAkunMarketplace.user_id == user.id))
+    await session.delete(user)
+    await session.flush()
+
+
 async def update_profil(session: AsyncSession, user: UserMarketplaceErp, payload) -> UserMarketplaceErp:
     """Every account may change its own display name and contact email (never its username or role). A new email
     must pass the validity check (syntax + the domain can receive mail) and not belong to someone else; an empty
