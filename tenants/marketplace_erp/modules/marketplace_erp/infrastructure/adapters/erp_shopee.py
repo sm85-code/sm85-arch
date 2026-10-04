@@ -456,8 +456,62 @@ def normalisasi_item(item: dict, model_resp: dict | None = None) -> list[dict]:
     ]
 
 
-async def sync_produk(session: Any, akun: Any) -> list[dict]:
-    """Pull the shop catalogue (NORMAL + UNLIST items, variants expanded) as listing dicts."""
+def _angka(value: Any) -> Decimal:
+    try:
+        return Decimal(str(value)) if value not in (None, "") else Decimal("0")
+    except Exception:  # noqa: BLE001
+        return Decimal("0")
+
+
+def _deskripsi(item: dict) -> str:
+    """Plain-text description: the ``description`` field, or the text parts of an extended description."""
+    teks = str(item.get("description") or "").strip()
+    if teks:
+        return teks
+    fields = (((item.get("description_info") or {}).get("extended_description")) or {}).get("field_list") or []
+    return "\n".join(str(f.get("text") or "").strip() for f in fields if f.get("field_type") == "text" and f.get("text"))
+
+
+def normalisasi_katalog(item: dict, model_resp: dict | None = None) -> dict:
+    """get_item_base_info entry (+ models) -> one catalogue dict: text, photos, size and variants.
+
+    Shopee reports weight in kg (as a string); it is stored in grams.
+    """
+    varian = []
+    if item.get("has_model") and model_resp:
+        for model in model_resp.get("model") or []:
+            if model.get("model_id"):
+                varian.append(
+                    {
+                        "nama": _nama_model(model, model_resp.get("tier_variation") or []),
+                        "sku": str(model.get("model_sku") or "").strip(),
+                        "harga": str(_harga(model.get("price_info")) or ""),
+                        "stok": _stok(model.get("stock_info_v2")),
+                    }
+                )
+    harga_semua = [Decimal(v["harga"]) for v in varian if v["harga"]] or [h for h in [_harga(item.get("price_info"))] if h is not None]
+    stok = sum(v["stok"] or 0 for v in varian) if varian else _stok(item.get("stock_info_v2"))
+    dim = item.get("dimension") or {}
+    return {
+        "item_id": str(item["item_id"]),
+        "nama": (str(item.get("item_name") or "").strip() or f"item {item['item_id']}")[:255],
+        "sku": str(item.get("item_sku") or "").strip(),
+        "deskripsi": _deskripsi(item),
+        "foto": list(((item.get("image") or {}).get("image_url_list")) or []),
+        "varian": varian,
+        "harga_min": min(harga_semua) if harga_semua else None,
+        "harga_max": max(harga_semua) if harga_semua else None,
+        "stok_shopee": stok,
+        "berat_gram": int(_angka(item.get("weight")) * 1000),
+        "panjang_cm": _angka(dim.get("package_length")),
+        "lebar_cm": _angka(dim.get("package_width")),
+        "tinggi_cm": _angka(dim.get("package_height")),
+        "status": str(item.get("item_status") or "NORMAL").upper(),
+    }
+
+
+async def ambil_item_mentah(session: Any, akun: Any) -> list[tuple[dict, dict | None]]:
+    """Pull the shop catalogue (NORMAL + UNLIST items) as (get_item_base_info entry, get_model_list response)."""
     if not live_sync_enabled() or not _akun_configured(akun):
         raise ShopeeNotConfigured(
             "Shopee live sync nonaktif atau akun belum terhubung. "
@@ -502,7 +556,12 @@ async def sync_produk(session: Any, akun: Any) -> list[dict]:
         return data.get("response") or {}
 
     model_resps = await asyncio.gather(*(_models(it) for it in items))
-    return [row for it, mr in zip(items, model_resps) for row in normalisasi_item(it, mr)]
+    return list(zip(items, model_resps))
+
+
+async def sync_produk(session: Any, akun: Any) -> list[dict]:
+    """The shop catalogue as listing dicts (variants expanded)."""
+    return [row for it, mr in await ambil_item_mentah(session, akun) for row in normalisasi_item(it, mr)]
 
 
 async def kirim_stok_harga(session: Any, akun: Any, rows: list[dict]) -> dict:

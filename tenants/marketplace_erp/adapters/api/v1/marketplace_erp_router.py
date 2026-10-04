@@ -16,13 +16,14 @@ import logging
 import os
 import secrets as pysecrets
 from types import SimpleNamespace
-from datetime import datetime
+from datetime import datetime, timezone
 
 from fastapi import APIRouter, Depends, HTTPException, Query, Request, Response, status
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from tenants.marketplace_erp.modules.marketplace_erp.application import services
 from tenants.marketplace_erp.modules.marketplace_erp.application.schemas import (
+    KatalogKirimIn,
     BatalkanPesananIn,
     AkunMarketplaceIn,
     AkunMarketplaceOut,
@@ -885,15 +886,124 @@ async def sync_produk_akun(
     akun = await services.get_akun_marketplace(session, akun_id)
     if akun.platform == "shopee":
         try:
-            rows = await erp_shopee.sync_produk(session, akun)
+            mentah = await erp_shopee.ambil_item_mentah(session, akun)
         except NotImplementedError as exc:
             raise HTTPException(status_code=status.HTTP_501_NOT_IMPLEMENTED, detail=str(exc)) from exc
+        rows = [r for it, mr in mentah for r in erp_shopee.normalisasi_item(it, mr)]
         hasil = await services.impor_listing_marketplace(session, akun, rows)
-        return {"ok": True, "pulled": len(rows), **hasil}
+        katalog = await services.simpan_katalog_shopee(
+            session, akun, [erp_shopee.normalisasi_katalog(it, mr) for it, mr in mentah]
+        )
+        return {"ok": True, "pulled": len(rows), **hasil, **katalog}
     raise HTTPException(
         status_code=status.HTTP_501_NOT_IMPLEMENTED,
         detail=f"Sync produk untuk platform '{akun.platform}' belum tersedia (Shopee first)",
     )
+
+
+@marketplace_erp_router.get("/katalog-shopee")
+async def list_katalog_shopee(
+    akun_id: str | None = Query(None, description="kosong = semua toko"),
+    q: str | None = Query(None, max_length=100),
+    belum_dikirim: bool = Query(False),
+    halaman: int = Query(1, ge=1),
+    per_halaman: int = Query(48, ge=1, le=100),
+    session: AsyncSession = Depends(get_db_marketplace_erp),
+    _: UserMarketplaceErp = Depends(require_roles_marketplace_erp(*OWNER_OR_STAFF)),
+):
+    """Products pulled from the Shopee shops, each row tagged with its shop. Never merged across shops."""
+    return await services.list_katalog_shopee(
+        session, akun_id=akun_id, q=q, belum_dikirim=belum_dikirim, halaman=halaman, per_halaman=per_halaman
+    )
+
+
+@marketplace_erp_router.get("/katalog-shopee/ringkasan")
+async def ringkasan_katalog_shopee(
+    session: AsyncSession = Depends(get_db_marketplace_erp),
+    _: UserMarketplaceErp = Depends(require_roles_marketplace_erp(*OWNER_OR_STAFF)),
+):
+    """Filter tabs: one entry per Shopee shop with its product count (shops never pulled show 0)."""
+    jumlah = await services.jumlah_katalog_per_toko(session)
+    toko = [a for a in await services.list_akun_marketplace(session, platform="shopee") if a.id_toko_eksternal]
+    return {
+        "total": sum(jumlah.values()),
+        "toko": [{"akun_id": a.id, "nama_toko": a.nama_toko, "jumlah": jumlah.get(a.id, 0)} for a in toko],
+    }
+
+
+@marketplace_erp_router.get("/katalog-shopee/{katalog_id}")
+async def get_katalog_shopee(
+    katalog_id: str,
+    session: AsyncSession = Depends(get_db_marketplace_erp),
+    _: UserMarketplaceErp = Depends(require_roles_marketplace_erp(*OWNER_OR_STAFF)),
+):
+    k, nama_toko = await services.get_katalog_shopee(session, katalog_id)
+    return services.katalog_out(k, nama_toko, lengkap=True)
+
+
+@marketplace_erp_router.post("/katalog-shopee/kirim-toko")
+async def kirim_katalog_ke_toko(
+    payload: KatalogKirimIn,
+    session: AsyncSession = Depends(get_db_marketplace_erp),
+    store_session: AsyncSession = Depends(_store_db),
+    _: UserMarketplaceErp = Depends(require_roles_marketplace_erp(*OWNER_ONLY)),
+):
+    """Copy chosen Shopee products to the online store: one-way, stock 0, draft unless ``aktif``.
+
+    Photos (up to 7) are copied into the store's own bucket. Variants come along with stock 0. Nothing is
+    written to Shopee, and later edits in the store admin never flow back here.
+    """
+    from decimal import Decimal
+
+    from tenants.store.modules.store.application.schemas import MAKS_FOTO_PRODUK, VarianIn
+
+    hasil = []
+    for katalog_id in dict.fromkeys(payload.ids):
+        k, nama_toko = await services.get_katalog_shopee(session, katalog_id)
+        info = {"id": k.id, "nama": k.nama, "nama_toko": nama_toko}
+        if k.dikirim_toko_id and not payload.timpa:
+            hasil.append({**info, "hasil": "dilewati", "pesan": "Sudah dikirim ke toko web"})
+            continue
+        data = services.katalog_out(k, nama_toko, lengkap=True)
+        baru = k.dikirim_toko_id is None
+        urls = data["foto"][:MAKS_FOTO_PRODUK] if baru else []
+        keys = [key for key in [await import_foto_dari_url(u) for u in urls] if key]
+        toko_produk, dibuat = await store_services.upsert_produk_dari_erp(
+            store_session,
+            erp_produk_id=f"shopee:{k.id}",
+            nama=k.nama,
+            deskripsi=k.deskripsi,
+            harga=k.harga_min if k.harga_min is not None else Decimal("0"),
+            stok=0,
+            platform_asal="shopee",
+            foto_key=keys[0] if keys else None,
+            aktif=payload.aktif,
+            berat_gram=k.berat_gram,
+            panjang_cm=k.panjang_cm,
+            lebar_cm=k.lebar_cm,
+            tinggi_cm=k.tinggi_cm,
+        )
+        for key in keys[1:]:
+            await store_services._tambah_foto_ke_galeri(store_session, toko_produk, key, melewati_batas=False)
+        if dibuat and data["varian"]:
+            dipakai: set[str] = set()
+            daftar = []
+            for i, v in enumerate(data["varian"], 1):
+                nama_v = (v["nama"] or f"Varian {i}").strip()[:110]
+                if nama_v.lower() in dipakai:
+                    nama_v = f"{nama_v} ({i})"
+                dipakai.add(nama_v.lower())
+                daftar.append(
+                    VarianIn(nama=nama_v, sku=(v["sku"] or "")[:64], harga=Decimal(v["harga"]) if v["harga"] else None, stok=0)
+                )
+            await store_services.ganti_varian(store_session, toko_produk.id, daftar)
+        k.dikirim_toko_id = toko_produk.id
+        k.dikirim_at = datetime.now(timezone.utc)
+        await session.flush()
+        hasil.append(
+            {**info, "hasil": "dibuat" if dibuat else "diperbarui", "produk_toko_id": toko_produk.id, "foto": len(keys)}
+        )
+    return {"ok": True, "hasil": hasil}
 
 
 @marketplace_erp_router.post("/akun/{akun_id}/push/stok-harga")

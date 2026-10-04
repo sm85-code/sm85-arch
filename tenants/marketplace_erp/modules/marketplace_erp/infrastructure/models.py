@@ -405,3 +405,36 @@ class IklanMetrikHarian(MarketplaceErpBase):
     updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=_utcnow, onupdate=_utcnow)
 
     campaign: Mapped["IklanCampaign"] = relationship(back_populates="metrik")
+
+
+class KatalogShopee(MarketplaceErpBase):
+    """Snapshot of one Shopee item as pulled from a shop (one row per item, variants kept as JSON).
+
+    Read-only reference for picking what goes to the online store: pulling it never touches Shopee
+    and never creates Produk / stock. ``dikirim_toko_id`` is the id of the store copy once sent.
+    """
+
+    __tablename__ = "mpe_katalog_shopee"
+    __table_args__ = (UniqueConstraint("akun_id", "item_id", name="uq_mpe_katalog_akun_item"),)
+
+    id: Mapped[str] = mapped_column(String(64), primary_key=True, default=_uuid)
+    akun_id: Mapped[str] = mapped_column(
+        String(64), ForeignKey("mpe_akun_marketplace.id", ondelete="CASCADE"), nullable=False, index=True
+    )
+    item_id: Mapped[str] = mapped_column(String(32), nullable=False)
+    nama: Mapped[str] = mapped_column(String(255), nullable=False)
+    sku: Mapped[str] = mapped_column(String(128), nullable=False, default="")
+    deskripsi: Mapped[str] = mapped_column(Text, nullable=False, default="")
+    foto_json: Mapped[str] = mapped_column(Text, nullable=False, default="[]")
+    varian_json: Mapped[str] = mapped_column(Text, nullable=False, default="[]")
+    harga_min: Mapped[Optional[Decimal]] = mapped_column(Numeric(20, 2), nullable=True)
+    harga_max: Mapped[Optional[Decimal]] = mapped_column(Numeric(20, 2), nullable=True)
+    stok_shopee: Mapped[Optional[int]] = mapped_column(Integer, nullable=True)
+    berat_gram: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
+    panjang_cm: Mapped[Decimal] = mapped_column(Numeric(8, 1), nullable=False, default=Decimal("0"))
+    lebar_cm: Mapped[Decimal] = mapped_column(Numeric(8, 1), nullable=False, default=Decimal("0"))
+    tinggi_cm: Mapped[Decimal] = mapped_column(Numeric(8, 1), nullable=False, default=Decimal("0"))
+    status: Mapped[str] = mapped_column(String(16), nullable=False, default="NORMAL")
+    diambil_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=_utcnow)
+    dikirim_toko_id: Mapped[Optional[str]] = mapped_column(String(64), nullable=True)
+    dikirim_at: Mapped[Optional[datetime]] = mapped_column(DateTime(timezone=True), nullable=True)

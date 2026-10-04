@@ -48,6 +48,7 @@ from tenants.marketplace_erp.modules.marketplace_erp.infrastructure.models impor
     IklanCampaign,
     IklanMetrikHarian,
     ItemPesanan,
+    KatalogShopee,
     Pesanan,
     Produk,
     ProdukListing,
@@ -345,6 +346,7 @@ async def delete_akun_marketplace(session: AsyncSession, akun_id: str, *, hapus_
         (await session.execute(select(func.count()).select_from(ProdukListing).where(ProdukListing.akun_id == akun_id))).scalar_one()
     )
     await session.execute(delete(ProdukListing).where(ProdukListing.akun_id == akun_id))
+    await session.execute(delete(KatalogShopee).where(KatalogShopee.akun_id == akun_id))
     await session.refresh(akun)
     await session.delete(akun)
     await session.flush()
@@ -614,6 +616,132 @@ async def impor_listing_marketplace(session: AsyncSession, akun: AkunMarketplace
         hasil["listing_baru"] += 1
     await session.flush()
     return hasil
+
+
+async def simpan_katalog_shopee(session: AsyncSession, akun: AkunMarketplace, entries: list[dict]) -> dict:
+    """Store the pulled Shopee catalogue for one shop (upsert per item). Only reference data: no Produk,
+    stock or listing is created and Shopee is not touched. Items that disappeared from the shop are removed
+    unless they were already sent to the store (that row is kept so the link is not lost)."""
+    import json
+
+    ada = {
+        k.item_id: k
+        for k in (await session.execute(select(KatalogShopee).where(KatalogShopee.akun_id == akun.id))).scalars()
+    }
+    baru = diperbarui = 0
+    sekarang = datetime.now(timezone.utc)
+    for e in entries:
+        row = ada.pop(e["item_id"], None)
+        if row is None:
+            row = KatalogShopee(akun_id=akun.id, item_id=e["item_id"], nama=e["nama"])
+            session.add(row)
+            baru += 1
+        else:
+            diperbarui += 1
+        row.nama = e["nama"]
+        row.sku = e["sku"]
+        row.deskripsi = e["deskripsi"]
+        row.foto_json = json.dumps(e["foto"])
+        row.varian_json = json.dumps(e["varian"])
+        row.harga_min = e["harga_min"]
+        row.harga_max = e["harga_max"]
+        row.stok_shopee = e["stok_shopee"]
+        row.berat_gram = e["berat_gram"]
+        row.panjang_cm = e["panjang_cm"]
+        row.lebar_cm = e["lebar_cm"]
+        row.tinggi_cm = e["tinggi_cm"]
+        row.status = e["status"]
+        row.diambil_at = sekarang
+    dihapus = 0
+    for hilang in ada.values():
+        if hilang.dikirim_toko_id is None:
+            await session.delete(hilang)
+            dihapus += 1
+    await session.flush()
+    return {"katalog_baru": baru, "katalog_diperbarui": diperbarui, "katalog_dihapus": dihapus}
+
+
+def katalog_out(k: KatalogShopee, nama_toko: str | None = None, *, lengkap: bool = False) -> dict:
+    import json
+
+    foto = json.loads(k.foto_json or "[]")
+    out = {
+        "id": k.id,
+        "akun_id": k.akun_id,
+        "nama_toko": nama_toko,
+        "item_id": k.item_id,
+        "nama": k.nama,
+        "sku": k.sku,
+        "foto_utama": foto[0] if foto else None,
+        "jumlah_foto": len(foto),
+        "harga_min": k.harga_min,
+        "harga_max": k.harga_max,
+        "stok_shopee": k.stok_shopee,
+        "jumlah_varian": len(json.loads(k.varian_json or "[]")),
+        "status": k.status,
+        "dikirim_toko_id": k.dikirim_toko_id,
+        "dikirim_at": k.dikirim_at,
+    }
+    if lengkap:
+        out.update(
+            deskripsi=k.deskripsi,
+            foto=foto,
+            varian=json.loads(k.varian_json or "[]"),
+            berat_gram=k.berat_gram,
+            panjang_cm=k.panjang_cm,
+            lebar_cm=k.lebar_cm,
+            tinggi_cm=k.tinggi_cm,
+        )
+    return out
+
+
+async def list_katalog_shopee(
+    session: AsyncSession,
+    *,
+    akun_id: str | None = None,
+    q: str | None = None,
+    belum_dikirim: bool = False,
+    halaman: int = 1,
+    per_halaman: int = 48,
+) -> dict:
+    """Catalogue rows across all shops (``akun_id`` None) or one shop, newest pull first, with shop name."""
+    cond = []
+    if akun_id:
+        cond.append(KatalogShopee.akun_id == akun_id)
+    if q and q.strip():
+        like = f"%{q.strip().lower()}%"
+        cond.append(or_(func.lower(KatalogShopee.nama).like(like), func.lower(KatalogShopee.sku).like(like)))
+    if belum_dikirim:
+        cond.append(KatalogShopee.dikirim_toko_id.is_(None))
+    total = int((await session.execute(select(func.count()).select_from(KatalogShopee).where(*cond))).scalar_one())
+    stmt = (
+        select(KatalogShopee, AkunMarketplace.nama_toko)
+        .join(AkunMarketplace, AkunMarketplace.id == KatalogShopee.akun_id)
+        .where(*cond)
+        .order_by(AkunMarketplace.nama_toko, KatalogShopee.nama, KatalogShopee.id)
+        .offset((max(halaman, 1) - 1) * per_halaman)
+        .limit(per_halaman)
+    )
+    rows = (await session.execute(stmt)).all()
+    return {"total": total, "halaman": halaman, "per_halaman": per_halaman, "items": [katalog_out(k, n) for k, n in rows]}
+
+
+async def jumlah_katalog_per_toko(session: AsyncSession) -> dict[str, int]:
+    rows = (await session.execute(select(KatalogShopee.akun_id, func.count()).group_by(KatalogShopee.akun_id))).all()
+    return {a: int(n) for a, n in rows}
+
+
+async def get_katalog_shopee(session: AsyncSession, katalog_id: str) -> tuple[KatalogShopee, str]:
+    row = (
+        await session.execute(
+            select(KatalogShopee, AkunMarketplace.nama_toko)
+            .join(AkunMarketplace, AkunMarketplace.id == KatalogShopee.akun_id)
+            .where(KatalogShopee.id == katalog_id)
+        )
+    ).first()
+    if row is None:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Produk katalog tidak ditemukan")
+    return row[0], row[1]
 
 
 async def baris_push_listing(session: AsyncSession, akun: AkunMarketplace) -> list[dict]:
