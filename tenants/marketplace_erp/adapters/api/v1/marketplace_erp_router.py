@@ -997,6 +997,29 @@ async def terima_push_shopee(
     return Response(status_code=status.HTTP_200_OK)
 
 
+@marketplace_erp_router.get("/shopee/push/pengaturan")
+async def baca_pengaturan_push(_: UserMarketplaceErp = Depends(require_roles_marketplace_erp(*OWNER_ONLY))):
+    """Callback URL yang disimpan dan pengaturan push di Shopee (setelah Verify)."""
+    from tenants.marketplace_erp.modules.marketplace_erp.infrastructure import shopee_push
+    from tenants.marketplace_erp.modules.marketplace_erp.infrastructure.adapters import erp_shopee
+
+    try:
+        jarak = await erp_shopee.baca_push()
+    except Exception as exc:  # noqa: BLE001
+        jarak = {"error": str(exc)}
+    return {"callback_url": shopee_push.CALLBACK_URL, "nyala": shopee_push.PUSH_AKTIF, "shopee": jarak}
+
+
+@marketplace_erp_router.post("/shopee/push/pengaturan")
+async def simpan_pengaturan_push(_: UserMarketplaceErp = Depends(require_roles_marketplace_erp(*OWNER_ONLY))):
+    """Simpan callback URL yang sudah Verify dan nyalakan push pesanan/otorisasi."""
+    from tenants.marketplace_erp.modules.marketplace_erp.infrastructure import shopee_push
+    from tenants.marketplace_erp.modules.marketplace_erp.infrastructure.adapters import erp_shopee
+
+    hasil = await erp_shopee.atur_push(callback_url=shopee_push.CALLBACK_URL, nyala=shopee_push.PUSH_AKTIF)
+    return {"ok": True, "callback_url": shopee_push.CALLBACK_URL, "nyala": shopee_push.PUSH_AKTIF, "shopee": hasil}
+
+
 @marketplace_erp_router.get("/shopee/push/log")
 async def log_push_shopee(
     limit: int = Query(50, ge=1, le=200),

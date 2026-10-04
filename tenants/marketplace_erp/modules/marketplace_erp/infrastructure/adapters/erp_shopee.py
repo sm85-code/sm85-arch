@@ -148,6 +148,46 @@ async def _http_post_json(url: str, body: dict, *, timeout: float = 25.0) -> dic
     return await asyncio.to_thread(_do)
 
 
+_PATH_PUSH_SET = "/api/v2/push/set_app_push_config"
+_PATH_PUSH_GET = "/api/v2/push/get_app_push_config"
+
+
+async def _public_post(path: str, body: dict) -> dict:
+    if not partner_configured():
+        raise ShopeeNotConfigured()
+    ts = int(time.time())
+    sign = sign_request(path, ts)
+    url = f"{_host()}{path}?partner_id={_partner_id_int()}&timestamp={ts}&sign={sign}"
+    data = await _http_post_json(url, body)
+    if data.get("error"):
+        raise HTTPException(status_code=status.HTTP_502_BAD_GATEWAY, detail=f"Shopee push config gagal: {data.get('error')} {data.get('message', '')}".strip())
+    return data
+
+
+async def atur_push(*, callback_url: str, nyala: list[int]) -> dict:
+    """Save the verified callback URL and turn on the push types the ERP handles (v2.push.set_app_push_config)."""
+    return await _public_post(_PATH_PUSH_SET, {"callback_url": callback_url, "set_push_config_on": nyala})
+
+
+async def baca_push() -> dict:
+    if not partner_configured():
+        raise ShopeeNotConfigured()
+    ts = int(time.time())
+    sign = sign_request(_PATH_PUSH_GET, ts)
+    url = f"{_host()}{_PATH_PUSH_GET}?partner_id={_partner_id_int()}&timestamp={ts}&sign={sign}"
+    import asyncio
+    import requests
+
+    def _do() -> dict:
+        resp = requests.get(url, timeout=25, proxies=proxies_for("SHOPEE_PROXY_URL"))
+        data = resp.json()
+        if resp.status_code >= 400 or data.get("error"):
+            raise HTTPException(status_code=status.HTTP_502_BAD_GATEWAY, detail=f"Shopee push config: {data}")
+        return data
+
+    return await asyncio.to_thread(_do)
+
+
 async def exchange_token(
     *, code: str, shop_id: str | None = None, main_account_id: str | None = None
 ) -> dict[str, Any]:
