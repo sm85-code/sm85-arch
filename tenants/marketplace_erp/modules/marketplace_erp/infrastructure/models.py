@@ -347,6 +347,37 @@ class Settlement(MarketplaceErpBase):
     akun: Mapped["AkunMarketplace"] = relationship()
 
 
+class SettlementPesanan(MarketplaceErpBase):
+    """What Shopee released for one order (v2.payment.get_escrow_list + get_escrow_detail), one row per
+    (shop, order number). Released escrow is final, so a stored row is not read again.
+
+    ``jumlah_cair`` is Shopee's payout_amount from the list; the other money columns come from the
+    detail's order_income (fees are positive costs, ``ongkir`` keeps Shopee's sign: negative = the seller
+    bears it). ``rincian`` keeps the whole order_income (without item lines) for fields not mapped yet."""
+
+    __tablename__ = "mpe_settlement_pesanan"
+    __table_args__ = (UniqueConstraint("akun_id", "order_sn", name="uq_mpe_settlement_pesanan_akun_sn"),)
+
+    id: Mapped[str] = mapped_column(String(64), primary_key=True, default=_uuid)
+    akun_id: Mapped[str] = mapped_column(
+        String(64), ForeignKey("mpe_akun_marketplace.id", ondelete="CASCADE"), nullable=False, index=True
+    )
+    order_sn: Mapped[str] = mapped_column(String(64), nullable=False, index=True)
+    dirilis_at: Mapped[Optional[datetime]] = mapped_column(DateTime(timezone=True), nullable=True, index=True)
+    jumlah_cair: Mapped[Decimal] = mapped_column(Numeric(20, 2), nullable=False, default=Decimal("0"))
+    penjualan: Mapped[Decimal] = mapped_column(Numeric(20, 2), nullable=False, default=Decimal("0"))
+    voucher_penjual: Mapped[Decimal] = mapped_column(Numeric(20, 2), nullable=False, default=Decimal("0"))
+    komisi: Mapped[Decimal] = mapped_column(Numeric(20, 2), nullable=False, default=Decimal("0"))
+    layanan: Mapped[Decimal] = mapped_column(Numeric(20, 2), nullable=False, default=Decimal("0"))
+    transaksi: Mapped[Decimal] = mapped_column(Numeric(20, 2), nullable=False, default=Decimal("0"))
+    ongkir: Mapped[Decimal] = mapped_column(Numeric(20, 2), nullable=False, default=Decimal("0"))
+    subsidi_ongkir: Mapped[Decimal] = mapped_column(Numeric(20, 2), nullable=False, default=Decimal("0"))
+    penyesuaian: Mapped[Decimal] = mapped_column(Numeric(20, 2), nullable=False, default=Decimal("0"))
+    escrow: Mapped[Decimal] = mapped_column(Numeric(20, 2), nullable=False, default=Decimal("0"))
+    rincian: Mapped[str] = mapped_column(Text, nullable=False, default="{}")
+    diambil_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=_utcnow)
+
+
 # --- Tahap 4: iklan (ads) ----------------------------------------------------
 
 STATUS_IKLAN = ("draft", "aktif", "dijeda", "selesai")
