@@ -18,7 +18,7 @@ import secrets as pysecrets
 from types import SimpleNamespace
 from datetime import date, datetime, timezone
 
-from fastapi import APIRouter, BackgroundTasks, Depends, HTTPException, Query, Request, Response, status
+from fastapi import APIRouter, BackgroundTasks, Body, Depends, HTTPException, Query, Request, Response, status
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from tenants.marketplace_erp.modules.marketplace_erp.application import services
@@ -1028,6 +1028,55 @@ async def log_push_shopee(
 ):
     """The latest pushes Shopee sent (newest first): what arrived, from which shop, and what the ERP did with it."""
     return await services.list_push(session, limit)
+
+
+
+@marketplace_erp_router.get("/akun/{akun_id}/iklan/saran")
+async def saran_iklan_akun(
+    akun_id: str,
+    item_id: int,
+    session: AsyncSession = Depends(get_db_marketplace_erp),
+    _: UserMarketplaceErp = Depends(require_roles_marketplace_erp(*OWNER_ONLY)),
+):
+    """Saran produk, ROAS, dan anggaran sebelum membuat iklan."""
+    akun = await services.get_akun_marketplace(session, akun_id)
+    return await services.saran_iklan(session, akun, item_id)
+
+
+@marketplace_erp_router.post("/akun/{akun_id}/iklan/buat")
+async def buat_iklan_akun(
+    akun_id: str,
+    payload: dict = Body(),
+    session: AsyncSession = Depends(get_db_marketplace_erp),
+    _: UserMarketplaceErp = Depends(require_roles_marketplace_erp(*OWNER_ONLY)),
+):
+    """Buat iklan produk manual di Shopee (auto atau manual bidding)."""
+    akun = await services.get_akun_marketplace(session, akun_id)
+    return await services.buat_iklan_produk(session, akun, payload)
+
+
+@marketplace_erp_router.post("/akun/{akun_id}/iklan/ubah")
+async def ubah_iklan_akun(
+    akun_id: str,
+    payload: dict = Body(),
+    session: AsyncSession = Depends(get_db_marketplace_erp),
+    _: UserMarketplaceErp = Depends(require_roles_marketplace_erp(*OWNER_ONLY)),
+):
+    """Jeda, lanjutkan, atau ubah anggaran/ROAS iklan yang sudah ada."""
+    akun = await services.get_akun_marketplace(session, akun_id)
+    return await services.ubah_iklan_produk(session, akun, payload)
+
+
+@marketplace_erp_router.post("/akun/{akun_id}/iklan/kata-kunci")
+async def ubah_kata_kunci_akun(
+    akun_id: str,
+    payload: dict = Body(),
+    session: AsyncSession = Depends(get_db_marketplace_erp),
+    _: UserMarketplaceErp = Depends(require_roles_marketplace_erp(*OWNER_ONLY)),
+):
+    """Tambah, hapus, atau ubah bid kata kunci iklan manual."""
+    akun = await services.get_akun_marketplace(session, akun_id)
+    return await services.ubah_kata_kunci_iklan(session, akun, payload)
 
 
 @marketplace_erp_router.post("/akun/{akun_id}/sync/iklan")

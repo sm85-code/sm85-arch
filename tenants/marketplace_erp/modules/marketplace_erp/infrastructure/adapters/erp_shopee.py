@@ -346,6 +346,33 @@ async def signed_shop_request(
     )
 
 
+
+async def iklan_saran(session: Any, akun: Any, item_id: int) -> dict:
+    """Recommended product, ROAS, and budget before creating a manual product ad."""
+    produk = await signed_shop_request(session, akun, "/api/v2/ads/get_recommended_item_list", params={"item_id": item_id})
+    roi = await signed_shop_request(session, akun, "/api/v2/ads/get_product_recommended_roi_target", params={"item_id": item_id})
+    anggaran = await signed_shop_request(
+        session, akun, "/api/v2/ads/get_create_product_ad_budget_suggestion",
+        method="POST", body={"item_id": item_id, "bidding_method": "auto"},
+    )
+    return {"produk": produk, "roas": roi, "anggaran": anggaran}
+
+
+async def buat_iklan_produk(session: Any, akun: Any, body: dict) -> dict:
+    """v2.ads.create_manual_product_ads. reference_id must be unique per attempt."""
+    return await signed_shop_request(session, akun, "/api/v2/ads/create_manual_product_ads", method="POST", body=body)
+
+
+async def ubah_iklan_produk(session: Any, akun: Any, body: dict) -> dict:
+    """v2.ads.edit_manual_product_ads: pause, resume, change_budget, change_duration, change_roas_target."""
+    return await signed_shop_request(session, akun, "/api/v2/ads/edit_manual_product_ads", method="POST", body=body)
+
+
+async def ubah_kata_kunci_iklan(session: Any, akun: Any, body: dict) -> dict:
+    """v2.ads.edit_manual_product_ad_keywords: add, delete, change_bid_price, change_match_type."""
+    return await signed_shop_request(session, akun, "/api/v2/ads/edit_manual_product_ad_keywords", method="POST", body=body)
+
+
 async def _call_shop_api(
     *,
     access_token: str,
