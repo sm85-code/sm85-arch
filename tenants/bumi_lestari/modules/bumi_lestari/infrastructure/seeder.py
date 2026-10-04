@@ -163,6 +163,7 @@ _ALTER_POSTGRES = (
     "ALTER TABLE bl_order ADD COLUMN IF NOT EXISTS status_cair VARCHAR(16) NOT NULL DEFAULT 'belum'",
     "ALTER TABLE bl_order ADD COLUMN IF NOT EXISTS tgl_cair DATE",
     "ALTER TABLE bl_order ADD COLUMN IF NOT EXISTS pencairan_baris_id VARCHAR(64)",
+    "ALTER TABLE bl_saluran ADD COLUMN IF NOT EXISTS akun_erp_id VARCHAR(64)",
     "ALTER TABLE bl_order ADD COLUMN IF NOT EXISTS potongan_aktual NUMERIC(14, 2)",
     "ALTER TABLE bl_order ADD COLUMN IF NOT EXISTS tgl_retur DATE",
     "ALTER TABLE bl_order ADD COLUMN IF NOT EXISTS alasan_retur TEXT",
