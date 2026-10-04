@@ -2330,6 +2330,7 @@ async def list_push(session: AsyncSession, limit: int = 50) -> list[dict]:
         {
             "id": r.id, "diterima_at": r.diterima_at, "valid": r.valid, "kode": r.kode, "jenis": r.jenis,
             "shop_id": r.shop_id, "order_sn": r.order_sn, "status": r.status, "hasil": r.hasil, "catatan": r.catatan,
+            "badan": r.badan[:300],
         }
         for r in rows
     ]
