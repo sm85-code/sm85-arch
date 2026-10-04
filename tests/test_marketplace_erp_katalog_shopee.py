@@ -214,3 +214,33 @@ async def test_list_rows_carry_what_is_needed_to_compare_and_can_be_sorted(sessi
     assert [i["harga_min"] for i in murah] == [Decimal("100"), Decimal("200"), Decimal("300")]
     with pytest.raises(Exception):
         await services.list_katalog_shopee(session, urut="acak")
+
+
+@pytest.mark.asyncio
+async def test_catalogue_sorts_by_each_column_and_old_values_still_work(session):
+    a, b = await _toko(session, "Toko A"), await _toko(session, "Toko B")
+    ringan = _item(1, "Alas", 300, item_status="UNLIST", weight="0.10")
+    berat = _item(2, "Kursi", 100, weight="2.00")
+    await services.simpan_katalog_shopee(session, a, [erp_shopee.normalisasi_katalog(ringan), erp_shopee.normalisasi_katalog(berat)])
+    await services.simpan_katalog_shopee(session, b, [erp_shopee.normalisasi_katalog(_item(9, "Meja", 200))])
+    row = (await session.execute(select(KatalogShopee).where(KatalogShopee.item_id == "2"))).scalar_one()
+    row.dikirim_toko_id = "x"
+    await session.flush()
+
+    async def urut(teks):
+        return [i["nama"] for i in (await services.list_katalog_shopee(session, urut=teks))["items"]]
+
+    assert await urut("nama:asc") == ["Alas", "Kursi", "Meja"]
+    assert await urut("nama:desc") == ["Meja", "Kursi", "Alas"]
+    assert await urut("harga:asc") == ["Kursi", "Meja", "Alas"]
+    assert await urut("harga:desc") == ["Alas", "Meja", "Kursi"]
+    assert await urut("berat:asc") == ["Alas", "Meja", "Kursi"] or (await urut("berat:asc"))[0] == "Alas"
+    assert (await urut("toko:desc"))[0] == "Meja"
+    assert (await urut("status:asc"))[-1] == "Alas"  # listed before not-listed
+    assert (await urut("dikirim:asc"))[-1] == "Kursi"  # not yet sent first, sent last
+    assert (await urut("dikirim:desc"))[0] == "Kursi"
+    # the previous values keep working
+    assert await urut("harga_naik") == ["Kursi", "Meja", "Alas"]
+    assert (await urut("terbaru"))[0] in {"Alas", "Kursi", "Meja"}
+    with pytest.raises(Exception):
+        await urut("deskripsi:asc")
