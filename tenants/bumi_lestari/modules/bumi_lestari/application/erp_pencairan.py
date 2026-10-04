@@ -54,10 +54,13 @@ def rincian_biaya(baris: SettlementPesanan) -> dict[str, Decimal]:
         angka = _uang(nilai)
         if angka > 0 and any(s in kunci for s in ("fee", "commission", "charge", "ams", "tax", "coin", "campaign")):
             hasil[kunci] = angka
-    for nama, nilai in (
-        ("komisi", baris.komisi), ("layanan", baris.layanan), ("transaksi", baris.transaksi),
+    sudah = " ".join(hasil)
+    for nama, nilai, kunci in (
+        ("komisi", baris.komisi, "commission"),
+        ("layanan", baris.layanan, "service_fee"),
+        ("transaksi", baris.transaksi, "transaction"),
     ):
-        if _uang(nilai) > 0:
+        if _uang(nilai) > 0 and kunci not in sudah:
             hasil[nama] = _uang(nilai)
     if _uang(baris.ongkir) < 0:
         hasil["selisih_ongkir"] = abs(_uang(baris.ongkir))
