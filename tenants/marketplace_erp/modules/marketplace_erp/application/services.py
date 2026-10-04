@@ -54,6 +54,7 @@ from tenants.marketplace_erp.modules.marketplace_erp.infrastructure.models impor
     ProdukListing,
     Settlement,
     SettlementPesanan,
+    ShopeePush,
     StaffAkunMarketplace,
     StokLedger,
     StokReservasi,
@@ -2259,6 +2260,59 @@ async def ringkasan_settlement_pesanan(
         total["pesanan"] += baris["pesanan"]
         toko.append(baris)
     return {"toko": toko, "total": total}
+
+
+# --- Shopee Push Mechanism (webhook) ----------------------------------------------
+
+PUSH_SIMPAN_HARI = 14
+
+
+async def catat_push(session: AsyncSession, *, valid: bool, ringkas: dict, hasil: str, catatan: str = "", badan: bytes = b"") -> ShopeePush:
+    """Write one line of the push log and drop lines older than PUSH_SIMPAN_HARI."""
+    await session.execute(delete(ShopeePush).where(ShopeePush.diterima_at < datetime.now(timezone.utc) - timedelta(days=PUSH_SIMPAN_HARI)))
+    baris = ShopeePush(
+        valid=valid,
+        kode=ringkas.get("kode"),
+        jenis=ringkas.get("jenis"),
+        shop_id=ringkas.get("shop_id"),
+        order_sn=ringkas.get("order_sn"),
+        status=ringkas.get("status"),
+        hasil=hasil,
+        catatan=catatan[:2000],
+        badan=badan.decode("utf-8", "replace")[:4000],
+    )
+    session.add(baris)
+    await session.flush()
+    return baris
+
+
+async def list_push(session: AsyncSession, limit: int = 50) -> list[dict]:
+    rows = (await session.execute(select(ShopeePush).order_by(ShopeePush.diterima_at.desc()).limit(min(max(limit, 1), 200)))).scalars()
+    return [
+        {
+            "id": r.id, "diterima_at": r.diterima_at, "valid": r.valid, "kode": r.kode, "jenis": r.jenis,
+            "shop_id": r.shop_id, "order_sn": r.order_sn, "status": r.status, "hasil": r.hasil, "catatan": r.catatan,
+        }
+        for r in rows
+    ]
+
+
+async def sinkron_karena_push(session: AsyncSession, shop_id: str) -> str:
+    """A push said an order of this shop changed: pull that shop's changes now. Pushes of one burst share one pull
+    (a shop is claimed at most every few seconds); the periodic background sync is the safety net for the rest."""
+    akun = (
+        await session.execute(
+            select(AkunMarketplace).where(
+                AkunMarketplace.platform == "shopee", AkunMarketplace.id_toko_eksternal == str(shop_id)
+            )
+        )
+    ).scalars().first()
+    if akun is None:
+        return "toko_tidak_dikenal"
+    if not akun.access_token:
+        return "toko_belum_terhubung"
+    hasil = await sinkron_semua_pesanan(session, [akun], jeda_detik=3, batas_detik=30)
+    return hasil[0]["hasil"] if hasil else "kosong"
 
 
 # --- Tahap 4: Iklan (ads) -------------------------------------------------------

@@ -378,6 +378,25 @@ class SettlementPesanan(MarketplaceErpBase):
     diambil_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=_utcnow)
 
 
+class ShopeePush(MarketplaceErpBase):
+    """Log of every push Shopee sent to our webhook (accepted or not): proof that pushes arrive, and what to look at
+    when one is rejected (``diagnosis`` holds the verification attempt, never the key). Old rows are pruned."""
+
+    __tablename__ = "mpe_shopee_push"
+
+    id: Mapped[str] = mapped_column(String(64), primary_key=True, default=_uuid)
+    diterima_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=_utcnow, index=True)
+    valid: Mapped[bool] = mapped_column(Boolean, nullable=False, default=False)
+    kode: Mapped[Optional[int]] = mapped_column(Integer, nullable=True)
+    jenis: Mapped[Optional[str]] = mapped_column(String(48), nullable=True)
+    shop_id: Mapped[Optional[str]] = mapped_column(String(32), nullable=True, index=True)
+    order_sn: Mapped[Optional[str]] = mapped_column(String(64), nullable=True, index=True)
+    status: Mapped[Optional[str]] = mapped_column(String(32), nullable=True)
+    hasil: Mapped[str] = mapped_column(String(32), nullable=False, default="")
+    catatan: Mapped[str] = mapped_column(Text, nullable=False, default="")
+    badan: Mapped[str] = mapped_column(Text, nullable=False, default="")
+
+
 # --- Tahap 4: iklan (ads) ----------------------------------------------------
 
 STATUS_IKLAN = ("draft", "aktif", "dijeda", "selesai")
