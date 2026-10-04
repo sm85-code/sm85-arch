@@ -17,6 +17,11 @@ import json
 import os
 from typing import Any
 
+# URL yang lolos Verify di Open Platform. Env SHOPEE_PUSH_URL menimpa ini bila diisi.
+CALLBACK_URL = "https://api.ampelkuning.com/api/marketplace-erp/shopee/push"
+# Jenis yang ERP terima: otorisasi, batal otorisasi, status pesanan, resi, masa berlaku otorisasi.
+PUSH_AKTIF = [1, 2, 3, 4, 12]
+
 JENIS_PUSH = {
     1: "shop_authorization",
     2: "shop_authorization_canceled",
@@ -41,9 +46,8 @@ def kandidat_url(url_terlihat: str, header: dict[str, str]) -> list[str]:
     """The callback URL as Shopee has it: the configured one first, then what the request looked like
     (behind the platform's proxy the scheme/host may differ from what was typed into Open Platform)."""
     hasil: list[str] = []
-    atur = os.getenv("SHOPEE_PUSH_URL", "").strip()
-    if atur:
-        hasil.append(atur)
+    atur = os.getenv("SHOPEE_PUSH_URL", "").strip() or CALLBACK_URL
+    hasil.append(atur)
     host = header.get("x-forwarded-host") or header.get("host") or ""
     proto = (header.get("x-forwarded-proto") or "").split(",")[0].strip()
     path = url_terlihat.split("://", 1)[-1].split("/", 1)[-1] if "://" in url_terlihat else url_terlihat.lstrip("/")
