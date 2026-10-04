@@ -10,11 +10,11 @@ row is enough; full multi-gudang allocation is deferred (see IDEAL_FOLLOWUPS).
 from __future__ import annotations
 
 import uuid
-from datetime import datetime, timezone
+from datetime import date, datetime, timezone
 from decimal import Decimal
 from typing import Optional
 
-from sqlalchemy import Boolean, DateTime, ForeignKey, Integer, Numeric, String, Text, UniqueConstraint, text
+from sqlalchemy import Boolean, Date, DateTime, ForeignKey, Integer, Numeric, String, Text, UniqueConstraint, text
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 
 from tenants.marketplace_erp.modules.marketplace_erp.infrastructure.database import MarketplaceErpBase
@@ -395,6 +395,44 @@ class ShopeePush(MarketplaceErpBase):
     hasil: Mapped[str] = mapped_column(String(32), nullable=False, default="")
     catatan: Mapped[str] = mapped_column(Text, nullable=False, default="")
     badan: Mapped[str] = mapped_column(Text, nullable=False, default="")
+
+
+class IklanHarianToko(MarketplaceErpBase):
+    """Shopee Ads performance of one shop for one day (v2.ads.get_all_cpc_ads_daily_performance, shop level, all
+    campaigns together). One row per (shop, day); pulling a day again refreshes it, since Shopee settles the
+    7-day attribution figures (orders, GMV, ROAS) after the day."""
+
+    __tablename__ = "mpe_iklan_harian_toko"
+    __table_args__ = (UniqueConstraint("akun_id", "tanggal", name="uq_mpe_iklan_harian_toko_akun_tanggal"),)
+
+    id: Mapped[str] = mapped_column(String(64), primary_key=True, default=_uuid)
+    akun_id: Mapped[str] = mapped_column(
+        String(64), ForeignKey("mpe_akun_marketplace.id", ondelete="CASCADE"), nullable=False, index=True
+    )
+    tanggal: Mapped[date] = mapped_column(Date, nullable=False, index=True)
+    impression: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
+    clicks: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
+    direct_order: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
+    broad_order: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
+    direct_item_sold: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
+    broad_item_sold: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
+    direct_gmv: Mapped[Decimal] = mapped_column(Numeric(20, 2), nullable=False, default=Decimal("0"))
+    broad_gmv: Mapped[Decimal] = mapped_column(Numeric(20, 2), nullable=False, default=Decimal("0"))
+    expense: Mapped[Decimal] = mapped_column(Numeric(20, 2), nullable=False, default=Decimal("0"))
+    diambil_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=_utcnow)
+
+
+class IklanSaldoToko(MarketplaceErpBase):
+    """Latest Shopee Ads credit balance of a shop (v2.ads.get_total_balance, paid + free credits)."""
+
+    __tablename__ = "mpe_iklan_saldo_toko"
+
+    akun_id: Mapped[str] = mapped_column(
+        String(64), ForeignKey("mpe_akun_marketplace.id", ondelete="CASCADE"), primary_key=True
+    )
+    saldo: Mapped[Decimal] = mapped_column(Numeric(20, 2), nullable=False, default=Decimal("0"))
+    data_at: Mapped[Optional[datetime]] = mapped_column(DateTime(timezone=True), nullable=True)
+    diambil_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=_utcnow)
 
 
 # --- Tahap 4: iklan (ads) ----------------------------------------------------

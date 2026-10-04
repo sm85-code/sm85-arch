@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import logging
 import time
-from datetime import datetime, timedelta, timezone
+from datetime import date, datetime, timedelta, timezone
 from decimal import Decimal
 
 from fastapi import HTTPException, status
@@ -46,6 +46,8 @@ from tenants.marketplace_erp.modules.marketplace_erp.infrastructure.models impor
     AkunMarketplace,
     Gudang,
     IklanCampaign,
+    IklanHarianToko,
+    IklanSaldoToko,
     IklanMetrikHarian,
     ItemPesanan,
     KatalogShopee,
@@ -369,6 +371,8 @@ async def delete_akun_marketplace(session: AsyncSession, akun_id: str, *, hapus_
     await session.execute(delete(ProdukListing).where(ProdukListing.akun_id == akun_id))
     await session.execute(delete(KatalogShopee).where(KatalogShopee.akun_id == akun_id))
     await session.execute(delete(SettlementPesanan).where(SettlementPesanan.akun_id == akun_id))
+    await session.execute(delete(IklanHarianToko).where(IklanHarianToko.akun_id == akun_id))
+    await session.execute(delete(IklanSaldoToko).where(IklanSaldoToko.akun_id == akun_id))
     await session.refresh(akun)
     await session.delete(akun)
     await session.flush()
@@ -2352,6 +2356,162 @@ async def sinkron_karena_push(session: AsyncSession, shop_id: str) -> str:
         return "toko_belum_terhubung"
     hasil = await sinkron_semua_pesanan(session, [akun], jeda_detik=3, batas_detik=30)
     return hasil[0]["hasil"] if hasil else "kosong"
+
+
+# --- Shopee Ads performance per shop, pulled from Shopee (v2.ads.get_all_cpc_ads_daily_performance) ---------
+
+KUNCI_URUT_IKLAN_TOKO = ("tanggal", "toko", "biaya", "tayang", "klik", "pesanan", "gmv", "roas")
+_ANGKA_IKLAN_TOKO = ("impression", "clicks", "direct_order", "broad_order", "direct_item_sold", "broad_item_sold")
+_UANG_IKLAN_TOKO = ("direct_gmv", "broad_gmv", "expense")
+
+
+def _rasio(a: Decimal | int, b: Decimal | int) -> Decimal | None:
+    return (Decimal(a) / Decimal(b)).quantize(Decimal("0.0001")) if b else None
+
+
+def iklan_harian_toko_out(r: IklanHarianToko, nama_toko: str | None = None) -> dict:
+    return {
+        "id": r.id,
+        "akun_id": r.akun_id,
+        "nama_toko": nama_toko,
+        "tanggal": r.tanggal,
+        **{k: getattr(r, k) for k in _ANGKA_IKLAN_TOKO + _UANG_IKLAN_TOKO},
+        "ctr": _rasio(r.clicks, r.impression),
+        "roas_langsung": _rasio(r.direct_gmv, r.expense),
+        "roas_luas": _rasio(r.broad_gmv, r.expense),
+    }
+
+
+async def simpan_iklan_harian_toko(session: AsyncSession, akun: AkunMarketplace, rows: list[dict], saldo: dict | None = None) -> dict:
+    """Insert or refresh the daily rows of one shop (a day is never duplicated) and keep its latest ads balance."""
+    ada = {
+        r.tanggal: r
+        for r in (
+            await session.execute(
+                select(IklanHarianToko).where(
+                    IklanHarianToko.akun_id == akun.id, IklanHarianToko.tanggal.in_([x["tanggal"] for x in rows] or [date.min])
+                )
+            )
+        ).scalars()
+    }
+    baru = diperbarui = 0
+    for row in rows:
+        rec = ada.get(row["tanggal"])
+        if rec is None:
+            session.add(IklanHarianToko(akun_id=akun.id, **row))
+            baru += 1
+        else:
+            for k, v in row.items():
+                setattr(rec, k, v)
+            rec.diambil_at = datetime.now(timezone.utc)
+            diperbarui += 1
+    if saldo is not None:
+        rec_saldo = await session.get(IklanSaldoToko, akun.id)
+        if rec_saldo is None:
+            session.add(IklanSaldoToko(akun_id=akun.id, saldo=saldo["saldo"], data_at=saldo.get("data_at")))
+        else:
+            rec_saldo.saldo, rec_saldo.data_at, rec_saldo.diambil_at = saldo["saldo"], saldo.get("data_at"), datetime.now(timezone.utc)
+    await session.flush()
+    return {"baru": baru, "diperbarui": diperbarui}
+
+
+IKLAN_HARI_MAKS = 180
+
+
+async def sinkron_iklan_akun(session: AsyncSession, akun: AkunMarketplace, hari: int = 30) -> dict:
+    """Pull the last ``hari`` days (1..180, Shopee keeps 6 months) of this shop's Shopee Ads performance."""
+    from tenants.marketplace_erp.modules.marketplace_erp.infrastructure.adapters import erp_shopee
+
+    if not 1 <= hari <= IKLAN_HARI_MAKS:
+        raise HTTPException(status_code=400, detail=f"hari harus 1 sampai {IKLAN_HARI_MAKS}")
+    sampai = datetime.now(timezone.utc).astimezone(timezone(timedelta(hours=7))).date()  # Shopee days are WIB
+    dari = sampai - timedelta(days=hari - 1)
+    hasil = await erp_shopee.sync_iklan_toko(session, akun, dari, sampai)
+    simpan = await simpan_iklan_harian_toko(session, akun, hasil["hari"], hasil["saldo"])
+    return {"hari": len(hasil["hari"]), "saldo": hasil["saldo"]["saldo"] if hasil["saldo"] else None, **simpan}
+
+
+def _kondisi_iklan_toko(akun_id: str | None, dari: date | None, sampai: date | None) -> list:
+    cond = []
+    if akun_id:
+        cond.append(IklanHarianToko.akun_id == akun_id)
+    if dari:
+        cond.append(IklanHarianToko.tanggal >= dari)
+    if sampai:
+        cond.append(IklanHarianToko.tanggal <= sampai)
+    return cond
+
+
+async def list_iklan_harian_toko(
+    session: AsyncSession,
+    *,
+    akun_id: str | None = None,
+    dari: date | None = None,
+    sampai: date | None = None,
+    urut: str = "tanggal:desc",
+    halaman: int = 1,
+    per_halaman: int = 50,
+) -> dict:
+    kunci, turun = _urut_kunci(urut, sah=KUNCI_URUT_IKLAN_TOKO)
+    roas = case((IklanHarianToko.expense > 0, IklanHarianToko.direct_gmv / func.nullif(IklanHarianToko.expense, 0)), else_=None)
+    kolom = {
+        "tanggal": IklanHarianToko.tanggal,
+        "toko": func.lower(AkunMarketplace.nama_toko),
+        "biaya": IklanHarianToko.expense,
+        "tayang": IklanHarianToko.impression,
+        "klik": IklanHarianToko.clicks,
+        "pesanan": IklanHarianToko.direct_order,
+        "gmv": IklanHarianToko.direct_gmv,
+        "roas": roas,
+    }[kunci]
+    cond = _kondisi_iklan_toko(akun_id, dari, sampai)
+    total = int((await session.execute(select(func.count()).select_from(IklanHarianToko).where(*cond))).scalar_one())
+    stmt = (
+        select(IklanHarianToko, AkunMarketplace.nama_toko)
+        .join(AkunMarketplace, AkunMarketplace.id == IklanHarianToko.akun_id)
+        .where(*cond)
+        .order_by((kolom.desc() if turun else kolom.asc()).nulls_last(), IklanHarianToko.id)
+        .offset((max(halaman, 1) - 1) * per_halaman)
+        .limit(per_halaman)
+    )
+    rows = (await session.execute(stmt)).all()
+    return {"total": total, "halaman": halaman, "per_halaman": per_halaman, "items": [iklan_harian_toko_out(r, n) for r, n in rows]}
+
+
+async def ringkasan_iklan_toko(session: AsyncSession, *, dari: date | None = None, sampai: date | None = None) -> dict:
+    """Totals per shop (and overall) over the period, with ratios and the shop's latest ads balance."""
+    cond = _kondisi_iklan_toko(None, dari, sampai)
+    jumlah = [func.coalesce(func.sum(getattr(IklanHarianToko, k)), 0) for k in _ANGKA_IKLAN_TOKO + _UANG_IKLAN_TOKO]
+    stmt = (
+        select(IklanHarianToko.akun_id, AkunMarketplace.nama_toko, func.count(), func.max(IklanHarianToko.tanggal), *jumlah)
+        .join(AkunMarketplace, AkunMarketplace.id == IklanHarianToko.akun_id)
+        .where(*cond)
+        .group_by(IklanHarianToko.akun_id, AkunMarketplace.nama_toko)
+        .order_by(func.lower(AkunMarketplace.nama_toko))
+    )
+    saldo = {s.akun_id: s for s in (await session.execute(select(IklanSaldoToko))).scalars()}
+    nama = _ANGKA_IKLAN_TOKO + _UANG_IKLAN_TOKO
+
+    def _baris(angka: dict) -> dict:
+        return {
+            **angka,
+            "ctr": _rasio(angka["clicks"], angka["impression"]),
+            "roas_langsung": _rasio(angka["direct_gmv"], angka["expense"]),
+            "roas_luas": _rasio(angka["broad_gmv"], angka["expense"]),
+        }
+
+    toko = []
+    total = {k: Decimal(0) if k in _UANG_IKLAN_TOKO else 0 for k in nama}
+    for akun_id, nama_toko, n, terakhir, *angka in (await session.execute(stmt)).all():
+        a = {k: (Decimal(str(v)) if k in _UANG_IKLAN_TOKO else int(v)) for k, v in zip(nama, angka)}
+        for k in nama:
+            total[k] += a[k]
+        s = saldo.get(akun_id)
+        toko.append({
+            "akun_id": akun_id, "nama_toko": nama_toko, "hari": int(n), "tanggal_terakhir": terakhir,
+            "saldo": s.saldo if s else None, "saldo_at": (s.data_at or s.diambil_at) if s else None, **_baris(a),
+        })
+    return {"toko": toko, "total": {**_baris(total), "saldo": sum((t["saldo"] or Decimal(0)) for t in toko), "hari": max([t["hari"] for t in toko], default=0)}}
 
 
 # --- Tahap 4: Iklan (ads) -------------------------------------------------------
