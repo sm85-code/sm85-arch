@@ -703,7 +703,11 @@ def normalisasi_pesanan(order: dict) -> dict:
 
 
 async def sync_pesanan(
-    session: Any, akun: Any, lewati_resi: frozenset[str] | set[str] = frozenset(), dari: datetime | None = None
+    session: Any,
+    akun: Any,
+    lewati_resi: frozenset[str] | set[str] = frozenset(),
+    dari: datetime | None = None,
+    lengkapi: list[str] | None = None,
 ) -> list[dict]:
     """Pull orders updated since ``dari`` (default: the last ~15 days) via get_order_list, then get_order_detail in batches.
 
@@ -712,6 +716,9 @@ async def sync_pesanan(
 
     Idempotent by design: the caller upserts on (platform, order_sn), so re-pulling the same window
     is harmless. Returns normalised dicts, see normalisasi_pesanan().
+
+    ``lengkapi``: order numbers stored earlier without their real order time that fell out of the 15-day
+    window; their detail is fetched by number so the real ``create_time`` (and current status) is filled in.
     """
     if not live_sync_enabled() or not _akun_configured(akun):
         raise ShopeeNotConfigured(
@@ -736,6 +743,10 @@ async def sync_pesanan(
         cursor = resp.get("next_cursor") or ""
         if not resp.get("more") or not cursor:
             break
+
+    for sn in lengkapi or []:
+        if sn not in order_sn_list:
+            order_sn_list.append(sn)
 
     rows: list[dict] = []
     for i in range(0, len(order_sn_list), _ORDER_DETAIL_BATCH):
