@@ -61,6 +61,13 @@ def test_signature_is_hmac_sha256_of_url_pipe_body_and_the_diagnosis_never_holds
     assert not ok and KEY not in json.dumps(diag) and len(diag["diterima"]) == 8
 
 
+def test_the_diagnosis_fingerprints_the_server_key_without_revealing_it():
+    ok, diag = shopee_push.verifikasi("abcdefghijklmnop", [URL], _body(), "0" * 64)
+    assert not ok and diag["kunci_server"] == {"panjang": 16, "awal": "ab", "akhir": "op"}
+    assert "cdefghijklmn" not in json.dumps(diag)
+    assert "kunci_server" not in shopee_push.verifikasi("", [URL], _body(), "0" * 64)[1]
+
+
 def test_near_variants_made_with_the_same_secret_are_accepted_and_other_keys_are_only_reported():
     import hashlib
     import hmac

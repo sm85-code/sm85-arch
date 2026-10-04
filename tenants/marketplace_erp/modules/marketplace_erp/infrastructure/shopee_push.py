@@ -55,6 +55,11 @@ def kandidat_url(url_terlihat: str, header: dict[str, str]) -> list[str]:
     return list(dict.fromkeys(hasil))
 
 
+def sidik_jari_kunci(key: str) -> dict[str, Any]:
+    """Length plus the first and last two characters: enough to tell two keys apart, useless for using one."""
+    return {"panjang": len(key), "awal": key[:2], "akhir": key[-2:]}
+
+
 def _hmac_hex(key: bytes, pesan: bytes) -> str:
     return hmac.new(key, pesan, hashlib.sha256).hexdigest()
 
@@ -100,6 +105,9 @@ def verifikasi(
     key Shopee used: a match there is reported in the diagnosis but never accepted. The diagnosis holds the first
     8 characters of signatures, never a key."""
     diagnosis: dict[str, Any] = {"ada_key": bool(key), "ada_authorization": bool(authorization), "url_dicoba": urls}
+    if key:
+        # So the owner can compare with the key shown in Open Platform without the key itself being logged.
+        diagnosis["kunci_server"] = sidik_jari_kunci(key)
     if not key or not authorization:
         return False, diagnosis
     diterima = authorization.strip().lower()
