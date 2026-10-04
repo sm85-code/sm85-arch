@@ -9,14 +9,17 @@ import json
 from datetime import date, datetime, timedelta, timezone
 from decimal import Decimal
 
-from sqlalchemy import select
+from sqlalchemy import func, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from tenants.bumi_lestari.modules.bumi_lestari.application.pencairan_format import BarisStandar
 from tenants.bumi_lestari.modules.bumi_lestari.application.pencairan_services import Cocok, kunci_unik, simpan_baris
 from tenants.bumi_lestari.modules.bumi_lestari.infrastructure.models import BlUser
-from tenants.bumi_lestari.modules.bumi_lestari.infrastructure.models_order import BlSaluran
-from tenants.marketplace_erp.modules.marketplace_erp.infrastructure.models import AkunMarketplace, SettlementPesanan
+from tenants.bumi_lestari.modules.bumi_lestari.infrastructure.models_order import BlOrder, BlProduk, BlSaluran
+from tenants.bumi_lestari.modules.bumi_lestari.application.schemas_order import OrderIn
+from tenants.bumi_lestari.modules.bumi_lestari.application import order_services
+from tenants.marketplace_erp.modules.marketplace_erp.infrastructure.models import AkunMarketplace, ItemPesanan, Pesanan, SettlementPesanan
+from sqlalchemy.orm import selectinload
 
 SUMBER = "marketplace_erp"
 # Nama toko yang memang masuk laporan Bumi Lestari. Yang lain tidak disarankan.
@@ -136,3 +139,72 @@ async def tarik(
         except Exception as exc:
             hasil.append({"saluran": sal.nama, "baris": 0, "catatan": str(exc)})
     return {"saluran": hasil}
+
+
+SKU_BELUM = "ERP-BELUM"
+
+
+async def _produk_sementara(session: AsyncSession) -> BlProduk:
+    ada = (await session.execute(select(BlProduk).where(BlProduk.sku == SKU_BELUM))).scalar_one_or_none()
+    if ada:
+        return ada
+    produk = BlProduk(sku=SKU_BELUM, nama="Pesanan ERP, produk belum dipetakan", jenis_produk="kayu", sumber_sistem=SUMBER, sumber_ref=SKU_BELUM)
+    session.add(produk)
+    await session.flush()
+    return produk
+
+
+async def tarik_order(session: AsyncSession, erp: AsyncSession, *, hari: int = 30) -> dict:
+    """Buat order Bumi Lestari dari pesanan ERP toko yang dipasangkan. Nomor pesanan = nomor Shopee."""
+    sejak = datetime.now(timezone.utc) - timedelta(days=hari)
+    saluran = (await session.execute(select(BlSaluran).where(BlSaluran.akun_erp_id.is_not(None)))).scalars().all()
+    produk = await _produk_sementara(session)
+    dibuat = 0
+    for sal in saluran:
+        pesanan = (
+            await erp.execute(
+                select(Pesanan).where(Pesanan.akun_id == sal.akun_erp_id, Pesanan.dipesan_at >= sejak).options(selectinload(Pesanan.items))
+            )
+        ).scalars().all()
+        for pesan in pesanan:
+            item = pesan.items or [None]
+            for baris in item:
+                ref = f"mpe_item_pesanan:{baris.id if baris else pesan.id}"
+                sudah = (await session.execute(select(BlOrder.id).where(BlOrder.sumber_ref == ref))).scalar_one_or_none()
+                if sudah:
+                    continue
+                order = await order_services.create_order(session, OrderIn(
+                    no_order=pesan.id_eksternal,
+                    tanggal_order=(pesan.dipesan_at or pesan.created_at).date(),
+                    saluran_id=sal.id,
+                    nama_pembeli=pesan.nama_pembeli or "",
+                    produk_id=produk.id,
+                    qty=baris.qty if baris else 1,
+                    harga_satuan=baris.harga_satuan if baris else pesan.total,
+                    catatan=baris.nama_produk if baris else "dari ERP",
+                ))
+                order.sumber_sistem = SUMBER
+                order.sumber_ref = ref
+                dibuat += 1
+        menunggu = (
+            await session.execute(
+                select(BlPencairanBaris).where(
+                    BlPencairanBaris.saluran_id == sal.id,
+                    BlPencairanBaris.status_cocok == "tidak_cocok",
+                    BlPencairanBaris.dibatalkan.is_(False),
+                )
+            )
+        ).scalars().all()
+        if menunggu:
+            kode = {r.kode_pesanan.strip().upper() for r in menunggu}
+            orders = (
+                await session.execute(select(BlOrder).where(BlOrder.saluran_id == sal.id, func.upper(BlOrder.no_order).in_(kode)))
+            ).scalars().all()
+            by_no = {o.no_order.strip().upper(): o.id for o in orders}
+            for r in menunggu:
+                oid = by_no.get(r.kode_pesanan.strip().upper())
+                if oid:
+                    r.order_id = oid
+                    r.status_cocok = "cocok"
+    await session.flush()
+    return {"order": dibuat}
