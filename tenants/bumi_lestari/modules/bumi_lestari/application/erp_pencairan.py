@@ -223,13 +223,23 @@ async def tarik_order(session: AsyncSession, erp: AsyncSession, *, hari: int = 3
     return {"order": dibuat}
 
 
+
+async def _pastikan_peta(session: AsyncSession) -> None:
+    from sqlalchemy import text
+    await session.execute(text(
+        "CREATE TABLE IF NOT EXISTS bl_peta_nama (id VARCHAR(64) PRIMARY KEY, nama VARCHAR(255) NOT NULL UNIQUE, produk_id VARCHAR(64) NOT NULL)"
+    ))
+
+
 async def _produk_dari_peta(session: AsyncSession, nama: str) -> str | None:
+    await _pastikan_peta(session)
     from tenants.bumi_lestari.modules.bumi_lestari.infrastructure.models_order import BlPetaNama
     baris = (await session.execute(select(BlPetaNama).where(BlPetaNama.nama == nama.strip()))).scalar_one_or_none()
     return baris.produk_id if baris else None
 
 
 async def daftar_belum_peta(session: AsyncSession) -> list[dict]:
+    await _pastikan_peta(session)
     from tenants.bumi_lestari.modules.bumi_lestari.infrastructure.models_order import BlPetaNama
     sementara = await _produk_sementara(session)
     baris = (await session.execute(select(BlOrder).where(BlOrder.produk_id == sementara.id))).scalars().all()
@@ -241,6 +251,7 @@ async def daftar_belum_peta(session: AsyncSession) -> list[dict]:
 
 
 async def simpan_peta(session: AsyncSession, nama: str, produk_id: str) -> dict:
+    await _pastikan_peta(session)
     from tenants.bumi_lestari.modules.bumi_lestari.infrastructure.models_order import BlPetaNama, BlProduk
     produk = await session.get(BlProduk, produk_id)
     if not produk or produk.sku == SKU_BELUM:
