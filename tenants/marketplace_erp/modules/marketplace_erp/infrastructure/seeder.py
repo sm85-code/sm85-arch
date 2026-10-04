@@ -8,8 +8,10 @@ from __future__ import annotations
 
 import logging
 import os
+import re
+import secrets
 
-from sqlalchemy import select, text
+from sqlalchemy import or_, select, text
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from shared.security import hash_password, verify_password
@@ -36,6 +38,10 @@ DEFAULT_PASSWORD = "password123"
 _SELF_HEAL_COLUMNS = (
     "ALTER TABLE IF EXISTS mpe_users "
     "ADD COLUMN IF NOT EXISTS must_change_password BOOLEAN NOT NULL DEFAULT FALSE",
+    # Usernames: the email is no longer required (it is an optional contact, also accepted at login).
+    "ALTER TABLE IF EXISTS mpe_users ADD COLUMN IF NOT EXISTS username VARCHAR(64)",
+    "ALTER TABLE IF EXISTS mpe_users ALTER COLUMN email DROP NOT NULL",
+    "CREATE UNIQUE INDEX IF NOT EXISTS ix_mpe_users_username ON mpe_users (username)",
     # Tahap 3: manual pengiriman (courier/AWB) fields on the orders inbox.
     "ALTER TABLE IF EXISTS mpe_akun_marketplace ADD COLUMN IF NOT EXISTS terakhir_sinkron_pesanan TIMESTAMPTZ NULL",
     "ALTER TABLE IF EXISTS mpe_akun_marketplace ADD COLUMN IF NOT EXISTS watermark_sinkron_pesanan TIMESTAMPTZ NULL",
@@ -89,44 +95,88 @@ async def _ensure_owner(session: AsyncSession) -> UserMarketplaceErp:
         nama="Owner",
         email=OWNER_EMAIL,
         password_hash=hash_password(DEFAULT_PASSWORD),
-        role="admin",
+        role="owner",
         must_change_password=True,
+        username=None,
     )
     session.add(owner)
     await session.flush()
     return owner
 
 
+def basis_username(teks: str) -> str:
+    """A valid username derived from free text (e.g. the part of an email before the @)."""
+    dasar = re.sub(r"[^a-z0-9._-]+", ".", (teks or "").strip().lower()).strip("._-")
+    dasar = dasar[:28] or "pengguna"
+    if len(dasar) < 3:
+        dasar = (dasar + "user")[:6]
+    return dasar
+
+
+async def username_unik(session: AsyncSession, dasar: str) -> str:
+    """``dasar`` itself when free, else ``dasar2``, ``dasar3``..."""
+    kandidat, nomor = dasar, 1
+    while (
+        await session.execute(select(UserMarketplaceErp.id).where(UserMarketplaceErp.username == kandidat))
+    ).scalar_one_or_none() is not None:
+        nomor += 1
+        kandidat = f"{dasar[:28]}{nomor}"
+    return kandidat
+
+
+async def _isi_username_kosong(session: AsyncSession) -> int:
+    """Accounts from before usernames existed get one from their email (``budi@x.id`` -> ``budi``)."""
+    kosong = (
+        await session.execute(
+            select(UserMarketplaceErp)
+            .where(or_(UserMarketplaceErp.username.is_(None), UserMarketplaceErp.username == ""))
+            .order_by(UserMarketplaceErp.created_at)
+        )
+    ).scalars().all()
+    for user in kosong:
+        user.username = await username_unik(session, basis_username((user.email or user.nama or "").split("@")[0]))
+        await session.flush()
+    return len(kosong)
+
+
+def _sandi_awal_admin() -> tuple[str, bool]:
+    """(password, was it generated). MARKETPLACE_ERP_ADMIN_PASSWORD sets it; otherwise a random one is made and
+    logged once. There is deliberately no fixed default for the most powerful account."""
+    dari_env = (os.getenv("MARKETPLACE_ERP_ADMIN_PASSWORD") or "").strip()
+    if len(dari_env) >= 8:
+        return dari_env, False
+    return secrets.token_urlsafe(12), True
+
+
 async def _ensure_admin(session: AsyncSession) -> UserMarketplaceErp | None:
-    """The ERP always has an admin. When there is none (a database from before the admin role), promote the
-    account named by MARKETPLACE_ERP_ADMIN_EMAIL, else the oldest owner. Returns the promoted user, if any."""
+    """The ERP always has an admin. When there is none, one is created (username ``admin``) with a temporary password
+    that must be changed at first login; the owner can then rename it and set its own password. Returns the new
+    admin, or None when one already existed."""
     ada = (
         await session.execute(select(UserMarketplaceErp.id).where(UserMarketplaceErp.role == "admin").limit(1))
     ).scalar_one_or_none()
-    email = (os.getenv("MARKETPLACE_ERP_ADMIN_EMAIL") or "").strip()
-    if email:
-        pilihan = (
-            await session.execute(select(UserMarketplaceErp).where(UserMarketplaceErp.email == email))
-        ).scalar_one_or_none()
-        if pilihan is not None and pilihan.role != "admin":
-            pilihan.role = "admin"
-            await session.flush()
-            return pilihan
     if ada is not None:
         return None
-    tertua = (
-        await session.execute(
-            select(UserMarketplaceErp)
-            .where(UserMarketplaceErp.role == "owner")
-            .order_by(UserMarketplaceErp.created_at)
-            .limit(1)
-        )
-    ).scalar_one_or_none()
-    if tertua is None:
-        return None
-    tertua.role = "admin"
+    sandi, acak = _sandi_awal_admin()
+    admin = UserMarketplaceErp(
+        nama="Administrator",
+        username=await username_unik(session, "admin"),
+        email=None,
+        password_hash=hash_password(sandi),
+        role="admin",
+        must_change_password=True,
+    )
+    session.add(admin)
     await session.flush()
-    return tertua
+    if acak:
+        logger.warning(
+            "marketplace_erp: admin account created. username=%s temporary password=%s (shown once; change it at "
+            "first login, or set MARKETPLACE_ERP_ADMIN_PASSWORD before the first start)",
+            admin.username, sandi,
+        )
+    else:
+        logger.warning("marketplace_erp: admin account created. username=%s (password from MARKETPLACE_ERP_ADMIN_PASSWORD)", admin.username)
+    return admin
 
 
 async def _ensure_default_gudang(session: AsyncSession) -> Gudang:
@@ -158,9 +208,8 @@ async def ensure_marketplace_erp_schema() -> None:
         return
     await _create_schema(engine)
     async with mpe_database.SessionLocal() as session:
-        diangkat = await _ensure_admin(session)
-        if diangkat is not None:
-            logger.warning("marketplace_erp: %s is now admin", diangkat.email)
+        await _isi_username_kosong(session)
+        await _ensure_admin(session)
         if await _flag_default_password_owner(session):
             logger.warning(
                 "marketplace_erp: seeded owner %s still uses the default password -- "
@@ -176,6 +225,7 @@ async def seed_marketplace_erp(session: AsyncSession) -> dict[str, str]:
     await _create_schema(engine)
 
     owner = await _ensure_owner(session)
+    await _isi_username_kosong(session)
     await _ensure_admin(session)
     gudang = await _ensure_default_gudang(session)
     await session.commit()

@@ -51,7 +51,11 @@ class UserMarketplaceErp(MarketplaceErpBase):
 
     id: Mapped[str] = mapped_column(String(64), primary_key=True, default=_uuid)
     nama: Mapped[str] = mapped_column(String(255), nullable=False)
-    email: Mapped[str] = mapped_column(String(255), nullable=False, unique=True, index=True)
+    # Login name: free text (letters, digits . _ -), unique, set by an admin. Always set by the app; the column is
+    # nullable only so tables from before this column existed can be migrated (see seeder).
+    username: Mapped[Optional[str]] = mapped_column(String(64), nullable=True, unique=True, index=True)
+    # Optional contact email (also accepted at login). The owner of the account sets it in their profile.
+    email: Mapped[Optional[str]] = mapped_column(String(255), nullable=True, unique=True, index=True)
     password_hash: Mapped[str] = mapped_column(String(255), nullable=False)
     role: Mapped[str] = mapped_column(String(32), nullable=False, default="owner")
     # Added after Tahap 2: existing Postgres databases get this column via

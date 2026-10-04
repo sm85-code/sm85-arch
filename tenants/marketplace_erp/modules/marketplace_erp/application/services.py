@@ -57,7 +57,11 @@ from tenants.marketplace_erp.modules.marketplace_erp.infrastructure.models impor
     StokReservasi,
     UserMarketplaceErp,
 )
-from tenants.marketplace_erp.modules.marketplace_erp.infrastructure.seeder import DEFAULT_PASSWORD
+from tenants.marketplace_erp.modules.marketplace_erp.infrastructure.seeder import (
+    DEFAULT_PASSWORD,
+    basis_username,
+    username_unik,
+)
 
 # Orders counted as real sales for reporting -- "unpaid" isn't money yet and
 # "cancelled" clearly isn't a sale, same convention as tenants/toko/modules/erp.
@@ -87,12 +91,42 @@ def _validate_platform(platform: str) -> str:
 # --- Auth --------------------------------------------------------------------
 
 
-async def _cek_email_belum_terdaftar(session: AsyncSession, email: str) -> None:
-    existing = (
-        await session.execute(select(UserMarketplaceErp).where(UserMarketplaceErp.email == email))
-    ).scalar_one_or_none()
-    if existing:
+async def _cek_email_belum_terdaftar(session: AsyncSession, email: str, *, kecuali_id: str | None = None) -> None:
+    stmt = select(UserMarketplaceErp).where(func.lower(UserMarketplaceErp.email) == email.lower())
+    if kecuali_id:
+        stmt = stmt.where(UserMarketplaceErp.id != kecuali_id)
+    if (await session.execute(stmt)).scalar_one_or_none():
         raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail="Email sudah terdaftar")
+
+
+async def _cek_username_belum_dipakai(session: AsyncSession, username: str, *, kecuali_id: str | None = None) -> None:
+    stmt = select(UserMarketplaceErp).where(UserMarketplaceErp.username == username)
+    if kecuali_id:
+        stmt = stmt.where(UserMarketplaceErp.id != kecuali_id)
+    if (await session.execute(stmt)).scalar_one_or_none():
+        raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail="Username sudah dipakai")
+
+
+def _periksa_email_sync(email: str) -> str:
+    """Syntax + DNS check (the domain must exist and be able to receive mail). A DNS timeout is not held against the
+    user. Returns the normalised email."""
+    from email_validator import EmailNotValidError, EmailUndeliverableError, validate_email
+
+    try:
+        return validate_email(email, check_deliverability=True, timeout=4).normalized.lower()
+    except EmailUndeliverableError as exc:
+        raise HTTPException(
+            status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+            detail=f"Email tidak valid: domain tidak ditemukan atau tidak bisa menerima email ({exc})",
+        ) from exc
+    except EmailNotValidError as exc:
+        raise HTTPException(status_code=status.HTTP_422_UNPROCESSABLE_ENTITY, detail=f"Format email tidak valid: {exc}") from exc
+
+
+async def periksa_email(email: str) -> str:
+    import asyncio
+
+    return await asyncio.to_thread(_periksa_email_sync, email)
 
 
 async def register_user(session: AsyncSession, payload: RegisterIn) -> UserMarketplaceErp:
@@ -104,6 +138,7 @@ async def register_user(session: AsyncSession, payload: RegisterIn) -> UserMarke
     await _cek_email_belum_terdaftar(session, payload.email)
     user = UserMarketplaceErp(
         nama=payload.nama,
+        username=await username_unik(session, basis_username(str(payload.email).split("@")[0])),
         email=payload.email,
         password_hash=hash_password(payload.password),
         role="owner",
@@ -117,10 +152,13 @@ async def register_user(session: AsyncSession, payload: RegisterIn) -> UserMarke
 async def create_user(session: AsyncSession, payload: UserCreateIn) -> UserMarketplaceErp:
     """Owner-only account creation. The owner picks a temporary password, so
     the new account must change it on first login."""
-    await _cek_email_belum_terdaftar(session, payload.email)
+    await _cek_username_belum_dipakai(session, payload.username)
+    if payload.email:
+        await _cek_email_belum_terdaftar(session, str(payload.email))
     user = UserMarketplaceErp(
         nama=payload.nama.strip(),
-        email=payload.email,
+        username=payload.username,
+        email=str(payload.email).lower() if payload.email else None,
         password_hash=hash_password(payload.password),
         role=payload.role,
         must_change_password=True,
@@ -143,15 +181,15 @@ def pastikan_boleh_membuat_peran(pembuat_role: str | None, peran_baru: str) -> N
 
 
 async def update_user(session: AsyncSession, user_id: str, payload) -> UserMarketplaceErp:
-    """Admin-only: change another account's username (login email), display name or role. The last admin cannot
-    be demoted, so the ERP never ends up without one."""
+    """Admin-only: change an account's username, display name or role. The last admin cannot be demoted, so the
+    ERP never ends up without one."""
     user = await session.get(UserMarketplaceErp, user_id)
     if user is None:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Pengguna tidak ditemukan")
     data = payload.model_dump(exclude_unset=True, exclude_none=True)
-    if "email" in data and data["email"] != user.email:
-        await _cek_email_belum_terdaftar(session, data["email"])
-        user.email = data["email"]
+    if "username" in data and data["username"] != user.username:
+        await _cek_username_belum_dipakai(session, data["username"], kecuali_id=user.id)
+        user.username = data["username"]
     if "nama" in data:
         user.nama = data["nama"].strip()
     if "role" in data and data["role"] != user.role:
@@ -169,8 +207,19 @@ async def update_user(session: AsyncSession, user_id: str, payload) -> UserMarke
 
 
 async def update_profil(session: AsyncSession, user: UserMarketplaceErp, payload) -> UserMarketplaceErp:
-    """Every account may change its own display name (never its username or role)."""
-    user.nama = payload.nama.strip()
+    """Every account may change its own display name and contact email (never its username or role). A new email
+    must pass the validity check (syntax + the domain can receive mail) and not belong to someone else; an empty
+    one removes it. Only the fields that were sent change."""
+    kirim = payload.model_fields_set
+    if "nama" in kirim and payload.nama:
+        user.nama = payload.nama.strip()
+    if "email" in kirim:
+        if payload.email is None:
+            user.email = None
+        elif payload.email != (user.email or "").lower():
+            email = await periksa_email(payload.email)
+            await _cek_email_belum_terdaftar(session, email, kecuali_id=user.id)
+            user.email = email
     await session.flush()
     return user
 
@@ -204,11 +253,16 @@ async def change_password(
 
 
 async def authenticate_user(session: AsyncSession, payload: LoginIn) -> UserMarketplaceErp:
+    ident = payload.identitas
     user = (
-        await session.execute(select(UserMarketplaceErp).where(UserMarketplaceErp.email == payload.email))
-    ).scalar_one_or_none()
+        await session.execute(
+            select(UserMarketplaceErp).where(
+                or_(func.lower(UserMarketplaceErp.username) == ident, func.lower(UserMarketplaceErp.email) == ident)
+            )
+        )
+    ).scalars().first()
     if not user or not verify_password(payload.password, user.password_hash):
-        raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="Email atau password salah")
+        raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="Username/email atau password salah")
     return user
 
 
