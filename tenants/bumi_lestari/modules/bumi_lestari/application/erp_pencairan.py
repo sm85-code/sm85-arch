@@ -12,14 +12,18 @@ from decimal import Decimal
 from sqlalchemy import func, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from tenants.bumi_lestari.modules.bumi_lestari.application import order_services
 from tenants.bumi_lestari.modules.bumi_lestari.application.pencairan_format import BarisStandar
 from tenants.bumi_lestari.modules.bumi_lestari.application.pencairan_services import Cocok, kunci_unik, simpan_baris
+from tenants.bumi_lestari.modules.bumi_lestari.application.schemas_order import OrderIn
 from tenants.bumi_lestari.modules.bumi_lestari.infrastructure.models import BlUser
 from tenants.bumi_lestari.modules.bumi_lestari.infrastructure.models_order import BlOrder, BlProduk, BlSaluran
-from tenants.bumi_lestari.modules.bumi_lestari.application.schemas_order import OrderIn
-from tenants.bumi_lestari.modules.bumi_lestari.application import order_services
-from tenants.marketplace_erp.modules.marketplace_erp.infrastructure.models import AkunMarketplace, ItemPesanan, Pesanan, SettlementPesanan
-from sqlalchemy.orm import selectinload
+from tenants.bumi_lestari.modules.bumi_lestari.infrastructure.models_pencairan import BlPencairanBaris
+from tenants.marketplace_erp.modules.marketplace_erp.infrastructure.models import (
+    AkunMarketplace,
+    Pesanan,
+    SettlementPesanan,
+)
 
 SUMBER = "marketplace_erp"
 # Nama toko yang memang masuk laporan Bumi Lestari. Yang lain tidak disarankan.
@@ -198,7 +202,9 @@ async def tarik_order(session: AsyncSession, erp: AsyncSession, *, hari: int = 3
         if menunggu:
             kode = {r.kode_pesanan.strip().upper() for r in menunggu}
             orders = (
-                await session.execute(select(BlOrder).where(BlOrder.saluran_id == sal.id, func.upper(BlOrder.no_order).in_(kode)))
+                await session.execute(
+                    select(BlOrder).where(BlOrder.saluran_id == sal.id, func.upper(BlOrder.no_order).in_(kode))
+                )
             ).scalars().all()
             by_no = {o.no_order.strip().upper(): o.id for o in orders}
             for r in menunggu:
