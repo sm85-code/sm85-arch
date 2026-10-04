@@ -96,7 +96,7 @@ def baris_dari(settlement: SettlementPesanan) -> BarisStandar:
 async def daftar_toko(erp: AsyncSession) -> list[dict]:
     rows = (await erp.execute(select(AkunMarketplace).where(AkunMarketplace.platform == "shopee"))).scalars().all()
     return [
-        {"id": a.id, "nama": a.nama_toko, "shop_id": a.id_toko_eksternal, "masuk": a.nama_toko.strip().lower() in MASUK}
+        {"id": a.id, "nama": a.nama_toko, "shop_id": a.id_toko_eksternal, "masuk": a.nama_toko.strip().lower() in MASUK or ("azfa furniture" in a.nama_toko.lower() and "digital" not in a.nama_toko.lower())}
         for a in rows
     ]
 
