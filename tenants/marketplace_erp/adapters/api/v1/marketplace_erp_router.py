@@ -16,7 +16,7 @@ import logging
 import os
 import secrets as pysecrets
 from types import SimpleNamespace
-from datetime import datetime, timezone
+from datetime import date, datetime, timezone
 
 from fastapi import APIRouter, BackgroundTasks, Depends, HTTPException, Query, Request, Response, status
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -1004,6 +1004,55 @@ async def log_push_shopee(
 ):
     """The latest pushes Shopee sent (newest first): what arrived, from which shop, and what the ERP did with it."""
     return await services.list_push(session, limit)
+
+
+@marketplace_erp_router.post("/akun/{akun_id}/sync/iklan")
+async def sync_iklan_akun(
+    akun_id: str,
+    hari: int = Query(30, ge=1, le=180, description="berapa hari ke belakang (Shopee menyimpan 6 bulan)"),
+    session: AsyncSession = Depends(get_db_marketplace_erp),
+    _: UserMarketplaceErp = Depends(require_roles_marketplace_erp(*OWNER_ONLY)),
+):
+    """Pull this shop's Shopee Ads performance per day and its ads balance."""
+    akun = await services.get_akun_marketplace(session, akun_id)
+    if akun.platform == "shopee":
+        try:
+            hasil = await services.sinkron_iklan_akun(session, akun, hari)
+        except NotImplementedError as exc:
+            raise HTTPException(status_code=status.HTTP_501_NOT_IMPLEMENTED, detail=str(exc)) from exc
+        return {"ok": True, **hasil}
+    raise HTTPException(
+        status_code=status.HTTP_501_NOT_IMPLEMENTED,
+        detail=f"Iklan untuk platform '{akun.platform}' belum tersedia (Shopee first)",
+    )
+
+
+@marketplace_erp_router.get("/iklan-toko/ringkasan")
+async def ringkasan_iklan_toko(
+    dari: date | None = None,
+    sampai: date | None = None,
+    session: AsyncSession = Depends(get_db_marketplace_erp),
+    _: UserMarketplaceErp = Depends(require_roles_marketplace_erp(*OWNER_ONLY)),
+):
+    """Shopee Ads totals per shop for the period (dates are Shopee/WIB days), with each shop's latest ads balance."""
+    return await services.ringkasan_iklan_toko(session, dari=dari, sampai=sampai)
+
+
+@marketplace_erp_router.get("/iklan-toko/harian")
+async def list_iklan_harian_toko(
+    akun_id: str | None = Query(None, description="kosong = semua toko"),
+    dari: date | None = None,
+    sampai: date | None = None,
+    urut: str = Query("tanggal:desc", description="<kolom>:asc|desc, kolom: tanggal toko biaya tayang klik pesanan gmv roas"),
+    halaman: int = Query(1, ge=1),
+    per_halaman: int = Query(50, ge=1, le=200),
+    session: AsyncSession = Depends(get_db_marketplace_erp),
+    _: UserMarketplaceErp = Depends(require_roles_marketplace_erp(*OWNER_ONLY)),
+):
+    """Shopee Ads performance per shop per day, with the shop name on every row."""
+    return await services.list_iklan_harian_toko(
+        session, akun_id=akun_id, dari=dari, sampai=sampai, urut=urut, halaman=halaman, per_halaman=per_halaman
+    )
 
 
 @marketplace_erp_router.post("/akun/{akun_id}/sync/settlement")

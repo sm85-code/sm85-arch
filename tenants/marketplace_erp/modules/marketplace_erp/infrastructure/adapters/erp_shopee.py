@@ -19,7 +19,7 @@ import json
 import logging
 import os
 import time
-from datetime import datetime, timedelta, timezone
+from datetime import date, datetime, timedelta, timezone
 from decimal import Decimal
 from typing import Any
 from urllib.parse import urlencode
@@ -887,6 +887,81 @@ async def sync_settlement(
 
     await asyncio.gather(*(_satu(e) for e in baru[:maks_detail]))
     return {"rows": rows, "ditemukan": len(daftar), "sisa": len(baru) - len(rows)}
+
+
+# --- Ads: shop-level performance and balance (v2.ads.*) ---------------------------------
+
+_PATH_ADS_HARIAN = "/api/v2/ads/get_all_cpc_ads_daily_performance"
+_PATH_ADS_SALDO = "/api/v2/ads/get_total_balance"
+# Shopee: a range may not be longer than 1 month, start may not equal end, and nothing older than 6 months.
+ADS_RENTANG_MAKS_HARI = 28
+ADS_HARI_MAKS = 180
+
+
+def _tanggal_ads(nilai: Any) -> "date | None":
+    """'17-03-2021' (the format Shopee Ads uses) -> date."""
+    try:
+        return datetime.strptime(str(nilai), "%d-%m-%Y").date()
+    except ValueError:
+        return None
+
+
+def normalisasi_iklan_harian(entry: dict) -> dict | None:
+    """One day of get_all_cpc_ads_daily_performance -> neutral dict (None when the date is unreadable)."""
+    tanggal = _tanggal_ads(entry.get("date"))
+    if tanggal is None:
+        return None
+    return {
+        "tanggal": tanggal,
+        "impression": int(entry.get("impression") or 0),
+        "clicks": int(entry.get("clicks") or 0),
+        "direct_order": int(entry.get("direct_order") or 0),
+        "broad_order": int(entry.get("broad_order") or 0),
+        "direct_item_sold": int(entry.get("direct_item_sold") or 0),
+        "broad_item_sold": int(entry.get("broad_item_sold") or 0),
+        "direct_gmv": _uang(entry.get("direct_gmv")),
+        "broad_gmv": _uang(entry.get("broad_gmv")),
+        "expense": _uang(entry.get("expense")),
+    }
+
+
+def potong_rentang_iklan(dari: "date", sampai: "date") -> list[tuple["date", "date"]]:
+    """Windows Shopee accepts: at most ADS_RENTANG_MAKS_HARI days each and never a single day (start != end, so a
+    one-day request is widened to the day before)."""
+    jendela: list[tuple[date, date]] = []
+    awal = dari
+    while awal <= sampai:
+        akhir = min(awal + timedelta(days=ADS_RENTANG_MAKS_HARI - 1), sampai)
+        if akhir == awal:
+            awal = awal - timedelta(days=1)
+        jendela.append((awal, akhir))
+        awal = akhir + timedelta(days=1)
+    return jendela
+
+
+async def sync_iklan_toko(session: Any, akun: Any, dari: "date", sampai: "date") -> dict:
+    """Ads performance per day for [dari, sampai] plus the current ads balance. A shop without Shopee Ads (or whose
+    token lacks the Ads permission) raises the API error; the caller reports it per shop."""
+    if not live_sync_enabled() or not _akun_configured(akun):
+        raise ShopeeNotConfigured("Shopee live sync nonaktif atau akun belum terhubung.")
+    hari: dict[date, dict] = {}
+    for awal, akhir in potong_rentang_iklan(dari, sampai):
+        data = await signed_shop_request(
+            session,
+            akun,
+            _PATH_ADS_HARIAN,
+            params={"start_date": awal.strftime("%d-%m-%Y"), "end_date": akhir.strftime("%d-%m-%Y")},
+        )
+        for entry in data.get("response") or []:
+            baris = normalisasi_iklan_harian(entry)
+            if baris is not None and dari <= baris["tanggal"] <= sampai:
+                hari[baris["tanggal"]] = baris
+    saldo = None
+    data = await signed_shop_request(session, akun, _PATH_ADS_SALDO)
+    resp = data.get("response") or {}
+    if resp.get("total_balance") is not None:
+        saldo = {"saldo": _uang(resp.get("total_balance")), "data_at": _waktu_epoch(resp.get("data_timestamp"))}
+    return {"hari": [hari[k] for k in sorted(hari)], "saldo": saldo}
 
 
 # --- Logistics: arrange shipment + shipping label ---------------------------------
