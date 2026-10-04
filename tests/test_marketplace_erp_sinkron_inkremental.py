@@ -77,7 +77,7 @@ async def _toko(session):
 def _fake_adapter(monkeypatch, gagal=False):
     dipanggil = []
 
-    async def fake(session, akun, lewati_resi=frozenset(), dari=None):
+    async def fake(session, akun, lewati_resi=frozenset(), dari=None, lengkapi=None):
         dipanggil.append(dari)
         if gagal:
             raise HTTPException(status_code=502, detail="Shopee gagal")

@@ -190,3 +190,14 @@ async def test_orders_sort_by_every_column_both_ways_with_old_values_still_worki
         await urut("harga:asc")
     with pytest.raises(Exception):
         await urut("total:naik")
+
+
+@pytest.mark.asyncio
+async def test_orders_without_order_time_are_listed_for_completion_until_filled(session):
+    a, b = await _toko(session, "Toko A"), await _toko(session, "Toko B")
+    await services.impor_pesanan_marketplace(session, a, [{**_order("OLD1", "unpaid", "UNPAID"), "dipesan_at": None}])
+    await services.impor_pesanan_marketplace(session, a, [_order("OK1", "to_ship", "READY_TO_SHIP")])
+    await services.impor_pesanan_marketplace(session, b, [{**_order("OTHER", "unpaid", "UNPAID"), "dipesan_at": None}])
+    assert await services.id_pesanan_tanpa_waktu_pesan(session, a) == ["OLD1"]  # only this shop, only the missing ones
+    await services.impor_pesanan_marketplace(session, a, [_order("OLD1", "unpaid", "UNPAID")])
+    assert await services.id_pesanan_tanpa_waktu_pesan(session, a) == []

@@ -215,3 +215,24 @@ async def test_unmapped_item_and_unknown_status(session):
     assert hasil["baru"] == 1 and hasil["dilewati"] == 1
     (pesanan,) = await services.list_pesanan(session, platform="shopee")
     assert pesanan.items[0].produk_id is None and pesanan.status == "to_ship"
+
+
+@pytest.mark.asyncio
+async def test_sync_pesanan_fetches_detail_of_orders_to_complete(monkeypatch):
+    """Orders stored without their real order time (outside the 15-day window) are fetched by number."""
+    monkeypatch.setattr(erp_shopee, "SHOPEE_LIVE_SYNC", True)
+    monkeypatch.setattr(erp_shopee, "SHOPEE_PARTNER_ID", "1")
+    monkeypatch.setattr(erp_shopee, "SHOPEE_PARTNER_KEY", "k")
+    akun = SimpleNamespace(access_token="at", id_toko_eksternal="5")
+
+    async def fake_request(session, akun, path, *, params=None, **_):
+        if path == erp_shopee._PATH_ORDER_LIST:
+            return {"response": {"more": False, "order_list": [{"order_sn": "NEW1"}]}}
+        sns = params["order_sn_list"].split(",")
+        return {"response": {"order_list": [{"order_sn": sn, "order_status": "CANCELLED", "create_time": 1_753_400_000} for sn in sns]}}
+
+    monkeypatch.setattr(erp_shopee, "signed_shop_request", fake_request)
+    rows = await erp_shopee.sync_pesanan(None, akun, lengkapi=["OLD1", "NEW1"])
+
+    assert sorted(r["id_eksternal"] for r in rows) == ["NEW1", "OLD1"]  # no duplicate for NEW1
+    assert next(r for r in rows if r["id_eksternal"] == "OLD1")["dipesan_at"].year == 2025

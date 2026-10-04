@@ -1540,6 +1540,21 @@ def _aware(waktu: datetime | None) -> datetime | None:
     return waktu if waktu is None or waktu.tzinfo else waktu.replace(tzinfo=timezone.utc)
 
 
+# Orders stored before the real order time was kept are completed this many per sync (Shopee rate limits).
+BATAS_LENGKAPI_WAKTU_PESAN = 100
+
+
+async def id_pesanan_tanpa_waktu_pesan(session: AsyncSession, akun: AkunMarketplace) -> list[str]:
+    """Order numbers of this shop that still lack ``dipesan_at`` (newest first, capped per sync)."""
+    hasil = await session.execute(
+        select(Pesanan.id_eksternal)
+        .where(Pesanan.akun_id == akun.id, Pesanan.dipesan_at.is_(None))
+        .order_by(Pesanan.created_at.desc())
+        .limit(BATAS_LENGKAPI_WAKTU_PESAN)
+    )
+    return [r for (r,) in hasil.all()]
+
+
 async def sinkron_pesanan_akun(session: AsyncSession, akun: AkunMarketplace, *, penuh: bool = False) -> dict:
     """Pull one shop's orders from Shopee and import them. Returns the import counts + pulled.
 
@@ -1556,7 +1571,11 @@ async def sinkron_pesanan_akun(session: AsyncSession, akun: AkunMarketplace, *, 
     perlu_penuh = penuh or watermark is None or terakhir_penuh is None or mulai - terakhir_penuh >= BATAS_SINKRON_PENUH
 
     rows = await erp_shopee.sync_pesanan(
-        session, akun, await id_pesanan_punya_resi(session, akun), None if perlu_penuh else watermark
+        session,
+        akun,
+        await id_pesanan_punya_resi(session, akun),
+        None if perlu_penuh else watermark,
+        await id_pesanan_tanpa_waktu_pesan(session, akun),
     )
     async with session.begin_nested():  # a failure while importing leaves no half-imported shop behind
         hasil = await impor_pesanan_marketplace(session, akun, rows)
