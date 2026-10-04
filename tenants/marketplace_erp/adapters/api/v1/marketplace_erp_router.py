@@ -1040,6 +1040,7 @@ async def sync_produk_akun(
 async def list_katalog_shopee(
     akun_id: str | None = Query(None, description="kosong = semua toko"),
     q: str | None = Query(None, max_length=100),
+    status: str | None = Query(None, description="status Shopee: NORMAL (aktif), UNLIST (tidak aktif), BANNED (diblokir), REVIEWING (ditinjau); kosong = semua"),
     belum_dikirim: bool = Query(False),
     urut: str = Query("toko:asc", description="<kolom>:asc|desc, kolom: toko nama sku harga stok berat status dikirim diambil"),
     halaman: int = Query(1, ge=1),
@@ -1049,21 +1050,25 @@ async def list_katalog_shopee(
 ):
     """Products pulled from the Shopee shops, each row tagged with its shop. Never merged across shops."""
     return await services.list_katalog_shopee(
-        session, akun_id=akun_id, q=q, belum_dikirim=belum_dikirim, urut=urut, halaman=halaman, per_halaman=per_halaman
+        session, akun_id=akun_id, q=q, status=status, belum_dikirim=belum_dikirim, urut=urut, halaman=halaman, per_halaman=per_halaman
     )
 
 
 @marketplace_erp_router.get("/katalog-shopee/ringkasan")
 async def ringkasan_katalog_shopee(
+    status: str | None = Query(None, description="hitung toko hanya untuk status ini (kosong = semua)"),
+    akun_id: str | None = Query(None, description="hitung status hanya untuk toko ini (kosong = semua)"),
     session: AsyncSession = Depends(get_db_marketplace_erp),
     _: UserMarketplaceErp = Depends(require_roles_marketplace_erp(*OWNER_OR_STAFF)),
 ):
-    """Filter tabs: one entry per Shopee shop with its product count (shops never pulled show 0)."""
-    jumlah = await services.jumlah_katalog_per_toko(session)
+    """Filter options: products per Shopee shop (within ``status``) and per Shopee status (within ``akun_id``);
+    shops never synced show 0."""
+    jumlah = await services.jumlah_katalog_per_toko(session, status)
     toko = [a for a in await services.list_akun_marketplace(session, platform="shopee") if a.id_toko_eksternal]
     return {
         "total": sum(jumlah.values()),
         "toko": [{"akun_id": a.id, "nama_toko": a.nama_toko, "jumlah": jumlah.get(a.id, 0)} for a in toko],
+        "status": await services.jumlah_katalog_per_status(session, akun_id),
     }
 
 

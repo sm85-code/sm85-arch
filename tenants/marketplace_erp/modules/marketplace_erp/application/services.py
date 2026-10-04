@@ -731,6 +731,7 @@ async def list_katalog_shopee(
     *,
     akun_id: str | None = None,
     q: str | None = None,
+    status: str | None = None,
     belum_dikirim: bool = False,
     urut: str = "toko:asc",
     halaman: int = 1,
@@ -757,6 +758,8 @@ async def list_katalog_shopee(
     if q and q.strip():
         like = f"%{q.strip().lower()}%"
         cond.append(or_(func.lower(KatalogShopee.nama).like(like), func.lower(KatalogShopee.sku).like(like)))
+    if status and status.strip():
+        cond.append(KatalogShopee.status == _status_katalog(status))
     if belum_dikirim:
         cond.append(KatalogShopee.dikirim_toko_id.is_(None))
     total = int((await session.execute(select(func.count()).select_from(KatalogShopee).where(*cond))).scalar_one())
@@ -772,9 +775,31 @@ async def list_katalog_shopee(
     return {"total": total, "halaman": halaman, "per_halaman": per_halaman, "items": [katalog_out(k, n) for k, n in rows]}
 
 
-async def jumlah_katalog_per_toko(session: AsyncSession) -> dict[str, int]:
-    rows = (await session.execute(select(KatalogShopee.akun_id, func.count()).group_by(KatalogShopee.akun_id))).all()
-    return {a: int(n) for a, n in rows}
+# Shopee's item_status values, as shown in the Katalog filter (Seller Centre wording).
+STATUS_KATALOG = ("NORMAL", "UNLIST", "BANNED", "REVIEWING")
+
+
+def _status_katalog(status: str) -> str:
+    nilai = status.strip().upper()
+    if nilai not in STATUS_KATALOG:
+        raise HTTPException(status_code=400, detail=f"status harus salah satu dari {STATUS_KATALOG}")
+    return nilai
+
+
+async def jumlah_katalog_per_toko(session: AsyncSession, status: str | None = None) -> dict[str, int]:
+    stmt = select(KatalogShopee.akun_id, func.count()).group_by(KatalogShopee.akun_id)
+    if status and status.strip():
+        stmt = stmt.where(KatalogShopee.status == _status_katalog(status))
+    return {a: int(n) for a, n in (await session.execute(stmt)).all()}
+
+
+async def jumlah_katalog_per_status(session: AsyncSession, akun_id: str | None = None) -> dict[str, int]:
+    """Product count per Shopee status (every status of STATUS_KATALOG is present, 0 when none)."""
+    stmt = select(KatalogShopee.status, func.count()).group_by(KatalogShopee.status)
+    if akun_id:
+        stmt = stmt.where(KatalogShopee.akun_id == akun_id)
+    jumlah = {s: int(n) for s, n in (await session.execute(stmt)).all()}
+    return {s: jumlah.get(s, 0) for s in STATUS_KATALOG}
 
 
 async def get_katalog_shopee(session: AsyncSession, katalog_id: str) -> tuple[KatalogShopee, str]:

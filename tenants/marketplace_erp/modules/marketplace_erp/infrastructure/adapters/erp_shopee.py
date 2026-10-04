@@ -384,6 +384,9 @@ _ITEM_LIST_PAGE_SIZE = 100
 _ITEM_LIST_MAX_PAGES = 10
 _ITEM_BASE_BATCH = 50
 _MODEL_CONCURRENCY = 5
+# Shopee item_status values pulled into the catalogue (NORMAL = Aktif, UNLIST = Tidak aktif, BANNED = Diblokir,
+# REVIEWING = Sedang ditinjau); deleted items (SELLER_DELETE, SHOPEE_DELETE) are not shown in Seller Centre either.
+STATUS_KATALOG = ("NORMAL", "UNLIST", "BANNED", "REVIEWING")
 _PUSH_BATCH = 50
 
 
@@ -511,7 +514,8 @@ def normalisasi_katalog(item: dict, model_resp: dict | None = None) -> dict:
 
 
 async def ambil_item_mentah(session: Any, akun: Any) -> list[tuple[dict, dict | None]]:
-    """Pull the shop catalogue (NORMAL + UNLIST items) as (get_item_base_info entry, get_model_list response)."""
+    """Pull the shop catalogue (active, unlisted, banned and under-review items, as Seller Centre shows them) as
+    (get_item_base_info entry, get_model_list response)."""
     if not live_sync_enabled() or not _akun_configured(akun):
         raise ShopeeNotConfigured(
             "Shopee live sync nonaktif atau akun belum terhubung. "
@@ -529,7 +533,7 @@ async def ambil_item_mentah(session: Any, akun: Any) -> list[tuple[dict, dict | 
             params={
                 "offset": offset,
                 "page_size": _ITEM_LIST_PAGE_SIZE,
-                "item_status": ["NORMAL", "UNLIST"],
+                "item_status": list(STATUS_KATALOG),
             },
         )
         resp = data.get("response") or {}
@@ -552,7 +556,12 @@ async def ambil_item_mentah(session: Any, akun: Any) -> list[tuple[dict, dict | 
         if not item.get("has_model"):
             return None
         async with gate:
-            data = await signed_shop_request(session, akun, _PATH_MODEL_LIST, params={"item_id": item["item_id"]})
+            try:
+                data = await signed_shop_request(session, akun, _PATH_MODEL_LIST, params={"item_id": item["item_id"]})
+            except HTTPException:
+                if str(item.get("item_status") or "NORMAL").upper() in ("NORMAL", "UNLIST"):
+                    raise
+                return None  # a banned / under-review item may have no readable variants: keep the item itself
         return data.get("response") or {}
 
     model_resps = await asyncio.gather(*(_models(it) for it in items))

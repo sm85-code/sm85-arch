@@ -244,3 +244,73 @@ async def test_catalogue_sorts_by_each_column_and_old_values_still_work(session)
     assert (await urut("terbaru"))[0] in {"Alas", "Kursi", "Meja"}
     with pytest.raises(Exception):
         await urut("deskripsi:asc")
+
+
+@pytest.mark.asyncio
+async def test_catalogue_filters_by_shopee_status_and_counts_each_status(session):
+    from fastapi import HTTPException
+
+    a, b = await _toko(session, "Toko A"), await _toko(session, "Toko B")
+    await services.simpan_katalog_shopee(
+        session,
+        a,
+        [
+            erp_shopee.normalisasi_katalog(_item(1, "Aktif A", 1)),
+            erp_shopee.normalisasi_katalog(_item(2, "Arsip A", 1, item_status="UNLIST")),
+            erp_shopee.normalisasi_katalog(_item(3, "Blokir A", 1, item_status="BANNED")),
+        ],
+    )
+    await services.simpan_katalog_shopee(session, b, [erp_shopee.normalisasi_katalog(_item(9, "Tinjau B", 1, item_status="REVIEWING"))])
+
+    nama = lambda out: sorted(i["nama"] for i in out["items"])  # noqa: E731
+    assert nama(await services.list_katalog_shopee(session, status="NORMAL")) == ["Aktif A"]
+    assert nama(await services.list_katalog_shopee(session, status="unlist")) == ["Arsip A"]  # case does not matter
+    assert nama(await services.list_katalog_shopee(session, status="REVIEWING")) == ["Tinjau B"]
+    assert (await services.list_katalog_shopee(session))["total"] == 4 and (await services.list_katalog_shopee(session, status=""))["total"] == 4
+    assert nama(await services.list_katalog_shopee(session, akun_id=a.id, status="BANNED")) == ["Blokir A"]
+    with pytest.raises(HTTPException) as exc:
+        await services.list_katalog_shopee(session, status="DELETED")
+    assert exc.value.status_code == 400
+
+    assert await services.jumlah_katalog_per_status(session) == {"NORMAL": 1, "UNLIST": 1, "BANNED": 1, "REVIEWING": 1}
+    assert await services.jumlah_katalog_per_status(session, b.id) == {"NORMAL": 0, "UNLIST": 0, "BANNED": 0, "REVIEWING": 1}
+    assert await services.jumlah_katalog_per_toko(session, "NORMAL") == {a.id: 1}  # shop counts follow the status filter
+
+
+@pytest.mark.asyncio
+async def test_catalogue_pull_asks_for_all_visible_statuses_and_survives_a_banned_item_without_variants(monkeypatch):
+    from types import SimpleNamespace
+
+    from fastapi import HTTPException
+
+    monkeypatch.setattr(erp_shopee, "SHOPEE_LIVE_SYNC", True)
+    monkeypatch.setattr(erp_shopee, "SHOPEE_PARTNER_ID", "1")
+    monkeypatch.setattr(erp_shopee, "SHOPEE_PARTNER_KEY", "k")
+    diminta = []
+
+    async def fake(session, akun, path, *, params=None, **_):
+        if path == erp_shopee._PATH_ITEM_LIST:
+            diminta.append(params["item_status"])
+            return {"response": {"item": [{"item_id": 1}, {"item_id": 2}], "has_next_page": False}}
+        if path == erp_shopee._PATH_ITEM_BASE:
+            return {"response": {"item_list": [
+                {"item_id": 1, "item_status": "BANNED", "has_model": True},
+                {"item_id": 2, "item_status": "NORMAL", "has_model": False},
+            ]}}
+        raise HTTPException(status_code=502, detail="model list gagal")  # only the banned item has variants to read
+
+    monkeypatch.setattr(erp_shopee, "signed_shop_request", fake)
+    hasil = await erp_shopee.ambil_item_mentah(None, SimpleNamespace(access_token="at", id_toko_eksternal="5"))
+    assert diminta == [["NORMAL", "UNLIST", "BANNED", "REVIEWING"]]
+    assert [(i["item_id"], m) for i, m in hasil] == [(1, None), (2, None)]  # the banned item is kept, without variants
+
+    async def selalu_gagal(session, akun, path, *, params=None, **_):
+        if path == erp_shopee._PATH_ITEM_LIST:
+            return {"response": {"item": [{"item_id": 3}], "has_next_page": False}}
+        if path == erp_shopee._PATH_ITEM_BASE:
+            return {"response": {"item_list": [{"item_id": 3, "item_status": "NORMAL", "has_model": True}]}}
+        raise HTTPException(status_code=502, detail="model list gagal")
+
+    monkeypatch.setattr(erp_shopee, "signed_shop_request", selalu_gagal)
+    with pytest.raises(HTTPException):  # an active item whose variants cannot be read still fails the pull (data would be wrong)
+        await erp_shopee.ambil_item_mentah(None, SimpleNamespace(access_token="at", id_toko_eksternal="5"))
