@@ -652,6 +652,14 @@ _ORDER_DETAIL_BATCH = 50
 _ORDER_LIST_MAX_PAGES = 20
 
 
+def _waktu_epoch(value: Any) -> datetime | None:
+    """Shopee unix seconds -> aware UTC datetime (None when absent or not a number)."""
+    try:
+        return datetime.fromtimestamp(int(value), tz=timezone.utc) if value else None
+    except (TypeError, ValueError, OverflowError, OSError):
+        return None
+
+
 def normalisasi_pesanan(order: dict) -> dict:
     """Shopee get_order_detail entry -> neutral dict consumed by services.impor_pesanan_marketplace.
 
@@ -689,6 +697,7 @@ def normalisasi_pesanan(order: dict) -> dict:
         "nama_pembeli": str(order.get("buyer_username") or ""),
         "total": Decimal(str(order.get("total_amount") or 0)),
         "kurir": str(order.get("shipping_carrier") or "").strip() or None,
+        "dipesan_at": _waktu_epoch(order.get("create_time")),
         "items": items,
     }
 

@@ -427,6 +427,7 @@ class PesananOut(BaseModel):
     kurir: Optional[str] = None
     nomor_resi: Optional[str] = None
     tanggal_kirim: Optional[datetime] = None
+    dipesan_at: Optional[datetime] = None
     items: list[ItemPesananOut] = Field(default_factory=list)
     created_at: datetime
     updated_at: datetime

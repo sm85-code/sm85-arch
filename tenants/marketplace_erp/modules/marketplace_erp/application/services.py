@@ -6,7 +6,7 @@ from datetime import datetime, timedelta, timezone
 from decimal import Decimal
 
 from fastapi import HTTPException, status
-from sqlalchemy import delete, func, or_, select, update
+from sqlalchemy import and_, case, delete, exists, func, literal, or_, select, update
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import selectinload
@@ -1056,6 +1056,151 @@ async def list_pesanan(
     return list((await session.execute(stmt)).scalars().all())
 
 
+# --- Pesanan: filterable, paged list + counts for the filter chips ---------------
+
+# Shopee statuses after "arrange shipment" (kept in step with lib/pesanan.ts SUDAH_DIPROSES in the frontend).
+_MP_SUDAH_DIPROSES = ("PROCESSED", "SHIPPED", "TO_CONFIRM_RECEIVE", "COMPLETED")
+TAHAP_PESANAN = ("belum_bayar", "perlu_diproses", "menunggu_kurir", "dikirim", "selesai", "dibatalkan")
+URUTAN_PESANAN = ("terbaru", "terlama", "total_besar", "total_kecil")
+
+
+def _tgl_pesanan():
+    """When the order was placed: the marketplace's time, or the time the ERP first saw it."""
+    return func.coalesce(Pesanan.dipesan_at, Pesanan.created_at)
+
+
+def _kondisi_tahap(tahap: str):
+    sudah = Pesanan.status_marketplace.in_(_MP_SUDAH_DIPROSES)
+    return {
+        "belum_bayar": Pesanan.status == "unpaid",
+        "perlu_diproses": and_(Pesanan.status == "to_ship", or_(Pesanan.status_marketplace.is_(None), ~sudah)),
+        "menunggu_kurir": and_(Pesanan.status == "to_ship", sudah),
+        "dikirim": Pesanan.status == "shipped",
+        "selesai": Pesanan.status == "completed",
+        "dibatalkan": Pesanan.status == "cancelled",
+    }[tahap]
+
+
+def _ekspresi_tahap():
+    return case(
+        *[(_kondisi_tahap(t), literal(t)) for t in TAHAP_PESANAN[:-1]],
+        else_=literal("dibatalkan"),
+    )
+
+
+def _kondisi_pesanan(
+    *,
+    akun_id: str | None = None,
+    akun_diizinkan: set[str] | None = None,
+    tahap: str | None = None,
+    resi: str | None = None,
+    q: str | None = None,
+    dari: datetime | None = None,
+    sampai: datetime | None = None,
+) -> list:
+    cond = []
+    if akun_diizinkan is not None:
+        cond.append(Pesanan.akun_id.in_(akun_diizinkan) if akun_diizinkan else literal(False))
+    if akun_id:
+        cond.append(Pesanan.akun_id == akun_id)
+    if tahap:
+        if tahap not in TAHAP_PESANAN:
+            raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=f"tahap harus salah satu dari {TAHAP_PESANAN}")
+        cond.append(_kondisi_tahap(tahap))
+    if resi:
+        if resi not in ("belum", "sudah"):
+            raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="resi harus 'belum' atau 'sudah'")
+        cond += [
+            Pesanan.status == "to_ship",
+            Pesanan.status_marketplace == "PROCESSED",
+            Pesanan.resi_dicetak_at.is_not(None) if resi == "sudah" else Pesanan.resi_dicetak_at.is_(None),
+        ]
+    if q and q.strip():
+        like = f"%{q.strip().lower()}%"
+        cond.append(
+            or_(
+                func.lower(Pesanan.id_eksternal).like(like),
+                func.lower(Pesanan.nama_pembeli).like(like),
+                func.lower(func.coalesce(Pesanan.nomor_resi, "")).like(like),
+                exists().where(ItemPesanan.pesanan_id == Pesanan.id, func.lower(ItemPesanan.nama_produk).like(like)),
+            )
+        )
+    if dari:
+        cond.append(_tgl_pesanan() >= dari)
+    if sampai:
+        cond.append(_tgl_pesanan() <= sampai)
+    return cond
+
+
+async def daftar_pesanan(
+    session: AsyncSession,
+    *,
+    urut: str = "terbaru",
+    halaman: int = 1,
+    per_halaman: int = 50,
+    **filters,
+) -> dict:
+    """One page of orders matching the filters, plus the total match count (all pages)."""
+    if urut not in URUTAN_PESANAN:
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=f"urut harus salah satu dari {URUTAN_PESANAN}")
+    cond = _kondisi_pesanan(**filters)
+    total = int((await session.execute(select(func.count()).select_from(Pesanan).where(*cond))).scalar_one())
+    urutan = {
+        "terbaru": (_tgl_pesanan().desc(),),
+        "terlama": (_tgl_pesanan().asc(),),
+        "total_besar": (Pesanan.total.desc(), _tgl_pesanan().desc()),
+        "total_kecil": (Pesanan.total.asc(), _tgl_pesanan().desc()),
+    }[urut]
+    stmt = (
+        select(Pesanan)
+        .options(selectinload(Pesanan.items))
+        .where(*cond)
+        .order_by(*urutan, Pesanan.id)
+        .offset((max(halaman, 1) - 1) * per_halaman)
+        .limit(per_halaman)
+    )
+    rows = list((await session.execute(stmt)).scalars().all())
+    return {"total": total, "halaman": halaman, "per_halaman": per_halaman, "items": rows}
+
+
+async def ringkasan_pesanan(
+    session: AsyncSession,
+    *,
+    akun_id: str | None = None,
+    tahap: str | None = None,
+    **filters,
+) -> dict:
+    """Counts for the filter chips. Each chip row ignores its own filter so it shows what picking it would give:
+    the status counts honour the chosen shop, the shop counts honour the chosen status."""
+    dasar = dict(filters)
+    per_tahap = (
+        await session.execute(
+            select(_ekspresi_tahap().label("t"), func.count())
+            .where(*_kondisi_pesanan(akun_id=akun_id, **dasar))
+            .group_by("t")
+        )
+    ).all()
+    tahap_hitung = {t: 0 for t in TAHAP_PESANAN} | {t: int(n) for t, n in per_tahap}
+    per_toko = (
+        await session.execute(
+            select(Pesanan.akun_id, func.count())
+            .where(*_kondisi_pesanan(tahap=tahap, **dasar))
+            .group_by(Pesanan.akun_id)
+        )
+    ).all()
+    jumlah_toko = {a: int(n) for a, n in per_toko}
+    akun_ids = dasar.get("akun_diizinkan")
+    toko = sorted(
+        (a for a in await list_akun_marketplace(session) if a.id_toko_eksternal and (akun_ids is None or a.id in akun_ids)),
+        key=lambda a: a.nama_toko.lower(),
+    )
+    return {
+        "tahap": {"semua": sum(tahap_hitung.values()), **tahap_hitung},
+        "toko": [{"akun_id": a.id, "nama_toko": a.nama_toko, "jumlah": jumlah_toko.get(a.id, 0)} for a in toko],
+        "total_toko": sum(jumlah_toko.values()),
+    }
+
+
 async def get_pesanan(session: AsyncSession, pesanan_id: str) -> Pesanan:
     stmt = (
         select(Pesanan)
@@ -1312,6 +1457,7 @@ async def impor_pesanan_marketplace(session: AsyncSession, akun: AkunMarketplace
                 status="unpaid",
                 nama_pembeli=row["nama_pembeli"],
                 total=row["total"],
+                dipesan_at=row.get("dipesan_at"),
             )
             session.add(pesanan)
             await session.flush()
@@ -1334,6 +1480,8 @@ async def impor_pesanan_marketplace(session: AsyncSession, akun: AkunMarketplace
             await session.flush()
             pesanan = await get_pesanan(session, pesanan.id)
 
+        if row.get("dipesan_at") and pesanan.dipesan_at is None:
+            pesanan.dipesan_at = row["dipesan_at"]  # orders ingested before this column existed get filled on the next pull
         sebelum_mp = pesanan.status_marketplace
         berubah = await _samakan_status_pesanan(session, pesanan, row["status"])
         pesanan.status_marketplace = row["status_mentah"]
@@ -1777,6 +1925,130 @@ async def laporan_ringkas(
         "total_omzet": total_omzet,
         "jumlah_pesanan_per_status": jumlah_per_status,
         "produk_terlaris": produk_terlaris,
+        "stok_kritis": stok_kritis,
+    }
+
+
+_ZONA_LAPORAN = "Asia/Jakarta"
+_TAHAP_TERHITUNG_OMZET = ("perlu_diproses", "menunggu_kurir", "dikirim", "selesai")
+
+
+async def laporan_dashboard(
+    session: AsyncSession, *, dari: datetime, sampai: datetime, batas_stok_kritis: int = _DEFAULT_BATAS_STOK_KRITIS
+) -> dict:
+    """Everything the dashboard tables show for the period, by the date the buyer placed each order:
+    totals, a row per shop (counts per stage + revenue), orders per stage, best sellers with the shops that
+    sold them, a row per day and low stock. Revenue counts orders that are not unpaid or cancelled."""
+    from zoneinfo import ZoneInfo
+
+    zona = ZoneInfo(_ZONA_LAPORAN)
+
+    def _aware(dt: datetime) -> datetime:
+        return dt if dt.tzinfo else dt.replace(tzinfo=timezone.utc)
+
+    tgl = _tgl_pesanan()
+    tahap_expr = _ekspresi_tahap()
+    jendela = [tgl >= dari, tgl <= sampai]
+    rows = (
+        await session.execute(
+            select(Pesanan.akun_id, tahap_expr.label("t"), Pesanan.total, tgl.label("tgl")).where(*jendela)
+        )
+    ).all()
+
+    toko_rows = {
+        a.id: a
+        for a in await list_akun_marketplace(session)
+        if a.id_toko_eksternal
+    }
+    per_toko: dict[str | None, dict] = {}
+
+    def _toko(akun_id: str | None) -> dict:
+        if akun_id not in per_toko:
+            akun = toko_rows.get(akun_id)
+            per_toko[akun_id] = {
+                "akun_id": akun_id,
+                "nama_toko": akun.nama_toko if akun else "(tanpa toko)",
+                "pesanan": 0,
+                "omzet": Decimal("0"),
+                **{t: 0 for t in TAHAP_PESANAN},
+                "pesanan_terbaru": None,
+            }
+        return per_toko[akun_id]
+
+    for akun_id in toko_rows:
+        _toko(akun_id)  # shops without orders still get a (zero) row
+
+    per_tahap = {t: {"tahap": t, "jumlah": 0, "nilai": Decimal("0")} for t in TAHAP_PESANAN}
+    per_hari: dict = {}
+    total_omzet = Decimal("0")
+    total_pesanan = 0
+    for akun_id, t, total, waktu in rows:
+        entry = _toko(akun_id)
+        entry[t] += 1
+        per_tahap[t]["jumlah"] += 1
+        per_tahap[t]["nilai"] += total
+        if waktu is not None and (entry["pesanan_terbaru"] is None or _aware(waktu) > entry["pesanan_terbaru"]):
+            entry["pesanan_terbaru"] = _aware(waktu)
+        if t in _TAHAP_TERHITUNG_OMZET:
+            entry["pesanan"] += 1
+            entry["omzet"] += total
+            total_pesanan += 1
+            total_omzet += total
+            if waktu is not None:
+                hari = per_hari.setdefault(_aware(waktu).astimezone(zona).date(), {"pesanan": 0, "omzet": Decimal("0")})
+                hari["pesanan"] += 1
+                hari["omzet"] += total
+
+    terlaris_rows = (
+        await session.execute(
+            select(
+                ItemPesanan.nama_produk,
+                Pesanan.akun_id,
+                func.sum(ItemPesanan.qty),
+                func.sum(ItemPesanan.subtotal),
+                func.count(func.distinct(Pesanan.id)),
+            )
+            .join(Pesanan, Pesanan.id == ItemPesanan.pesanan_id)
+            .where(*jendela, Pesanan.status.in_(_STATUS_TERHITUNG_PENJUALAN))
+            .group_by(ItemPesanan.nama_produk, Pesanan.akun_id)
+        )
+    ).all()
+    produk: dict[str, dict] = {}
+    for nama, akun_id, qty, omzet, jumlah in terlaris_rows:
+        e = produk.setdefault(nama, {"nama_produk": nama, "qty_terjual": 0, "omzet": Decimal("0"), "pesanan": 0, "toko": []})
+        e["qty_terjual"] += int(qty)
+        e["omzet"] += omzet
+        e["pesanan"] += int(jumlah)
+        akun = toko_rows.get(akun_id)
+        e["toko"].append({"nama_toko": akun.nama_toko if akun else "(tanpa toko)", "qty": int(qty)})
+    produk_terlaris = sorted(produk.values(), key=lambda e: (-e["qty_terjual"], e["nama_produk"]))[:20]
+    for e in produk_terlaris:
+        e["toko"].sort(key=lambda x: -x["qty"])
+
+    data_sejak = (await session.execute(select(func.min(tgl)))).scalar_one_or_none()
+
+    stok_kritis = [
+        {"produk_id": p.id, "sku_induk": p.sku_induk, "nama": p.nama, "stok": p.stok}
+        for p in (
+            await session.execute(
+                select(Produk).where(Produk.aktif.is_(True), Produk.stok <= batas_stok_kritis).order_by(Produk.stok.asc())
+            )
+        ).scalars()
+    ]
+    return {
+        "dari": dari,
+        "sampai": sampai,
+        "data_sejak": _aware(data_sejak) if data_sejak else None,
+        "total_omzet": total_omzet,
+        "total_pesanan": total_pesanan,
+        "rata_rata_pesanan": (total_omzet / total_pesanan) if total_pesanan else Decimal("0"),
+        "jumlah_toko": len(toko_rows),
+        "per_toko": sorted(per_toko.values(), key=lambda e: (-e["omzet"], e["nama_toko"].lower())),
+        "per_tahap": list(per_tahap.values()),
+        "produk_terlaris": produk_terlaris,
+        "per_hari": [
+            {"tanggal": d, **v} for d, v in sorted(per_hari.items(), reverse=True)
+        ],
         "stok_kritis": stok_kritis,
     }
 

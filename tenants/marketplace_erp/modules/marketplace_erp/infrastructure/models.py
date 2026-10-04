@@ -254,6 +254,9 @@ class Pesanan(MarketplaceErpBase):
     kurir: Mapped[Optional[str]] = mapped_column(String(64), nullable=True)
     nomor_resi: Mapped[Optional[str]] = mapped_column(String(128), nullable=True)
     tanggal_kirim: Mapped[Optional[datetime]] = mapped_column(DateTime(timezone=True), nullable=True)
+    # When the buyer placed the order on the marketplace (Shopee create_time). ``created_at`` is only when the ERP
+    # first saw it, so reports and date filters use coalesce(dipesan_at, created_at).
+    dipesan_at: Mapped[Optional[datetime]] = mapped_column(DateTime(timezone=True), nullable=True, index=True)
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=_utcnow)
     updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=_utcnow, onupdate=_utcnow)
 
