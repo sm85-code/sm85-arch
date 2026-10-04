@@ -240,7 +240,6 @@ async def _produk_dari_peta(session: AsyncSession, nama: str) -> str | None:
 
 async def daftar_belum_peta(session: AsyncSession) -> list[dict]:
     await _pastikan_peta(session)
-    from tenants.bumi_lestari.modules.bumi_lestari.infrastructure.models_order import BlPetaNama
     sementara = await _produk_sementara(session)
     baris = (await session.execute(select(BlOrder).where(BlOrder.produk_id == sementara.id))).scalars().all()
     hitung: dict[str, int] = {}
