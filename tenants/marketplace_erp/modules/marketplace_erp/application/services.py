@@ -663,7 +663,11 @@ async def simpan_katalog_shopee(session: AsyncSession, akun: AkunMarketplace, en
 
 KATALOG_FOTO_DAFTAR = 5
 KATALOG_DESKRIPSI_DAFTAR = 300
-KATALOG_URUTAN = ("toko", "nama", "harga_naik", "harga_turun", "stok", "terbaru")
+KUNCI_URUT_KATALOG = ("toko", "nama", "sku", "harga", "stok", "berat", "status", "dikirim", "diambil")
+_ALIAS_URUT_KATALOG = {
+    "toko": "toko:asc", "nama": "nama:asc", "harga_naik": "harga:asc", "harga_turun": "harga:desc",
+    "stok": "stok:desc", "terbaru": "diambil:desc",
+}
 
 
 def katalog_out(k: KatalogShopee, nama_toko: str | None = None, *, lengkap: bool = False) -> dict:
@@ -706,22 +710,25 @@ async def list_katalog_shopee(
     akun_id: str | None = None,
     q: str | None = None,
     belum_dikirim: bool = False,
-    urut: str = "toko",
+    urut: str = "toko:asc",
     halaman: int = 1,
     per_halaman: int = 48,
 ) -> dict:
     """Catalogue rows across all shops (``akun_id`` None) or one shop, with shop name. ``urut`` picks the order
     (by name puts the same title from different shops next to each other, for comparing)."""
-    if urut not in KATALOG_URUTAN:
-        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=f"urut harus salah satu dari {KATALOG_URUTAN}")
-    urutan = {
-        "toko": (AkunMarketplace.nama_toko, KatalogShopee.nama),
-        "nama": (func.lower(KatalogShopee.nama), AkunMarketplace.nama_toko),
-        "harga_naik": (KatalogShopee.harga_min.asc(), func.lower(KatalogShopee.nama)),
-        "harga_turun": (KatalogShopee.harga_min.desc(), func.lower(KatalogShopee.nama)),
-        "stok": (KatalogShopee.stok_shopee.desc(), func.lower(KatalogShopee.nama)),
-        "terbaru": (KatalogShopee.diambil_at.desc(), func.lower(KatalogShopee.nama)),
-    }[urut]
+    kunci, turun = _urut_kunci(urut, sah=KUNCI_URUT_KATALOG, alias=_ALIAS_URUT_KATALOG)
+    kolom = {
+        "toko": func.lower(AkunMarketplace.nama_toko),
+        "nama": func.lower(KatalogShopee.nama),
+        "sku": func.lower(KatalogShopee.sku),
+        "harga": KatalogShopee.harga_min,
+        "stok": KatalogShopee.stok_shopee,
+        "berat": KatalogShopee.berat_gram,
+        "status": KatalogShopee.status,  # NORMAL (listed) sorts before UNLIST
+        "dikirim": KatalogShopee.dikirim_toko_id.is_not(None),  # sent = true, so asc lists the not-yet-sent first
+        "diambil": KatalogShopee.diambil_at,
+    }[kunci]
+    urutan = ((kolom.desc() if turun else kolom.asc()).nulls_last(), func.lower(AkunMarketplace.nama_toko), func.lower(KatalogShopee.nama))
     cond = []
     if akun_id:
         cond.append(KatalogShopee.akun_id == akun_id)
@@ -1056,12 +1063,25 @@ async def list_pesanan(
     return list((await session.execute(stmt)).scalars().all())
 
 
+def _urut_kunci(urut: str, *, sah: tuple[str, ...], alias: dict[str, str] | None = None) -> tuple[str, bool]:
+    """'total:desc' -> ('total', True). Old single-word values go through ``alias``. 400 on anything unknown."""
+    urut = (alias or {}).get(urut, urut)
+    kunci, _, arah = urut.partition(":")
+    if kunci not in sah or arah not in ("", "asc", "desc"):
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail=f"urut harus berbentuk kunci:asc atau kunci:desc, dengan kunci salah satu dari {sah}",
+        )
+    return kunci, arah == "desc"
+
+
 # --- Pesanan: filterable, paged list + counts for the filter chips ---------------
 
 # Shopee statuses after "arrange shipment" (kept in step with lib/pesanan.ts SUDAH_DIPROSES in the frontend).
 _MP_SUDAH_DIPROSES = ("PROCESSED", "SHIPPED", "TO_CONFIRM_RECEIVE", "COMPLETED")
 TAHAP_PESANAN = ("belum_bayar", "perlu_diproses", "menunggu_kurir", "dikirim", "selesai", "dibatalkan")
-URUTAN_PESANAN = ("terbaru", "terlama", "total_besar", "total_kecil")
+KUNCI_URUT_PESANAN = ("tanggal", "nomor", "toko", "status", "total", "kurir")
+_ALIAS_URUT_PESANAN = {"terbaru": "tanggal:desc", "terlama": "tanggal:asc", "total_besar": "total:desc", "total_kecil": "total:asc"}
 
 
 def _tgl_pesanan():
@@ -1135,27 +1155,34 @@ def _kondisi_pesanan(
 async def daftar_pesanan(
     session: AsyncSession,
     *,
-    urut: str = "terbaru",
+    urut: str = "tanggal:desc",
     halaman: int = 1,
     per_halaman: int = 50,
     **filters,
 ) -> dict:
-    """One page of orders matching the filters, plus the total match count (all pages)."""
-    if urut not in URUTAN_PESANAN:
-        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=f"urut harus salah satu dari {URUTAN_PESANAN}")
+    """One page of orders matching the filters, plus the total match count (all pages).
+
+    ``urut`` is ``<column>:asc|desc`` with column one of KUNCI_URUT_PESANAN (the old terbaru / terlama /
+    total_besar / total_kecil still work). Rows with no value for the column go last.
+    """
+    kunci, turun = _urut_kunci(urut, sah=KUNCI_URUT_PESANAN, alias=_ALIAS_URUT_PESANAN)
     cond = _kondisi_pesanan(**filters)
     total = int((await session.execute(select(func.count()).select_from(Pesanan).where(*cond))).scalar_one())
-    urutan = {
-        "terbaru": (_tgl_pesanan().desc(),),
-        "terlama": (_tgl_pesanan().asc(),),
-        "total_besar": (Pesanan.total.desc(), _tgl_pesanan().desc()),
-        "total_kecil": (Pesanan.total.asc(), _tgl_pesanan().desc()),
-    }[urut]
+    nama_toko = select(AkunMarketplace.nama_toko).where(AkunMarketplace.id == Pesanan.akun_id).scalar_subquery()
+    urutan_tahap = case(*[(_kondisi_tahap(t), i) for i, t in enumerate(TAHAP_PESANAN[:-1])], else_=len(TAHAP_PESANAN) - 1)
+    kolom = {
+        "tanggal": _tgl_pesanan(),
+        "nomor": func.lower(Pesanan.id_eksternal),
+        "toko": func.lower(nama_toko),
+        "status": urutan_tahap,
+        "total": Pesanan.total,
+        "kurir": func.lower(func.coalesce(Pesanan.kurir, "")),
+    }[kunci]
     stmt = (
         select(Pesanan)
         .options(selectinload(Pesanan.items))
         .where(*cond)
-        .order_by(*urutan, Pesanan.id)
+        .order_by((kolom.desc() if turun else kolom.asc()).nulls_last(), _tgl_pesanan().desc(), Pesanan.id)
         .offset((max(halaman, 1) - 1) * per_halaman)
         .limit(per_halaman)
     )

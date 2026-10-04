@@ -165,3 +165,28 @@ async def test_dashboard_tables(session, data):
     assert sum(h["pesanan"] for h in d["per_hari"]) == 4
     assert d["per_hari"][0]["tanggal"] > d["per_hari"][-1]["tanggal"]  # newest day first
     assert d["data_sejak"] == SEKARANG - timedelta(days=40)
+
+
+@pytest.mark.asyncio
+async def test_orders_sort_by_every_column_both_ways_with_old_values_still_working(session, data):
+    async def urut(teks, **kw):
+        return _sn(await services.daftar_pesanan(session, urut=teks, **kw))
+
+    assert (await urut("total:desc"))[:2] == ["B1", "B2"]
+    assert (await urut("total:asc"))[0] == "A1"
+    assert (await urut("tanggal:asc"))[0] == "A5"
+    assert (await urut("tanggal:desc"))[0] in ("A1", "B1")
+    assert (await urut("nomor:asc"))[:3] == ["A1", "A2", "A3"]
+    assert (await urut("nomor:desc"))[0] == "B2"
+    toko = await urut("toko:asc")
+    assert toko[:5] == sorted(toko[:5]) and set(toko[:5]) == {"A1", "A2", "A3", "A4", "A5"}  # Toko A before Toko B
+    assert (await urut("toko:desc"))[0].startswith("B")
+    assert (await urut("status:asc"))[0] == "A1"  # belum bayar first
+    assert (await urut("status:desc"))[0] == "B2"  # dibatalkan first
+    assert len(await urut("kurir:asc")) == 7
+    # the previous values keep working
+    assert (await urut("terlama"))[0] == "A5" and (await urut("total_besar"))[0] == "B1"
+    with pytest.raises(Exception):
+        await urut("harga:asc")
+    with pytest.raises(Exception):
+        await urut("total:naik")
