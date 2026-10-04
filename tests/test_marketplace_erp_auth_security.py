@@ -310,7 +310,7 @@ async def test_me_exposes_must_change_password_via_token(session, monkeypatch):
 async def test_seed_creates_owner_flagged_for_password_change(session):
     result = await seeder.seed_marketplace_erp(session)
     owner = await session.get(UserMarketplaceErp, result["owner_id"])
-    assert owner.role == "owner"
+    assert owner.role == "admin"  # the first account is the admin
     assert owner.must_change_password is True
     assert verify_password(seeder.DEFAULT_PASSWORD, owner.password_hash)
 

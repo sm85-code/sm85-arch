@@ -62,7 +62,9 @@ from tenants.marketplace_erp.modules.marketplace_erp.application.schemas import 
     StokAdjustIn,
     StokLedgerOut,
     StokTransferIn,
+    ProfilUpdateIn,
     UserCreateIn,
+    UserUpdateIn,
     UserOut,
 )
 from tenants.marketplace_erp.modules.marketplace_erp.infrastructure.auth import (
@@ -85,11 +87,14 @@ logger = logging.getLogger(__name__)
 
 marketplace_erp_router = APIRouter()
 
-OWNER_ONLY = ("owner",)
+# Roles by level: ``OWNER_ONLY`` means owner level and above (admin inherits everything an owner can do);
+# ``ADMIN_ONLY`` is for what only an admin may do (other users' usernames and roles).
+ADMIN_ONLY = ("admin",)
+OWNER_ONLY = ("admin", "owner")
 # Endpoints a scoped `staff` account may reach at all -- per-akun filtering
 # still applies inside the handler via akun_ids_diizinkan/pastikan_akses_akun.
 # Owner is always unrestricted.
-OWNER_OR_STAFF = ("owner", "staff")
+OWNER_OR_STAFF = ("admin", "owner", "staff")
 
 
 def _is_production_env() -> bool:
@@ -134,7 +139,7 @@ async def authorize_marketplace_erp_seed(
                 ),
             )
         raise
-    if (user.role or "").strip().lower() != "owner":
+    if (user.role or "").strip().lower() not in OWNER_ONLY:
         raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="Akses ditolak")
     return user
 
@@ -196,6 +201,16 @@ async def me(user: UserMarketplaceErp = Depends(get_current_user_marketplace_erp
     return user
 
 
+@marketplace_erp_router.patch("/auth/profil", response_model=UserOut)
+async def update_profil(
+    payload: ProfilUpdateIn,
+    session: AsyncSession = Depends(get_db_marketplace_erp),
+    user: UserMarketplaceErp = Depends(get_current_user_marketplace_erp),
+):
+    """Any account edits its own display name. The username (email) and role cannot be changed here."""
+    return await services.update_profil(session, user, payload)
+
+
 @marketplace_erp_router.post("/auth/change-password", response_model=UserOut)
 async def change_password(
     payload: ChangePasswordIn,
@@ -231,9 +246,21 @@ async def create_user(
     session: AsyncSession = Depends(get_db_marketplace_erp),
     _: UserMarketplaceErp = Depends(require_roles_marketplace_erp(*OWNER_ONLY)),
 ):
-    """Owner creates a staff/owner account with a temporary password; the new
-    account gets must_change_password=true."""
+    """Create an account with a temporary password (must_change_password=true). An admin may create any role;
+    an owner only staff."""
+    services.pastikan_boleh_membuat_peran(_.role, payload.role)
     return await services.create_user(session, payload)
+
+
+@marketplace_erp_router.patch("/users/{user_id}", response_model=UserOut)
+async def update_user(
+    user_id: str,
+    payload: UserUpdateIn,
+    session: AsyncSession = Depends(get_db_marketplace_erp),
+    _: UserMarketplaceErp = Depends(require_roles_marketplace_erp(*ADMIN_ONLY)),
+):
+    """Admin only: change another account's username (login email), name or role."""
+    return await services.update_user(session, user_id, payload)
 
 
 # --- Akun Marketplace ------------------------------------------------------

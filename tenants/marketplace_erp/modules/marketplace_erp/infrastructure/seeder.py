@@ -7,6 +7,7 @@ ensure_marketplace_erp_schema().
 from __future__ import annotations
 
 import logging
+import os
 
 from sqlalchemy import select, text
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -88,12 +89,44 @@ async def _ensure_owner(session: AsyncSession) -> UserMarketplaceErp:
         nama="Owner",
         email=OWNER_EMAIL,
         password_hash=hash_password(DEFAULT_PASSWORD),
-        role="owner",
+        role="admin",
         must_change_password=True,
     )
     session.add(owner)
     await session.flush()
     return owner
+
+
+async def _ensure_admin(session: AsyncSession) -> UserMarketplaceErp | None:
+    """The ERP always has an admin. When there is none (a database from before the admin role), promote the
+    account named by MARKETPLACE_ERP_ADMIN_EMAIL, else the oldest owner. Returns the promoted user, if any."""
+    ada = (
+        await session.execute(select(UserMarketplaceErp.id).where(UserMarketplaceErp.role == "admin").limit(1))
+    ).scalar_one_or_none()
+    email = (os.getenv("MARKETPLACE_ERP_ADMIN_EMAIL") or "").strip()
+    if email:
+        pilihan = (
+            await session.execute(select(UserMarketplaceErp).where(UserMarketplaceErp.email == email))
+        ).scalar_one_or_none()
+        if pilihan is not None and pilihan.role != "admin":
+            pilihan.role = "admin"
+            await session.flush()
+            return pilihan
+    if ada is not None:
+        return None
+    tertua = (
+        await session.execute(
+            select(UserMarketplaceErp)
+            .where(UserMarketplaceErp.role == "owner")
+            .order_by(UserMarketplaceErp.created_at)
+            .limit(1)
+        )
+    ).scalar_one_or_none()
+    if tertua is None:
+        return None
+    tertua.role = "admin"
+    await session.flush()
+    return tertua
 
 
 async def _ensure_default_gudang(session: AsyncSession) -> Gudang:
@@ -125,6 +158,9 @@ async def ensure_marketplace_erp_schema() -> None:
         return
     await _create_schema(engine)
     async with mpe_database.SessionLocal() as session:
+        diangkat = await _ensure_admin(session)
+        if diangkat is not None:
+            logger.warning("marketplace_erp: %s is now admin", diangkat.email)
         if await _flag_default_password_owner(session):
             logger.warning(
                 "marketplace_erp: seeded owner %s still uses the default password -- "
@@ -140,6 +176,7 @@ async def seed_marketplace_erp(session: AsyncSession) -> dict[str, str]:
     await _create_schema(engine)
 
     owner = await _ensure_owner(session)
+    await _ensure_admin(session)
     gudang = await _ensure_default_gudang(session)
     await session.commit()
     return {

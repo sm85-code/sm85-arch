@@ -130,6 +130,51 @@ async def create_user(session: AsyncSession, payload: UserCreateIn) -> UserMarke
     return user
 
 
+# Which roles an account of a given role may create (admin: anyone; owner: staff only).
+_PERAN_YANG_BOLEH_DIBUAT = {"admin": {"admin", "owner", "staff"}, "owner": {"staff"}}
+
+
+def pastikan_boleh_membuat_peran(pembuat_role: str | None, peran_baru: str) -> None:
+    boleh = _PERAN_YANG_BOLEH_DIBUAT.get((pembuat_role or "").strip().lower(), set())
+    if peran_baru not in boleh:
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN, detail=f"Peran Anda tidak boleh membuat akun dengan peran {peran_baru}"
+        )
+
+
+async def update_user(session: AsyncSession, user_id: str, payload) -> UserMarketplaceErp:
+    """Admin-only: change another account's username (login email), display name or role. The last admin cannot
+    be demoted, so the ERP never ends up without one."""
+    user = await session.get(UserMarketplaceErp, user_id)
+    if user is None:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Pengguna tidak ditemukan")
+    data = payload.model_dump(exclude_unset=True, exclude_none=True)
+    if "email" in data and data["email"] != user.email:
+        await _cek_email_belum_terdaftar(session, data["email"])
+        user.email = data["email"]
+    if "nama" in data:
+        user.nama = data["nama"].strip()
+    if "role" in data and data["role"] != user.role:
+        if user.role == "admin":
+            jumlah_admin = (
+                await session.execute(select(func.count()).select_from(UserMarketplaceErp).where(UserMarketplaceErp.role == "admin"))
+            ).scalar_one()
+            if jumlah_admin <= 1:
+                raise HTTPException(
+                    status_code=status.HTTP_409_CONFLICT, detail="Admin terakhir tidak bisa diturunkan perannya"
+                )
+        user.role = data["role"]
+    await session.flush()
+    return user
+
+
+async def update_profil(session: AsyncSession, user: UserMarketplaceErp, payload) -> UserMarketplaceErp:
+    """Every account may change its own display name (never its username or role)."""
+    user.nama = payload.nama.strip()
+    await session.flush()
+    return user
+
+
 async def list_users(session: AsyncSession) -> list[UserMarketplaceErp]:
     rows = await session.execute(select(UserMarketplaceErp).order_by(UserMarketplaceErp.created_at))
     return list(rows.scalars())

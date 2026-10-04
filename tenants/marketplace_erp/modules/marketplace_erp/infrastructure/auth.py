@@ -5,11 +5,8 @@ generic JWT encode/decode + cookie primitives from shared.security, with
 its own cookie name so a login here never collides with siabumdes/
 madrasah/toko sessions in the same browser.
 
-Tahap 1 role model: only two roles for now, "owner" (full access) and
-"staff" (reserved for later per-akun scoping once the marketplace_erp
-equivalent of tenants/toko's admin_marketplace staff role is needed --
-not built yet, this tenant currently has no multi-staff endpoints to
-restrict).
+Role model: "admin" (everything, including other users' usernames and roles) >
+"owner" (everything else) > "staff" (scoped to the shops assigned to it).
 """
 from __future__ import annotations
 
@@ -25,7 +22,7 @@ from tenants.marketplace_erp.modules.marketplace_erp.infrastructure.models impor
 
 MARKETPLACE_ERP_COOKIE_NAME = "marketplace_erp_token"
 
-FULL_ACCESS_ROLES = ("owner",)
+FULL_ACCESS_ROLES = ("admin", "owner")
 
 
 def issue_marketplace_erp_token(user: UserMarketplaceErp) -> str:
@@ -93,7 +90,7 @@ def require_roles_marketplace_erp(*roles: str) -> Callable:
 
 
 async def akun_ids_diizinkan(user: UserMarketplaceErp, session: AsyncSession) -> list[str] | None:
-    """None for `owner` (unrestricted, see everything). A concrete (possibly
+    """None for `admin`/`owner` (unrestricted, see everything). A concrete (possibly
     empty) list of AkunMarketplace ids for `staff` -- the only shops that
     role may read/write, per StaffAkunMarketplace. Imported lazily to avoid
     a module-load-time cycle between auth.py and models.py's own imports."""

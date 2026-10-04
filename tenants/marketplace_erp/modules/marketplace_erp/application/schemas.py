@@ -15,7 +15,9 @@ PASSWORD_MIN_LENGTH = 8
 # releases raise instead of silently truncating) -- cap it explicitly.
 PASSWORD_MAX_BYTES = 72
 
-USER_ROLES = ("owner", "staff")
+# admin (everything, incl. other users' usernames and roles) > owner (everything except that) > staff (scoped to
+# the shops it is assigned to).
+USER_ROLES = ("admin", "owner", "staff")
 
 
 def _validate_new_password(value: str) -> str:
@@ -74,6 +76,33 @@ class ChangePasswordIn(BaseModel):
     @classmethod
     def _new_password_ok(cls, value: str) -> str:
         return _validate_new_password(value)
+
+
+class UserUpdateIn(BaseModel):
+    """Admin edits another user: username (the login email), display name and role. All optional."""
+
+    nama: Optional[str] = Field(None, min_length=1, max_length=255)
+    email: Optional[EmailStr] = None
+    role: Optional[str] = None
+
+    @field_validator("role")
+    @classmethod
+    def _role_ok(cls, value: Optional[str]) -> Optional[str]:
+        if value is None:
+            return None
+        role = value.strip().lower()
+        if role not in USER_ROLES:
+            raise ValueError(f"Role harus salah satu dari: {', '.join(USER_ROLES)}")
+        return role
+
+
+class ProfilUpdateIn(BaseModel):
+    """What a user may change about themselves: the display name. Not the username (email) and not the role;
+    sending those is rejected rather than silently ignored."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    nama: str = Field(min_length=1, max_length=255)
 
 
 class UserOut(BaseModel):
