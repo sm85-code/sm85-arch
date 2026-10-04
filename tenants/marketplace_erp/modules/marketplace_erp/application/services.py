@@ -6,7 +6,7 @@ from datetime import datetime, timedelta, timezone
 from decimal import Decimal
 
 from fastapi import HTTPException, status
-from sqlalchemy import func, or_, select, update
+from sqlalchemy import delete, func, or_, select, update
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import selectinload
@@ -228,10 +228,28 @@ async def update_akun_marketplace(session: AsyncSession, akun_id: str, payload: 
     return akun
 
 
-async def delete_akun_marketplace(session: AsyncSession, akun_id: str) -> None:
+async def delete_akun_marketplace(session: AsyncSession, akun_id: str, *, hapus_pesanan: bool = False) -> dict:
+    """Remove a shop and its listings. By default its orders stay (detached from the shop, as before);
+    with ``hapus_pesanan`` they are deleted too, with their items and stock reservations. That is meant for
+    clearing test data before a real shop is connected. Returns how many orders / listings went."""
     akun = await get_akun_marketplace(session, akun_id)
+    jumlah_pesanan = 0
+    if hapus_pesanan:
+        ids = select(Pesanan.id).where(Pesanan.akun_id == akun_id)
+        jumlah_pesanan = int(
+            (await session.execute(select(func.count()).select_from(Pesanan).where(Pesanan.akun_id == akun_id))).scalar_one()
+        )
+        await session.execute(delete(ItemPesanan).where(ItemPesanan.pesanan_id.in_(ids)))
+        await session.execute(delete(StokReservasi).where(StokReservasi.pesanan_id.in_(ids)))
+        await session.execute(delete(Pesanan).where(Pesanan.akun_id == akun_id))
+    jumlah_listing = int(
+        (await session.execute(select(func.count()).select_from(ProdukListing).where(ProdukListing.akun_id == akun_id))).scalar_one()
+    )
+    await session.execute(delete(ProdukListing).where(ProdukListing.akun_id == akun_id))
+    await session.refresh(akun)
     await session.delete(akun)
     await session.flush()
+    return {"pesanan_dihapus": jumlah_pesanan, "listing_dihapus": jumlah_listing}
 
 
 async def hubungkan_shopee_akun_utama(

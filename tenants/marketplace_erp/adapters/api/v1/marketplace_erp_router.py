@@ -285,11 +285,12 @@ async def update_akun(
 @marketplace_erp_router.delete("/akun/{akun_id}")
 async def delete_akun(
     akun_id: str,
+    bersama_pesanan: bool = False,
     session: AsyncSession = Depends(get_db_marketplace_erp),
     _: UserMarketplaceErp = Depends(require_roles_marketplace_erp(*OWNER_ONLY)),
 ):
-    await services.delete_akun_marketplace(session, akun_id)
-    return {"ok": True}
+    """``bersama_pesanan=true`` also deletes the shop's orders (for clearing test data)."""
+    return {"ok": True, **await services.delete_akun_marketplace(session, akun_id, hapus_pesanan=bersama_pesanan)}
 
 
 # --- Produk (SKU induk) -----------------------------------------------------
