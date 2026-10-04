@@ -1,6 +1,5 @@
 """Shopee Push Mechanism (webhook): signature check, push log, and the order pull a valid order push starts."""
 import json
-from types import SimpleNamespace
 
 import pytest
 import pytest_asyncio
