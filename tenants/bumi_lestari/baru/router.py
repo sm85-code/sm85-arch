@@ -83,6 +83,28 @@ async def _siap(session: AsyncSession) -> None:
             custom BOOLEAN NOT NULL DEFAULT FALSE
         )
     """))
+    await session.execute(text("""
+        CREATE TABLE IF NOT EXISTS bl2_reseller (
+            kode TEXT PRIMARY KEY,
+            nama TEXT NOT NULL DEFAULT ''
+        )
+    """))
+    await session.execute(text("""
+        CREATE TABLE IF NOT EXISTS bl2_tukang (
+            id TEXT PRIMARY KEY,
+            nama TEXT NOT NULL DEFAULT ''
+        )
+    """))
+    await session.execute(text("""
+        INSERT INTO bl2_reseller (kode, nama) VALUES
+        ('001', 'Mandala Wangi'), ('002', ''), ('003', ''), ('004', '')
+        ON CONFLICT (kode) DO NOTHING
+    """))
+    await session.execute(text("""
+        INSERT INTO bl2_tukang (id, nama)
+        SELECT 't' || n, '' FROM generate_series(1, 5) AS n
+        ON CONFLICT (id) DO NOTHING
+    """))
     await session.commit()
 
 
@@ -451,3 +473,22 @@ async def isi_cat(session: AsyncSession = _db(), _: BlUser = _guard()):
     """))
     await session.commit()
     return {"nilai": pas, "catatan": "Termasuk packing biasa. Ukuran tanpa tarif ditandai custom."}
+
+
+@router.get("/pihak")
+async def pihak(session: AsyncSession = _db(), _: BlUser = _guard()):
+    await _siap(session)
+    reseller = (await session.execute(text("SELECT kode, nama FROM bl2_reseller ORDER BY kode"))).mappings().all()
+    tukang = (await session.execute(text("SELECT id, nama FROM bl2_tukang ORDER BY id"))).mappings().all()
+    return {"reseller": [dict(r) for r in reseller], "tukang": [dict(r) for r in tukang]}
+
+
+@router.patch("/pihak")
+async def ubah_pihak(payload: dict, session: AsyncSession = _db(), _: BlUser = _guard()):
+    await _siap(session)
+    for r in payload.get("reseller") or []:
+        await session.execute(text("UPDATE bl2_reseller SET nama = :nama WHERE kode = :kode"), {"kode": r.get("kode"), "nama": r.get("nama") or ""})
+    for t in payload.get("tukang") or []:
+        await session.execute(text("UPDATE bl2_tukang SET nama = :nama WHERE id = :id"), {"id": t.get("id"), "nama": t.get("nama") or ""})
+    await session.commit()
+    return {"ok": True}
