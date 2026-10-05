@@ -747,7 +747,7 @@ async def kirim_stok_harga(session: Any, akun: Any, rows: list[dict]) -> dict:
 _PATH_ORDER_LIST = "/api/v2/order/get_order_list"
 _PATH_ORDER_DETAIL = "/api/v2/order/get_order_detail"
 # item_list / buyer_username / total_amount are not returned unless asked for.
-_ORDER_DETAIL_FIELDS = "buyer_username,item_list,total_amount,shipping_carrier,payment_method,estimated_shipping_fee,actual_shipping_fee,note,pay_time,cancel_by,cancel_reason,buyer_cancel_reason,package_list,recipient_address,cod"
+_ORDER_DETAIL_FIELDS = "buyer_username,item_list,total_amount,shipping_carrier,payment_method,estimated_shipping_fee,actual_shipping_fee,note,pay_time,cancel_by,cancel_reason,buyer_cancel_reason,package_list,recipient_address,cod,ship_by_date"
 # Shopee rejects a time_from..time_to span over 15 days; stay a minute under.
 _ORDER_WINDOW_SECONDS = 15 * 24 * 3600 - 60
 # An incremental pull starts this much before the previous one, so a change that landed while it ran is not missed.
