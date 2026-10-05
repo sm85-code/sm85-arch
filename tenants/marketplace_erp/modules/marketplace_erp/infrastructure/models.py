@@ -519,6 +519,7 @@ class KatalogShopee(MarketplaceErpBase):
     deskripsi: Mapped[str] = mapped_column(Text, nullable=False, default="")
     foto_json: Mapped[str] = mapped_column(Text, nullable=False, default="[]")
     varian_json: Mapped[str] = mapped_column(Text, nullable=False, default="[]")
+    detail_json: Mapped[str] = mapped_column(Text, nullable=False, default="{}")
     harga_min: Mapped[Optional[Decimal]] = mapped_column(Numeric(20, 2), nullable=True)
     harga_max: Mapped[Optional[Decimal]] = mapped_column(Numeric(20, 2), nullable=True)
     stok_shopee: Mapped[Optional[int]] = mapped_column(Integer, nullable=True)

@@ -542,6 +542,40 @@ def _deskripsi(item: dict) -> str:
     return "\n".join(str(f.get("text") or "").strip() for f in fields if f.get("field_type") == "text" and f.get("text"))
 
 
+
+def _detail_item(item: dict) -> dict:
+    """Field get_item_base_info yang namanya dipakai apa adanya, supaya tidak tertukar."""
+    merek = item.get("brand") or {}
+    pre = item.get("pre_order") or {}
+    atribut = []
+    for a in item.get("attribute_list") or []:
+        nama = a.get("original_attribute_name") or ""
+        nilai = ", ".join(str(v.get("original_value_name") or "") for v in a.get("attribute_value_list") or [] if v.get("original_value_name"))
+        if nama:
+            atribut.append(f"{nama}: {nilai}" if nilai else nama)
+    kurir = [str(x.get("logistic_name") or "") for x in item.get("logistic_info") or [] if x.get("enabled") and x.get("logistic_name")]
+    grosir = [f"{w.get('min_count')}-{w.get('max_count')}: {w.get('unit_price')}" for w in item.get("wholesales") or []]
+    return {
+        "category_id": item.get("category_id"),
+        "brand": merek.get("original_brand_name") or "",
+        "attribute_list": "; ".join(atribut),
+        "create_time": item.get("create_time"),
+        "update_time": item.get("update_time"),
+        "condition": item.get("condition") or "",
+        "is_pre_order": bool(pre.get("is_pre_order")),
+        "days_to_ship": pre.get("days_to_ship"),
+        "logistic_info": ", ".join(kurir),
+        "has_model": bool(item.get("has_model")),
+        "has_promotion": bool(item.get("has_promotion")),
+        "deboost": bool(item.get("deboost")),
+        "item_dangerous": item.get("item_dangerous"),
+        "wholesales": "; ".join(grosir),
+        "video_info": bool(item.get("video_info")),
+        "size_chart": item.get("size_chart") or "",
+        "gtin_code": item.get("gtin_code") or "",
+    }
+
+
 def normalisasi_katalog(item: dict, model_resp: dict | None = None) -> dict:
     """get_item_base_info entry (+ models) -> one catalogue dict: text, photos, size and variants.
 
@@ -582,6 +616,7 @@ def normalisasi_katalog(item: dict, model_resp: dict | None = None) -> dict:
         "lebar_cm": _angka(dim.get("package_width")),
         "tinggi_cm": _angka(dim.get("package_height")),
         "status": str(item.get("item_status") or "NORMAL").upper(),
+        "detail": _detail_item(item),
     }
 
 
