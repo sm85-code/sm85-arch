@@ -56,7 +56,10 @@ from tenants.bumi_lestari.modules.bumi_lestari.infrastructure.database import ge
 from tenants.bumi_lestari.modules.bumi_lestari.infrastructure.models import BlUser
 from tenants.bumi_lestari.modules.bumi_lestari.infrastructure.seeder import seed_bumi_lestari
 
+from tenants.bumi_lestari.baru.router import router as baru_router
+
 bumi_lestari_router = APIRouter()
+bumi_lestari_router.include_router(baru_router)
 bumi_lestari_router.include_router(order_router)
 bumi_lestari_router.include_router(pembayaran_router)
 bumi_lestari_router.include_router(dokumen_router)
