@@ -134,18 +134,33 @@ async def tambah_order(payload: dict, session: AsyncSession = _db(), _: BlUser =
     jenis = (await session.execute(text("SELECT jenis_id FROM bl2_peta WHERE nama = :n"), {"n": nama})).scalar()
     oid = uuid.uuid4().hex
     await session.execute(text("""
-        INSERT INTO bl2_order (id, no_order, nama_barang, pembeli, sumber, jenis_id)
-        VALUES (:id, :no, :nama, :pembeli, :sumber, :jenis)
+        INSERT INTO bl2_order (id, no_order, nama_barang, pembeli, toko, sumber, jenis_id, tgl_pesan, varian, qty, keterangan)
+        VALUES (:id, :no, :nama, :pembeli, :toko, :sumber, :jenis, :tgl, :varian, :qty, :ket)
     """), {
         "id": oid,
         "no": str(payload.get("no_order") or ""),
         "nama": nama,
         "pembeli": str(payload.get("pembeli") or ""),
+        "toko": str(payload.get("toko") or ""),
         "sumber": str(payload.get("sumber") or "manual"),
         "jenis": jenis,
+        "tgl": payload.get("tgl_pesan") or None,
+        "varian": str(payload.get("varian") or ""),
+        "qty": int(payload.get("qty") or 1),
+        "ket": str(payload.get("keterangan") or ""),
     })
     await session.commit()
     return {"id": oid}
+
+
+@router.post("/order/impor")
+async def impor_order(payload: dict, session: AsyncSession = _db(), _: BlUser = _guard()):
+    await _siap(session)
+    n = 0
+    for baris in payload.get("baris") or []:
+        await tambah_order(baris, session, _)
+        n += 1
+    return {"masuk": n}
 
 
 @router.get("/jenis")
