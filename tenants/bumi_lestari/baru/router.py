@@ -26,7 +26,8 @@ async def _siap(session: AsyncSession) -> None:
             id TEXT PRIMARY KEY,
             nama TEXT NOT NULL,
             kayu BOOLEAN NOT NULL DEFAULT TRUE,
-            ukuran TEXT NOT NULL DEFAULT ''
+            ukuran TEXT NOT NULL DEFAULT '',
+            harga_reseller NUMERIC NOT NULL DEFAULT 0
         )
     """))
     await session.execute(text("""
@@ -50,6 +51,7 @@ async def _siap(session: AsyncSession) -> None:
     """))
     await session.execute(text("ALTER TABLE bl2_order ADD COLUMN IF NOT EXISTS toko TEXT NOT NULL DEFAULT ''"))
     await session.execute(text("ALTER TABLE bl2_order ADD COLUMN IF NOT EXISTS sumber_ref TEXT"))
+    await session.execute(text("ALTER TABLE bl2_jenis ADD COLUMN IF NOT EXISTS harga_reseller NUMERIC NOT NULL DEFAULT 0"))
     await session.commit()
 
 
@@ -89,7 +91,7 @@ async def tambah_order(payload: dict, session: AsyncSession = _db(), _: BlUser =
 @router.get("/jenis")
 async def jenis(session: AsyncSession = _db(), _: BlUser = _guard()):
     await _siap(session)
-    baris = (await session.execute(text("SELECT id, nama, kayu, ukuran FROM bl2_jenis ORDER BY nama"))).mappings().all()
+    baris = (await session.execute(text("SELECT id, nama, kayu, ukuran, harga_reseller FROM bl2_jenis ORDER BY nama"))).mappings().all()
     return [dict(r) for r in baris]
 
 
@@ -98,11 +100,12 @@ async def tambah_jenis(payload: dict, session: AsyncSession = _db(), _: BlUser =
     await _siap(session)
     import uuid
     jid = uuid.uuid4().hex
-    await session.execute(text("INSERT INTO bl2_jenis (id, nama, kayu, ukuran) VALUES (:id, :nama, :kayu, :ukuran)"), {
+    await session.execute(text("INSERT INTO bl2_jenis (id, nama, kayu, ukuran, harga_reseller) VALUES (:id, :nama, :kayu, :ukuran, :harga)"), {
         "id": jid,
         "nama": str(payload.get("nama") or "").strip(),
         "kayu": bool(payload.get("kayu", True)),
         "ukuran": str(payload.get("ukuran") or ""),
+        "harga": payload.get("harga_reseller") or 0,
     })
     await session.commit()
     return {"id": jid}
