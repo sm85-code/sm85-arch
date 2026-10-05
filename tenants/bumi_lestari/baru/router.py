@@ -428,7 +428,7 @@ TARIF_CAT = {
 
 @router.post("/cat")
 async def isi_cat(session: AsyncSession = _db(), _: BlUser = _guard()):
-    """Pasang tarif cat partisi rak palang. Packing kayu tidak ikut. Tidak mengubah harga tukang."""
+    """Pasang tarif cat partisi rak palang. Packing biasa sudah termasuk. Packing kayu tidak ikut."""
     await _siap(session)
     pas = 0
     for ukuran, harga in TARIF_CAT.items():
@@ -443,4 +443,4 @@ async def isi_cat(session: AsyncSession = _db(), _: BlUser = _guard()):
         """), {"harga": harga, "ukuran": ukuran})
         pas += hasil.rowcount or 0
     await session.commit()
-    return {"nilai": pas, "catatan": "Tarif cat. Packing kayu terpisah."}
+    return {"nilai": pas, "catatan": "Termasuk packing biasa. Packing kayu terpisah."}
