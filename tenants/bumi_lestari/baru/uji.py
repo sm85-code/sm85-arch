@@ -1,4 +1,4 @@
-"""Data percobaan dan ubah/hapus order. Tidak menyentuh katalog impor."""
+"""Tiga kasus uji. Tidak mengirim apa pun ke Shopee."""
 from __future__ import annotations
 
 from fastapi import APIRouter, Depends
@@ -20,63 +20,59 @@ def _guard():
     return Depends(require_roles_bumi_lestari("owner", "admin"))
 
 
+KASUS = [
+    {"id": "uji-shopee", "no": "UJI-SHOPEE", "nama": "Partisi Rak Palang 80x20x200", "pembeli": "Pembeli Shopee", "sumber": "shopee", "status": "selesai", "tukang": "Ahmad Nur Alim", "pendapatan": 500000, "barang": 375000, "cat": 100000, "packing": 0, "admin": 25000, "proses": 0},
+    {"id": "uji-mandala", "no": "UJI-MANDALA", "nama": "Partisi Rak Palang 80x20x200", "pembeli": "Mandala Wangi", "sumber": "reseller", "status": "selesai", "tukang": "Ai Hendarso", "pendapatan": 485000, "barang": 375000, "cat": 100000, "packing": 0, "admin": 0, "proses": 10000},
+    {"id": "uji-web", "no": "UJI-WEB", "nama": "Batu gamping 500 gram", "pembeli": "Pembeli toko web", "sumber": "web", "status": "selesai", "tukang": "", "pendapatan": 150000, "barang": 90000, "cat": 0, "packing": 5000, "admin": 0, "proses": 0},
+]
+
+
+async def _kolom(session: AsyncSession) -> None:
+    for kolom in ("harga_barang", "harga_cat", "packing_kayu", "pendapatan", "biaya_admin", "biaya_proses"):
+        await session.execute(text(f"ALTER TABLE bl2_order ADD COLUMN IF NOT EXISTS {kolom} NUMERIC NOT NULL DEFAULT 0"))
+    await session.execute(text("ALTER TABLE bl2_order ADD COLUMN IF NOT EXISTS tukang TEXT NOT NULL DEFAULT ''"))
+
+
 @uji.post("/uji")
 async def isi_uji(session: AsyncSession = _db(), _: BlUser = _guard()):
-    await session.execute(text("ALTER TABLE bl2_order ADD COLUMN IF NOT EXISTS harga_barang NUMERIC NOT NULL DEFAULT 0"))
-    await session.execute(text("ALTER TABLE bl2_order ADD COLUMN IF NOT EXISTS harga_cat NUMERIC NOT NULL DEFAULT 0"))
-    await session.execute(text("ALTER TABLE bl2_order ADD COLUMN IF NOT EXISTS packing_kayu NUMERIC NOT NULL DEFAULT 0"))
-    await session.execute(text("ALTER TABLE bl2_order ADD COLUMN IF NOT EXISTS tukang TEXT NOT NULL DEFAULT ''"))
-    contoh = [
-        ("uji-1", "UJI-001", "Partisi Rak Palang 80x20x200", "Mandala Wangi", "reseller", "selesai", 375000, 100000, 0, "Ahmad Nur Alim"),
-        ("uji-2", "UJI-002", "Partisi Rak Tengah 80x20x200", "Chakra Digital Niaga", "reseller", "dicat", 450000, 160000, 0, "Ai Hendarso"),
-        ("uji-3", "UJI-003", "Kandang Kelinci 120x50x90", "Shopee", "erp", "dipesan", 800000, 0, 0, "Cahyono"),
-        ("uji-4", "UJI-004", "Atap daun rumbia", "Shopee", "erp", "dipesan", 0, 0, 0, ""),
-    ]
-    for row in contoh:
+    await _kolom(session)
+    for r in KASUS:
         await session.execute(text("""
-            INSERT INTO bl2_order (id, no_order, nama_barang, pembeli, sumber, status, harga_barang, harga_cat, packing_kayu, tukang, sumber_ref)
-            VALUES (:id, :no, :nama, :pembeli, :sumber, :status, :barang, :cat, :packing, :tukang, :id)
-            ON CONFLICT (id) DO UPDATE SET
-              nama_barang = EXCLUDED.nama_barang, pembeli = EXCLUDED.pembeli, status = EXCLUDED.status,
-              harga_barang = EXCLUDED.harga_barang, harga_cat = EXCLUDED.harga_cat,
-              packing_kayu = EXCLUDED.packing_kayu, tukang = EXCLUDED.tukang
-        """), {
-            "id": row[0], "no": row[1], "nama": row[2], "pembeli": row[3], "sumber": row[4],
-            "status": row[5], "barang": row[6], "cat": row[7], "packing": row[8], "tukang": row[9],
-        })
+            INSERT INTO bl2_order (id, no_order, nama_barang, pembeli, sumber, status, tukang, sumber_ref, harga_barang, harga_cat, packing_kayu, pendapatan, biaya_admin, biaya_proses)
+            VALUES (:id, :no, :nama, :pembeli, :sumber, :status, :tukang, :id, :barang, :cat, :packing, :pendapatan, :admin, :proses)
+            ON CONFLICT (id) DO UPDATE SET nama_barang = EXCLUDED.nama_barang, pendapatan = EXCLUDED.pendapatan,
+              harga_barang = EXCLUDED.harga_barang, harga_cat = EXCLUDED.harga_cat, packing_kayu = EXCLUDED.packing_kayu,
+              biaya_admin = EXCLUDED.biaya_admin, biaya_proses = EXCLUDED.biaya_proses, status = EXCLUDED.status
+        """), r)
     await session.commit()
-    return {"order": len(contoh)}
+    return {"kasus": 3}
+
+
+@uji.get("/laporan")
+async def laporan(session: AsyncSession = _db(), _: BlUser = _guard()):
+    await _kolom(session)
+    baris = (await session.execute(text("""
+        SELECT id, no_order, nama_barang, pembeli, sumber, pendapatan::float AS pendapatan,
+               harga_barang::float AS barang, harga_cat::float AS cat, packing_kayu::float AS packing,
+               biaya_admin::float AS admin, biaya_proses::float AS proses
+        FROM bl2_order WHERE id LIKE 'uji-%' ORDER BY id
+    """))).mappings().all()
+    hasil = []
+    for r in baris:
+        biaya = r["barang"] + r["cat"] + r["packing"] + r["admin"]
+        hasil.append({**dict(r), "laba_kotor": r["pendapatan"] - biaya})
+    return {
+        "periode": "Senin–Sabtu, cut-off Selasa",
+        "kasus": hasil,
+        "pendapatan": sum(x["pendapatan"] for x in hasil),
+        "laba_kotor": sum(x["laba_kotor"] for x in hasil),
+        "catatan": "Operasional dan gaji belum dipotong. Bagi hasil setelah gaji minggu keempat.",
+    }
 
 
 @uji.delete("/uji")
 async def hapus_uji(session: AsyncSession = _db(), _: BlUser = _guard()):
-    await session.execute(text("DELETE FROM bl2_order WHERE id LIKE 'uji-%' OR sumber_ref LIKE 'uji-%'"))
-    await session.commit()
-    return {"ok": True}
-
-
-@uji.patch("/order/{order_id}")
-async def ubah_order(order_id: str, payload: dict, session: AsyncSession = _db(), _: BlUser = _guard()):
-    await session.execute(text("""
-        UPDATE bl2_order SET
-          nama_barang = COALESCE(:nama, nama_barang),
-          status = COALESCE(:status, status),
-          pembeli = COALESCE(:pembeli, pembeli),
-          harga_barang = COALESCE(:barang, harga_barang),
-          harga_cat = COALESCE(:cat, harga_cat),
-          packing_kayu = COALESCE(:packing, packing_kayu),
-          tukang = COALESCE(:tukang, tukang)
-        WHERE id = :id
-    """), {
-        "id": order_id,
-        "nama": payload.get("nama_barang"),
-        "status": payload.get("status"),
-        "pembeli": payload.get("pembeli"),
-        "barang": payload.get("harga_barang"),
-        "cat": payload.get("harga_cat"),
-        "packing": payload.get("packing_kayu"),
-        "tukang": payload.get("tukang"),
-    })
+    await session.execute(text("DELETE FROM bl2_order WHERE id LIKE 'uji-%'"))
     await session.commit()
     return {"ok": True}
 
@@ -84,13 +80,5 @@ async def ubah_order(order_id: str, payload: dict, session: AsyncSession = _db()
 @uji.delete("/order/{order_id}")
 async def hapus_order(order_id: str, session: AsyncSession = _db(), _: BlUser = _guard()):
     await session.execute(text("DELETE FROM bl2_order WHERE id = :id"), {"id": order_id})
-    await session.commit()
-    return {"ok": True}
-
-
-@uji.delete("/peta")
-async def hapus_peta(nama: str, session: AsyncSession = _db(), _: BlUser = _guard()):
-    await session.execute(text("DELETE FROM bl2_peta WHERE nama = :nama"), {"nama": nama})
-    await session.execute(text("UPDATE bl2_order SET jenis_id = NULL WHERE nama_barang = :nama"), {"nama": nama})
     await session.commit()
     return {"ok": True}
