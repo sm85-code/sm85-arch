@@ -55,6 +55,7 @@ async def _siap(session: AsyncSession) -> None:
     await session.execute(text("ALTER TABLE bl2_order ADD COLUMN IF NOT EXISTS varian TEXT NOT NULL DEFAULT ''"))
     await session.execute(text("ALTER TABLE bl2_order ADD COLUMN IF NOT EXISTS qty INTEGER NOT NULL DEFAULT 1"))
     await session.execute(text("ALTER TABLE bl2_order ADD COLUMN IF NOT EXISTS keterangan TEXT NOT NULL DEFAULT ''"))
+    await session.execute(text("ALTER TABLE bl2_order ADD COLUMN IF NOT EXISTS jenis_pesanan TEXT NOT NULL DEFAULT ''"))
     await session.execute(text("ALTER TABLE bl2_jenis ADD COLUMN IF NOT EXISTS harga_reseller NUMERIC NOT NULL DEFAULT 0"))
     await session.execute(text("ALTER TABLE bl2_jenis ADD COLUMN IF NOT EXISTS produk_id TEXT"))
     await session.execute(text("ALTER TABLE bl2_nilai ADD COLUMN IF NOT EXISTS harga_tukang NUMERIC NOT NULL DEFAULT 0"))
@@ -118,7 +119,7 @@ async def daftar_order(session: AsyncSession = _db(), _: BlUser = _guard()):
     await _siap(session)
     baris = (await session.execute(text("""
         SELECT o.id, o.no_order, o.nama_barang, o.varian, o.qty, o.keterangan, o.pembeli, o.toko, o.sumber,
-               o.tgl_pesan::text AS tgl_pesan, o.status, j.nama AS jenis, j.kayu,
+               o.tgl_pesan::text AS tgl_pesan, o.status, o.jenis_pesanan, j.nama AS jenis, j.kayu,
                CASE WHEN o.jenis_id IS NULL THEN 'Belum' ELSE 'Sudah' END AS status_peta
         FROM bl2_order o LEFT JOIN bl2_jenis j ON j.id = o.jenis_id
         ORDER BY o.tgl_pesan DESC NULLS LAST, o.no_order DESC
@@ -513,5 +514,16 @@ async def ubah_pihak(payload: dict, session: AsyncSession = _db(), _: BlUser = _
         await session.execute(text("UPDATE bl2_reseller SET nama = :nama WHERE kode = :kode"), {"kode": r.get("kode"), "nama": r.get("nama") or ""})
     for t in payload.get("tukang") or []:
         await session.execute(text("UPDATE bl2_tukang SET nama = :nama WHERE id = :id"), {"id": t.get("id"), "nama": t.get("nama") or ""})
+    await session.commit()
+    return {"ok": True}
+
+
+@router.patch("/order/{order_id}/jenis")
+async def jenis_pesanan(order_id: str, payload: dict, session: AsyncSession = _db(), _: BlUser = _guard()):
+    await _siap(session)
+    nilai = str(payload.get("jenis_pesanan") or "")
+    if nilai not in ("Kayu", "Non-Kayu", ""):
+        raise HTTPException(422, "Jenis pesanan hanya Kayu atau Non-Kayu")
+    await session.execute(text("UPDATE bl2_order SET jenis_pesanan = :nilai WHERE id = :id"), {"nilai": nilai, "id": order_id})
     await session.commit()
     return {"ok": True}
