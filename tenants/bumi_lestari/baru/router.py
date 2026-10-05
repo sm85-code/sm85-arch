@@ -59,11 +59,12 @@ async def _siap(session: AsyncSession) -> None:
 async def daftar_order(session: AsyncSession = _db(), _: BlUser = _guard()):
     await _siap(session)
     baris = (await session.execute(text("""
-        SELECT o.id, o.no_order, o.nama_barang, o.pembeli, o.sumber, o.status, j.nama AS jenis, j.kayu
+        SELECT o.id, o.no_order, o.nama_barang, o.pembeli, o.toko, o.sumber, o.status,
+               j.nama AS jenis, j.kayu
         FROM bl2_order o LEFT JOIN bl2_jenis j ON j.id = o.jenis_id
         ORDER BY o.no_order DESC
     """))).mappings().all()
-    return [dict(r) for r in baris]
+    return [{**dict(r), "kayu": bool(r["kayu"]) if r["kayu"] is not None else None} for r in baris]
 
 
 @router.post("/order")
@@ -91,7 +92,7 @@ async def tambah_order(payload: dict, session: AsyncSession = _db(), _: BlUser =
 @router.get("/jenis")
 async def jenis(session: AsyncSession = _db(), _: BlUser = _guard()):
     await _siap(session)
-    baris = (await session.execute(text("SELECT id, nama, kayu, ukuran, harga_reseller FROM bl2_jenis ORDER BY nama"))).mappings().all()
+    baris = (await session.execute(text("SELECT id, nama, kayu, ukuran, harga_reseller::float AS harga_reseller FROM bl2_jenis ORDER BY nama"))).mappings().all()
     return [dict(r) for r in baris]
 
 
