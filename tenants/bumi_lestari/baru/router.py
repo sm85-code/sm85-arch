@@ -442,5 +442,12 @@ async def isi_cat(session: AsyncSession = _db(), _: BlUser = _guard()):
                OR replace(lower(nama), ' ', '') LIKE '%' || :ukuran || '%'
         """), {"harga": harga, "ukuran": ukuran})
         pas += hasil.rowcount or 0
+        await session.execute(text("""
+            UPDATE bl2_nilai SET custom = FALSE WHERE replace(lower(nilai), ' ', '') LIKE '%' || :ukuran || '%'
+        """), {"ukuran": ukuran})
+    await session.execute(text("""
+        UPDATE bl2_nilai SET custom = TRUE, harga_cat = 0
+        WHERE COALESCE(harga_cat, 0) = 0
+    """))
     await session.commit()
-    return {"nilai": pas, "catatan": "Termasuk packing biasa. Packing kayu terpisah."}
+    return {"nilai": pas, "catatan": "Termasuk packing biasa. Ukuran tanpa tarif ditandai custom."}
