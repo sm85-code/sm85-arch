@@ -527,3 +527,47 @@ async def jenis_pesanan(order_id: str, payload: dict, session: AsyncSession = _d
     await session.execute(text("UPDATE bl2_order SET jenis_pesanan = :nilai WHERE id = :id"), {"nilai": nilai, "id": order_id})
     await session.commit()
     return {"ok": True}
+
+
+@router.patch("/order/{order_id}")
+async def ubah_order(order_id: str, payload: dict, session: AsyncSession = _db(), _: BlUser = _guard()):
+    await _siap(session)
+    sumber = (await session.execute(text("SELECT sumber FROM bl2_order WHERE id = :id"), {"id": order_id})).scalar()
+    if sumber == "erp":
+        raise HTTPException(403, "Pesanan ERP tidak diubah di sini")
+    await session.execute(text("""
+        UPDATE bl2_order SET tgl_pesan = :tgl, toko = :toko, nama_barang = :nama, varian = :varian,
+        qty = :qty, no_order = :no, keterangan = :ket WHERE id = :id
+    """), {
+        "id": order_id, "tgl": payload.get("tgl_pesan") or None, "toko": payload.get("toko") or "",
+        "nama": payload.get("nama_barang") or "", "varian": payload.get("varian") or "",
+        "qty": int(payload.get("qty") or 1), "no": payload.get("no_order") or "", "ket": payload.get("keterangan") or "",
+    })
+    await session.commit()
+    return {"ok": True}
+
+
+@router.delete("/order/{order_id}")
+async def hapus_order(order_id: str, session: AsyncSession = _db(), _: BlUser = _guard()):
+    await _siap(session)
+    sumber = (await session.execute(text("SELECT sumber FROM bl2_order WHERE id = :id"), {"id": order_id})).scalar()
+    if sumber == "erp":
+        raise HTTPException(403, "Pesanan ERP tidak dihapus")
+    await session.execute(text("DELETE FROM bl2_order WHERE id = :id"), {"id": order_id})
+    await session.commit()
+    return {"ok": True}
+
+
+@router.post("/order/massal")
+async def massal(payload: dict, session: AsyncSession = _db(), _: BlUser = _guard()):
+    await _siap(session)
+    ids = payload.get("id") or []
+    if payload.get("aksi") == "hapus":
+        await session.execute(text("DELETE FROM bl2_order WHERE id = ANY(:ids) AND sumber <> 'erp'"), {"ids": ids})
+    elif payload.get("aksi") == "jenis":
+        nilai = str(payload.get("jenis_pesanan") or "")
+        if nilai not in ("Kayu", "Non-Kayu"):
+            raise HTTPException(422, "Jenis pesanan hanya Kayu atau Non-Kayu")
+        await session.execute(text("UPDATE bl2_order SET jenis_pesanan = :nilai WHERE id = ANY(:ids)"), {"nilai": nilai, "ids": ids})
+    await session.commit()
+    return {"ok": True}
