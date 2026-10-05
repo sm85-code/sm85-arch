@@ -753,7 +753,8 @@ def normalisasi_pesanan(order: dict) -> dict:
         price = it.get("model_discounted_price") or it.get("model_original_price") or 0
         items.append(
             {
-                "nama_produk": (f"{nama} - {model}" if model else nama)[:255] or "(tanpa nama)",
+                "nama_produk": nama[:255] or "(tanpa nama)",
+                "model_name": model[:255],
                 "harga_satuan": Decimal(str(price)),
                 "qty": qty,
                 "id_eksternal_kandidat": [
