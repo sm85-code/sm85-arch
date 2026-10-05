@@ -97,8 +97,9 @@ async def _siap(session: AsyncSession) -> None:
     """))
     await session.execute(text("""
         INSERT INTO bl2_reseller (kode, nama) VALUES
-        ('001', 'Mandala Wangi'), ('002', ''), ('003', ''), ('004', '')
-        ON CONFLICT (kode) DO NOTHING
+        ('001', 'Mandala Wangi'), ('002', 'Chakra Digital Niaga'),
+        ('003', 'Karya Raharja Store'), ('004', 'AZFA Digital Indonesia')
+        ON CONFLICT (kode) DO UPDATE SET nama = EXCLUDED.nama WHERE bl2_reseller.nama = ''
     """))
     await session.execute(text("""
         INSERT INTO bl2_tukang (id, nama)
