@@ -381,3 +381,36 @@ async def hapus_jenis(jenis_id: str, session: AsyncSession = _db(), _: BlUser = 
     await session.execute(text("DELETE FROM bl2_jenis WHERE id = :id"), {"id": jenis_id})
     await session.commit()
     return {"ok": True}
+
+
+@router.post("/impor")
+async def impor(session: AsyncSession = _db(), _: BlUser = _guard()):
+    """Isi katalog dari daftar harga. Aman diulang. Cat tidak ikut."""
+    await _siap(session)
+    import json
+    from pathlib import Path
+    data = json.loads(Path(__file__).with_name("katalog.json").read_text())
+    produk = 0
+    nilai = 0
+    for p in data["produk"]:
+        ada = (await session.execute(text("SELECT id FROM bl2_produk WHERE id = :id"), {"id": p["id"]})).scalar()
+        if not ada:
+            await session.execute(text("INSERT INTO bl2_produk (id, nama, kayu) VALUES (:id, :nama, :kayu)"), p)
+            produk += 1
+        vid = __import__("hashlib").md5(f"varian|{p['id']}|Ukuran".encode()).hexdigest()
+        if not (await session.execute(text("SELECT id FROM bl2_varian WHERE id = :id"), {"id": vid})).scalar():
+            await session.execute(text("INSERT INTO bl2_varian (id, produk_id, nama) VALUES (:id, :produk, 'Ukuran')"), {"id": vid, "produk": p["id"]})
+    for n in data["nilai"]:
+        if (await session.execute(text("SELECT id FROM bl2_nilai WHERE id = :id"), {"id": n["id"]})).scalar():
+            continue
+        await session.execute(text("""
+            INSERT INTO bl2_jenis (id, nama, kayu, ukuran, harga_tukang, produk_id)
+            VALUES (:jenis, :nama, TRUE, :ukuran, :harga, :produk)
+        """), n)
+        await session.execute(text("""
+            INSERT INTO bl2_nilai (id, varian_id, nilai, jenis_id, harga_tukang, custom)
+            VALUES (:id, :varian, :nilai, :jenis, :harga, FALSE)
+        """), n)
+        nilai += 1
+    await session.commit()
+    return {"produk": produk, "nilai": nilai}
