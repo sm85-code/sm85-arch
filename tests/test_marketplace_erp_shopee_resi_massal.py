@@ -196,3 +196,133 @@ def test_schema_limits():
         ResiMassalIn(pesanan_ids=["a"], tipe="OTHER")
     with pytest.raises(ValidationError):
         ResiMassalIn(pesanan_ids=[str(i) for i in range(51)])
+
+
+# --- gabungan: any mix of shops and couriers in ONE pdf --------------------------------------
+
+
+def _pdf(halaman: int) -> bytes:
+    import io
+
+    from pypdf import PdfWriter
+
+    w = PdfWriter()
+    for _ in range(halaman):
+        w.add_blank_page(width=100, height=100)
+    out = io.BytesIO()
+    w.write(out)
+    return out.getvalue()
+
+
+def _jumlah_halaman(pdf: bytes) -> int:
+    import io
+
+    from pypdf import PdfReader
+
+    return len(PdfReader(io.BytesIO(pdf)).pages)
+
+
+@pytest.mark.asyncio
+async def test_a_mixed_selection_becomes_one_pdf_in_selection_order_and_is_marked_printed(session, monkeypatch):
+    a, b = await _toko(session, "A"), await _toko(session, "B")
+    b.id_toko_eksternal = "6"
+    p1, p2 = await _pesanan(session, a, "S1", kurir="J&T"), await _pesanan(session, a, "S2", kurir="J&T")
+    p3, p4 = await _pesanan(session, a, "S3", kurir="JNE"), await _pesanan(session, b, "S4", kurir="J&T")
+    dipanggil = []
+
+    async def fake_banyak(sess, akun_, pesanan, tipe=None):
+        dipanggil.append((akun_.id, [sn for sn, _ in pesanan]))
+        return _pdf(len(pesanan))
+
+    monkeypatch.setattr(erp_shopee, "unduh_resi_banyak", fake_banyak)
+    h = await services.unduh_resi_gabungan(session, [p1.id, p4.id, p3.id, p2.id], "NORMAL_AIR_WAYBILL", "budi")
+    assert _jumlah_halaman(h["pdf"]) == 4 and h["berhasil"] == 4 and h["gagal"] == [] and h["jumlah_pdf"] == 3
+    assert sorted(sorted(x[1]) for x in dipanggil) == [["S1", "S2"], ["S3"], ["S4"]]  # one call per shop and courier
+    assert all(p.resi_dicetak_at and p.resi_dicetak_oleh == "budi" for p in (p1, p2, p3, p4))
+
+
+@pytest.mark.asyncio
+async def test_orders_not_ready_are_reported_and_never_marked_printed(session, monkeypatch):
+    akun = await _toko(session)
+    ok, belum = await _pesanan(session, akun, "S1"), await _pesanan(session, akun, "S2", mentah="READY_TO_SHIP")
+
+    async def fake_banyak(sess, akun_, pesanan, tipe=None):
+        return _pdf(len(pesanan))
+
+    monkeypatch.setattr(erp_shopee, "unduh_resi_banyak", fake_banyak)
+    h = await services.unduh_resi_gabungan(session, [ok.id, belum.id, "tidak-ada"])
+    assert h["berhasil"] == 1 and _jumlah_halaman(h["pdf"]) == 1
+    assert {g["id_eksternal"] for g in h["gagal"] if g["id_eksternal"]} == {"S2"} and len(h["gagal"]) == 2
+    assert ok.resi_dicetak_at is not None and belum.resi_dicetak_at is None
+
+
+@pytest.mark.asyncio
+async def test_one_refused_order_does_not_block_the_rest_of_its_group(session, monkeypatch):
+    akun = await _toko(session)
+    p1 = await _pesanan(session, akun, "S1")
+    p2 = await _pesanan(session, akun, "S2")
+    p3 = await _pesanan(session, akun, "S3")
+
+    async def fake_banyak(sess, akun_, pesanan, tipe=None):
+        if any(sn == "S2" for sn, _ in pesanan):
+            raise HTTPException(status_code=409, detail="Resi belum bisa dibuat: S2: error_status not ready")
+        return _pdf(len(pesanan))
+
+    monkeypatch.setattr(erp_shopee, "unduh_resi_banyak", fake_banyak)
+    h = await services.unduh_resi_gabungan(session, [p1.id, p2.id, p3.id])
+    assert h["berhasil"] == 2 and _jumlah_halaman(h["pdf"]) == 2
+    assert [(g["id_eksternal"], "not ready" in g["pesan"]) for g in h["gagal"]] == [("S2", True)]
+    assert p1.resi_dicetak_at and p3.resi_dicetak_at and p2.resi_dicetak_at is None
+
+
+@pytest.mark.asyncio
+async def test_when_nothing_could_be_printed_the_reasons_are_the_error(session, monkeypatch):
+    akun = await _toko(session)
+    p1 = await _pesanan(session, akun, "S1")
+
+    async def fake_banyak(sess, akun_, pesanan, tipe=None):
+        raise HTTPException(status_code=409, detail="Shopee menolak")
+
+    monkeypatch.setattr(erp_shopee, "unduh_resi_banyak", fake_banyak)
+    with pytest.raises(HTTPException) as exc:
+        await services.unduh_resi_gabungan(session, [p1.id])
+    assert exc.value.status_code == 409 and "S1" in exc.value.detail and "Shopee menolak" in exc.value.detail
+    assert p1.resi_dicetak_at is None
+
+
+@pytest.mark.asyncio
+async def test_the_time_budget_stops_new_groups_and_says_so(session, monkeypatch):
+    a, b = await _toko(session, "A"), await _toko(session, "B")
+    b.id_toko_eksternal = "6"
+    p1, p2 = await _pesanan(session, a, "S1"), await _pesanan(session, b, "S2")
+    monkeypatch.setattr(services, "RESI_BATAS_TOTAL_DETIK", -1.0)  # already over budget: nothing may start
+
+    async def fake_banyak(sess, akun_, pesanan, tipe=None):
+        raise AssertionError("must not start")
+
+    monkeypatch.setattr(erp_shopee, "unduh_resi_banyak", fake_banyak)
+    with pytest.raises(HTTPException) as exc:
+        await services.unduh_resi_gabungan(session, [p1.id, p2.id])
+    assert "Waktu habis" in exc.value.detail
+
+
+@pytest.mark.asyncio
+async def test_gabungan_endpoint_returns_base64_pdf_with_the_failures_and_respects_staff_scope(session, monkeypatch):
+    import base64
+
+    from tenants.marketplace_erp.modules.marketplace_erp.application.schemas import ResiGabunganIn
+
+    akun = await _toko(session)
+    p1 = await _pesanan(session, akun, "S1")
+
+    async def fake_banyak(sess, akun_, pesanan, tipe=None):
+        return _pdf(1)
+
+    monkeypatch.setattr(erp_shopee, "unduh_resi_banyak", fake_banyak)
+    hasil = await router.cetak_resi_gabungan(ResiGabunganIn(pesanan_ids=[p1.id]), session=session, user=SimpleNamespace(role="owner", id="o", username="o"))
+    assert _jumlah_halaman(base64.b64decode(hasil["pdf"])) == 1 and hasil["nama_file"] == "resi-S1.pdf" and hasil["gagal"] == []
+    with pytest.raises(HTTPException) as exc:
+        await router.cetak_resi_gabungan(ResiGabunganIn(pesanan_ids=[p1.id]), session=session, user=SimpleNamespace(role="staff", id="s"))
+    assert exc.value.status_code == 403
+    with pytest.raises(ValidationError):
+        ResiGabunganIn(pesanan_ids=[str(i) for i in range(201)])

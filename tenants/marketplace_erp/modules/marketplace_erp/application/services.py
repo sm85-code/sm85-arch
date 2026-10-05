@@ -1796,6 +1796,94 @@ async def unduh_resi_massal(
     return pdf, nama
 
 
+# Total time one "print labels" request may spend before it stops starting new groups (the proxy cuts a request at ~100 s).
+RESI_BATAS_TOTAL_DETIK = 75.0
+RESI_ISOLASI_MAKS = 15  # a failed group this small is retried order by order, to find the one that blocks it
+
+
+def _pesan_gagal(exc: Exception) -> str:
+    return str(getattr(exc, "detail", None) or exc)[:300]
+
+
+async def unduh_resi_gabungan(
+    session: AsyncSession, pesanan_ids: list[str], tipe: str | None = None, oleh: str | None = None
+) -> dict:
+    """Labels of any selection of processed Shopee orders as ONE pdf.
+
+    Shopee prints one shop and one courier per download, so the selection is split into those groups, each group is
+    fetched, and the PDFs are joined in the order of the selection. One order Shopee refuses (not ready, cancelled by
+    the buyer…) does not block the others: a failed group is retried order by order and the refused ones are reported
+    with their reason. Only the orders that really got a label are marked as printed.
+    """
+    import io
+
+    from pypdf import PdfReader, PdfWriter
+
+    from tenants.marketplace_erp.modules.marketplace_erp.infrastructure.adapters import erp_shopee
+
+    gagal: list[dict] = []
+    kelompok: dict[tuple, list] = {}
+    for pid in dict.fromkeys(pesanan_ids):
+        try:
+            p, akun = await _pesanan_marketplace(session, pid)
+        except HTTPException as exc:
+            gagal.append({"id": pid, "id_eksternal": None, "pesan": _pesan_gagal(exc)})
+            continue
+        if p.status_marketplace != "PROCESSED":
+            gagal.append({"id": p.id, "id_eksternal": p.id_eksternal, "pesan": "Belum diproses atau belum menunggu kurir, resinya belum bisa dicetak."})
+            continue
+        kelompok.setdefault((p.akun_id, (p.kurir or "").strip().lower()), []).append((p, akun))
+
+    mulai = time.monotonic()
+    pdfs: list[bytes] = []
+    berhasil: list = []
+
+    def habis() -> bool:
+        return time.monotonic() - mulai >= RESI_BATAS_TOTAL_DETIK
+
+    async def satu_kelompok(anggota: list) -> bytes:
+        akun = anggota[0][1]
+        return await erp_shopee.unduh_resi_banyak(session, akun, [(p.id_eksternal, p.nomor_resi) for p, _ in anggota], tipe)
+
+    for anggota_penuh in kelompok.values():
+        for awal in range(0, len(anggota_penuh), erp_shopee.MAKS_RESI_MASSAL):
+            anggota = anggota_penuh[awal : awal + erp_shopee.MAKS_RESI_MASSAL]
+            if habis():
+                gagal += [{"id": p.id, "id_eksternal": p.id_eksternal, "pesan": "Waktu habis sebelum sempat diproses, cetak ulang pesanan ini."} for p, _ in anggota]
+                continue
+            try:
+                pdfs.append(await satu_kelompok(anggota))
+                berhasil += [p for p, _ in anggota]
+                continue
+            except HTTPException as exc:
+                alasan_kelompok = _pesan_gagal(exc)
+            if len(anggota) > 1 and len(anggota) <= RESI_ISOLASI_MAKS:
+                for item in anggota:
+                    p = item[0]
+                    if habis():
+                        gagal.append({"id": p.id, "id_eksternal": p.id_eksternal, "pesan": "Waktu habis sebelum sempat diproses, cetak ulang pesanan ini."})
+                        continue
+                    try:
+                        pdfs.append(await satu_kelompok([item]))
+                        berhasil.append(p)
+                    except HTTPException as exc:
+                        gagal.append({"id": p.id, "id_eksternal": p.id_eksternal, "pesan": _pesan_gagal(exc)})
+            else:
+                gagal += [{"id": p.id, "id_eksternal": p.id_eksternal, "pesan": alasan_kelompok} for p, _ in anggota]
+
+    if not pdfs:
+        contoh = "; ".join(f"#{g['id_eksternal'] or g['id']}: {g['pesan']}" for g in gagal[:3])
+        raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail=f"Tidak ada resi yang berhasil dibuat. {contoh}".strip())
+    penulis = PdfWriter()
+    for pdf in pdfs:
+        penulis.append(PdfReader(io.BytesIO(pdf)))
+    keluar = io.BytesIO()
+    penulis.write(keluar)
+    _tandai_dicetak(berhasil, oleh)
+    nama = f"resi-{berhasil[0].id_eksternal}.pdf" if len(berhasil) == 1 else f"resi-{len(berhasil)}-pesanan.pdf"
+    return {"pdf": keluar.getvalue(), "nama_file": nama, "berhasil": len(berhasil), "gagal": gagal, "jumlah_pdf": len(pdfs)}
+
+
 async def batalkan_pesanan_marketplace(session: AsyncSession, pesanan_id: str, alasan: str) -> Pesanan:
     """Cancel a pulled Shopee order on Shopee, then locally (reserved stock is released).
 
