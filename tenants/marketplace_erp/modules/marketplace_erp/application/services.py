@@ -2441,19 +2441,31 @@ async def saran_iklan(session: AsyncSession, akun: AkunMarketplace, item_id: int
     return await erp_shopee.iklan_saran(session, akun, item_id)
 
 
-async def buat_iklan_produk(session: AsyncSession, akun: AkunMarketplace, body: dict) -> dict:
+async def daftar_kampanye_iklan(session: AsyncSession, akun: AkunMarketplace, hari: int = 7) -> dict:
     from tenants.marketplace_erp.modules.marketplace_erp.infrastructure.adapters import erp_shopee
-    return await erp_shopee.buat_iklan_produk(session, akun, body)
+
+    if akun.platform != "shopee":
+        raise HTTPException(status_code=501, detail=f"Iklan untuk platform '{akun.platform}' belum tersedia (Shopee first)")
+    return await erp_shopee.daftar_kampanye_iklan(session, akun, hari)
 
 
-async def ubah_iklan_produk(session: AsyncSession, akun: AkunMarketplace, body: dict) -> dict:
+async def ubah_iklan_shopee(session: AsyncSession, akun: AkunMarketplace, jenis: str, campaign_id: int | None, payload: dict, pengguna) -> dict:
+    """Validated write on Shopee Ads (``buat`` | ``aksi`` | ``kata_kunci``). Every call is logged with who did it."""
     from tenants.marketplace_erp.modules.marketplace_erp.infrastructure.adapters import erp_shopee
-    return await erp_shopee.ubah_iklan_produk(session, akun, body)
 
-
-async def ubah_kata_kunci_iklan(session: AsyncSession, akun: AkunMarketplace, body: dict) -> dict:
-    from tenants.marketplace_erp.modules.marketplace_erp.infrastructure.adapters import erp_shopee
-    return await erp_shopee.ubah_kata_kunci_iklan(session, akun, body)
+    if akun.platform != "shopee":
+        raise HTTPException(status_code=501, detail=f"Iklan untuk platform '{akun.platform}' belum tersedia (Shopee first)")
+    if jenis == "buat":
+        body, path = erp_shopee.susun_iklan_baru(payload), erp_shopee._PATH_ADS_BUAT
+    elif jenis == "aksi":
+        body, path = erp_shopee.susun_aksi_kampanye(int(campaign_id), payload), erp_shopee._PATH_ADS_UBAH
+    else:
+        body, path = erp_shopee.susun_kata_kunci(int(campaign_id), payload), erp_shopee._PATH_ADS_KATA_KUNCI
+    logging.getLogger(__name__).warning(
+        "iklan shopee %s oleh %s (toko %s): %s", jenis, getattr(pengguna, "username", None) or getattr(pengguna, "id", "?"), akun.nama_toko,
+        {k: v for k, v in body.items() if k != "reference_id"},
+    )
+    return await erp_shopee.signed_shop_request(session, akun, path, method="POST", body=body)
 
 
 async def sinkron_iklan_akun(session: AsyncSession, akun: AkunMarketplace, hari: int = 30) -> dict:

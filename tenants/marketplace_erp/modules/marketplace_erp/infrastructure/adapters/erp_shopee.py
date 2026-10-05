@@ -19,6 +19,7 @@ import json
 import logging
 import os
 import time
+import uuid
 from datetime import date, datetime, timedelta, timezone
 from decimal import Decimal
 from typing import Any
@@ -356,21 +357,6 @@ async def iklan_saran(session: Any, akun: Any, item_id: int) -> dict:
         method="POST", body={"item_id": item_id, "bidding_method": "auto"},
     )
     return {"produk": produk, "roas": roi, "anggaran": anggaran}
-
-
-async def buat_iklan_produk(session: Any, akun: Any, body: dict) -> dict:
-    """v2.ads.create_manual_product_ads. reference_id must be unique per attempt."""
-    return await signed_shop_request(session, akun, "/api/v2/ads/create_manual_product_ads", method="POST", body=body)
-
-
-async def ubah_iklan_produk(session: Any, akun: Any, body: dict) -> dict:
-    """v2.ads.edit_manual_product_ads: pause, resume, change_budget, change_duration, change_roas_target."""
-    return await signed_shop_request(session, akun, "/api/v2/ads/edit_manual_product_ads", method="POST", body=body)
-
-
-async def ubah_kata_kunci_iklan(session: Any, akun: Any, body: dict) -> dict:
-    """v2.ads.edit_manual_product_ad_keywords: add, delete, change_bid_price, change_match_type."""
-    return await signed_shop_request(session, akun, "/api/v2/ads/edit_manual_product_ad_keywords", method="POST", body=body)
 
 
 async def _call_shop_api(
@@ -1088,6 +1074,231 @@ async def sync_iklan_toko(session: Any, akun: Any, dari: "date", sampai: "date")
     if resp.get("total_balance") is not None:
         saldo = {"saldo": _uang(resp.get("total_balance")), "data_at": _waktu_epoch(resp.get("data_timestamp"))}
     return {"hari": [hari[k] for k in sorted(hari)], "saldo": saldo}
+
+
+# --- Ads: campaigns of one shop (list, settings, performance) and the validated write actions ---------------
+
+_PATH_ADS_KAMPANYE = "/api/v2/ads/get_product_level_campaign_id_list"
+_PATH_ADS_PENGATURAN = "/api/v2/ads/get_product_level_campaign_setting_info"
+_PATH_ADS_KINERJA = "/api/v2/ads/get_product_campaign_daily_performance"
+_PATH_ADS_UBAH = "/api/v2/ads/edit_manual_product_ads"
+_PATH_ADS_KATA_KUNCI = "/api/v2/ads/edit_manual_product_ad_keywords"
+_PATH_ADS_BUAT = "/api/v2/ads/create_manual_product_ads"
+ADS_KAMPANYE_MAKS = 500
+ADS_BATCH = 100  # campaign ids per setting/performance call (Shopee maximum)
+AKSI_KAMPANYE = frozenset({"pause", "resume", "stop", "delete", "change_budget", "change_roas_target"})
+AKSI_KATA_KUNCI = frozenset({"add", "delete", "restore", "change_bid_price", "change_match_type"})
+# A typo guard, not a Shopee rule: one extra zero in a daily budget costs real money.
+ADS_ANGGARAN_MAKS = Decimal(os.getenv("ADS_ANGGARAN_HARIAN_MAKS", "1000000"))
+
+
+def _bagi(daftar: list, ukuran: int) -> list[list]:
+    return [daftar[i : i + ukuran] for i in range(0, len(daftar), ukuran)]
+
+
+def _desimal(nilai: Any) -> Decimal | None:
+    try:
+        return Decimal(str(nilai))
+    except Exception:  # noqa: BLE001 -- anything unreadable is "unknown"
+        return None
+
+
+def normalisasi_kampanye(pengaturan: dict, kinerja: dict | None) -> dict:
+    """One campaign: its settings (get_product_level_campaign_setting_info) joined with the summed daily performance
+    of the period (get_product_campaign_daily_performance). Missing pieces become None / empty, never an error."""
+    info = pengaturan.get("common_info") or {}
+    durasi = info.get("campaign_duration") or {}
+    manual = pengaturan.get("manual_bidding_info") or {}
+    auto = pengaturan.get("auto_bidding_info") or {}
+    kata_kunci = [
+        {
+            "kata": k.get("keyword"),
+            "status": k.get("status"),
+            "tipe": k.get("match_type"),
+            "bid": _desimal(k.get("bid_price_per_click")),
+        }
+        for k in (manual.get("selected_keywords") or [])
+        if k.get("keyword") and k.get("status") != "deleted"
+    ]
+    jumlah = {"impression": 0, "clicks": 0, "expense": Decimal(0), "direct_order": 0, "direct_gmv": Decimal(0)}
+    ada_kinerja = False
+    for hari in (kinerja or {}).get("metrics_list") or []:
+        ada_kinerja = True
+        jumlah["impression"] += int(hari.get("impression") or 0)
+        jumlah["clicks"] += int(hari.get("clicks") or 0)
+        jumlah["expense"] += _uang(hari.get("expense"))
+        jumlah["direct_order"] += int(hari.get("direct_order") or 0)
+        jumlah["direct_gmv"] += _uang(hari.get("direct_gmv"))
+    anggaran = _desimal(info.get("campaign_budget"))
+    return {
+        "campaign_id": str(pengaturan.get("campaign_id")),
+        "nama": info.get("ad_name") or f"Kampanye {pengaturan.get('campaign_id')}",
+        "jenis": info.get("ad_type"),
+        "status": info.get("campaign_status"),
+        "bidding": info.get("bidding_method"),
+        "penempatan": info.get("campaign_placement"),
+        "anggaran": anggaran,  # 0 = unlimited (Shopee)
+        "mulai": _waktu_epoch(durasi.get("start_time")),
+        "selesai": _waktu_epoch(durasi.get("end_time")) if durasi.get("end_time") else None,
+        "item_id": [str(i) for i in (info.get("item_id_list") or [])],
+        "roas_target": _desimal(auto.get("roas_target")),
+        "kata_kunci": kata_kunci,
+        "kinerja": (
+            {
+                "impression": jumlah["impression"],
+                "clicks": jumlah["clicks"],
+                "expense": jumlah["expense"],
+                "direct_order": jumlah["direct_order"],
+                "direct_gmv": jumlah["direct_gmv"],
+                "roas": (jumlah["direct_gmv"] / jumlah["expense"]) if jumlah["expense"] > 0 else None,
+                "ctr": (Decimal(jumlah["clicks"]) / jumlah["impression"]) if jumlah["impression"] else None,
+            }
+            if ada_kinerja
+            else None
+        ),
+    }
+
+
+async def daftar_kampanye_iklan(session: Any, akun: Any, hari: int = 7) -> dict:
+    """Every product-level campaign of the shop with settings and performance of the last ``hari`` days, plus the
+    ads balance. Performance and balance are best effort (a failure becomes a note in ``catatan``)."""
+    if not live_sync_enabled() or not _akun_configured(akun):
+        raise ShopeeNotConfigured("Shopee live sync nonaktif atau akun belum terhubung.")
+    ids: list[int] = []
+    awal = 0
+    while len(ids) < ADS_KAMPANYE_MAKS:
+        data = await signed_shop_request(
+            session, akun, _PATH_ADS_KAMPANYE, params={"ad_type": "all", "offset": awal, "limit": 100}
+        )
+        resp = data.get("response") or {}
+        halaman = [int(c["campaign_id"]) for c in resp.get("campaign_list") or [] if c.get("campaign_id")]
+        ids.extend(halaman)
+        if not resp.get("has_next_page") or not halaman:
+            break
+        awal += len(halaman)
+    ids = ids[:ADS_KAMPANYE_MAKS]
+    catatan: list[str] = []
+    pengaturan: dict[int, dict] = {}
+    for kelompok in _bagi(ids, ADS_BATCH):
+        data = await signed_shop_request(
+            session,
+            akun,
+            _PATH_ADS_PENGATURAN,
+            params={"info_type_list": "1,2,3", "campaign_id_list": ",".join(str(i) for i in kelompok)},
+        )
+        for c in (data.get("response") or {}).get("campaign_list") or []:
+            pengaturan[int(c["campaign_id"])] = c
+    kinerja: dict[int, dict] = {}
+    sampai = datetime.now(timezone.utc).astimezone(timezone(timedelta(hours=7))).date()
+    dari = sampai - timedelta(days=max(2, min(hari, ADS_RENTANG_MAKS_HARI)) - 1)
+    try:
+        for kelompok in _bagi(ids, ADS_BATCH):
+            data = await signed_shop_request(
+                session,
+                akun,
+                _PATH_ADS_KINERJA,
+                params={
+                    "start_date": dari.strftime("%d-%m-%Y"),
+                    "end_date": sampai.strftime("%d-%m-%Y"),
+                    "campaign_id_list": ",".join(str(i) for i in kelompok),
+                },
+            )
+            respon = data.get("response")
+            for toko in respon if isinstance(respon, list) else [respon or {}]:
+                for c in toko.get("campaign_list") or []:
+                    kinerja[int(c["campaign_id"])] = c
+    except HTTPException as exc:
+        catatan.append(f"Performa kampanye gagal dimuat: {exc.detail}")
+    saldo = None
+    try:
+        data = await signed_shop_request(session, akun, _PATH_ADS_SALDO)
+        resp = data.get("response") or {}
+        if resp.get("total_balance") is not None:
+            saldo = _uang(resp.get("total_balance"))
+    except HTTPException as exc:
+        catatan.append(f"Saldo iklan gagal dimuat: {exc.detail}")
+    kampanye = [normalisasi_kampanye(pengaturan[i], kinerja.get(i)) for i in ids if i in pengaturan]
+    return {"saldo": saldo, "hari": (sampai - dari).days + 1, "kampanye": kampanye, "catatan": catatan}
+
+
+def _aman_angka(nilai: Any, nama: str, *, maks: Decimal | None = None) -> float:
+    angka = _desimal(nilai)
+    if angka is None or angka <= 0:
+        raise HTTPException(status_code=422, detail=f"{nama} harus angka lebih dari 0")
+    if maks is not None and angka > maks:
+        raise HTTPException(status_code=422, detail=f"{nama} melebihi batas Rp {maks:,.0f}".replace(",", "."))
+    return float(angka)
+
+
+def susun_aksi_kampanye(campaign_id: int, payload: dict) -> dict:
+    """Validated body of edit_manual_product_ads. The browser sends only the action and its value; the reference id is
+    made here so a double click cannot run the same change twice."""
+    aksi = str(payload.get("aksi") or "")
+    if aksi not in AKSI_KAMPANYE:
+        raise HTTPException(status_code=422, detail=f"Aksi tidak dikenal: {aksi or '(kosong)'}")
+    body: dict = {"reference_id": str(payload.get("reference_id") or uuid.uuid4()), "campaign_id": campaign_id, "edit_action": aksi}
+    if aksi == "change_budget":
+        body["budget"] = _aman_angka(payload.get("budget"), "Anggaran", maks=ADS_ANGGARAN_MAKS)
+    if aksi == "change_roas_target":
+        body["roas_target"] = _aman_angka(payload.get("roas_target"), "Target ROAS", maks=Decimal(100))
+    return body
+
+
+def susun_kata_kunci(campaign_id: int, payload: dict) -> dict:
+    """Validated body of edit_manual_product_ad_keywords."""
+    daftar = payload.get("kata_kunci")
+    if not isinstance(daftar, list) or not daftar:
+        raise HTTPException(status_code=422, detail="kata_kunci wajib berisi minimal satu kata")
+    pilihan = []
+    for k in daftar[:50]:
+        aksi = str(k.get("aksi") or "")
+        kata = str(k.get("kata") or "").strip()
+        if aksi not in AKSI_KATA_KUNCI or not kata:
+            raise HTTPException(status_code=422, detail="Setiap kata kunci butuh aksi yang sah dan kata")
+        item: dict = {"edit_action": aksi, "keyword": kata}
+        if aksi in {"add", "change_bid_price"}:
+            item["bid_price_per_click"] = _aman_angka(k.get("bid"), f"Bid untuk '{kata}'", maks=Decimal(100000))
+        if aksi in {"add", "change_match_type"}:
+            if k.get("tipe") not in {"exact", "broad"}:
+                raise HTTPException(status_code=422, detail=f"Tipe untuk '{kata}' harus exact atau broad")
+            item["match_type"] = k["tipe"]
+        pilihan.append(item)
+    return {"reference_id": str(payload.get("reference_id") or uuid.uuid4()), "campaign_id": campaign_id, "selected_keywords": pilihan}
+
+
+def susun_iklan_baru(payload: dict) -> dict:
+    """Validated body of create_manual_product_ads for item-level auto bidding (GMV Max) or manual bidding."""
+    try:
+        item_id = int(payload.get("item_id"))
+    except (TypeError, ValueError):
+        raise HTTPException(status_code=422, detail="item_id harus angka") from None
+    metode = str(payload.get("bidding") or "auto")
+    if metode not in {"auto", "manual"}:
+        raise HTTPException(status_code=422, detail="bidding harus auto atau manual")
+    mulai = _tanggal_ads(payload.get("mulai")) or datetime.now(timezone.utc).astimezone(timezone(timedelta(hours=7))).date()
+    body: dict = {
+        "reference_id": str(payload.get("reference_id") or uuid.uuid4()),
+        "item_id": item_id,
+        "budget": _aman_angka(payload.get("budget"), "Anggaran", maks=ADS_ANGGARAN_MAKS),
+        "start_date": mulai.strftime("%d-%m-%Y"),
+        "end_date": "",
+        "bidding_method": metode,
+    }
+    if metode == "auto" and payload.get("roas_target"):
+        body["roas_target"] = _aman_angka(payload.get("roas_target"), "Target ROAS", maks=Decimal(100))
+    if metode == "manual":
+        kata = [k for k in payload.get("kata_kunci") or [] if str(k.get("kata") or "").strip()]
+        if not kata:
+            raise HTTPException(status_code=422, detail="Iklan manual butuh minimal satu kata kunci")
+        body["selected_keywords"] = [
+            {
+                "keyword": str(k["kata"]).strip(),
+                "match_type": k.get("tipe") if k.get("tipe") in {"exact", "broad"} else "broad",
+                "bid_price_per_click": _aman_angka(k.get("bid"), f"Bid untuk '{k['kata']}'", maks=Decimal(100000)),
+            }
+            for k in kata[:50]
+        ]
+    return body
 
 
 # --- Logistics: arrange shipment + shipping label ---------------------------------
