@@ -747,7 +747,7 @@ async def kirim_stok_harga(session: Any, akun: Any, rows: list[dict]) -> dict:
 _PATH_ORDER_LIST = "/api/v2/order/get_order_list"
 _PATH_ORDER_DETAIL = "/api/v2/order/get_order_detail"
 # item_list / buyer_username / total_amount are not returned unless asked for.
-_ORDER_DETAIL_FIELDS = "buyer_username,item_list,total_amount,shipping_carrier"
+_ORDER_DETAIL_FIELDS = "buyer_username,item_list,total_amount,shipping_carrier,payment_method,estimated_shipping_fee,actual_shipping_fee,note,pay_time,cancel_by,cancel_reason,buyer_cancel_reason,package_list,recipient_address,cod"
 # Shopee rejects a time_from..time_to span over 15 days; stay a minute under.
 _ORDER_WINDOW_SECONDS = 15 * 24 * 3600 - 60
 # An incremental pull starts this much before the previous one, so a change that landed while it ran is not missed.
@@ -795,6 +795,8 @@ def normalisasi_pesanan(order: dict) -> dict:
             {
                 "nama_produk": nama[:255] or "(tanpa nama)",
                 "model_name": model[:255],
+                "item_sku": str(it.get("item_sku") or "")[:128],
+                "model_sku": str(it.get("model_sku") or "")[:128],
                 "harga_satuan": Decimal(str(price)),
                 "qty": qty,
                 "id_eksternal_kandidat": [
@@ -816,6 +818,22 @@ def normalisasi_pesanan(order: dict) -> dict:
         "kurir": str(order.get("shipping_carrier") or "").strip() or None,
         "dipesan_at": _waktu_epoch(order.get("create_time")),
         "items": items,
+        "detail": {
+            "payment_method": order.get("payment_method") or "",
+            "currency": order.get("currency") or "",
+            "cod": bool(order.get("cod")),
+            "days_to_ship": order.get("days_to_ship"),
+            "ship_by_date": order.get("ship_by_date"),
+            "estimated_shipping_fee": order.get("estimated_shipping_fee"),
+            "actual_shipping_fee": order.get("actual_shipping_fee"),
+            "note": order.get("note") or "",
+            "pay_time": order.get("pay_time"),
+            "cancel_by": order.get("cancel_by") or "",
+            "cancel_reason": order.get("cancel_reason") or order.get("buyer_cancel_reason") or "",
+            "penerima": ((order.get("recipient_address") or {}).get("name") or ""),
+            "kota": ((order.get("recipient_address") or {}).get("city") or ""),
+            "order_chargeable_weight_gram": order.get("order_chargeable_weight_gram"),
+        },
     }
 
 

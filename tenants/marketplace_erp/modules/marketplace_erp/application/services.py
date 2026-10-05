@@ -1555,6 +1555,8 @@ async def impor_pesanan_marketplace(session: AsyncSession, akun: AkunMarketplace
                         listing_id=listing.id if listing else None,
                         nama_produk=it["nama_produk"],
                         model_name=it.get("model_name") or "",
+                        item_sku=it.get("item_sku") or "",
+                        model_sku=it.get("model_sku") or "",
                         harga_satuan=it["harga_satuan"],
                         qty=it["qty"],
                         subtotal=it["harga_satuan"] * it["qty"],
@@ -1568,6 +1570,9 @@ async def impor_pesanan_marketplace(session: AsyncSession, akun: AkunMarketplace
         sebelum_mp = pesanan.status_marketplace
         berubah = await _samakan_status_pesanan(session, pesanan, row["status"])
         pesanan.status_marketplace = row["status_mentah"]
+        if row.get("detail"):
+            import json
+            pesanan.detail_json = json.dumps(row["detail"])
         if berubah and pesanan.status == row["status"]:
             # Reached the marketplace status: replace stale notes such as "waiting for the courier".
             pesanan.tersinkron_marketplace = True

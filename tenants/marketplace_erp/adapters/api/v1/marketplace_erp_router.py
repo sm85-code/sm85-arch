@@ -580,7 +580,13 @@ async def daftar_pesanan(
         akun_id=akun_id, akun_diizinkan=await akun_ids_diizinkan(user, session), tahap=tahap, resi=resi, q=q,
         dari=dari, sampai=sampai, urut=urut, halaman=halaman, per_halaman=per_halaman,
     )
-    hasil["items"] = [PesananOut.model_validate(p) for p in hasil["items"]]
+    import json
+    baris = []
+    for p in hasil["items"]:
+        data = PesananOut.model_validate(p).model_dump()
+        data.update({k: v for k, v in json.loads(getattr(p, "detail_json", None) or "{}").items() if v not in (None, "")})
+        baris.append(data)
+    hasil["items"] = baris
     return hasil
 
 
