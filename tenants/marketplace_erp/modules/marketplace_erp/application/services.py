@@ -714,6 +714,7 @@ def katalog_out(k: KatalogShopee, nama_toko: str | None = None, *, lengkap: bool
         "stok_shopee": k.stok_shopee,
         "jumlah_varian": len(json.loads(k.varian_json or "[]")),
         "nilai_varian": ", ".join(v.get("nama") or "" for v in json.loads(k.varian_json or "[]") if v.get("nama")),
+        "sumbu": next((v.get("sumbu") for v in json.loads(k.varian_json or "[]") if v.get("sumbu")), ""),
         "status": k.status,
         "dikirim_toko_id": k.dikirim_toko_id,
         "dikirim_at": k.dikirim_at,

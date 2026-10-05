@@ -547,6 +547,9 @@ def normalisasi_katalog(item: dict, model_resp: dict | None = None) -> dict:
 
     Shopee reports weight in kg (as a string); it is stored in grams.
     """
+    tier = model_resp.get("tier_variation") or model_resp.get("standardise_tier_variation") or [] if model_resp else []
+    sumbu = [str(x.get("name") or x.get("variation_name") or "").strip() for x in tier]
+    sumbu = [x for x in sumbu if x]
     varian = []
     if item.get("has_model") and model_resp:
         for model in model_resp.get("model") or []:
@@ -554,6 +557,7 @@ def normalisasi_katalog(item: dict, model_resp: dict | None = None) -> dict:
                 varian.append(
                     {
                         "nama": _nama_model(model, model_resp.get("tier_variation") or []),
+                        "sumbu": ", ".join(sumbu),
                         "sku": str(model.get("model_sku") or "").strip(),
                         "harga": str(_harga(model.get("price_info")) or ""),
                         "stok": _stok(model.get("stock_info_v2")),
@@ -569,6 +573,7 @@ def normalisasi_katalog(item: dict, model_resp: dict | None = None) -> dict:
         "deskripsi": _deskripsi(item),
         "foto": list(((item.get("image") or {}).get("image_url_list")) or []),
         "varian": varian,
+        "sumbu": ", ".join(sumbu),
         "harga_min": min(harga_semua) if harga_semua else None,
         "harga_max": max(harga_semua) if harga_semua else None,
         "stok_shopee": stok,
