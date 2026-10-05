@@ -53,6 +53,10 @@ async def _siap(session: AsyncSession) -> None:
     await session.execute(text("ALTER TABLE bl2_order ADD COLUMN IF NOT EXISTS sumber_ref TEXT"))
     await session.execute(text("ALTER TABLE bl2_jenis ADD COLUMN IF NOT EXISTS harga_reseller NUMERIC NOT NULL DEFAULT 0"))
     await session.execute(text("ALTER TABLE bl2_jenis ADD COLUMN IF NOT EXISTS produk_id TEXT"))
+    await session.execute(text("ALTER TABLE bl2_nilai ADD COLUMN IF NOT EXISTS harga_tukang NUMERIC NOT NULL DEFAULT 0"))
+    await session.execute(text("ALTER TABLE bl2_nilai ADD COLUMN IF NOT EXISTS custom BOOLEAN NOT NULL DEFAULT FALSE"))
+    await session.execute(text("ALTER TABLE bl2_jenis ADD COLUMN IF NOT EXISTS harga_tukang NUMERIC NOT NULL DEFAULT 0"))
+    await session.execute(text("ALTER TABLE bl2_jenis ADD COLUMN IF NOT EXISTS custom BOOLEAN NOT NULL DEFAULT FALSE"))
     await session.execute(text("""
         CREATE TABLE IF NOT EXISTS bl2_produk (
             id TEXT PRIMARY KEY,
@@ -72,7 +76,9 @@ async def _siap(session: AsyncSession) -> None:
             id TEXT PRIMARY KEY,
             varian_id TEXT NOT NULL,
             nilai TEXT NOT NULL,
-            jenis_id TEXT
+            jenis_id TEXT,
+            harga_tukang NUMERIC NOT NULL DEFAULT 0,
+            custom BOOLEAN NOT NULL DEFAULT FALSE
         )
     """))
     await session.commit()
@@ -237,7 +243,7 @@ async def daftar_produk(session: AsyncSession = _db(), _: BlUser = _guard()):
     await _siap(session)
     produk = (await session.execute(text("SELECT id, nama, kayu FROM bl2_produk ORDER BY nama"))).mappings().all()
     varian = (await session.execute(text("SELECT id, produk_id, nama FROM bl2_varian ORDER BY nama"))).mappings().all()
-    nilai = (await session.execute(text("SELECT id, varian_id, nilai, jenis_id FROM bl2_nilai ORDER BY nilai"))).mappings().all()
+    nilai = (await session.execute(text("SELECT id, varian_id, nilai, jenis_id, harga_tukang::float AS harga_tukang, custom FROM bl2_nilai ORDER BY nilai"))).mappings().all()
     hasil = []
     for p in produk:
         sumbu = []
@@ -287,8 +293,8 @@ async def tambah_nilai(payload: dict, session: AsyncSession = _db(), _: BlUser =
         raise HTTPException(422, "Varian dan nilai wajib")
     jid = uuid.uuid4().hex
     await session.execute(text("""
-        INSERT INTO bl2_jenis (id, nama, kayu, ukuran, harga_reseller, produk_id)
-        VALUES (:id, :nama, :kayu, :ukuran, :harga, :produk)
+        INSERT INTO bl2_jenis (id, nama, kayu, ukuran, harga_reseller, produk_id, harga_tukang, custom)
+        VALUES (:id, :nama, :kayu, :ukuran, :harga, :produk, :tukang, :custom)
     """), {
         "id": jid,
         "nama": f"{induk['nama']} · {induk['varian']} · {nilai}",
@@ -296,9 +302,13 @@ async def tambah_nilai(payload: dict, session: AsyncSession = _db(), _: BlUser =
         "ukuran": nilai,
         "harga": payload.get("harga_reseller") or 0,
         "produk": induk["id"],
+        "tukang": 0 if payload.get("custom") else (payload.get("harga_tukang") or 0),
+        "custom": bool(payload.get("custom")),
     })
-    await session.execute(text("INSERT INTO bl2_nilai (id, varian_id, nilai, jenis_id) VALUES (:id, :varian, :nilai, :jenis)"), {
+    await session.execute(text("INSERT INTO bl2_nilai (id, varian_id, nilai, jenis_id, harga_tukang, custom) VALUES (:id, :varian, :nilai, :jenis, :tukang, :custom)"), {
         "id": uuid.uuid4().hex, "varian": vid, "nilai": nilai, "jenis": jid,
+        "tukang": 0 if payload.get("custom") else (payload.get("harga_tukang") or 0),
+        "custom": bool(payload.get("custom")),
     })
     await session.commit()
     return {"id": jid}
