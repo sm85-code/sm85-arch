@@ -137,6 +137,22 @@ async def create_order(payload: OrderIn, session: AsyncSession = _db(), _: BlUse
     return await svc.create_order(session, payload)
 
 
+@order_router.get("/order/belum-peta")
+async def belum_peta(session: AsyncSession = _db(), _: BlUser = _guard()):
+    from tenants.bumi_lestari.modules.bumi_lestari.application import erp_pencairan
+    return await erp_pencairan.daftar_belum_peta(session)
+
+
+@order_router.post("/order/peta")
+async def simpan_peta(payload: dict, session: AsyncSession = _db(), _: BlUser = _guard()):
+    from fastapi import HTTPException
+    from tenants.bumi_lestari.modules.bumi_lestari.application import erp_pencairan
+    try:
+        return await erp_pencairan.simpan_peta(session, str(payload.get("nama") or ""), str(payload.get("produk_id") or ""))
+    except ValueError as exc:
+        raise HTTPException(422, str(exc)) from exc
+
+
 @order_router.get("/order/{order_id}", response_model=OrderOut)
 async def get_order(order_id: str, session: AsyncSession = _db(), _: BlUser = _guard()):
     return await svc.get_order(session, order_id)
