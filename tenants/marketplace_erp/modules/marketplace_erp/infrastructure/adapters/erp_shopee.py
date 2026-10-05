@@ -348,15 +348,52 @@ async def signed_shop_request(
 
 
 
-async def iklan_saran(session: Any, akun: Any, item_id: int) -> dict:
-    """Recommended product, ROAS, and budget before creating a manual product ad."""
-    produk = await signed_shop_request(session, akun, "/api/v2/ads/get_recommended_item_list", params={"item_id": item_id})
-    roi = await signed_shop_request(session, akun, "/api/v2/ads/get_product_recommended_roi_target", params={"item_id": item_id})
-    anggaran = await signed_shop_request(
-        session, akun, "/api/v2/ads/get_create_product_ad_budget_suggestion",
-        method="POST", body={"item_id": item_id, "bidding_method": "auto"},
+async def iklan_saran(session: Any, akun: Any, item_id: int, kata: str | None = None, bidding: str = "auto") -> dict:
+    """Shopee's own recommendations before creating an item-level ad: ROAS target, daily budget, and keywords with
+    search volume and suggested bid. Each part is best effort: one that fails becomes a note, not an error."""
+    hasil: dict = {"roas": None, "anggaran": None, "kata_kunci": [], "catatan": []}
+
+    async def coba(nama: str, kerja):
+        try:
+            return await kerja
+        except HTTPException as exc:
+            hasil["catatan"].append(f"{nama} tidak tersedia: {exc.detail}")
+            return None
+
+    roi = await coba(
+        "Saran target ROAS",
+        signed_shop_request(session, akun, "/api/v2/ads/get_product_recommended_roi_target", params={"reference_id": str(uuid.uuid4()), "item_id": item_id}),
     )
-    return {"produk": produk, "roas": roi, "anggaran": anggaran}
+    if roi:
+        r = roi.get("response") or {}
+        hasil["roas"] = {
+            nama: {"nilai": (r.get(kunci) or {}).get("value"), "persentil": (r.get(kunci) or {}).get("percentile")}
+            for nama, kunci in (("rendah", "lower_bound"), ("sedang", "exact"), ("tinggi", "upper_bound"))
+            if r.get(kunci)
+        }
+    uang = await coba(
+        "Saran anggaran",
+        signed_shop_request(
+            session, akun, "/api/v2/ads/get_create_product_ad_budget_suggestion",
+            method="POST",
+            body={
+                "reference_id": str(uuid.uuid4()), "product_selection": "manual", "campaign_placement": "all",
+                "bidding_method": bidding, "item_id": item_id, **({"enhanced_cpc": "false"} if bidding == "manual" else {}),
+            },
+        ),
+    )
+    if uang:
+        b = (uang.get("response") or {}).get("budget") or {}
+        hasil["anggaran"] = {"min": b.get("min_budget"), "rekomendasi": b.get("recommended_budget"), "maks": b.get("max_budget")}
+    params = {"item_id": item_id, **({"input_keyword": kata} if kata else {})}
+    kunci = await coba("Saran kata kunci", signed_shop_request(session, akun, "/api/v2/ads/get_recommended_keyword_list", params=params))
+    if kunci:
+        hasil["kata_kunci"] = [
+            {"kata": k.get("keyword"), "skor": k.get("quality_score"), "volume": k.get("search_volume"), "bid": k.get("suggested_bid")}
+            for k in (kunci.get("response") or {}).get("suggested_keywords") or []
+            if k.get("keyword")
+        ][:50]
+    return hasil
 
 
 async def _call_shop_api(

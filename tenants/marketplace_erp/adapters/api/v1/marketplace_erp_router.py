@@ -1047,12 +1047,14 @@ async def log_push_shopee(
 async def saran_iklan_akun(
     akun_id: str,
     item_id: int,
+    kata: str | None = Query(None, max_length=100),
+    bidding: str = Query("auto", pattern="^(auto|manual)$"),
     session: AsyncSession = Depends(get_db_marketplace_erp),
     _: UserMarketplaceErp = Depends(require_roles_marketplace_erp(*OWNER_ONLY)),
 ):
-    """Saran produk, ROAS, dan anggaran sebelum membuat iklan."""
+    """Saran Shopee sebelum membuat iklan: target ROAS, anggaran harian, dan kata kunci (volume + bid saran)."""
     akun = await services.get_akun_marketplace(session, akun_id)
-    return await services.saran_iklan(session, akun, item_id)
+    return await services.saran_iklan(session, akun, item_id, kata, bidding)
 
 
 @marketplace_erp_router.get("/akun/{akun_id}/iklan/kampanye")

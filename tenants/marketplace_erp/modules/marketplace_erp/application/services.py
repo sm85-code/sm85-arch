@@ -2436,9 +2436,9 @@ IKLAN_HARI_MAKS = 180
 
 
 
-async def saran_iklan(session: AsyncSession, akun: AkunMarketplace, item_id: int) -> dict:
+async def saran_iklan(session: AsyncSession, akun: AkunMarketplace, item_id: int, kata: str | None = None, bidding: str = "auto") -> dict:
     from tenants.marketplace_erp.modules.marketplace_erp.infrastructure.adapters import erp_shopee
-    return await erp_shopee.iklan_saran(session, akun, item_id)
+    return await erp_shopee.iklan_saran(session, akun, item_id, kata, bidding)
 
 
 async def daftar_kampanye_iklan(session: AsyncSession, akun: AkunMarketplace, hari: int = 7) -> dict:

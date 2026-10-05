@@ -124,3 +124,22 @@ async def test_a_write_calls_shopee_with_the_validated_body_and_is_logged(monkey
     with pytest.raises(HTTPException) as exc:
         await services.ubah_iklan_shopee(None, SimpleNamespace(platform="tiktok", nama_toko="x"), "aksi", 9, {"aksi": "pause"}, None)
     assert exc.value.status_code == 501
+
+
+@pytest.mark.asyncio
+async def test_recommendations_are_read_per_part_and_one_failure_does_not_hide_the_rest(monkeypatch):
+    async def fake(session, akun, path, **kw):
+        if path.endswith("get_product_recommended_roi_target"):
+            assert kw["params"]["item_id"] == 5 and kw["params"]["reference_id"]
+            return {"response": {"lower_bound": {"value": 3.5, "percentile": 80}, "exact": {"value": 5.9, "percentile": 50}}}
+        if path.endswith("get_create_product_ad_budget_suggestion"):
+            assert kw["body"]["product_selection"] == "manual" and kw["body"]["bidding_method"] == "auto"
+            raise HTTPException(status_code=502, detail="anggaran down")
+        assert kw["params"] == {"item_id": 5, "input_keyword": "kursi"}
+        return {"response": {"suggested_keywords": [{"keyword": "kursi rotan", "quality_score": 8, "search_volume": 900, "suggested_bid": 450}]}}
+
+    monkeypatch.setattr(erp_shopee, "signed_shop_request", fake)
+    h = await erp_shopee.iklan_saran(None, SimpleNamespace(), 5, "kursi")
+    assert h["roas"]["rendah"] == {"nilai": 3.5, "persentil": 80} and "tinggi" not in h["roas"]
+    assert h["anggaran"] is None and h["catatan"] == ["Saran anggaran tidak tersedia: anggaran down"]
+    assert h["kata_kunci"] == [{"kata": "kursi rotan", "skor": 8, "volume": 900, "bid": 450}]
