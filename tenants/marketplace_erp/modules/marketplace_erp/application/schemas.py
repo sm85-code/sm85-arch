@@ -404,6 +404,7 @@ class ItemPesananOut(BaseModel):
     produk_id: Optional[str]
     listing_id: Optional[str]
     nama_produk: str
+    model_name: str = ""
     harga_satuan: Decimal
     qty: int
     subtotal: Decimal

@@ -282,6 +282,7 @@ class ItemPesanan(MarketplaceErpBase):
         String(64), ForeignKey("mpe_produk_listing.id", ondelete="SET NULL"), nullable=True, index=True
     )
     nama_produk: Mapped[str] = mapped_column(String(255), nullable=False)
+    model_name: Mapped[str] = mapped_column(String(255), nullable=False, default="")
     harga_satuan: Mapped[Decimal] = mapped_column(Numeric(20, 2), nullable=False)
     qty: Mapped[int] = mapped_column(Integer, nullable=False)
     subtotal: Mapped[Decimal] = mapped_column(Numeric(20, 2), nullable=False)
