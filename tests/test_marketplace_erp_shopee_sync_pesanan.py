@@ -87,7 +87,7 @@ def test_normalisasi_pesanan_maps_fields():
     assert out["nama_pembeli"] == "budi" and out["total"] == Decimal("101500.5")
     assert len(out["items"]) == 1  # zero-qty line dropped
     item = out["items"][0]
-    assert item["nama_produk"] == "Kaos - M" and item["qty"] == 2
+    assert item["nama_produk"] == "Kaos" and item["model_name"] == "M" and item["qty"] == 2
     assert item["harga_satuan"] == Decimal("50000")  # discounted price wins
     assert item["id_eksternal_kandidat"] == ["9001:777", "9001"]  # variant listing key first, then the item
 
