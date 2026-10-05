@@ -586,6 +586,12 @@ async def daftar_pesanan(
         data = PesananOut.model_validate(p).model_dump()
         data.update({k: v for k, v in json.loads(getattr(p, "detail_json", None) or "{}").items() if v not in (None, "")})
         baris.append(data)
+    for data in baris:
+        for item in data.get("items") or []:
+            if not item.get("model_name") and " - " in (item.get("nama_produk") or ""):
+                nama, model = item["nama_produk"].rsplit(" - ", 1)
+                item["nama_produk"] = nama
+                item["model_name"] = model
     hasil["items"] = baris
     return hasil
 
