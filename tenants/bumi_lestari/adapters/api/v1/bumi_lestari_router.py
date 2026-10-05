@@ -16,6 +16,7 @@ from tenants.bumi_lestari.adapters.api.v1.bumi_lestari_dokumen_router import dok
 from tenants.bumi_lestari.adapters.api.v1.bumi_lestari_kiriman_router import kiriman_router
 from tenants.bumi_lestari.adapters.api.v1.bumi_lestari_laporan_router import laporan_router
 from tenants.bumi_lestari.adapters.api.v1.bumi_lestari_order_router import order_router
+from tenants.bumi_lestari.adapters.api.v1.bumi_lestari_v2_router import v2_router
 from tenants.bumi_lestari.adapters.api.v1.bumi_lestari_pembayaran_router import pembayaran_router
 from tenants.bumi_lestari.adapters.api.v1.bumi_lestari_pencairan_router import pencairan_router
 from tenants.bumi_lestari.adapters.api.v1.bumi_lestari_iklan_router import iklan_router
@@ -57,6 +58,7 @@ from tenants.bumi_lestari.modules.bumi_lestari.infrastructure.models import BlUs
 from tenants.bumi_lestari.modules.bumi_lestari.infrastructure.seeder import seed_bumi_lestari
 
 bumi_lestari_router = APIRouter()
+bumi_lestari_router.include_router(v2_router)
 bumi_lestari_router.include_router(order_router)
 bumi_lestari_router.include_router(pembayaran_router)
 bumi_lestari_router.include_router(dokumen_router)
