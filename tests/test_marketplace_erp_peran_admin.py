@@ -265,3 +265,22 @@ def test_only_an_admin_may_delete_users():
     import inspect
 
     assert "ADMIN_ONLY" in inspect.getsource(router.delete_user)
+
+
+def test_every_iklan_route_is_admin_only():
+    """Ads move real money: owners and staff must be refused on all of them (the menu is hidden too, but the API decides)."""
+    import inspect
+
+    diperiksa = []
+    for route in router.marketplace_erp_router.routes:
+        path = getattr(route, "path", "")
+        if "/iklan" not in path:
+            continue
+        peran = [
+            inspect.getclosurevars(d.call).nonlocals["allowed"]
+            for d in route.dependant.dependencies
+            if getattr(d.call, "__name__", "") == "_inner" and "allowed" in inspect.getclosurevars(d.call).nonlocals
+        ]
+        assert peran == [{"admin"}], f"{path} {sorted(route.methods)} boleh diakses {peran}"
+        diperiksa.append(path)
+    assert len(diperiksa) >= 20  # every ads route was found (not an empty loop)

@@ -89,7 +89,7 @@ logger = logging.getLogger(__name__)
 marketplace_erp_router = APIRouter()
 
 # Roles by level: ``OWNER_ONLY`` means owner level and above (admin inherits everything an owner can do);
-# ``ADMIN_ONLY`` is for what only an admin may do (other users' usernames and roles).
+# ``ADMIN_ONLY`` is for what only an admin may do (other users' usernames and roles, and everything under Iklan).
 ADMIN_ONLY = ("admin",)
 OWNER_ONLY = ("admin", "owner")
 # Endpoints a scoped `staff` account may reach at all -- per-akun filtering
@@ -1050,7 +1050,7 @@ async def saran_iklan_akun(
     kata: str | None = Query(None, max_length=100),
     bidding: str = Query("auto", pattern="^(auto|manual)$"),
     session: AsyncSession = Depends(get_db_marketplace_erp),
-    _: UserMarketplaceErp = Depends(require_roles_marketplace_erp(*OWNER_ONLY)),
+    _: UserMarketplaceErp = Depends(require_roles_marketplace_erp(*ADMIN_ONLY)),
 ):
     """Saran Shopee sebelum membuat iklan: target ROAS, anggaran harian, dan kata kunci (volume + bid saran)."""
     akun = await services.get_akun_marketplace(session, akun_id)
@@ -1062,7 +1062,7 @@ async def daftar_kampanye_iklan_akun(
     akun_id: str,
     hari: int = Query(7, ge=2, le=28),
     session: AsyncSession = Depends(get_db_marketplace_erp),
-    _: UserMarketplaceErp = Depends(require_roles_marketplace_erp(*OWNER_ONLY)),
+    _: UserMarketplaceErp = Depends(require_roles_marketplace_erp(*ADMIN_ONLY)),
 ):
     """Kampanye iklan produk toko ini: pengaturan, kata kunci, performa ``hari`` hari terakhir, dan saldo iklan."""
     akun = await services.get_akun_marketplace(session, akun_id)
@@ -1074,7 +1074,7 @@ async def saran_ai_iklan_akun(
     akun_id: str,
     hari: int = Query(7, ge=2, le=28),
     session: AsyncSession = Depends(get_db_marketplace_erp),
-    pengguna: UserMarketplaceErp = Depends(require_roles_marketplace_erp(*OWNER_ONLY)),
+    pengguna: UserMarketplaceErp = Depends(require_roles_marketplace_erp(*ADMIN_ONLY)),
 ):
     """Analisis AI atas kampanye toko ini. Hanya memberi saran; tidak mengubah apa pun di Shopee."""
     akun = await services.get_akun_marketplace(session, akun_id)
@@ -1089,7 +1089,7 @@ async def simpan_modal_produk_akun(
     item_id: str,
     payload: dict = Body(),
     session: AsyncSession = Depends(get_db_marketplace_erp),
-    pengguna: UserMarketplaceErp = Depends(require_roles_marketplace_erp(*OWNER_ONLY)),
+    pengguna: UserMarketplaceErp = Depends(require_roles_marketplace_erp(*ADMIN_ONLY)),
 ):
     """Modal (harga pokok) satu produk Shopee: `modal_rp` ATAU `modal_persen`; keduanya kosong = hapus."""
     akun = await services.get_akun_marketplace(session, akun_id)
@@ -1103,7 +1103,7 @@ async def buat_kampanye_iklan_akun(
     akun_id: str,
     payload: dict = Body(),
     session: AsyncSession = Depends(get_db_marketplace_erp),
-    pengguna: UserMarketplaceErp = Depends(require_roles_marketplace_erp(*OWNER_ONLY)),
+    pengguna: UserMarketplaceErp = Depends(require_roles_marketplace_erp(*ADMIN_ONLY)),
 ):
     """Buat iklan produk di Shopee (GMV Max otomatis atau manual). Memakai uang sungguhan."""
     akun = await services.get_akun_marketplace(session, akun_id)
@@ -1116,7 +1116,7 @@ async def aksi_kampanye_iklan_akun(
     campaign_id: int,
     payload: dict = Body(),
     session: AsyncSession = Depends(get_db_marketplace_erp),
-    pengguna: UserMarketplaceErp = Depends(require_roles_marketplace_erp(*OWNER_ONLY)),
+    pengguna: UserMarketplaceErp = Depends(require_roles_marketplace_erp(*ADMIN_ONLY)),
 ):
     """Jeda, lanjutkan, hentikan, hapus, ubah anggaran atau target ROAS satu kampanye."""
     akun = await services.get_akun_marketplace(session, akun_id)
@@ -1129,7 +1129,7 @@ async def kata_kunci_kampanye_iklan_akun(
     campaign_id: int,
     payload: dict = Body(),
     session: AsyncSession = Depends(get_db_marketplace_erp),
-    pengguna: UserMarketplaceErp = Depends(require_roles_marketplace_erp(*OWNER_ONLY)),
+    pengguna: UserMarketplaceErp = Depends(require_roles_marketplace_erp(*ADMIN_ONLY)),
 ):
     """Tambah, hapus, atau ubah bid dan tipe kata kunci satu kampanye manual."""
     akun = await services.get_akun_marketplace(session, akun_id)
@@ -1142,7 +1142,7 @@ async def iklan_shopee(
     aksi: str,
     payload: dict = Body(default={}),
     session: AsyncSession = Depends(get_db_marketplace_erp),
-    _: UserMarketplaceErp = Depends(require_roles_marketplace_erp(*OWNER_ONLY)),
+    _: UserMarketplaceErp = Depends(require_roles_marketplace_erp(*ADMIN_ONLY)),
 ):
     """Semua API iklan Shopee yang terdokumentasi. `params` untuk GET, `body` untuk POST."""
     from tenants.marketplace_erp.modules.marketplace_erp.infrastructure import shopee_iklan
@@ -1157,7 +1157,7 @@ async def iklan_shopee(
 
 
 @marketplace_erp_router.get("/iklan/shopee/aksi")
-async def daftar_aksi_iklan(_: UserMarketplaceErp = Depends(require_roles_marketplace_erp(*OWNER_ONLY))):
+async def daftar_aksi_iklan(_: UserMarketplaceErp = Depends(require_roles_marketplace_erp(*ADMIN_ONLY))):
     from tenants.marketplace_erp.modules.marketplace_erp.infrastructure import shopee_iklan
     return [{"aksi": k, "method": v[0], "path": v[1]} for k, v in shopee_iklan.IKLAN_API.items()]
 
@@ -1167,7 +1167,7 @@ async def sync_iklan_akun(
     akun_id: str,
     hari: int = Query(30, ge=1, le=180, description="berapa hari ke belakang (Shopee menyimpan 6 bulan)"),
     session: AsyncSession = Depends(get_db_marketplace_erp),
-    _: UserMarketplaceErp = Depends(require_roles_marketplace_erp(*OWNER_ONLY)),
+    _: UserMarketplaceErp = Depends(require_roles_marketplace_erp(*ADMIN_ONLY)),
 ):
     """Pull this shop's Shopee Ads performance per day and its ads balance."""
     akun = await services.get_akun_marketplace(session, akun_id)
@@ -1188,7 +1188,7 @@ async def ringkasan_iklan_toko(
     dari: date | None = None,
     sampai: date | None = None,
     session: AsyncSession = Depends(get_db_marketplace_erp),
-    _: UserMarketplaceErp = Depends(require_roles_marketplace_erp(*OWNER_ONLY)),
+    _: UserMarketplaceErp = Depends(require_roles_marketplace_erp(*ADMIN_ONLY)),
 ):
     """Shopee Ads totals per shop for the period (dates are Shopee/WIB days), with each shop's latest ads balance."""
     return await services.ringkasan_iklan_toko(session, dari=dari, sampai=sampai)
@@ -1203,7 +1203,7 @@ async def list_iklan_harian_toko(
     halaman: int = Query(1, ge=1),
     per_halaman: int = Query(50, ge=1, le=200),
     session: AsyncSession = Depends(get_db_marketplace_erp),
-    _: UserMarketplaceErp = Depends(require_roles_marketplace_erp(*OWNER_ONLY)),
+    _: UserMarketplaceErp = Depends(require_roles_marketplace_erp(*ADMIN_ONLY)),
 ):
     """Shopee Ads performance per shop per day, with the shop name on every row."""
     return await services.list_iklan_harian_toko(
@@ -1520,7 +1520,7 @@ async def list_campaign(
     platform: str | None = None,
     status_filter: str | None = Query(None, alias="status"),
     session: AsyncSession = Depends(get_db_marketplace_erp),
-    _: UserMarketplaceErp = Depends(require_roles_marketplace_erp(*OWNER_ONLY)),
+    _: UserMarketplaceErp = Depends(require_roles_marketplace_erp(*ADMIN_ONLY)),
 ):
     return await services.list_campaign(session, akun_id=akun_id, platform=platform, status_filter=status_filter)
 
@@ -1529,7 +1529,7 @@ async def list_campaign(
 async def create_campaign(
     payload: IklanCampaignIn,
     session: AsyncSession = Depends(get_db_marketplace_erp),
-    _: UserMarketplaceErp = Depends(require_roles_marketplace_erp(*OWNER_ONLY)),
+    _: UserMarketplaceErp = Depends(require_roles_marketplace_erp(*ADMIN_ONLY)),
 ):
     return await services.create_campaign(session, payload)
 
@@ -1538,7 +1538,7 @@ async def create_campaign(
 async def get_campaign(
     campaign_id: str,
     session: AsyncSession = Depends(get_db_marketplace_erp),
-    _: UserMarketplaceErp = Depends(require_roles_marketplace_erp(*OWNER_ONLY)),
+    _: UserMarketplaceErp = Depends(require_roles_marketplace_erp(*ADMIN_ONLY)),
 ):
     return await services.get_campaign(session, campaign_id)
 
@@ -1548,7 +1548,7 @@ async def update_campaign(
     campaign_id: str,
     payload: IklanCampaignPatch,
     session: AsyncSession = Depends(get_db_marketplace_erp),
-    _: UserMarketplaceErp = Depends(require_roles_marketplace_erp(*OWNER_ONLY)),
+    _: UserMarketplaceErp = Depends(require_roles_marketplace_erp(*ADMIN_ONLY)),
 ):
     return await services.update_campaign(session, campaign_id, payload)
 
@@ -1557,7 +1557,7 @@ async def update_campaign(
 async def delete_campaign(
     campaign_id: str,
     session: AsyncSession = Depends(get_db_marketplace_erp),
-    _: UserMarketplaceErp = Depends(require_roles_marketplace_erp(*OWNER_ONLY)),
+    _: UserMarketplaceErp = Depends(require_roles_marketplace_erp(*ADMIN_ONLY)),
 ):
     await services.delete_campaign(session, campaign_id)
     return {"ok": True}
@@ -1568,7 +1568,7 @@ async def record_metrik_harian(
     campaign_id: str,
     payload: IklanMetrikHarianIn,
     session: AsyncSession = Depends(get_db_marketplace_erp),
-    _: UserMarketplaceErp = Depends(require_roles_marketplace_erp(*OWNER_ONLY)),
+    _: UserMarketplaceErp = Depends(require_roles_marketplace_erp(*ADMIN_ONLY)),
 ):
     return await services.record_metrik_harian(session, campaign_id, payload)
 
@@ -1577,7 +1577,7 @@ async def record_metrik_harian(
 async def list_metrik_harian(
     campaign_id: str,
     session: AsyncSession = Depends(get_db_marketplace_erp),
-    _: UserMarketplaceErp = Depends(require_roles_marketplace_erp(*OWNER_ONLY)),
+    _: UserMarketplaceErp = Depends(require_roles_marketplace_erp(*ADMIN_ONLY)),
 ):
     return await services.list_metrik_harian(session, campaign_id)
 
@@ -1588,7 +1588,7 @@ async def laporan_iklan(
     dari: datetime = Query(...),
     sampai: datetime = Query(...),
     session: AsyncSession = Depends(get_db_marketplace_erp),
-    _: UserMarketplaceErp = Depends(require_roles_marketplace_erp(*OWNER_ONLY)),
+    _: UserMarketplaceErp = Depends(require_roles_marketplace_erp(*ADMIN_ONLY)),
 ):
     if sampai < dari:
         raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="sampai sebelum dari")

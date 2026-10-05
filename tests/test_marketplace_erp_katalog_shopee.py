@@ -314,3 +314,59 @@ async def test_catalogue_pull_asks_for_all_visible_statuses_and_survives_a_banne
     monkeypatch.setattr(erp_shopee, "signed_shop_request", selalu_gagal)
     with pytest.raises(HTTPException):  # an active item whose variants cannot be read still fails the pull (data would be wrong)
         await erp_shopee.ambil_item_mentah(None, SimpleNamespace(access_token="at", id_toko_eksternal="5"))
+
+
+def _produk_dua_tier():
+    item = _item(5, "Lemari", 0, has_model=True)
+    model_resp = {
+        "tier_variation": [
+            {"name": "Warna", "option_list": [{"option": "Merah", "image": {"image_url": "https://img.example/merah.jpg"}}, {"option": "Biru"}]},
+            {"name": "Ukuran", "option_list": [{"option": "S"}, {"option": "L"}]},
+        ],
+        "model": [
+            {"model_id": 51, "tier_index": [0, 0], "model_sku": "L-R-S", "model_status": "MODEL_NORMAL",
+             "price_info": [{"current_price": 100000, "original_price": 120000}], "has_promotion": True,
+             "stock_info_v2": {"summary_info": {"total_available_stock": 4}},
+             "weight": "1.25", "dimension": {"package_length": 40, "package_width": 30, "package_height": 20},
+             "pre_order": {"is_pre_order": True, "days_to_ship": 7}},
+            {"model_id": 52, "tier_index": [0, 1], "model_sku": "L-R-L", "price_info": [{"current_price": 150000, "original_price": 150000}],
+             "stock_info_v2": {"summary_info": {"total_available_stock": 0}}, "weight": "", "dimension": {},
+             "pre_order": {"is_pre_order": False, "days_to_ship": 0}},
+            {"model_id": 53, "tier_index": [1, 1], "price_info": [{"current_price": 175000}]},
+        ],
+    }
+    return item, model_resp
+
+
+def test_each_variant_keeps_its_own_tier_option_price_weight_size_and_preorder():
+    item, model_resp = _produk_dua_tier()
+    v = erp_shopee.normalisasi_katalog(item, model_resp)["varian"]
+    assert [x["model_id"] for x in v] == ["51", "52", "53"]
+    assert v[0]["opsi"] == [{"tier": "Warna", "opsi": "Merah"}, {"tier": "Ukuran", "opsi": "S"}] and v[0]["foto"] == "https://img.example/merah.jpg"
+    assert v[0]["nama"] == "Merah / S" and v[0]["sku"] == "L-R-S"
+    # price: current and, only when higher, the original (a promo)
+    assert (v[0]["harga"], v[0]["harga_asli"], v[0]["promo"]) == ("100000", "120000", True)
+    assert (v[1]["harga"], v[1]["harga_asli"], v[1]["promo"]) == ("150000", None, False)
+    assert (v[0]["berat_gram"], v[0]["panjang_cm"], v[0]["lebar_cm"], v[0]["tinggi_cm"]) == (1250, 40.0, 30.0, 20.0)
+    assert (v[0]["preorder"], v[0]["hari_kirim"]) == (True, 7) and v[0]["stok"] == 4 and v[0]["status"] == "MODEL_NORMAL"
+    # not set on the variant: None (shown as "same as the product"), never a made-up 0
+    assert (v[1]["berat_gram"], v[1]["panjang_cm"], v[1]["tinggi_cm"]) == (None, None, None)
+    assert (v[1]["preorder"], v[2]["preorder"], v[2]["status"], v[2]["sku"]) == (False, None, None, "")
+    assert [o["opsi"] for o in v[2]["opsi"]] == ["Biru", "L"]
+
+
+@pytest.mark.asyncio
+async def test_catalogue_list_rows_carry_the_variants_and_the_old_summary_still_works(session):
+    a = await _toko(session, "Toko A")
+    item, model_resp = _produk_dua_tier()
+    await services.simpan_katalog_shopee(session, a, [erp_shopee.normalisasi_katalog(item, model_resp)])
+    baris = (await services.list_katalog_shopee(session))["items"][0]
+    assert baris["jumlah_varian"] == 3 and baris["sumbu"] == "Warna, Ukuran" and baris["nilai_varian"] == "Merah / S, Merah / L, Biru / L"
+    assert len(baris["varian"]) == 3 and baris["varian"][0]["berat_gram"] == 1250
+    assert (baris["harga_min"], baris["harga_max"]) == (Decimal("100000"), Decimal("175000"))
+    # a catalogue pulled before this change (old variant dicts) is still readable
+    k = (await session.execute(select(KatalogShopee))).scalar_one()
+    k.varian_json = '[{"nama": "Merah", "sumbu": "Warna", "sku": "X", "harga": "100", "stok": 2}]'
+    await session.flush()
+    lama = (await services.list_katalog_shopee(session))["items"][0]["varian"][0]
+    assert lama["nama"] == "Merah" and "model_id" not in lama and "berat_gram" not in lama

@@ -599,6 +599,55 @@ def _detail_item(item: dict) -> dict:
     }
 
 
+def _varian_katalog(model: dict, tier_variation: list[dict], sumbu: str) -> dict:
+    """One model (variant) of get_model_list as stored in the catalogue: its place in each tier (tier name + option),
+    price (current and original), stock, weight, package size and pre-order. A field Shopee did not send stays None, so
+    "not set on this variant" is told apart from zero; Shopee says an unset weight/size falls back to the item's."""
+    opsi = []
+    foto = None
+    for tier, idx in zip(tier_variation, model.get("tier_index") or []):
+        pilihan = tier.get("option_list") or []
+        if 0 <= idx < len(pilihan):
+            opsi.append({"tier": str(tier.get("name") or "").strip(), "opsi": str(pilihan[idx].get("option") or "").strip()})
+            if foto is None:
+                foto = (pilihan[idx].get("image") or {}).get("image_url") or None
+    info = (model.get("price_info") or [{}])[0] if isinstance(model.get("price_info"), list) else (model.get("price_info") or {})
+    sekarang, asli = _harga(model.get("price_info")), None
+    if info.get("original_price") is not None and Decimal(str(info["original_price"])) > 0:
+        asli = Decimal(str(info["original_price"]))
+    berat = _angka_atau_none(model.get("weight"))
+    dim = model.get("dimension") or {}
+    pre = model.get("pre_order")
+    return {
+        "model_id": str(model.get("model_id")),
+        "nama": _nama_model(model, tier_variation),
+        "sumbu": sumbu,
+        "opsi": opsi,
+        "sku": str(model.get("model_sku") or "").strip(),
+        "harga": str(_harga(model.get("price_info")) or ""),
+        "harga_asli": str(asli) if asli is not None and sekarang is not None and asli > sekarang else None,
+        "promo": bool(model.get("has_promotion")),
+        "stok": _stok(model.get("stock_info_v2")),
+        "berat_gram": int(round(berat * 1000)) if berat else None,
+        "panjang_cm": _angka_atau_none(dim.get("package_length")),
+        "lebar_cm": _angka_atau_none(dim.get("package_width")),
+        "tinggi_cm": _angka_atau_none(dim.get("package_height")),
+        "preorder": bool(pre.get("is_pre_order")) if isinstance(pre, dict) else None,
+        "hari_kirim": pre.get("days_to_ship") if isinstance(pre, dict) else None,
+        "status": str(model.get("model_status") or "") or None,
+        "foto": foto,
+    }
+
+
+def _angka_atau_none(v: Any) -> float | None:
+    """A positive number, or None for missing / empty / zero (Shopee sends 0 or "" for a value that is not set)."""
+    try:
+        n = float(v)
+    except (TypeError, ValueError):
+        return None
+    return n if n > 0 else None
+
+
 def normalisasi_katalog(item: dict, model_resp: dict | None = None) -> dict:
     """get_item_base_info entry (+ models) -> one catalogue dict: text, photos, size and variants.
 
@@ -609,17 +658,10 @@ def normalisasi_katalog(item: dict, model_resp: dict | None = None) -> dict:
     sumbu = [x for x in sumbu if x]
     varian = []
     if item.get("has_model") and model_resp:
+        tier_asli = model_resp.get("tier_variation") or []
         for model in model_resp.get("model") or []:
             if model.get("model_id"):
-                varian.append(
-                    {
-                        "nama": _nama_model(model, model_resp.get("tier_variation") or []),
-                        "sumbu": ", ".join(sumbu),
-                        "sku": str(model.get("model_sku") or "").strip(),
-                        "harga": str(_harga(model.get("price_info")) or ""),
-                        "stok": _stok(model.get("stock_info_v2")),
-                    }
-                )
+                varian.append(_varian_katalog(model, tier_asli, ", ".join(sumbu)))
     harga_semua = [Decimal(v["harga"]) for v in varian if v["harga"]] or [h for h in [_harga(item.get("price_info"))] if h is not None]
     stok = sum(v["stok"] or 0 for v in varian) if varian else _stok(item.get("stock_info_v2"))
     dim = item.get("dimension") or {}
