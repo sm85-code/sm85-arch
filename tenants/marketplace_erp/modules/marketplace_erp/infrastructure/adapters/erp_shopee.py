@@ -862,6 +862,9 @@ def normalisasi_pesanan(order: dict) -> dict:
                 "model_name": model[:255],
                 "item_sku": str(it.get("item_sku") or "")[:128],
                 "model_sku": str(it.get("model_sku") or "")[:128],
+                "foto": str((it.get("image_info") or {}).get("image_url") or "")[:1024] or None,
+                "item_id": str(it["item_id"]) if it.get("item_id") else None,
+                "model_id": str(it["model_id"]) if it.get("model_id") else None,
                 "harga_satuan": Decimal(str(price)),
                 "qty": qty,
                 "id_eksternal_kandidat": [

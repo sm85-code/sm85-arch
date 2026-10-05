@@ -414,6 +414,8 @@ class ItemPesananOut(BaseModel):
     model_name: str = ""
     item_sku: str = ""
     model_sku: str = ""
+    foto: Optional[str] = None
+    item_id_eksternal: Optional[str] = None
     harga_satuan: Decimal
     qty: int
     subtotal: Decimal

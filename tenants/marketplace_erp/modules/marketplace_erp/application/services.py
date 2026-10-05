@@ -1105,6 +1105,46 @@ def pesanan_out(pesanan: Pesanan) -> Pesanan:
     return pesanan
 
 
+async def lengkapi_foto_item(session: AsyncSession, pesanan: list) -> None:
+    """Give every order line a photo to show. Lines stored with their own photo keep it; older lines (pulled before the
+    photo was stored) borrow the catalogue photo of the same shop: matched by Shopee item id when known, else by the
+    exact product name, and the variant's own photo when its name matches the line's variant."""
+    import json
+
+    perlu = [(p.akun_id, it) for p in pesanan if p.akun_id for it in p.items if not it.foto_url]
+    if not perlu:
+        return
+    akun_ids = {a for a, _ in perlu}
+    id_item = {it.item_id_eksternal for _, it in perlu if it.item_id_eksternal}
+    nama = {it.nama_produk.strip().lower() for _, it in perlu if not it.item_id_eksternal and it.nama_produk}
+    kondisi = []
+    if id_item:
+        kondisi.append(KatalogShopee.item_id.in_(id_item))
+    if nama:
+        kondisi.append(func.lower(KatalogShopee.nama).in_(nama))
+    if not kondisi:
+        return
+    baris = (await session.execute(select(KatalogShopee).where(KatalogShopee.akun_id.in_(akun_ids), or_(*kondisi)))).scalars().all()
+    per_id = {(k.akun_id, k.item_id): k for k in baris}
+    per_nama = {(k.akun_id, k.nama.strip().lower()): k for k in baris}
+    for akun_id, it in perlu:
+        k = per_id.get((akun_id, it.item_id_eksternal or "")) or per_nama.get((akun_id, (it.nama_produk or "").strip().lower()))
+        if k is None:
+            continue
+        foto = json.loads(k.foto_json or "[]")
+        varian = json.loads(k.varian_json or "[]")
+        model = (it.model_name or "").strip().lower()
+        milik_varian = next(
+            (
+                v.get("foto")
+                for v in varian
+                if v.get("foto") and model and model in {(v.get("nama") or "").strip().lower(), " / ".join(o.get("opsi", "") for o in v.get("opsi") or []).strip().lower()}
+            ),
+            None,
+        )
+        it._foto_tampil = milik_varian or (foto[0] if foto else None)
+
+
 async def list_pesanan(
     session: AsyncSession,
     *,
@@ -1564,6 +1604,9 @@ async def impor_pesanan_marketplace(session: AsyncSession, akun: AkunMarketplace
                         model_name=it.get("model_name") or "",
                         item_sku=it.get("item_sku") or "",
                         model_sku=it.get("model_sku") or "",
+                        foto_url=it.get("foto"),
+                        item_id_eksternal=it.get("item_id"),
+                        model_id_eksternal=it.get("model_id"),
                         harga_satuan=it["harga_satuan"],
                         qty=it["qty"],
                         subtotal=it["harga_satuan"] * it["qty"],
@@ -1578,6 +1621,9 @@ async def impor_pesanan_marketplace(session: AsyncSession, akun: AkunMarketplace
                 item.model_name = sumber.get("model_name") or ""
                 item.item_sku = sumber.get("item_sku") or ""
                 item.model_sku = sumber.get("model_sku") or ""
+                item.foto_url = sumber.get("foto") or item.foto_url
+                item.item_id_eksternal = sumber.get("item_id") or item.item_id_eksternal
+                item.model_id_eksternal = sumber.get("model_id") or item.model_id_eksternal
 
         if row.get("dipesan_at") and pesanan.dipesan_at is None:
             pesanan.dipesan_at = row["dipesan_at"]  # orders ingested before this column existed get filled on the next pull

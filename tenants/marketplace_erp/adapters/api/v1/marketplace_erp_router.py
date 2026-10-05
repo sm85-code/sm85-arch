@@ -582,6 +582,7 @@ async def daftar_pesanan(
         dari=dari, sampai=sampai, urut=urut, halaman=halaman, per_halaman=per_halaman,
     )
     import json
+    await services.lengkapi_foto_item(session, hasil["items"])
     baris = []
     for p in hasil["items"]:
         data = PesananOut.model_validate(p).model_dump()
@@ -649,6 +650,7 @@ async def get_pesanan(
 ):
     pesanan = await services.get_pesanan(session, pesanan_id)
     await pastikan_akses_akun(user, session, pesanan.akun_id)
+    await services.lengkapi_foto_item(session, [pesanan])
     return pesanan
 
 
