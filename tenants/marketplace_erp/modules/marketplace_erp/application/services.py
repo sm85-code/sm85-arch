@@ -669,6 +669,7 @@ async def simpan_katalog_shopee(session: AsyncSession, akun: AkunMarketplace, en
         row.deskripsi = e["deskripsi"]
         row.foto_json = json.dumps(e["foto"])
         row.varian_json = json.dumps(e["varian"])
+        row.detail_json = json.dumps(e.get("detail") or {})
         row.harga_min = e["harga_min"]
         row.harga_max = e["harga_max"]
         row.stok_shopee = e["stok_shopee"]
@@ -726,6 +727,7 @@ def katalog_out(k: KatalogShopee, nama_toko: str | None = None, *, lengkap: bool
         "lebar_cm": k.lebar_cm,
         "tinggi_cm": k.tinggi_cm,
         "diambil_at": k.diambil_at,
+        **json.loads(getattr(k, "detail_json", None) or "{}"),
     }
     if lengkap:
         out.update(deskripsi=k.deskripsi, foto=foto, varian=json.loads(k.varian_json or "[]"))
