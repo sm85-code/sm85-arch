@@ -52,6 +52,29 @@ async def _siap(session: AsyncSession) -> None:
     await session.execute(text("ALTER TABLE bl2_order ADD COLUMN IF NOT EXISTS toko TEXT NOT NULL DEFAULT ''"))
     await session.execute(text("ALTER TABLE bl2_order ADD COLUMN IF NOT EXISTS sumber_ref TEXT"))
     await session.execute(text("ALTER TABLE bl2_jenis ADD COLUMN IF NOT EXISTS harga_reseller NUMERIC NOT NULL DEFAULT 0"))
+    await session.execute(text("ALTER TABLE bl2_jenis ADD COLUMN IF NOT EXISTS produk_id TEXT"))
+    await session.execute(text("""
+        CREATE TABLE IF NOT EXISTS bl2_produk (
+            id TEXT PRIMARY KEY,
+            nama TEXT NOT NULL,
+            kayu BOOLEAN NOT NULL DEFAULT TRUE
+        )
+    """))
+    await session.execute(text("""
+        CREATE TABLE IF NOT EXISTS bl2_varian (
+            id TEXT PRIMARY KEY,
+            produk_id TEXT NOT NULL,
+            nama TEXT NOT NULL
+        )
+    """))
+    await session.execute(text("""
+        CREATE TABLE IF NOT EXISTS bl2_nilai (
+            id TEXT PRIMARY KEY,
+            varian_id TEXT NOT NULL,
+            nilai TEXT NOT NULL,
+            jenis_id TEXT
+        )
+    """))
     await session.commit()
 
 
@@ -207,3 +230,75 @@ async def ubah_status(payload: dict, session: AsyncSession = _db(), _: BlUser = 
     })
     await session.commit()
     return {"ok": True}
+
+
+@router.get("/produk")
+async def daftar_produk(session: AsyncSession = _db(), _: BlUser = _guard()):
+    await _siap(session)
+    produk = (await session.execute(text("SELECT id, nama, kayu FROM bl2_produk ORDER BY nama"))).mappings().all()
+    varian = (await session.execute(text("SELECT id, produk_id, nama FROM bl2_varian ORDER BY nama"))).mappings().all()
+    nilai = (await session.execute(text("SELECT id, varian_id, nilai, jenis_id FROM bl2_nilai ORDER BY nilai"))).mappings().all()
+    hasil = []
+    for p in produk:
+        sumbu = []
+        for v in varian:
+            if v["produk_id"] != p["id"]:
+                continue
+            sumbu.append({**dict(v), "nilai": [dict(n) for n in nilai if n["varian_id"] == v["id"]]})
+        hasil.append({**dict(p), "kayu": bool(p["kayu"]), "varian": sumbu})
+    return hasil
+
+
+@router.post("/produk")
+async def tambah_produk(payload: dict, session: AsyncSession = _db(), _: BlUser = _guard()):
+    await _siap(session)
+    import uuid
+    pid = uuid.uuid4().hex
+    await session.execute(text("INSERT INTO bl2_produk (id, nama, kayu) VALUES (:id, :nama, :kayu)"), {
+        "id": pid, "nama": str(payload.get("nama") or "").strip(), "kayu": bool(payload.get("kayu", True)),
+    })
+    await session.commit()
+    return {"id": pid}
+
+
+@router.post("/varian")
+async def tambah_varian(payload: dict, session: AsyncSession = _db(), _: BlUser = _guard()):
+    await _siap(session)
+    import uuid
+    vid = uuid.uuid4().hex
+    await session.execute(text("INSERT INTO bl2_varian (id, produk_id, nama) VALUES (:id, :produk, :nama)"), {
+        "id": vid, "produk": str(payload.get("produk_id") or ""), "nama": str(payload.get("nama") or "").strip(),
+    })
+    await session.commit()
+    return {"id": vid}
+
+
+@router.post("/nilai")
+async def tambah_nilai(payload: dict, session: AsyncSession = _db(), _: BlUser = _guard()):
+    await _siap(session)
+    import uuid
+    vid = str(payload.get("varian_id") or "")
+    nilai = str(payload.get("nilai") or "").strip()
+    induk = (await session.execute(text("""
+        SELECT p.id, p.nama, p.kayu, v.nama AS varian
+        FROM bl2_varian v JOIN bl2_produk p ON p.id = v.produk_id WHERE v.id = :id
+    """), {"id": vid})).mappings().first()
+    if not induk or not nilai:
+        raise HTTPException(422, "Varian dan nilai wajib")
+    jid = uuid.uuid4().hex
+    await session.execute(text("""
+        INSERT INTO bl2_jenis (id, nama, kayu, ukuran, harga_reseller, produk_id)
+        VALUES (:id, :nama, :kayu, :ukuran, :harga, :produk)
+    """), {
+        "id": jid,
+        "nama": f"{induk['nama']} · {induk['varian']} · {nilai}",
+        "kayu": induk["kayu"],
+        "ukuran": nilai,
+        "harga": payload.get("harga_reseller") or 0,
+        "produk": induk["id"],
+    })
+    await session.execute(text("INSERT INTO bl2_nilai (id, varian_id, nilai, jenis_id) VALUES (:id, :varian, :nilai, :jenis)"), {
+        "id": uuid.uuid4().hex, "varian": vid, "nilai": nilai, "jenis": jid,
+    })
+    await session.commit()
+    return {"id": jid}
