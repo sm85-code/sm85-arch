@@ -405,6 +405,8 @@ class ItemPesananOut(BaseModel):
     listing_id: Optional[str]
     nama_produk: str
     model_name: str = ""
+    item_sku: str = ""
+    model_sku: str = ""
     harga_satuan: Decimal
     qty: int
     subtotal: Decimal
@@ -430,6 +432,17 @@ class PesananOut(BaseModel):
     tanggal_kirim: Optional[datetime] = None
     dipesan_at: Optional[datetime] = None
     items: list[ItemPesananOut] = Field(default_factory=list)
+    payment_method: str = ""
+    currency: str = ""
+    cod: bool = False
+    days_to_ship: Optional[int] = None
+    estimated_shipping_fee: Optional[str] = None
+    actual_shipping_fee: Optional[str] = None
+    note: str = ""
+    cancel_by: str = ""
+    cancel_reason: str = ""
+    penerima: str = ""
+    kota: str = ""
     created_at: datetime
     updated_at: datetime
 

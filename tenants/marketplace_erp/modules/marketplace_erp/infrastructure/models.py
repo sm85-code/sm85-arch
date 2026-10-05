@@ -257,6 +257,7 @@ class Pesanan(MarketplaceErpBase):
     # When the buyer placed the order on the marketplace (Shopee create_time). ``created_at`` is only when the ERP
     # first saw it, so reports and date filters use coalesce(dipesan_at, created_at).
     dipesan_at: Mapped[Optional[datetime]] = mapped_column(DateTime(timezone=True), nullable=True, index=True)
+    detail_json: Mapped[str] = mapped_column(Text, nullable=False, default="{}")
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=_utcnow)
     updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=_utcnow, onupdate=_utcnow)
 
@@ -283,6 +284,8 @@ class ItemPesanan(MarketplaceErpBase):
     )
     nama_produk: Mapped[str] = mapped_column(String(255), nullable=False)
     model_name: Mapped[str] = mapped_column(String(255), nullable=False, default="")
+    item_sku: Mapped[str] = mapped_column(String(128), nullable=False, default="")
+    model_sku: Mapped[str] = mapped_column(String(128), nullable=False, default="")
     harga_satuan: Mapped[Decimal] = mapped_column(Numeric(20, 2), nullable=False)
     qty: Mapped[int] = mapped_column(Integer, nullable=False)
     subtotal: Mapped[Decimal] = mapped_column(Numeric(20, 2), nullable=False)
