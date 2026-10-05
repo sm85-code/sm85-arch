@@ -101,9 +101,10 @@ async def _siap(session: AsyncSession) -> None:
         ON CONFLICT (kode) DO NOTHING
     """))
     await session.execute(text("""
-        INSERT INTO bl2_tukang (id, nama)
-        SELECT 't' || n, '' FROM generate_series(1, 5) AS n
-        ON CONFLICT (id) DO NOTHING
+        INSERT INTO bl2_tukang (id, nama) VALUES
+        ('t1', 'Ahmad Nur Alim'), ('t2', 'Ai Hendarso'), ('t3', 'Cahyono'),
+        ('t4', 'Joko Wahyono'), ('t5', 'Suryaman')
+        ON CONFLICT (id) DO UPDATE SET nama = EXCLUDED.nama WHERE bl2_tukang.nama = ''
     """))
     await session.commit()
 
