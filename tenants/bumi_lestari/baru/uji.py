@@ -61,6 +61,13 @@ async def laporan(session: AsyncSession = _db(), _: BlUser = _guard()):
     for r in baris:
         biaya = r["barang"] + r["cat"] + r["packing"] + r["admin"]
         hasil.append({**dict(r), "laba_kotor": r["pendapatan"] - biaya})
+    alur = {
+        "uji-shopee": {"pihak": "Ahmad Nur Alim", "peran": "tukang kayu", "dokumen": "PO/MG.1-001/X/2026", "invoice": "tidak ada, uang dari pencairan Shopee"},
+        "uji-mandala": {"pihak": "Ai Hendarso", "peran": "tukang kayu", "dokumen": "PO/MG.1-002/X/2026", "invoice": "INV/MG.1-001/X/2026 ke Mandala Wangi"},
+        "uji-web": {"pihak": "staf non-kayu", "peran": "karyawan non-kayu", "dokumen": "tidak ada PO tukang", "invoice": "tidak ada, uang dari pembayaran toko web"},
+    }
+    for x in hasil:
+        x.update(alur.get(x["id"], {}))
     return {
         "periode": "Senin–Sabtu, cut-off Selasa",
         "kasus": hasil,
