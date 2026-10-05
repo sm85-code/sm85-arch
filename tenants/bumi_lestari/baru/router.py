@@ -312,3 +312,72 @@ async def tambah_nilai(payload: dict, session: AsyncSession = _db(), _: BlUser =
     })
     await session.commit()
     return {"id": jid}
+
+
+@router.patch("/produk/{produk_id}")
+async def ubah_produk(produk_id: str, payload: dict, session: AsyncSession = _db(), _: BlUser = _guard()):
+    await _siap(session)
+    await session.execute(text("UPDATE bl2_produk SET nama = :nama, kayu = :kayu WHERE id = :id"), {
+        "id": produk_id, "nama": str(payload.get("nama") or "").strip(), "kayu": bool(payload.get("kayu", True)),
+    })
+    await session.commit()
+    return {"ok": True}
+
+
+@router.delete("/produk/{produk_id}")
+async def hapus_produk(produk_id: str, session: AsyncSession = _db(), _: BlUser = _guard()):
+    await _siap(session)
+    await session.execute(text("DELETE FROM bl2_jenis WHERE produk_id = :id"), {"id": produk_id})
+    await session.execute(text("DELETE FROM bl2_nilai WHERE varian_id IN (SELECT id FROM bl2_varian WHERE produk_id = :id)"), {"id": produk_id})
+    await session.execute(text("DELETE FROM bl2_varian WHERE produk_id = :id"), {"id": produk_id})
+    await session.execute(text("DELETE FROM bl2_produk WHERE id = :id"), {"id": produk_id})
+    await session.commit()
+    return {"ok": True}
+
+
+@router.delete("/varian/{varian_id}")
+async def hapus_varian(varian_id: str, session: AsyncSession = _db(), _: BlUser = _guard()):
+    await _siap(session)
+    await session.execute(text("DELETE FROM bl2_jenis WHERE id IN (SELECT jenis_id FROM bl2_nilai WHERE varian_id = :id)"), {"id": varian_id})
+    await session.execute(text("DELETE FROM bl2_nilai WHERE varian_id = :id"), {"id": varian_id})
+    await session.execute(text("DELETE FROM bl2_varian WHERE id = :id"), {"id": varian_id})
+    await session.commit()
+    return {"ok": True}
+
+
+@router.patch("/nilai/{nilai_id}")
+async def ubah_nilai(nilai_id: str, payload: dict, session: AsyncSession = _db(), _: BlUser = _guard()):
+    await _siap(session)
+    custom = bool(payload.get("custom"))
+    harga = 0 if custom else (payload.get("harga_tukang") or 0)
+    nilai = str(payload.get("nilai") or "").strip()
+    await session.execute(text("UPDATE bl2_nilai SET nilai = :nilai, harga_tukang = :harga, custom = :custom WHERE id = :id"), {
+        "id": nilai_id, "nilai": nilai, "harga": harga, "custom": custom,
+    })
+    await session.execute(text("""
+        UPDATE bl2_jenis j SET ukuran = :nilai, harga_tukang = :harga, custom = :custom,
+            nama = p.nama || ' · ' || v.nama || ' · ' || :nilai
+        FROM bl2_nilai n
+        JOIN bl2_varian v ON v.id = n.varian_id
+        JOIN bl2_produk p ON p.id = v.produk_id
+        WHERE n.id = :id AND j.id = n.jenis_id
+    """), {"id": nilai_id, "nilai": nilai, "harga": harga, "custom": custom})
+    await session.commit()
+    return {"ok": True}
+
+
+@router.delete("/nilai/{nilai_id}")
+async def hapus_nilai(nilai_id: str, session: AsyncSession = _db(), _: BlUser = _guard()):
+    await _siap(session)
+    await session.execute(text("DELETE FROM bl2_jenis WHERE id = (SELECT jenis_id FROM bl2_nilai WHERE id = :id)"), {"id": nilai_id})
+    await session.execute(text("DELETE FROM bl2_nilai WHERE id = :id"), {"id": nilai_id})
+    await session.commit()
+    return {"ok": True}
+
+
+@router.delete("/jenis/{jenis_id}")
+async def hapus_jenis(jenis_id: str, session: AsyncSession = _db(), _: BlUser = _guard()):
+    await _siap(session)
+    await session.execute(text("DELETE FROM bl2_jenis WHERE id = :id"), {"id": jenis_id})
+    await session.commit()
+    return {"ok": True}
