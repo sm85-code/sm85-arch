@@ -45,6 +45,7 @@ from tenants.marketplace_erp.modules.marketplace_erp.application.schemas import 
     PesananOut,
     PesananStatusIn,
     ProsesMassalIn,
+    ResiGabunganIn,
     ResiMassalIn,
     TandaiResiIn,
     ProdukIn,
@@ -581,6 +582,7 @@ async def daftar_pesanan(
         dari=dari, sampai=sampai, urut=urut, halaman=halaman, per_halaman=per_halaman,
     )
     import json
+    await services.lengkapi_foto_item(session, hasil["items"])
     baris = []
     for p in hasil["items"]:
         data = PesananOut.model_validate(p).model_dump()
@@ -648,6 +650,7 @@ async def get_pesanan(
 ):
     pesanan = await services.get_pesanan(session, pesanan_id)
     await pastikan_akses_akun(user, session, pesanan.akun_id)
+    await services.lengkapi_foto_item(session, [pesanan])
     return pesanan
 
 
@@ -724,6 +727,23 @@ async def cetak_resi_massal(
         await pastikan_akses_akun(user, session, pesanan.akun_id)
     pdf, nama_file = await services.unduh_resi_massal(session, payload.pesanan_ids, payload.tipe, _nama_pengguna(user))
     return Response(content=pdf, media_type="application/pdf", headers={"Content-Disposition": f'inline; filename="{nama_file}"'})
+
+
+@marketplace_erp_router.post("/pesanan/resi-gabungan")
+async def cetak_resi_gabungan(
+    payload: ResiGabunganIn,
+    session: AsyncSession = Depends(get_db_marketplace_erp),
+    user: UserMarketplaceErp = Depends(require_roles_marketplace_erp(*OWNER_OR_STAFF)),
+):
+    """Resi untuk pilihan campur (beberapa toko dan kurir) dalam SATU pdf. Pesanan yang ditolak Shopee dilaporkan
+    beserta alasannya dan tidak menghalangi yang lain. Hasil berupa JSON (pdf base64) supaya daftar yang gagal ikut."""
+    import base64
+
+    for pesanan_id in dict.fromkeys(payload.pesanan_ids):
+        pesanan = await services.get_pesanan(session, pesanan_id)
+        await pastikan_akses_akun(user, session, pesanan.akun_id)
+    hasil = await services.unduh_resi_gabungan(session, payload.pesanan_ids, payload.tipe, _nama_pengguna(user))
+    return {**hasil, "pdf": base64.b64encode(hasil["pdf"]).decode("ascii")}
 
 
 @marketplace_erp_router.post("/pesanan/proses-massal")

@@ -394,6 +394,13 @@ class ResiMassalIn(BaseModel):
     tipe: Optional[str] = Field(default=None, pattern="^(THERMAL_AIR_WAYBILL|NORMAL_AIR_WAYBILL)$")
 
 
+class ResiGabunganIn(BaseModel):
+    """Labels for any mix of shops and couriers: the server splits them the way Shopee needs and joins the PDFs."""
+
+    pesanan_ids: list[str] = Field(min_length=1, max_length=200)
+    tipe: Optional[str] = Field(default=None, pattern="^(THERMAL_AIR_WAYBILL|NORMAL_AIR_WAYBILL)$")
+
+
 class ProsesMassalIn(BaseModel):
     # Each order costs several marketplace calls, so one request is capped; the UI sends chunks.
     pesanan_ids: list[str] = Field(min_length=1, max_length=25)
@@ -407,6 +414,8 @@ class ItemPesananOut(BaseModel):
     model_name: str = ""
     item_sku: str = ""
     model_sku: str = ""
+    foto: Optional[str] = None
+    item_id_eksternal: Optional[str] = None
     harga_satuan: Decimal
     qty: int
     subtotal: Decimal

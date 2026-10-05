@@ -58,6 +58,9 @@ _SELF_HEAL_COLUMNS = (
     "ALTER TABLE IF EXISTS mpe_pesanan ADD COLUMN IF NOT EXISTS detail_json TEXT NOT NULL DEFAULT '{}'",
     "ALTER TABLE IF EXISTS mpe_item_pesanan ADD COLUMN IF NOT EXISTS item_sku VARCHAR(128) NOT NULL DEFAULT ''",
     "ALTER TABLE IF EXISTS mpe_item_pesanan ADD COLUMN IF NOT EXISTS model_sku VARCHAR(128) NOT NULL DEFAULT ''",
+    "ALTER TABLE IF EXISTS mpe_item_pesanan ADD COLUMN IF NOT EXISTS foto_url VARCHAR(1024) NULL",
+    "ALTER TABLE IF EXISTS mpe_item_pesanan ADD COLUMN IF NOT EXISTS item_id_eksternal VARCHAR(32) NULL",
+    "ALTER TABLE IF EXISTS mpe_item_pesanan ADD COLUMN IF NOT EXISTS model_id_eksternal VARCHAR(32) NULL",
     "CREATE INDEX IF NOT EXISTS ix_mpe_pesanan_dipesan_at ON mpe_pesanan (dipesan_at)",
     # Product weight/size and lead time.
     "ALTER TABLE IF EXISTS mpe_produk ADD COLUMN IF NOT EXISTS berat_gram INTEGER NOT NULL DEFAULT 0",

@@ -19,6 +19,7 @@ google-auth==2.58.1
 google-auth-httplib2==0.4.2
 google-auth-oauthlib==1.4.1
 boto3==1.43.106
+pypdf==6.19.0  # gabung resi beberapa toko/kurir jadi satu PDF (tenant marketplace_erp)
 anthropic==1.11.0  # asisten AI iklan Shopee (tenant marketplace_erp)
 reportlab==5.0.1  # PDF invoice/PO tenant bumi_lestari
 openpyxl==3.1.5  # impor file penghasilan marketplace (xlsx) tenant bumi_lestari

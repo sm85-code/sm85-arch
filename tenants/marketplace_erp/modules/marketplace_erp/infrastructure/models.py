@@ -286,9 +286,20 @@ class ItemPesanan(MarketplaceErpBase):
     model_name: Mapped[str] = mapped_column(String(255), nullable=False, default="")
     item_sku: Mapped[str] = mapped_column(String(128), nullable=False, default="")
     model_sku: Mapped[str] = mapped_column(String(128), nullable=False, default="")
+    # Photo and Shopee ids of the line as the order came in: told apart at a glance when many product names look alike,
+    # and used to find the catalogue entry of orders pulled before these were stored.
+    foto_url: Mapped[Optional[str]] = mapped_column(String(1024), nullable=True)
+    item_id_eksternal: Mapped[Optional[str]] = mapped_column(String(32), nullable=True)
+    model_id_eksternal: Mapped[Optional[str]] = mapped_column(String(32), nullable=True)
     harga_satuan: Mapped[Decimal] = mapped_column(Numeric(20, 2), nullable=False)
     qty: Mapped[int] = mapped_column(Integer, nullable=False)
     subtotal: Mapped[Decimal] = mapped_column(Numeric(20, 2), nullable=False)
+
+    @property
+    def foto(self) -> Optional[str]:
+        """The photo to show: the one stored with the line, else the one looked up in the catalogue (see
+        services.lengkapi_foto_item)."""
+        return self.foto_url or getattr(self, "_foto_tampil", None)
 
     pesanan: Mapped["Pesanan"] = relationship(back_populates="items")
 
