@@ -1047,49 +1047,64 @@ async def log_push_shopee(
 async def saran_iklan_akun(
     akun_id: str,
     item_id: int,
+    kata: str | None = Query(None, max_length=100),
+    bidding: str = Query("auto", pattern="^(auto|manual)$"),
     session: AsyncSession = Depends(get_db_marketplace_erp),
     _: UserMarketplaceErp = Depends(require_roles_marketplace_erp(*OWNER_ONLY)),
 ):
-    """Saran produk, ROAS, dan anggaran sebelum membuat iklan."""
+    """Saran Shopee sebelum membuat iklan: target ROAS, anggaran harian, dan kata kunci (volume + bid saran)."""
     akun = await services.get_akun_marketplace(session, akun_id)
-    return await services.saran_iklan(session, akun, item_id)
+    return await services.saran_iklan(session, akun, item_id, kata, bidding)
 
 
-@marketplace_erp_router.post("/akun/{akun_id}/iklan/buat")
-async def buat_iklan_akun(
+@marketplace_erp_router.get("/akun/{akun_id}/iklan/kampanye")
+async def daftar_kampanye_iklan_akun(
+    akun_id: str,
+    hari: int = Query(7, ge=2, le=28),
+    session: AsyncSession = Depends(get_db_marketplace_erp),
+    _: UserMarketplaceErp = Depends(require_roles_marketplace_erp(*OWNER_ONLY)),
+):
+    """Kampanye iklan produk toko ini: pengaturan, kata kunci, performa ``hari`` hari terakhir, dan saldo iklan."""
+    akun = await services.get_akun_marketplace(session, akun_id)
+    return await services.daftar_kampanye_iklan(session, akun, hari)
+
+
+@marketplace_erp_router.post("/akun/{akun_id}/iklan/kampanye")
+async def buat_kampanye_iklan_akun(
     akun_id: str,
     payload: dict = Body(),
     session: AsyncSession = Depends(get_db_marketplace_erp),
-    _: UserMarketplaceErp = Depends(require_roles_marketplace_erp(*OWNER_ONLY)),
+    pengguna: UserMarketplaceErp = Depends(require_roles_marketplace_erp(*OWNER_ONLY)),
 ):
-    """Buat iklan produk manual di Shopee (auto atau manual bidding)."""
+    """Buat iklan produk di Shopee (GMV Max otomatis atau manual). Memakai uang sungguhan."""
     akun = await services.get_akun_marketplace(session, akun_id)
-    return await services.buat_iklan_produk(session, akun, payload)
+    return await services.ubah_iklan_shopee(session, akun, "buat", None, payload, pengguna)
 
 
-@marketplace_erp_router.post("/akun/{akun_id}/iklan/ubah")
-async def ubah_iklan_akun(
+@marketplace_erp_router.post("/akun/{akun_id}/iklan/kampanye/{campaign_id}/aksi")
+async def aksi_kampanye_iklan_akun(
     akun_id: str,
+    campaign_id: int,
     payload: dict = Body(),
     session: AsyncSession = Depends(get_db_marketplace_erp),
-    _: UserMarketplaceErp = Depends(require_roles_marketplace_erp(*OWNER_ONLY)),
+    pengguna: UserMarketplaceErp = Depends(require_roles_marketplace_erp(*OWNER_ONLY)),
 ):
-    """Jeda, lanjutkan, atau ubah anggaran/ROAS iklan yang sudah ada."""
+    """Jeda, lanjutkan, hentikan, hapus, ubah anggaran atau target ROAS satu kampanye."""
     akun = await services.get_akun_marketplace(session, akun_id)
-    return await services.ubah_iklan_produk(session, akun, payload)
+    return await services.ubah_iklan_shopee(session, akun, "aksi", campaign_id, payload, pengguna)
 
 
-@marketplace_erp_router.post("/akun/{akun_id}/iklan/kata-kunci")
-async def ubah_kata_kunci_akun(
+@marketplace_erp_router.post("/akun/{akun_id}/iklan/kampanye/{campaign_id}/kata-kunci")
+async def kata_kunci_kampanye_iklan_akun(
     akun_id: str,
+    campaign_id: int,
     payload: dict = Body(),
     session: AsyncSession = Depends(get_db_marketplace_erp),
-    _: UserMarketplaceErp = Depends(require_roles_marketplace_erp(*OWNER_ONLY)),
+    pengguna: UserMarketplaceErp = Depends(require_roles_marketplace_erp(*OWNER_ONLY)),
 ):
-    """Tambah, hapus, atau ubah bid kata kunci iklan manual."""
+    """Tambah, hapus, atau ubah bid dan tipe kata kunci satu kampanye manual."""
     akun = await services.get_akun_marketplace(session, akun_id)
-    return await services.ubah_kata_kunci_iklan(session, akun, payload)
-
+    return await services.ubah_iklan_shopee(session, akun, "kata_kunci", campaign_id, payload, pengguna)
 
 
 @marketplace_erp_router.post("/akun/{akun_id}/iklan/shopee/{aksi}")
