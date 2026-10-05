@@ -57,6 +57,8 @@ async def _siap(session: AsyncSession) -> None:
     await session.execute(text("ALTER TABLE bl2_nilai ADD COLUMN IF NOT EXISTS custom BOOLEAN NOT NULL DEFAULT FALSE"))
     await session.execute(text("ALTER TABLE bl2_jenis ADD COLUMN IF NOT EXISTS harga_tukang NUMERIC NOT NULL DEFAULT 0"))
     await session.execute(text("ALTER TABLE bl2_jenis ADD COLUMN IF NOT EXISTS custom BOOLEAN NOT NULL DEFAULT FALSE"))
+    await session.execute(text("ALTER TABLE bl2_nilai ADD COLUMN IF NOT EXISTS harga_cat NUMERIC NOT NULL DEFAULT 0"))
+    await session.execute(text("ALTER TABLE bl2_jenis ADD COLUMN IF NOT EXISTS harga_cat NUMERIC NOT NULL DEFAULT 0"))
     await session.execute(text("""
         CREATE TABLE IF NOT EXISTS bl2_produk (
             id TEXT PRIMARY KEY,
@@ -414,3 +416,38 @@ async def impor(session: AsyncSession = _db(), _: BlUser = _guard()):
         nilai += 1
     await session.commit()
     return {"produk": produk, "nilai": nilai}
+
+
+TARIF_CAT = {
+    "60x20x200": 80000, "80x20x200": 100000, "100x20x200": 120000, "120x20x200": 140000,
+    "140x20x200": 160000, "150x20x200": 170000, "160x20x200": 180000, "180x20x200": 200000, "200x20x200": 220000,
+    "60x10x200": 80000, "80x10x200": 90000, "100x10x200": 100000, "120x10x200": 120000,
+    "140x10x200": 130000, "150x10x200": 140000, "160x10x200": 150000, "180x10x200": 160000, "200x10x200": 170000,
+}
+
+
+@router.post("/cat")
+async def isi_cat(session: AsyncSession = _db(), _: BlUser = _guard()):
+    """Pasang tarif cat partisi rak palang. Packing biasa sudah termasuk. Packing kayu tidak ikut."""
+    await _siap(session)
+    pas = 0
+    for ukuran, harga in TARIF_CAT.items():
+        hasil = await session.execute(text("""
+            UPDATE bl2_nilai SET harga_cat = :harga
+            WHERE replace(lower(nilai), ' ', '') LIKE '%' || :ukuran || '%'
+        """), {"harga": harga, "ukuran": ukuran})
+        await session.execute(text("""
+            UPDATE bl2_jenis SET harga_cat = :harga
+            WHERE replace(lower(ukuran), ' ', '') LIKE '%' || :ukuran || '%'
+               OR replace(lower(nama), ' ', '') LIKE '%' || :ukuran || '%'
+        """), {"harga": harga, "ukuran": ukuran})
+        pas += hasil.rowcount or 0
+        await session.execute(text("""
+            UPDATE bl2_nilai SET custom = FALSE WHERE replace(lower(nilai), ' ', '') LIKE '%' || :ukuran || '%'
+        """), {"ukuran": ukuran})
+    await session.execute(text("""
+        UPDATE bl2_nilai SET custom = TRUE, harga_cat = 0
+        WHERE COALESCE(harga_cat, 0) = 0
+    """))
+    await session.commit()
+    return {"nilai": pas, "catatan": "Termasuk packing biasa. Ukuran tanpa tarif ditandai custom."}
