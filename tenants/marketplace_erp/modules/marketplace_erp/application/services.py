@@ -1564,6 +1564,13 @@ async def impor_pesanan_marketplace(session: AsyncSession, akun: AkunMarketplace
                 )
             await session.flush()
             pesanan = await get_pesanan(session, pesanan.id)
+        else:
+            lama = (await session.execute(select(ItemPesanan).where(ItemPesanan.pesanan_id == pesanan.id))).scalars().all()
+            for item, sumber in zip(lama, row["items"]):
+                item.nama_produk = sumber["nama_produk"]
+                item.model_name = sumber.get("model_name") or ""
+                item.item_sku = sumber.get("item_sku") or ""
+                item.model_sku = sumber.get("model_sku") or ""
 
         if row.get("dipesan_at") and pesanan.dipesan_at is None:
             pesanan.dipesan_at = row["dipesan_at"]  # orders ingested before this column existed get filled on the next pull
