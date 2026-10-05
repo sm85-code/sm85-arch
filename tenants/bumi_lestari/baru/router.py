@@ -51,6 +51,10 @@ async def _siap(session: AsyncSession) -> None:
     """))
     await session.execute(text("ALTER TABLE bl2_order ADD COLUMN IF NOT EXISTS toko TEXT NOT NULL DEFAULT ''"))
     await session.execute(text("ALTER TABLE bl2_order ADD COLUMN IF NOT EXISTS sumber_ref TEXT"))
+    await session.execute(text("ALTER TABLE bl2_order ADD COLUMN IF NOT EXISTS tgl_pesan DATE"))
+    await session.execute(text("ALTER TABLE bl2_order ADD COLUMN IF NOT EXISTS varian TEXT NOT NULL DEFAULT ''"))
+    await session.execute(text("ALTER TABLE bl2_order ADD COLUMN IF NOT EXISTS qty INTEGER NOT NULL DEFAULT 1"))
+    await session.execute(text("ALTER TABLE bl2_order ADD COLUMN IF NOT EXISTS keterangan TEXT NOT NULL DEFAULT ''"))
     await session.execute(text("ALTER TABLE bl2_jenis ADD COLUMN IF NOT EXISTS harga_reseller NUMERIC NOT NULL DEFAULT 0"))
     await session.execute(text("ALTER TABLE bl2_jenis ADD COLUMN IF NOT EXISTS produk_id TEXT"))
     await session.execute(text("ALTER TABLE bl2_nilai ADD COLUMN IF NOT EXISTS harga_tukang NUMERIC NOT NULL DEFAULT 0"))
@@ -113,10 +117,11 @@ async def _siap(session: AsyncSession) -> None:
 async def daftar_order(session: AsyncSession = _db(), _: BlUser = _guard()):
     await _siap(session)
     baris = (await session.execute(text("""
-        SELECT o.id, o.no_order, o.nama_barang, o.pembeli, o.toko, o.sumber, o.status,
-               j.nama AS jenis, j.kayu
+        SELECT o.id, o.no_order, o.nama_barang, o.varian, o.qty, o.keterangan, o.pembeli, o.toko, o.sumber,
+               o.tgl_pesan::text AS tgl_pesan, o.status, j.nama AS jenis, j.kayu,
+               CASE WHEN o.jenis_id IS NULL THEN 'Belum' ELSE 'Sudah' END AS status_peta
         FROM bl2_order o LEFT JOIN bl2_jenis j ON j.id = o.jenis_id
-        ORDER BY o.no_order DESC
+        ORDER BY o.tgl_pesan DESC NULLS LAST, o.no_order DESC
     """))).mappings().all()
     return [{**dict(r), "kayu": bool(r["kayu"]) if r["kayu"] is not None else None} for r in baris]
 
@@ -224,7 +229,8 @@ async def tarik(hari: int = 30, session: AsyncSession = _db(), _: BlUser = _guar
         raise HTTPException(503, "Database ERP belum tersambung")
     async with SessionLocal() as erp:
         baris = (await erp.execute(text("""
-            SELECT p.id_eksternal, i.id AS item_id, i.nama_produk, p.nama_pembeli, a.nama_toko
+            SELECT p.id_eksternal, i.id AS item_id, i.nama_produk, i.qty, p.nama_pembeli, a.nama_toko,
+                   COALESCE(p.dipesan_at, p.created_at)::date AS tgl_pesan
             FROM mpe_pesanan p
             JOIN mpe_akun_marketplace a ON a.id = p.akun_id
             LEFT JOIN mpe_item_pesanan i ON i.pesanan_id = p.id
@@ -241,11 +247,12 @@ async def tarik(hari: int = 30, session: AsyncSession = _db(), _: BlUser = _guar
         nama = (r["nama_produk"] or "").strip()
         jenis = (await session.execute(text("SELECT jenis_id FROM bl2_peta WHERE nama = :n"), {"n": nama})).scalar()
         await session.execute(text("""
-            INSERT INTO bl2_order (id, no_order, nama_barang, pembeli, toko, sumber, sumber_ref, jenis_id)
-            VALUES (:id, :no, :nama, :pembeli, :toko, 'erp', :ref, :jenis)
+            INSERT INTO bl2_order (id, no_order, nama_barang, pembeli, toko, sumber, sumber_ref, jenis_id, tgl_pesan, qty, varian)
+            VALUES (:id, :no, :nama, :pembeli, :toko, 'erp', :ref, :jenis, :tgl, :qty, '')
         """), {
             "id": uuid.uuid4().hex, "no": r["id_eksternal"] or "", "nama": nama,
             "pembeli": r["nama_pembeli"] or "", "toko": r["nama_toko"] or "", "ref": ref, "jenis": jenis,
+            "tgl": r["tgl_pesan"], "qty": r["qty"] or 1,
         })
         baru += 1
     await session.commit()
