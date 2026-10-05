@@ -1394,8 +1394,8 @@ _PATH_DOC_RESULT = "/api/v2/logistics/get_shipping_document_result"
 _PATH_DOC_DOWNLOAD = "/api/v2/logistics/download_shipping_document"
 # Shopee statuses after "arrange shipment": a tracking number exists from here on.
 STATUS_SUDAH_DIPROSES = frozenset({"PROCESSED", "SHIPPED", "TO_CONFIRM_RECEIVE", "COMPLETED"})
-_DOC_POLL_TRIES = 10
-_DOC_POLL_DELAY = 1.5
+_DOC_POLL_TRIES = 100  # bounded by _DOC_BATAS_DETIK, not by the count
+_DOC_POLL_DELAY = 0.6
 # The whole label flow must answer well inside the proxy limit (~100 s, after which the user only sees a 504).
 _DOC_BATAS_DETIK = 60.0
 _DOC_TIMEOUT = 15.0
