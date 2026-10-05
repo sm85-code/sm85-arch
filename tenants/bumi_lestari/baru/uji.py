@@ -50,6 +50,7 @@ async def isi_uji(session: AsyncSession = _db(), _: BlUser = _guard()):
 
 @uji.get("/laporan")
 async def laporan(session: AsyncSession = _db(), _: BlUser = _guard()):
+    await isi_uji(session)
     await _kolom(session)
     baris = (await session.execute(text("""
         SELECT id, no_order, nama_barang, pembeli, sumber, pendapatan::float AS pendapatan,
