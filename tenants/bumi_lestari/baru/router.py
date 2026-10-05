@@ -35,7 +35,9 @@ async def _siap(session: AsyncSession) -> None:
             no_order TEXT NOT NULL DEFAULT '',
             nama_barang TEXT NOT NULL DEFAULT '',
             pembeli TEXT NOT NULL DEFAULT '',
+            toko TEXT NOT NULL DEFAULT '',
             sumber TEXT NOT NULL DEFAULT 'manual',
+            sumber_ref TEXT,
             jenis_id TEXT,
             status TEXT NOT NULL DEFAULT 'dipesan'
         )
@@ -46,6 +48,8 @@ async def _siap(session: AsyncSession) -> None:
             jenis_id TEXT NOT NULL
         )
     """))
+    await session.execute(text("ALTER TABLE bl2_order ADD COLUMN IF NOT EXISTS toko TEXT NOT NULL DEFAULT ''"))
+    await session.execute(text("ALTER TABLE bl2_order ADD COLUMN IF NOT EXISTS sumber_ref TEXT"))
     await session.commit()
 
 
@@ -141,3 +145,61 @@ async def produksi(session: AsyncSession = _db(), _: BlUser = _guard()):
         SELECT COUNT(*) FROM bl2_order o JOIN bl2_jenis j ON j.id = o.jenis_id WHERE NOT j.kayu
     """))).scalar()
     return {"kayu": kayu or 0, "non_kayu": non or 0}
+
+
+TOKO = (
+    "MAJAPAHIT STORE IND",
+    "BUMI TANI IND",
+    "BUMI LESTARI INDONESIA",
+    "RESTU BUMI IND",
+    "CAHAYA LANGIT IND",
+    "AZFA Furniture Official",
+)
+
+
+@router.post("/tarik")
+async def tarik(hari: int = 30, session: AsyncSession = _db(), _: BlUser = _guard()):
+    """Tarik order ERP untuk toko yang masuk Bumi Lestari. Tidak mengirim status ke Shopee."""
+    await _siap(session)
+    from tenants.marketplace_erp.modules.marketplace_erp.infrastructure.database import SessionLocal
+    if SessionLocal is None:
+        raise HTTPException(503, "Database ERP belum tersambung")
+    async with SessionLocal() as erp:
+        baris = (await erp.execute(text("""
+            SELECT p.id_eksternal, i.id AS item_id, i.nama_produk, p.nama_pembeli, a.nama_toko
+            FROM mpe_pesanan p
+            JOIN mpe_akun_marketplace a ON a.id = p.akun_id
+            LEFT JOIN mpe_item_pesanan i ON i.pesanan_id = p.id
+            WHERE a.nama_toko = ANY(:toko)
+              AND COALESCE(p.dipesan_at, p.created_at) >= NOW() - (:hari || ' days')::interval
+        """), {"toko": list(TOKO), "hari": str(hari)})).mappings().all()
+    import uuid
+    baru = 0
+    for r in baris:
+        ref = f"erp:{r['item_id'] or r['id_eksternal']}"
+        ada = (await session.execute(text("SELECT id FROM bl2_order WHERE sumber_ref = :ref"), {"ref": ref})).scalar()
+        if ada:
+            continue
+        nama = (r["nama_produk"] or "").strip()
+        jenis = (await session.execute(text("SELECT jenis_id FROM bl2_peta WHERE nama = :n"), {"n": nama})).scalar()
+        await session.execute(text("""
+            INSERT INTO bl2_order (id, no_order, nama_barang, pembeli, toko, sumber, sumber_ref, jenis_id)
+            VALUES (:id, :no, :nama, :pembeli, :toko, 'erp', :ref, :jenis)
+        """), {
+            "id": uuid.uuid4().hex, "no": r["id_eksternal"] or "", "nama": nama,
+            "pembeli": r["nama_pembeli"] or "", "toko": r["nama_toko"] or "", "ref": ref, "jenis": jenis,
+        })
+        baru += 1
+    await session.commit()
+    return {"order": baru, "toko": list(TOKO)}
+
+
+@router.post("/status")
+async def ubah_status(payload: dict, session: AsyncSession = _db(), _: BlUser = _guard()):
+    await _siap(session)
+    await session.execute(text("UPDATE bl2_order SET status = :status WHERE id = :id"), {
+        "status": str(payload.get("status") or "dipesan"),
+        "id": str(payload.get("id") or ""),
+    })
+    await session.commit()
+    return {"ok": True}
