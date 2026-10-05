@@ -701,7 +701,7 @@ _ALIAS_URUT_KATALOG = {
 }
 
 
-def katalog_out(k: KatalogShopee, nama_toko: str | None = None, *, lengkap: bool = False) -> dict:
+def katalog_out(k: KatalogShopee, nama_toko: str | None = None, *, lengkap: bool = False, varian: bool = False) -> dict:
     import json
 
     foto = json.loads(k.foto_json or "[]")
@@ -733,8 +733,11 @@ def katalog_out(k: KatalogShopee, nama_toko: str | None = None, *, lengkap: bool
         "diambil_at": k.diambil_at,
         **json.loads(getattr(k, "detail_json", None) or "{}"),
     }
+    if varian or lengkap:
+        # Every variant with its own price, stock, weight, package size and pre-order (the list shows them as sub-rows).
+        out["varian"] = json.loads(k.varian_json or "[]")
     if lengkap:
-        out.update(deskripsi=k.deskripsi, foto=foto, varian=json.loads(k.varian_json or "[]"))
+        out.update(deskripsi=k.deskripsi, foto=foto)
     return out
 
 
@@ -784,7 +787,7 @@ async def list_katalog_shopee(
         .limit(per_halaman)
     )
     rows = (await session.execute(stmt)).all()
-    return {"total": total, "halaman": halaman, "per_halaman": per_halaman, "items": [katalog_out(k, n) for k, n in rows]}
+    return {"total": total, "halaman": halaman, "per_halaman": per_halaman, "items": [katalog_out(k, n, varian=True) for k, n in rows]}
 
 
 # Shopee's item_status values, as shown in the Katalog filter (Seller Centre wording).
