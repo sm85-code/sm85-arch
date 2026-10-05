@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import logging
+import os
 import time
 from datetime import date, datetime, timedelta, timezone
 from decimal import Decimal
@@ -49,6 +50,7 @@ from tenants.marketplace_erp.modules.marketplace_erp.infrastructure.models impor
     IklanHarianToko,
     IklanSaldoToko,
     IklanMetrikHarian,
+    SaranIklanAi,
     ItemPesanan,
     KatalogShopee,
     Pesanan,
@@ -2466,6 +2468,56 @@ async def ubah_iklan_shopee(session: AsyncSession, akun: AkunMarketplace, jenis:
         {k: v for k, v in body.items() if k != "reference_id"},
     )
     return await erp_shopee.signed_shop_request(session, akun, path, method="POST", body=body)
+
+
+ADS_AI_BATAS_HARIAN = int(os.getenv("ADS_AI_BATAS_HARIAN", "30"))
+KURS_RUPIAH = Decimal(os.getenv("KURS_USD_IDR", "16000"))  # only for the estimate shown to the user
+
+
+async def saran_ai_iklan(session: AsyncSession, akun: AkunMarketplace, pengguna, hari: int = 7) -> dict:
+    """Ask the AI advisor to review this shop's running and paused campaigns. Nothing is changed on Shopee; every
+    run that reaches the model is recorded with its token use and cost, and a daily quota caps the spend."""
+    from tenants.marketplace_erp.modules.marketplace_erp.infrastructure import ads_ai
+
+    kampanye = await daftar_kampanye_iklan(session, akun, hari)
+    ringkas = ads_ai.ringkas_kampanye(kampanye["kampanye"])
+    nol = {"token_masuk": 0, "token_keluar": 0, "biaya_usd": 0.0, "biaya_rp": 0, "model": None}
+    if not ringkas:
+        return {"ringkasan": "Tidak ada kampanye berjalan atau dijeda di toko ini, jadi tidak ada yang perlu dianalisis.", "saran": [], "pemakaian": nol, "kuota_sisa": None, "bulan_ini_usd": None}
+    sekarang = datetime.now(timezone.utc)
+    awal_hari = sekarang.replace(hour=0, minute=0, second=0, microsecond=0)
+    terpakai = (await session.execute(select(func.count()).select_from(SaranIklanAi).where(SaranIklanAi.created_at >= awal_hari))).scalar_one()
+    if terpakai >= ADS_AI_BATAS_HARIAN:
+        raise HTTPException(status_code=429, detail=f"Batas {ADS_AI_BATAS_HARIAN} analisis AI per hari sudah tercapai. Coba lagi besok.")
+    try:
+        hasil = await ads_ai.minta_saran(ads_ai.susun_pesan(akun.nama_toko, kampanye["hari"], kampanye["saldo"], ringkas))
+    except ads_ai.AiTidakTersedia as exc:
+        raise HTTPException(status_code=502 if "ANTHROPIC_API_KEY" not in str(exc) else 501, detail=str(exc)) from exc
+    saran = ads_ai.validasi_saran(hasil["mentah"], ringkas)
+    biaya = ads_ai.biaya_usd(hasil["model"], hasil["token_masuk"], hasil["token_keluar"])
+    session.add(
+        SaranIklanAi(
+            akun_id=akun.id, user_id=getattr(pengguna, "id", None), model=hasil["model"], token_masuk=hasil["token_masuk"],
+            token_keluar=hasil["token_keluar"], biaya_usd=biaya, jumlah_saran=len(saran),
+        )
+    )
+    await session.flush()
+    awal_bulan = sekarang.replace(day=1, hour=0, minute=0, second=0, microsecond=0)
+    bulan_ini = (await session.execute(select(func.coalesce(func.sum(SaranIklanAi.biaya_usd), 0)).where(SaranIklanAi.created_at >= awal_bulan))).scalar_one()
+    logging.getLogger(__name__).warning(
+        "saran ai iklan toko %s oleh %s: %s saran, %s+%s token, $%s", akun.nama_toko, getattr(pengguna, "username", None), len(saran),
+        hasil["token_masuk"], hasil["token_keluar"], biaya,
+    )
+    return {
+        "ringkasan": str(hasil["mentah"].get("ringkasan") or "")[:800],
+        "saran": saran,
+        "pemakaian": {
+            "token_masuk": hasil["token_masuk"], "token_keluar": hasil["token_keluar"], "biaya_usd": float(biaya),
+            "biaya_rp": int(biaya * KURS_RUPIAH), "model": hasil["model"],
+        },
+        "kuota_sisa": ADS_AI_BATAS_HARIAN - terpakai - 1,
+        "bulan_ini_usd": float(bulan_ini),
+    }
 
 
 async def sinkron_iklan_akun(session: AsyncSession, akun: AkunMarketplace, hari: int = 30) -> dict:

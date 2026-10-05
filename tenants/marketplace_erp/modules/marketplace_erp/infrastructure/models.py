@@ -439,6 +439,24 @@ class IklanSaldoToko(MarketplaceErpBase):
     diambil_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=_utcnow)
 
 
+class SaranIklanAi(MarketplaceErpBase):
+    """One run of the AI ads advisor: who asked, for which shop, and what it cost (also the daily quota counter)."""
+
+    __tablename__ = "mpe_saran_iklan_ai"
+
+    id: Mapped[str] = mapped_column(String(64), primary_key=True, default=_uuid)
+    akun_id: Mapped[Optional[str]] = mapped_column(
+        String(64), ForeignKey("mpe_akun_marketplace.id", ondelete="SET NULL"), nullable=True, index=True
+    )
+    user_id: Mapped[Optional[str]] = mapped_column(String(64), nullable=True)
+    model: Mapped[str] = mapped_column(String(64), nullable=False)
+    token_masuk: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
+    token_keluar: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
+    biaya_usd: Mapped[Decimal] = mapped_column(Numeric(12, 6), nullable=False, default=Decimal("0"))
+    jumlah_saran: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=_utcnow, index=True)
+
+
 # --- Tahap 4: iklan (ads) ----------------------------------------------------
 
 STATUS_IKLAN = ("draft", "aktif", "dijeda", "selesai")

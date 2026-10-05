@@ -1069,6 +1069,20 @@ async def daftar_kampanye_iklan_akun(
     return await services.daftar_kampanye_iklan(session, akun, hari)
 
 
+@marketplace_erp_router.post("/akun/{akun_id}/iklan/saran-ai")
+async def saran_ai_iklan_akun(
+    akun_id: str,
+    hari: int = Query(7, ge=2, le=28),
+    session: AsyncSession = Depends(get_db_marketplace_erp),
+    pengguna: UserMarketplaceErp = Depends(require_roles_marketplace_erp(*OWNER_ONLY)),
+):
+    """Analisis AI atas kampanye toko ini. Hanya memberi saran; tidak mengubah apa pun di Shopee."""
+    akun = await services.get_akun_marketplace(session, akun_id)
+    hasil = await services.saran_ai_iklan(session, akun, pengguna, hari)
+    await session.commit()  # the usage row must survive even if the response is lost
+    return hasil
+
+
 @marketplace_erp_router.post("/akun/{akun_id}/iklan/kampanye")
 async def buat_kampanye_iklan_akun(
     akun_id: str,
