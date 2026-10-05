@@ -21,9 +21,9 @@ def _guard():
 
 
 KASUS = [
-    {"id": "uji-shopee", "no": "UJI-SHOPEE", "nama": "Partisi Rak Palang 80x20x200", "pembeli": "Pembeli Shopee", "sumber": "shopee", "status": "selesai", "tukang": "Ahmad Nur Alim", "pendapatan": 500000, "barang": 375000, "cat": 100000, "packing": 0, "admin": 25000, "proses": 0},
-    {"id": "uji-mandala", "no": "UJI-MANDALA", "nama": "Partisi Rak Palang 80x20x200", "pembeli": "Mandala Wangi", "sumber": "reseller", "status": "selesai", "tukang": "Ai Hendarso", "pendapatan": 485000, "barang": 375000, "cat": 100000, "packing": 0, "admin": 0, "proses": 10000},
-    {"id": "uji-web", "no": "UJI-WEB", "nama": "Batu gamping 500 gram", "pembeli": "Pembeli toko web", "sumber": "web", "status": "selesai", "tukang": "", "pendapatan": 150000, "barang": 90000, "cat": 0, "packing": 5000, "admin": 0, "proses": 0},
+    {"id": "uji-shopee", "no": "260919E0ABRN4W", "nama": "Partisi Rak Palang 80x20x200", "pembeli": "Pembeli Shopee", "sumber": "erp", "status": "selesai", "tukang": "Ahmad Nur Alim", "pendapatan": 500000, "barang": 375000, "cat": 100000, "packing": 0, "admin": 25000, "proses": 0},
+    {"id": "uji-mandala", "no": "260922PJ9B35EN", "nama": "Partisi Rak Palang 100x20x200", "pembeli": "Pembeli Shopee", "sumber": "erp", "status": "selesai", "tukang": "Ai Hendarso", "pendapatan": 485000, "barang": 425000, "cat": 120000, "packing": 0, "admin": 20000, "proses": 0},
+    {"id": "uji-web", "no": "260922PKT0DUPW", "nama": "Atap daun rumbia", "pembeli": "Pembeli Shopee", "sumber": "erp", "status": "selesai", "tukang": "", "pendapatan": 150000, "barang": 90000, "cat": 0, "packing": 5000, "admin": 8000, "proses": 0},
 ]
 
 
@@ -50,6 +50,7 @@ async def isi_uji(session: AsyncSession = _db(), _: BlUser = _guard()):
 
 @uji.get("/laporan")
 async def laporan(session: AsyncSession = _db(), _: BlUser = _guard()):
+    await isi_uji(session)
     await _kolom(session)
     baris = (await session.execute(text("""
         SELECT id, no_order, nama_barang, pembeli, sumber, pendapatan::float AS pendapatan,
