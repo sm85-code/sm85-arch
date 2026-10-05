@@ -50,6 +50,7 @@ from tenants.marketplace_erp.modules.marketplace_erp.infrastructure.models impor
     IklanHarianToko,
     IklanSaldoToko,
     IklanMetrikHarian,
+    ModalProduk,
     SaranIklanAi,
     ItemPesanan,
     KatalogShopee,
@@ -373,6 +374,7 @@ async def delete_akun_marketplace(session: AsyncSession, akun_id: str, *, hapus_
     await session.execute(delete(ProdukListing).where(ProdukListing.akun_id == akun_id))
     await session.execute(delete(KatalogShopee).where(KatalogShopee.akun_id == akun_id))
     await session.execute(delete(SettlementPesanan).where(SettlementPesanan.akun_id == akun_id))
+    await session.execute(delete(ModalProduk).where(ModalProduk.akun_id == akun_id))
     await session.execute(delete(IklanHarianToko).where(IklanHarianToko.akun_id == akun_id))
     await session.execute(delete(IklanSaldoToko).where(IklanSaldoToko.akun_id == akun_id))
     await session.refresh(akun)
@@ -2443,12 +2445,96 @@ async def saran_iklan(session: AsyncSession, akun: AkunMarketplace, item_id: int
     return await erp_shopee.iklan_saran(session, akun, item_id, kata, bidding)
 
 
+PRODUK_KAMPANYE_MAKS = 6  # products shown per campaign (all of them still count for the break-even)
+
+
+async def rata_biaya_shopee(session: AsyncSession, akun_id: str) -> float | None:
+    """Share of sales Shopee kept as commission + service + transaction fees over the last 90 days of settlements."""
+    sejak = datetime.now(timezone.utc) - timedelta(days=90)
+    row = (
+        await session.execute(
+            select(
+                func.coalesce(func.sum(SettlementPesanan.komisi + SettlementPesanan.layanan + SettlementPesanan.transaksi), 0),
+                func.coalesce(func.sum(SettlementPesanan.penjualan), 0),
+            ).where(SettlementPesanan.akun_id == akun_id, SettlementPesanan.dirilis_at >= sejak)
+        )
+    ).one()
+    return float(row[0] / row[1]) if row[1] and row[1] > 0 else None
+
+
+async def perkaya_produk_kampanye(session: AsyncSession, akun: AkunMarketplace, hasil: dict) -> None:
+    """Attach photo/name/price (from the catalogue) and the modal to each campaign's products, plus its break-even ROAS."""
+    import json
+
+    from tenants.marketplace_erp.modules.marketplace_erp.infrastructure import margin_iklan
+
+    ids = sorted({i for k in hasil["kampanye"] for i in k["item_id"]})
+    katalog: dict[str, KatalogShopee] = {}
+    modal: dict[str, ModalProduk] = {}
+    for awal in range(0, len(ids), 400):
+        potong = ids[awal : awal + 400]
+        for k in (await session.execute(select(KatalogShopee).where(KatalogShopee.akun_id == akun.id, KatalogShopee.item_id.in_(potong)))).scalars():
+            katalog[k.item_id] = k
+        for m in (await session.execute(select(ModalProduk).where(ModalProduk.akun_id == akun.id, ModalProduk.item_id.in_(potong)))).scalars():
+            modal[m.item_id] = m
+    fee = await rata_biaya_shopee(session, akun.id)
+    hasil["biaya_shopee_persen"] = fee
+    for kamp in hasil["kampanye"]:
+        lengkap = []
+        for item_id in kamp["item_id"]:
+            k, m = katalog.get(item_id), modal.get(item_id)
+            foto = json.loads(k.foto_json or "[]") if k else []
+            lengkap.append(
+                {
+                    "item_id": item_id,
+                    "nama": k.nama if k else None,
+                    "foto": foto[0] if foto else None,
+                    "harga_min": k.harga_min if k else None,
+                    "harga_max": k.harga_max if k else None,
+                    "harga": margin_iklan.harga_acuan(k.harga_min, k.harga_max) if k else None,
+                    "stok": k.stok_shopee if k else None,
+                    "modal_rp": m.modal_rp if m else None,
+                    "modal_persen": m.modal_persen if m else None,
+                }
+            )
+        kamp["jumlah_produk"] = len(lengkap)
+        kamp["produk"] = [{k_: v for k_, v in p.items() if k_ != "harga"} for p in lengkap[:PRODUK_KAMPANYE_MAKS]]
+        kamp["margin"] = margin_iklan.hitung(lengkap, fee)
+
+
 async def daftar_kampanye_iklan(session: AsyncSession, akun: AkunMarketplace, hari: int = 7) -> dict:
     from tenants.marketplace_erp.modules.marketplace_erp.infrastructure.adapters import erp_shopee
 
     if akun.platform != "shopee":
         raise HTTPException(status_code=501, detail=f"Iklan untuk platform '{akun.platform}' belum tersedia (Shopee first)")
-    return await erp_shopee.daftar_kampanye_iklan(session, akun, hari)
+    hasil = await erp_shopee.daftar_kampanye_iklan(session, akun, hari)
+    await perkaya_produk_kampanye(session, akun, hasil)
+    return hasil
+
+
+async def simpan_modal_produk(session: AsyncSession, akun: AkunMarketplace, item_id: str, modal_rp, modal_persen, pengguna) -> dict:
+    """Set, change or clear (both empty) the modal of one item. Exactly one of Rp / percent may be given."""
+    rp = None if modal_rp in (None, "") else Decimal(str(modal_rp))
+    persen = None if modal_persen in (None, "") else Decimal(str(modal_persen))
+    if rp is not None and persen is not None:
+        raise HTTPException(status_code=422, detail="Isi modal dalam Rp atau dalam %, tidak keduanya")
+    if rp is not None and not 0 < rp <= Decimal("1000000000"):
+        raise HTTPException(status_code=422, detail="Modal (Rp) harus lebih dari 0")
+    if persen is not None and not 0 < persen < 100:
+        raise HTTPException(status_code=422, detail="Modal (%) harus di antara 0 dan 100")
+    if not item_id.isdigit() or len(item_id) > 32:
+        raise HTTPException(status_code=422, detail="item_id tidak valid")
+    rec = await session.get(ModalProduk, (akun.id, item_id))
+    if rp is None and persen is None:
+        if rec is not None:
+            await session.delete(rec)
+        return {"item_id": item_id, "modal_rp": None, "modal_persen": None}
+    if rec is None:
+        rec = ModalProduk(akun_id=akun.id, item_id=item_id)
+        session.add(rec)
+    rec.modal_rp, rec.modal_persen, rec.updated_by = rp, persen, getattr(pengguna, "id", None)
+    await session.flush()
+    return {"item_id": item_id, "modal_rp": rp, "modal_persen": persen}
 
 
 async def ubah_iklan_shopee(session: AsyncSession, akun: AkunMarketplace, jenis: str, campaign_id: int | None, payload: dict, pengguna) -> dict:

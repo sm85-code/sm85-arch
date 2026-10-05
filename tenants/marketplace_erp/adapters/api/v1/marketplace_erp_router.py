@@ -1083,6 +1083,21 @@ async def saran_ai_iklan_akun(
     return hasil
 
 
+@marketplace_erp_router.put("/akun/{akun_id}/iklan/modal/{item_id}")
+async def simpan_modal_produk_akun(
+    akun_id: str,
+    item_id: str,
+    payload: dict = Body(),
+    session: AsyncSession = Depends(get_db_marketplace_erp),
+    pengguna: UserMarketplaceErp = Depends(require_roles_marketplace_erp(*OWNER_ONLY)),
+):
+    """Modal (harga pokok) satu produk Shopee: `modal_rp` ATAU `modal_persen`; keduanya kosong = hapus."""
+    akun = await services.get_akun_marketplace(session, akun_id)
+    hasil = await services.simpan_modal_produk(session, akun, item_id, payload.get("modal_rp"), payload.get("modal_persen"), pengguna)
+    await session.commit()
+    return hasil
+
+
 @marketplace_erp_router.post("/akun/{akun_id}/iklan/kampanye")
 async def buat_kampanye_iklan_akun(
     akun_id: str,

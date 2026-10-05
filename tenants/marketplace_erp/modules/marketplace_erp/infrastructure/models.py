@@ -439,6 +439,22 @@ class IklanSaldoToko(MarketplaceErpBase):
     diambil_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=_utcnow)
 
 
+class ModalProduk(MarketplaceErpBase):
+    """Seller's cost price (modal) of one Shopee item, as Rp per unit OR as a percentage of the selling price (never
+    both). Used to judge whether an ad pays for itself (break-even ROAS)."""
+
+    __tablename__ = "mpe_modal_produk"
+
+    akun_id: Mapped[str] = mapped_column(
+        String(64), ForeignKey("mpe_akun_marketplace.id", ondelete="CASCADE"), primary_key=True
+    )
+    item_id: Mapped[str] = mapped_column(String(32), primary_key=True)
+    modal_rp: Mapped[Optional[Decimal]] = mapped_column(Numeric(20, 2), nullable=True)
+    modal_persen: Mapped[Optional[Decimal]] = mapped_column(Numeric(6, 2), nullable=True)
+    updated_by: Mapped[Optional[str]] = mapped_column(String(64), nullable=True)
+    updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=_utcnow, onupdate=_utcnow)
+
+
 class SaranIklanAi(MarketplaceErpBase):
     """One run of the AI ads advisor: who asked, for which shop, and what it cost (also the daily quota counter)."""
 
