@@ -237,7 +237,7 @@ TOKO = (
 
 
 @router.post("/tarik")
-async def tarik(hari: int = 30, session: AsyncSession = _db(), _: BlUser = _guard()):
+async def tarik(hari: int = 15, session: AsyncSession = _db(), _: BlUser = _guard()):
     """Tarik order ERP untuk toko yang masuk Bumi Lestari. Tidak mengirim status ke Shopee."""
     await _siap(session)
     from tenants.marketplace_erp.modules.marketplace_erp.infrastructure.database import SessionLocal
