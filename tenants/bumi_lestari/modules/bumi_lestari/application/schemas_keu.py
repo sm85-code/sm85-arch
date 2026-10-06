@@ -8,7 +8,7 @@ from datetime import date
 from decimal import Decimal
 from typing import Annotated, Literal
 
-from pydantic import AliasChoices, AwareDatetime, BaseModel, ConfigDict, Field, JsonValue, StrictBool, StrictInt, StringConstraints, field_validator, model_validator
+from pydantic import AliasChoices, AwareDatetime, BaseModel, ConfigDict, Field, JsonValue, SecretStr, StrictBool, StrictInt, StringConstraints, field_validator, model_validator
 
 Id = Annotated[str, StringConstraints(strip_whitespace=True, min_length=1, max_length=64)]
 Ref = Annotated[str, StringConstraints(strip_whitespace=True, min_length=1, max_length=255)]
@@ -41,6 +41,18 @@ class PelangganIn(InputBase):
     nama: str = Field(min_length=1, max_length=255)
     segmen: Segment | None = None
     kontak: str = Field(default="", max_length=255)
+
+
+class MasterStatusIn(InputBase):
+    aktif: StrictBool
+
+
+class ResetKeuIn(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+    challenge_id: Id
+    token: str = Field(min_length=32, max_length=128)
+    konfirmasi: Literal["RESET-KEUANGAN"]
+    password: SecretStr = Field(min_length=1, max_length=255)
 
 
 class VendorIn(InputBase):

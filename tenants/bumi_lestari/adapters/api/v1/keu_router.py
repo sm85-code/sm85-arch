@@ -11,7 +11,7 @@ from sqlalchemy import select
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from tenants.bumi_lestari.modules.bumi_lestari.application import keu_import, keu_services as svc, keu_sync, schemas_keu as sc
+from tenants.bumi_lestari.modules.bumi_lestari.application import keu_import, keu_reset, keu_services as svc, keu_sync, schemas_keu as sc
 from tenants.bumi_lestari.modules.bumi_lestari.infrastructure import models_keu as m
 from tenants.bumi_lestari.modules.bumi_lestari.infrastructure.auth import require_roles_bumi_lestari
 from tenants.bumi_lestari.modules.bumi_lestari.infrastructure.database import get_db_bumi_lestari
@@ -47,6 +47,16 @@ async def dashboard(session: AsyncSession = DB):
     return await svc.dashboard(session)
 
 
+@router.post("/reset/pratinjau")
+async def reset_preview(session: AsyncSession = DB, actor: BlUser = ACTOR):
+    return await keu_reset.preview(session, actor)
+
+
+@router.post("/reset")
+async def reset_finance(payload: sc.ResetKeuIn, session: AsyncSession = DB, actor: BlUser = ACTOR):
+    return await keu_reset.execute(session, actor, payload)
+
+
 @router.get("/sumber")
 async def sources():
     return await keu_sync.source_options()
@@ -77,6 +87,37 @@ def register_master(name, model, schema):
 
 for _name, _schema in (("saluran", sc.SaluranIn), ("akun", sc.AkunIn), ("pelanggan", sc.PelangganIn), ("vendor", sc.VendorIn), ("produk", sc.ProdukIn)):
     register_master(_name, svc.MASTERS[_name], _schema)
+
+
+MasterName = Literal["produk", "akun", "vendor", "pelanggan", "saluran"]
+
+
+@router.delete("/master/{name}/{key}")
+async def delete_master(name: MasterName, key: str, session: AsyncSession = DB, actor: BlUser = ACTOR):
+    return await svc.delete_master(session, actor, name, key)
+
+
+@router.patch("/master/{name}/{key}/status")
+async def master_status(name: MasterName, key: str, payload: sc.MasterStatusIn, session: AsyncSession = DB, actor: BlUser = ACTOR):
+    return await svc.master_status(session, actor, name, key, payload)
+
+
+def register_edit(name, schema):
+    async def edit(key: str, payload, session: AsyncSession = DB, actor: BlUser = ACTOR):
+        if name == "saluran":
+            if payload.sistem == "store" and payload.akun_ref != "store":
+                svc.bad("Referensi saluran Store harus store")
+            if payload.sistem == "marketplace_erp":
+                options = await keu_sync.source_options()
+                if payload.akun_ref not in {row["id"] for row in options["erp"]}:
+                    svc.bad("Akun ERP tidak ditemukan")
+        return await svc.edit_master(session, actor, name, key, payload)
+    edit.__annotations__["payload"] = schema
+    router.add_api_route(f"/{name}/{{key}}", edit, methods=["PATCH"], name=f"keu-edit-{name}")
+
+
+for _name, _schema in (("akun", sc.AkunIn), ("pelanggan", sc.PelangganIn), ("saluran", sc.SaluranIn)):
+    register_edit(_name, _schema)
 
 
 @router.get("/vendor/{key}")

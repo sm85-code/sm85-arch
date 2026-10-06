@@ -178,8 +178,58 @@ async def deactivate_vendor(session, user, key):
     return await save_vendor(session, user, key, sc.VendorEditIn(aktif=False))
 
 
+async def master_references(session, name, key):
+    model = MASTERS[name]
+    for table in model.metadata.sorted_tables:
+        for fk in table.foreign_keys:
+            if fk.column.table is model.__table__:
+                used = (await session.execute(select(fk.parent).where(fk.parent == key).limit(1))).first()
+                if used:
+                    return True
+    return False
+
+
+async def delete_master(session, user, name, key):
+    obj = await get(session, MASTERS[name], key, lock=True)
+    if await master_references(session, name, key):
+        bad("Master masih memiliki keterkaitan data. Lepaskan keterkaitan terlebih dahulu atau pilih Nonaktifkan.", 409)
+    before = record(obj)
+    await catat_audit(session, user.id, "hapus-master", obj.__tablename__, key, sebelum=before, sesudah=None)
+    await session.delete(obj)
+    await session.flush()
+    return {"id": key, "dihapus": True}
+
+
+async def master_status(session, user, name, key, payload):
+    if name == "vendor":
+        return await save_vendor(session, user, key, sc.VendorEditIn(aktif=payload.aktif))
+    obj = await get(session, MASTERS[name], key, lock=True)
+    if name == "produk" and payload.aktif and obj.status != "master":
+        bad("Petakan dan simpan produk sebagai master terlebih dahulu", 409)
+    before = record(obj)
+    obj.aktif = payload.aktif
+    await session.flush()
+    await audit(session, user, obj, "status-master", before)
+    return record(obj)
+
+
+async def edit_master(session, user, name, key, payload):
+    obj = await get(session, MASTERS[name], key, lock=True)
+    values = payload.model_dump()
+    protected = {"akun": {"jenis", "saldo_awal"}, "saluran": {"sistem", "akun_ref"}}
+    if any(getattr(obj, field) != values[field] for field in protected.get(name, set())) and await master_references(session, name, key):
+        bad("Identitas sumber atau saldo/jenis akun yang sudah digunakan tidak dapat diubah. Buat master baru atau lepaskan keterkaitan.", 409)
+    before = record(obj)
+    for field, value in values.items():
+        setattr(obj, field, value)
+    await session.flush()
+    await audit(session, user, obj, "edit-master", before)
+    return record(obj)
+
+
 async def save_product(session, user, key, payload):
     product = await get(session, m.KeuProduk, key, lock=True)
+    was_draft = product.status == "draf"
     if product.jenis != payload.jenis:
         allocated = (await session.execute(select(m.KeuAlokasiVendor.id).join(m.KeuItem, m.KeuItem.id == m.KeuAlokasiVendor.item_id)
                      .where(m.KeuItem.produk_id == key, m.KeuAlokasiVendor.dibatalkan.is_(False)).limit(1))).first()
@@ -188,7 +238,9 @@ async def save_product(session, user, key, payload):
     before = record(product)
     for field, value in payload.model_dump().items():
         setattr(product, field, value)
-    product.status, product.aktif = "master", True
+    product.status = "master"
+    if was_draft:
+        product.aktif = True
     await session.flush()
     await audit(session, user, product, "simpan-master", before)
     return record(product)
@@ -292,6 +344,8 @@ async def create_order(session: AsyncSession, user: BlUser, payload: sc.PesananI
         bad("Referensi pesanan sudah dipakai dengan data berbeda", 409)
     if payload.pelanggan_id:
         customer = await get(session, m.KeuPelanggan, payload.pelanggan_id)
+        if not customer.aktif:
+            bad("Pelanggan tidak aktif")
         segment = customer.segmen
     else:
         segment = payload.segmen_snapshot
@@ -523,7 +577,9 @@ async def post_transaction(session, user, key):
     if settlement:
         await guard_settlement_orders(session, settlement)
     await pastikan_bulan_terbuka(session, row.tanggal)
-    await get(session, m.KeuAkun, row.akun_id, lock=True)
+    account = await get(session, m.KeuAkun, row.akun_id, lock=True)
+    if not account.aktif:
+        bad("Akun tidak aktif")
     before = record(row)
     row.status = "terkirim"
     await session.flush()
