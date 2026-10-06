@@ -62,3 +62,11 @@ TEST_DATABASE_URL=postgresql://user:password@localhost/test_db python -m pytest 
 ```
 
 Tes mencakup auth/password guard, batas nominal, alokasi dan jenis vendor, idempotensi, rollback batch, posting neto, periode tertutup, event gagal/revisi stale, SQL hasil generator, trigger dan concurrency PostgreSQL.
+
+## Rentang tanggal penarikan
+
+`POST /saluran/{id}/tarik` menerima pasangan query `tanggal_awal` dan `tanggal_akhir` (YYYY-MM-DD). Pesanan Store difilter dengan `created_at`, pesanan ERP dengan `coalesce(dipesan_at, created_at)`, settlement ERP dengan `dirilis_at`. Batas inklusif dalam Asia/Jakarta diterjemahkan menjadi interval UTC `[awal 00:00, sehari setelah akhir 00:00)`. Tanggal terbalik atau hanya satu batas ditolak 422. Tidak ada batas jumlah hari khusus; setiap batch tetap maksimal 100 data.
+
+Untuk rentang yang berisi lebih dari 100 data, response memuat `ada_lanjutan=true` dan `halaman_berikutnya={setelah_at,setelah_ref}`. Kirim pasangan tersebut bersama saluran, entitas, dan rentang tanggal yang sama untuk mengambil batch berikutnya. Urutan halaman tetap memakai waktu revisi sumber dan ID. Request baru tanpa posisi halaman memulai rentang dari awal; deduplikasi existing tetap berlaku. API membaca 101 kandidat untuk menentukan apakah batch berikutnya benar-benar ada, lalu memproses maksimal 100.
+
+Penarikan dengan rentang tidak membaca atau memajukan `keu_cursor` global. API tanpa rentang tetap mendukung cursor inkremental global untuk kompatibilitas. UI mewajibkan kedua tanggal dan menyimpan posisi halaman terpisah per saluran/entitas, direset saat tanggal berubah. Tidak ada perubahan skema DB. Settlement tanpa `dirilis_at` tidak termasuk hasil rentang; jangan menebak tanggal cair dari tanggal pengambilan ERP.
