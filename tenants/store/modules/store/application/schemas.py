@@ -2,9 +2,20 @@ from __future__ import annotations
 
 import re
 from decimal import Decimal
-from typing import Optional
+from typing import Annotated, Optional
 
-from pydantic import BaseModel, EmailStr, Field, field_validator, model_validator
+from pydantic import AfterValidator, BeforeValidator, BaseModel, EmailStr, Field, field_validator, model_validator
+
+
+def _password_bytes(value: str) -> str:
+    if len(value.encode("utf-8")) > 72:
+        raise ValueError("Password maksimal 72 byte UTF-8")
+    return value
+
+
+Password = Annotated[str, AfterValidator(_password_bytes)]
+Name = Annotated[str, BeforeValidator(lambda value: value.strip() if isinstance(value, str) else value)]
+
 
 _TELEPON_RE = re.compile(r"^\+?[0-9][0-9\-\s]{7,19}$")
 _KODE_POS_RE = re.compile(r"^[0-9]{5}$")
@@ -43,18 +54,18 @@ def _validate_kode_wilayah(value: str) -> str:
 
 class LoginRequest(BaseModel):
     email: EmailStr
-    password: str = Field(..., max_length=72)
+    password: Password = Field(..., max_length=72)
 
 
 class ChangePasswordIn(BaseModel):
-    current_password: str = Field(..., min_length=1, max_length=72)
-    new_password: str = Field(..., min_length=8, max_length=72)
+    current_password: Password = Field(..., min_length=1, max_length=72)
+    new_password: Password = Field(..., min_length=8, max_length=72)
 
 
 class RegisterRequest(BaseModel):
-    nama: str
+    nama: Name = Field(..., min_length=1, max_length=255)
     email: EmailStr
-    password: str = Field(..., min_length=8, max_length=72)
+    password: Password = Field(..., min_length=8, max_length=72)
 
 
 class GoogleLoginRequest(BaseModel):
@@ -274,13 +285,13 @@ class StaffIn(BaseModel):
     """POST /staff -- owner only. Always creates a plain ``admin``; owner
     accounts come from the seed only."""
 
-    nama: str
+    nama: Name = Field(..., min_length=1, max_length=255)
     email: EmailStr
-    password: str = Field(..., min_length=8, max_length=72)
+    password: Password = Field(..., min_length=8, max_length=72)
 
 
 class StaffPatch(BaseModel):
-    nama: Optional[str] = None
+    nama: Optional[Name] = Field(None, min_length=1, max_length=255)
 
 
 class PengaturanPatch(BaseModel):

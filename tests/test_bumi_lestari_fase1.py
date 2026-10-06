@@ -437,6 +437,7 @@ async def test_error_500_bumi_lestari_tanpa_detail_exception():
         return r.status_code, json.loads(r.body)
 
     kode, isi = await panggil("/api/bumi-lestari/transaksi")
-    assert kode == 500 and isi == {"detail": "Terjadi kesalahan internal pada server"}
+    assert kode == 500 and isi["detail"] == "Terjadi kesalahan internal pada server"
+    assert len(isi["tracking_id"]) == 32
     kode, isi = await panggil("/api/lain/x")
-    assert kode == 500 and "error_message" in isi
+    assert kode == 500 and set(isi) == {"detail", "tracking_id"}

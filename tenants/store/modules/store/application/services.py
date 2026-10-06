@@ -173,11 +173,13 @@ async def authenticate_admin(session: AsyncSession, email: str, password: str) -
 
 
 async def change_admin_password(session: AsyncSession, user: AdminStore, current: str, new: str) -> AdminStore:
+    await session.refresh(user, with_for_update=True)
     if not verify_password(current, user.password_hash):
         raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Password saat ini salah")
     if current == new:
         raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Password baru harus berbeda dari yang lama")
     user.password_hash = hash_password(new)
+    user.session_version += 1
     await session.flush()
     return user
 

@@ -261,6 +261,7 @@ async def change_password(
 ) -> UserMarketplaceErp:
     # 400 (not 401) on a wrong current password: the caller IS logged in,
     # and a 401 would make the FE treat it as an expired session.
+    await session.refresh(user, with_for_update=True)
     if not verify_password(payload.current_password, user.password_hash):
         raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Password saat ini salah")
     if payload.new_password == payload.current_password:
@@ -274,6 +275,7 @@ async def change_password(
             detail="Password baru tidak boleh sama dengan password bawaan",
         )
     user.password_hash = hash_password(payload.new_password)
+    user.session_version += 1
     user.must_change_password = False
     await session.flush()
     return user

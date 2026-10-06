@@ -30,3 +30,6 @@ pytest-xdist==3.8.0
 ruff==0.16.9
 pytest-asyncio==1.4.0
 aiosqlite==0.22.1
+
+# Direct dependency for authenticated marketplace token storage.
+cryptography==50.0.2

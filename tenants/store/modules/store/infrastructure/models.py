@@ -40,6 +40,7 @@ class AdminStore(StoreBase):
     nama: Mapped[str] = mapped_column(String(255), nullable=False)
     email: Mapped[str] = mapped_column(String(255), unique=True, nullable=False, index=True)
     password_hash: Mapped[str] = mapped_column(String(255), nullable=False)
+    session_version: Mapped[int] = mapped_column(Integer, nullable=False, default=0, server_default="0")
     role: Mapped[str] = mapped_column(String(32), nullable=False, index=True, default=ROLE_ADMIN)
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=_utcnow)
 
@@ -53,6 +54,7 @@ class PembeliStore(StoreBase):
     # Nullable: accounts created through "Masuk dengan Google" have no
     # password of our own -- they always log in by verifying a Google token.
     password_hash: Mapped[Optional[str]] = mapped_column(String(255), nullable=True)
+    session_version: Mapped[int] = mapped_column(Integer, nullable=False, default=0, server_default="0")
     google_sub: Mapped[Optional[str]] = mapped_column(String(255), unique=True, nullable=True, index=True)
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=_utcnow)
 
