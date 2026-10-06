@@ -1,6 +1,9 @@
 """Authenticated BUMI keu API; mounted under /api/bumi-lestari/keu."""
 from __future__ import annotations
 
+from datetime import date
+from pydantic import AwareDatetime
+
 from fastapi import APIRouter, Depends, File, Form, HTTPException, Query, Response, UploadFile
 from fastapi.routing import APIRoute
 from sqlalchemy import select
@@ -176,8 +179,12 @@ async def apply_import(key: str, session: AsyncSession = DB, actor: BlUser = ACT
 
 
 @router.post("/saluran/{key}/tarik")
-async def pull(key: str, entitas: str = Query("order", pattern="^(order|settlement)$"), session: AsyncSession = DB, actor: BlUser = ACTOR):
-    return await keu_sync.pull(session, actor, key, entitas)
+async def pull(key: str, entitas: str = Query("order", pattern="^(order|settlement)$"),
+               tanggal_awal: date | None = None, tanggal_akhir: date | None = None,
+               setelah_at: AwareDatetime | None = None, setelah_ref: str | None = Query(None, min_length=1, max_length=64),
+               session: AsyncSession = DB, actor: BlUser = ACTOR):
+    return await keu_sync.pull(session, actor, key, entitas, tanggal_awal=tanggal_awal, tanggal_akhir=tanggal_akhir,
+                               setelah_at=setelah_at, setelah_ref=setelah_ref)
 
 
 @router.post("/masukan/{key}/ulang")

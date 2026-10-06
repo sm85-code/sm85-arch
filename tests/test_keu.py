@@ -291,3 +291,114 @@ async def test_pull_reads_actual_source_models_and_deduplicates_cursor(env, monk
                 await keu_sync.pull(s, u, sal["id"], "settlement")
     finally:
         await source_engine.dispose()
+
+
+def test_pull_range_rejects_incomplete_or_reversed_dates():
+    from datetime import datetime, timezone
+    from tenants.bumi_lestari.modules.bumi_lestari.application.keu_sync import validate_range
+    cases = [(date(2026, 9, 1), None, None, None),
+             (None, date(2026, 9, 1), None, None),
+             (date(2026, 9, 2), date(2026, 9, 1), None, None),
+             (None, None, datetime.now(timezone.utc), "id"),
+             (date(2026, 9, 1), date(2026, 9, 1), datetime.now(timezone.utc), None),
+             (date(2026, 9, 1), date.max, None, None), (date.min, date.min, None, None)]
+    for args in cases:
+        with pytest.raises(HTTPException) as error:
+            validate_range(*args)
+        assert error.value.status_code == 422
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("kind,entity", [("store", "order"), ("marketplace_erp", "order"), ("marketplace_erp", "settlement")])
+async def test_historical_range_wib_boundaries_pagination_and_global_cursor(env, monkeypatch, kind, entity):
+    from datetime import datetime, timedelta, timezone
+    from tenants.bumi_lestari.modules.bumi_lestari.application import keu_sync
+    s, user, _, _, _, _ = env
+    engine = create_async_engine("sqlite+aiosqlite:///:memory:")
+    maker = async_sessionmaker(engine, expire_on_commit=False)
+    begin = datetime(2026, 8, 31, 17, tzinfo=timezone.utc)  # 1 September 00:00 WIB
+    stop = begin + timedelta(days=1)
+    stamp = datetime(2026, 10, 5, tzinfo=timezone.utc)
+    watermark = stamp + timedelta(days=1)
+    if kind == "store":
+        from tenants.store.modules.store.infrastructure import database, models
+        base = database.StoreBase
+    else:
+        from tenants.marketplace_erp.modules.marketplace_erp.infrastructure import database, models
+        base = database.MarketplaceErpBase
+    try:
+        async with engine.begin() as conn:
+            await conn.run_sync(base.metadata.create_all)
+        async with maker.begin() as source:
+            if kind == "marketplace_erp":
+                source.add(models.AkunMarketplace(id="range-account", platform="shopee", nama_toko="Range"))
+            for i in range(103):
+                when = begin if i < 100 else stop - timedelta(microseconds=1) if i == 100 else begin - timedelta(microseconds=1) if i == 101 else stop
+                key = f"range-{i:03}"
+                if entity == "settlement":
+                    row = models.SettlementPesanan(id=key, akun_id="range-account", order_sn=key, dirilis_at=when,
+                                                  diambil_at=stamp, penjualan=20, jumlah_cair=18)
+                elif kind == "store":
+                    row = models.PesananStore(id=key, user_id="buyer", status="dibayar", total=20, created_at=when, updated_at=stamp)
+                    row.items = [models.ItemPesanan(id=f"line-{i}", produk_id="p", nama_produk="Kayu", qty=2, harga_satuan=10, subtotal=20)]
+                else:
+                    row = models.Pesanan(id=key, platform="shopee", akun_id="range-account", id_eksternal=key, total=20,
+                                         created_at=when if i == 0 else begin - timedelta(days=30), dipesan_at=None if i == 0 else when, updated_at=stamp)
+                    row.items = [models.ItemPesanan(id=f"line-{i}", nama_produk="Kayu", qty=2, harga_satuan=10, subtotal=20)]
+                source.add(row)
+        monkeypatch.setattr(database, "SessionLocal", maker)
+        sal = await svc.create_master(s, user, "saluran", sc.SaluranIn(nama="Historical", sistem=kind, akun_ref="store" if kind == "store" else "range-account", aktif=True))
+        cursor = m.KeuCursor(saluran_id=sal["id"], entitas=entity, watermark_at=watermark, watermark_ref="last")
+        s.add(cursor)
+        await s.flush()
+        dates = {"tanggal_awal": date(2026, 9, 1), "tanggal_akhir": date(2026, 9, 1)}
+        first = await keu_sync.pull(s, user, sal["id"], entity, **dates)
+        assert first["dibaca"] == first["terproses"] == 100 and first["gagal"] == 0 and first["ada_lanjutan"]
+        position = first["halaman_berikutnya"]
+        second = await keu_sync.pull(s, user, sal["id"], entity, **dates,
+                                     setelah_at=datetime.fromisoformat(position["setelah_at"]), setelah_ref=position["setelah_ref"])
+        assert second["dibaca"] == second["terproses"] == 1 and not second["ada_lanjutan"] and second["halaman_berikutnya"] is None
+        model = m.KeuPesanan if entity == "order" else m.KeuSettlement
+        rows = (await s.execute(select(model).where(model.saluran_id == sal["id"]))).scalars().all()
+        assert len(rows) == 101
+        assert all((row.tanggal if entity == "order" else row.tanggal_cair) == date(2026, 9, 1) for row in rows)
+        repeated = await keu_sync.pull(s, user, sal["id"], entity, **dates)
+        assert repeated["dibaca"] == 100 and repeated["terproses"] == repeated["gagal"] == 0
+        assert cursor.watermark_at == watermark and cursor.watermark_ref == "last"
+        empty = await keu_sync.pull(s, user, sal["id"], entity, tanggal_awal=date(2026, 7, 1), tanggal_akhir=date(2026, 7, 2))
+        assert empty["dibaca"] == 0 and empty["halaman_berikutnya"] is None
+    finally:
+        await engine.dispose()
+
+
+@pytest.mark.asyncio
+async def test_pull_route_validates_and_forwards_date_range(env, monkeypatch):
+    from datetime import datetime, timezone
+    from tenants.bumi_lestari.modules.bumi_lestari.application import keu_sync
+    s, user, sal, _, _, _ = env
+    app = FastAPI()
+    app.include_router(router, prefix="/api/bumi-lestari")
+    calls = []
+    async def db():
+        yield s
+    async def principal():
+        return user
+    async def capture(session, actor, key, entity, **kwargs):
+        keu_sync.validate_range(**kwargs)
+        calls.append((key, entity, kwargs))
+        return {"dibaca": 0, "terproses": 0, "gagal": 0, "ada_lanjutan": False, "halaman_berikutnya": None}
+    app.dependency_overrides[get_db_bumi_lestari] = db
+    app.dependency_overrides[get_current_user_bumi_lestari] = principal
+    monkeypatch.setattr(keu_sync, "pull", capture)
+    path = f'/api/bumi-lestari/keu/saluran/{sal["id"]}/tarik'
+    async with httpx.AsyncClient(transport=httpx.ASGITransport(app=app), base_url="http://test") as client:
+        for params in [{"tanggal_awal": "bad", "tanggal_akhir": "2026-09-01"},
+                       {"tanggal_awal": "2026-09-02", "tanggal_akhir": "2026-09-01"},
+                       {"tanggal_awal": "2026-09-01"},
+                       {"tanggal_awal": "2026-09-01", "tanggal_akhir": "2026-09-01", "setelah_at": "2026-10-06T10:00:00", "setelah_ref": "last"}]:
+            response = await client.post(path, params=params)
+            assert response.status_code == 422, response.text
+        params = {"entitas": "settlement", "tanggal_awal": "2026-09-01", "tanggal_akhir": "2026-09-30", "setelah_at": "2026-10-06T10:00:00+00:00", "setelah_ref": "last"}
+        response = await client.post(path, params=params)
+        assert response.status_code == 200, response.text
+        assert calls == [(sal["id"], "settlement", {"tanggal_awal": date(2026, 9, 1), "tanggal_akhir": date(2026, 9, 30), "setelah_at": datetime(2026, 10, 6, 10, tzinfo=timezone.utc), "setelah_ref": "last"})]
