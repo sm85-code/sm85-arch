@@ -4,6 +4,7 @@ from __future__ import annotations
 import csv
 import hashlib
 import io
+import json
 import zipfile
 from datetime import date, datetime
 from decimal import Decimal
@@ -19,6 +20,7 @@ HEADERS = {
     "biaya": ["sumber_ref", "tanggal", "akun_id", "kategori_id", "jumlah", "keterangan"],
     "settlement": ["sumber_ref", "tanggal_cair", "bruto", "potongan", "penyesuaian", "neto"],
 }
+PRODUCT_HEADERS = ["sku", "sku_induk", "nama_asli", "gambar_url", "varian_list", "harga_jual"]
 MAX_BYTES = 5 * 1024 * 1024
 MAX_ROWS = 10000
 
@@ -27,7 +29,7 @@ def template(kind):
     if kind not in HEADERS:
         svc.bad("Jenis impor tidak dikenal")
     output = io.StringIO()
-    csv.writer(output).writerow(HEADERS[kind])
+    csv.writer(output).writerow(HEADERS[kind] + (PRODUCT_HEADERS if kind == "order" else []))
     return output.getvalue()
 
 
@@ -37,7 +39,7 @@ def parse_file(content, filename):
     if filename.lower().endswith(".csv"):
         try:
             raw = content.decode("utf-8-sig")
-            dialect = csv.Sniffer().sniff(raw[:8192], delimiters=",;")
+            dialect = csv.Sniffer().sniff(raw.splitlines()[0], delimiters=",;")
             rows = csv.reader(io.StringIO(raw), dialect)
             return read_rows(rows)
         except (UnicodeDecodeError, csv.Error):
@@ -92,7 +94,15 @@ def validated(kind, channel_id, row):
         q = row.get("qty", "")
         if not q.isdigit():
             raise ValueError("qty harus bilangan bulat positif")
-        line = sc.ItemIn(sumber_ref=row["item_ref"], produk_id=row.get("produk_id") or None,
+        metadata = None
+        if row.get("sku"):
+            variants = json.loads(row["varian_list"]) if row.get("varian_list") else ([{"kategori": "Varian", "nilai": row["varian_snapshot"]}] if row.get("varian_snapshot") else [])
+            metadata = sc.ProdukSumberIn(sku=row["sku"], sku_induk=row.get("sku_induk") or None,
+                nama_asli=row.get("nama_asli") or row["nama_snapshot"], gambar_url=row.get("gambar_url") or "",
+                varian_list=variants, harga_jual=row.get("harga_jual") or row["harga_satuan"])
+        elif any(row.get(key) for key in PRODUCT_HEADERS if key != "sku"):
+            raise ValueError("Metadata produk memerlukan SKU varian")
+        line = sc.ItemIn(produk_sumber=metadata, sumber_ref=row["item_ref"], produk_id=row.get("produk_id") or None,
                          nama_snapshot=row["nama_snapshot"], varian_snapshot=row.get("varian_snapshot", ""),
                          qty=int(q), harga_satuan=row["harga_satuan"],
                          subtotal_sumber=Decimal(row["harga_satuan"]) * int(q))
@@ -120,7 +130,9 @@ async def preview(session, user, channel_id, kind, filename, content):
     if previous:
         return await detail(session, previous.id)
     header, rows = parse_file(content, filename)
-    if set(header) != set(HEADERS[kind]):
+    required = set(HEADERS[kind])
+    allowed = required | (set(PRODUCT_HEADERS) if kind == "order" else set())
+    if not required.issubset(header) or not set(header).issubset(allowed):
         svc.bad("Kolom file harus sesuai template")
     batch = m.KeuImpor(saluran_id=channel_id, jenis=kind, nama_file=filename[:255], file_sha256=digest,
                        versi_format=1, pemetaan={key: key for key in header}, dibuat_oleh=user.id)

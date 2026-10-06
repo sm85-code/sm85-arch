@@ -11,6 +11,9 @@ from tenants.bumi_lestari.modules.bumi_lestari.infrastructure.models_keu import 
 
 VERSION = "20261006_keu_initial"
 
+# Historical DDL is immutable; new product columns belong to the additive migration.
+INITIAL_PRODUCT_DDL = "CREATE TABLE keu_produk (\n\tid VARCHAR(64) NOT NULL, \n\tsku VARCHAR(128) NOT NULL, \n\tnama VARCHAR(255) NOT NULL, \n\tjenis VARCHAR(16) NOT NULL, \n\tbiaya_acuan NUMERIC(20, 2) DEFAULT '0' NOT NULL, \n\taktif BOOLEAN DEFAULT 'true' NOT NULL, \n\tPRIMARY KEY (id), \n\tCONSTRAINT ck_keu_produk_jenis CHECK (jenis IN ('kayu', 'non_kayu')), \n\tCONSTRAINT ck_keu_produk_biaya CHECK (biaya_acuan >= 0), \n\tUNIQUE (sku)\n);"
+
 # Statement boundaries are explicit: asyncpg executes exactly one statement per call.
 INVARIANTS = [
     """CREATE OR REPLACE FUNCTION keu_vendor_slot_check() RETURNS trigger LANGUAGE plpgsql SET search_path FROM CURRENT AS $keu$
@@ -125,7 +128,7 @@ def sql() -> str:
                   "CREATE TABLE IF NOT EXISTS keu_schema_versions (version varchar(64) PRIMARY KEY, applied_at timestamptz NOT NULL DEFAULT now());",
                   f"DO $$ BEGIN IF EXISTS (SELECT 1 FROM keu_schema_versions WHERE version = '{VERSION}') THEN RAISE EXCEPTION 'Migration already applied'; END IF; END $$;"]
     for table in sort_tables([model.__table__ for model in KEU_MODELS]):
-        statements.append(str(CreateTable(table).compile(dialect=dialect)).strip() + ";")
+        statements.append(INITIAL_PRODUCT_DDL if table.name == "keu_produk" else str(CreateTable(table).compile(dialect=dialect)).strip() + ";")
         for index in sorted(table.indexes, key=lambda obj: obj.name):
             statements.append(str(CreateIndex(index).compile(dialect=dialect)).strip() + ";")
     for jenis, count in (("tukang_kayu", 5), ("supplier", 3)):
@@ -141,6 +144,8 @@ async def ensure_keu_schema(conn) -> None:
         await conn.execute(text("CREATE TABLE IF NOT EXISTS keu_schema_versions (version varchar(64) PRIMARY KEY, applied_at timestamptz NOT NULL DEFAULT now())"))
         exists = (await conn.execute(text("SELECT 1 FROM keu_schema_versions WHERE version=:v"), {"v": VERSION})).first()
         if exists:
+            from .keu_product_migration import ensure_product_schema
+            await ensure_product_schema(conn)
             return
     # create_all is additive. Existing tenant tables must be initialized by the BUMI seeder first.
     await conn.run_sync(lambda sync: KEU_MODELS[0].metadata.create_all(sync, tables=[m.__table__ for m in KEU_MODELS]))
@@ -152,3 +157,6 @@ async def ensure_keu_schema(conn) -> None:
         for statement in INVARIANTS:
             await conn.execute(text(statement))
         await conn.execute(text("INSERT INTO keu_schema_versions(version) VALUES (:v)"), {"v": VERSION})
+
+    from .keu_product_migration import ensure_product_schema
+    await ensure_product_schema(conn)

@@ -94,11 +94,19 @@ class KeuProduk(BumiLestariBase):
     __table_args__ = (
         CheckConstraint("jenis IN ('kayu', 'non_kayu')", name="ck_keu_produk_jenis"),
         CheckConstraint("biaya_acuan >= 0", name="ck_keu_produk_biaya"),
+        CheckConstraint("harga_jual >= 0", name="ck_keu_produk_harga"),
+        CheckConstraint("status IN ('draf', 'master') AND (status <> 'master' OR jenis IS NOT NULL)", name="ck_keu_produk_status"),
     )
     id: Mapped[str] = pk()
     sku: Mapped[str] = mapped_column(String(128), nullable=False, unique=True)
+    sku_induk: Mapped[str | None] = mapped_column(String(128))
+    nama_asli: Mapped[str] = mapped_column(String(255), nullable=False, default="", server_default="")
+    gambar_url: Mapped[str] = mapped_column(String(2048), nullable=False, default="", server_default="")
+    varian_list: Mapped[list[dict[str, str]]] = mapped_column(JSON_DATA, nullable=False, default=list, server_default="[]")
+    harga_jual: Mapped[Decimal] = mapped_column(Numeric(20, 2), nullable=False, default=Decimal("0"), server_default="0")
+    status: Mapped[str] = mapped_column(String(16), nullable=False, default="master", server_default="master")
     nama: Mapped[str] = mapped_column(String(255), nullable=False)
-    jenis: Mapped[str] = mapped_column(String(16), nullable=False)
+    jenis: Mapped[str | None] = mapped_column(String(16))
     biaya_acuan: Mapped[Decimal] = mapped_column(Numeric(20, 2), nullable=False, default=Decimal("0"), server_default="0")
     aktif: Mapped[bool] = mapped_column(Boolean, nullable=False, default=True, server_default="true")
 
