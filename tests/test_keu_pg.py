@@ -145,3 +145,38 @@ async def test_concurrent_source_products_share_one_child_sku(pg):
     with pytest.raises(IntegrityError):
         async with pg.begin() as conn:
             await conn.execute(text("INSERT INTO keu_alokasi_vendor(id,item_id,vendor_id,qty,biaya_satuan,dibuat_oleh) VALUES('blocked','i','v1',1,5,'u')"))
+
+
+@pytest.mark.asyncio
+async def test_order_cancellation_serializes_with_settlement_posting(pg):
+    from fastapi import HTTPException
+    from tenants.bumi_lestari.modules.bumi_lestari.application import keu_services as svc, schemas_keu as sc
+    from tenants.bumi_lestari.modules.bumi_lestari.infrastructure.models import BlUser
+    async with pg.begin() as conn:
+        await conn.execute(text("INSERT INTO keu_pesanan(id,saluran_id,sumber_ref,nomor,tanggal,status_sumber,total_sumber) VALUES('other','s','other','other','2026-10-06','manual',20)"))
+        await conn.execute(text("INSERT INTO keu_item(id,pesanan_id,sumber_ref,produk_id,nama_snapshot,qty,harga_satuan,subtotal_sumber) VALUES('other-item','other','other','p','Kayu',2,10,20)"))
+        await conn.execute(text('UPDATE keu_settlement SET rincian=\'{"order_sn":"o"}\'::jsonb WHERE id=\'st\''))
+    maker = async_sessionmaker(pg, expire_on_commit=False)
+    async with maker.begin() as session:
+        user = await session.get(BlUser, "u")
+        await svc.allocate_settlement(session, user, sc.AlokasiSettlementIn(settlement_id="st", item_id="other-item", jumlah="18"))
+    async def attempt(cancel):
+        try:
+            async with maker.begin() as session:
+                user = await session.get(BlUser, "u")
+                if cancel:
+                    await svc.order_status(session, user, "o", sc.PesananStatusIn(status="batal", alasan="Diabaikan"))
+                else:
+                    await svc.post_settlement(session, user, "st", sc.PostingSettlementIn(akun_id="a", kategori_id="k"))
+            return True
+        except HTTPException as error:
+            assert error.status_code == 409
+            return False
+    cancelled, posted = await asyncio.wait_for(asyncio.gather(attempt(True), attempt(False)), timeout=15)
+    assert cancelled != posted
+    async with maker() as session:
+        order = (await session.execute(text("SELECT status FROM keu_pesanan WHERE id='o'"))).scalar_one()
+        settlement = (await session.execute(text("SELECT status FROM keu_settlement WHERE id='st'"))).scalar_one()
+        assert (order, settlement) == (("batal", "draf") if cancelled else ("draf", "terkirim"))
+        dashboard = await svc.dashboard(session)
+        assert float(dashboard["kas_masuk"]) == (0 if cancelled else 18)
