@@ -24,11 +24,11 @@ BUYER_COOKIE_NAME = "store_buyer_token"
 
 
 def issue_admin_token(user: AdminStore) -> str:
-    return create_access_token(subject=user.id, role=user.role, session_version=0, tenant=TENANT_ADMIN)
+    return create_access_token(subject=user.id, role=user.role, session_version=user.session_version or 0, tenant=TENANT_ADMIN)
 
 
 def issue_buyer_token(user: PembeliStore) -> str:
-    return create_access_token(subject=user.id, role="pembeli", session_version=0, tenant=TENANT_BUYER)
+    return create_access_token(subject=user.id, role="pembeli", session_version=user.session_version or 0, tenant=TENANT_BUYER)
 
 
 def _set_cookie(response: Response, name: str, token: str) -> None:
@@ -73,23 +73,23 @@ def _token_from_request(request: Request, cookie_name: str) -> str:
     raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="Tidak terautentikasi")
 
 
-def _subject(token: str, tenant: str) -> str:
+def _subject(token: str, tenant: str) -> dict:
     payload = decode_access_token(token, expected_tenant=tenant)
     user_id = payload.get("sub")
     # Unlike the legacy tenants, a store token without aud/iss is never
     # accepted: both claims are always minted by issue_*_token above.
     if not user_id or payload.get("aud") != tenant:
         raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="Sesi tidak valid")
-    return user_id
+    return payload
 
 
 async def get_current_admin(
     request: Request,
     session: AsyncSession = Depends(get_db_store),
 ) -> AdminStore:
-    user_id = _subject(_token_from_request(request, ADMIN_COOKIE_NAME), TENANT_ADMIN)
-    user = await session.get(AdminStore, user_id)
-    if not user:
+    payload = _subject(_token_from_request(request, ADMIN_COOKIE_NAME), TENANT_ADMIN)
+    user = await session.get(AdminStore, payload["sub"])
+    if not user or type(payload.get("sv")) is not int or payload["sv"] != user.session_version:
         raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="Sesi tidak valid")
     return user
 
@@ -98,9 +98,9 @@ async def get_current_buyer(
     request: Request,
     session: AsyncSession = Depends(get_db_store),
 ) -> PembeliStore:
-    user_id = _subject(_token_from_request(request, BUYER_COOKIE_NAME), TENANT_BUYER)
-    user = await session.get(PembeliStore, user_id)
-    if not user:
+    payload = _subject(_token_from_request(request, BUYER_COOKIE_NAME), TENANT_BUYER)
+    user = await session.get(PembeliStore, payload["sub"])
+    if not user or type(payload.get("sv")) is not int or payload["sv"] != user.session_version:
         raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="Sesi tidak valid")
     return user
 

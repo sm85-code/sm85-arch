@@ -15,6 +15,13 @@ import hashlib
 import hmac
 import json
 import os
+import re
+from datetime import datetime, timedelta, timezone
+
+from sqlalchemy import delete
+from sqlalchemy.exc import IntegrityError
+
+from tenants.marketplace_erp.modules.marketplace_erp.infrastructure.models import ShopeePushReceipt
 from typing import Any
 
 # URL yang lolos Verify di Open Platform. Env SHOPEE_PUSH_URL menimpa ini bila diisi.
@@ -45,89 +52,71 @@ def tanda_tangan(key: str, url: str, body: bytes) -> str:
 def kandidat_url(url_terlihat: str, header: dict[str, str]) -> list[str]:
     """The callback URL as Shopee has it: the configured one first, then what the request looked like
     (behind the platform's proxy the scheme/host may differ from what was typed into Open Platform)."""
-    hasil: list[str] = []
-    atur = os.getenv("SHOPEE_PUSH_URL", "").strip() or CALLBACK_URL
-    hasil.append(atur)
-    host = header.get("x-forwarded-host") or header.get("host") or ""
-    proto = (header.get("x-forwarded-proto") or "").split(",")[0].strip()
-    path = url_terlihat.split("://", 1)[-1].split("/", 1)[-1] if "://" in url_terlihat else url_terlihat.lstrip("/")
-    if host and proto:
-        hasil.append(f"{proto}://{host}/{path}")
-    if host:
-        hasil.append(f"https://{host}/{path}")
-    hasil.append(url_terlihat)
-    return list(dict.fromkeys(hasil))
+    return [os.getenv("SHOPEE_PUSH_URL", "").strip() or CALLBACK_URL]
 
 
 def sidik_jari_kunci(key: str) -> dict[str, Any]:
-    """Length plus the first and last two characters: enough to tell two keys apart, useless for using one."""
-    return {"panjang": len(key), "awal": key[:2], "akhir": key[-2:]}
-
-
-def _hmac_hex(key: bytes, pesan: bytes) -> str:
-    return hmac.new(key, pesan, hashlib.sha256).hexdigest()
-
-
-def _variasi_url(urls: list[str]) -> list[str]:
-    """The callback URL as typed in Open Platform may differ in small ways from what the server sees."""
-    hasil: list[str] = []
-    for u in urls:
-        for v in (u, u.rstrip("/"), u.rstrip("/") + "/"):
-            hasil.append(v)
-            if v.startswith("https://"):
-                hasil.append("http://" + v[len("https://") :])
-    return list(dict.fromkeys(hasil))
-
-
-def _skema(key_bytes: bytes, urls: list[str], body: bytes) -> dict[str, str]:
-    """name -> hex signature of every way the Authorization header could plausibly be built from this key."""
-    hasil: dict[str, str] = {}
-    for u in _variasi_url(urls):
-        ub = u.encode()
-        hasil[f"url|badan  [{u}]"] = _hmac_hex(key_bytes, ub + b"|" + body)
-        hasil[f"urlbadan  [{u}]"] = _hmac_hex(key_bytes, ub + body)
-    hasil["badan"] = _hmac_hex(key_bytes, body)
-    return hasil
-
-
-def _kunci_varian(key: str) -> dict[str, bytes]:
-    """The key as text (how Shopee's API signing uses keys) and, when it is hex, also as raw bytes."""
-    hasil = {"teks": key.encode()}
-    try:
-        hasil["hex"] = bytes.fromhex(key)
-    except ValueError:
-        pass
-    return hasil
+    return {"sha256": hashlib.sha256(key.encode()).hexdigest()[:12]}
 
 
 def verifikasi(
     key: str, urls: list[str], body: bytes, authorization: str | None, kunci_lain: dict[str, str] | None = None
 ) -> tuple[bool, dict[str, Any]]:
-    """(valid, diagnosis). A push is valid when its Authorization is the HMAC-SHA256 (hex) of ``<url>|<body>``
-    (developer guide 18) made with the App partner key or SHOPEE_PUSH_KEY. Near variants of the same secret
-    (trailing slash, body only) are accepted too. The diagnosis holds the first 8 characters of signatures, never a key."""
-    kunci = {}
-    if key:
-        kunci["push_key"] = key
-    for label, lain in (kunci_lain or {}).items():
-        if lain:
-            kunci[label] = lain
-    diagnosis: dict[str, Any] = {"ada_key": bool(kunci), "ada_authorization": bool(authorization), "url_dicoba": urls}
-    if key:
-        diagnosis["kunci_server"] = sidik_jari_kunci(key)
-    if not kunci or not authorization:
+    """Only provider HMAC-SHA256 of exact configured callback URL + '|' + raw body.
+
+    Prefer the explicit push key; use the partner key only when no push key is
+    configured. Never accept body-only/no-delimiter/hex-decoded key variants.
+    """
+    chosen = key or (kunci_lain or {}).get("partner_key", "")
+    diagnosis: dict[str, Any] = {"ada_key": bool(chosen), "ada_authorization": bool(authorization), "url_dicoba": urls[:1]}
+    if chosen:
+        diagnosis["kunci_server"] = sidik_jari_kunci(chosen)
+    if not chosen or not authorization or not urls:
         return False, diagnosis
-    diterima = authorization.strip().lower()
-    diagnosis["diterima"] = diterima[:8]
-    utama = key or next(iter(kunci.values()))
-    diagnosis["hitung"] = {urls[0]: tanda_tangan(utama, urls[0], body)[:8]} if urls else {}
-    for label, rahasia in kunci.items():
-        for nama_kunci, kb in _kunci_varian(rahasia).items():
-            for nama, sah in _skema(kb, urls, body).items():
-                if hmac.compare_digest(sah, diterima):
-                    diagnosis["cocok"] = f"{label} (kunci {nama_kunci}), {nama}"
-                    return True, diagnosis
-    return False, diagnosis
+    received = authorization.strip().lower()
+    diagnosis["diterima"] = received[:8]
+    if not re.fullmatch(r"[0-9a-f]{64}", received):
+        return False, diagnosis
+    expected = tanda_tangan(chosen, urls[0], body)
+    diagnosis["hitung"] = {urls[0]: expected[:8]}
+    valid = hmac.compare_digest(expected, received)
+    if valid:
+        diagnosis["cocok"] = f"url|badan  [{urls[0]}]"
+    return valid, diagnosis
+
+
+# Accommodates the provider's documented 5 min / 30 min / 3 h retry sequence.
+REPLAY_WINDOW = timedelta(hours=4)
+FUTURE_SKEW = timedelta(minutes=5)
+
+
+async def claim_push(session, body: bytes, push: dict) -> bool:
+    """Reject stale events; acknowledge identical retries without a second pull.
+
+    The receipt's unique primary key handles concurrent arrivals and survives
+    restarts independently from the bounded diagnostic log.
+    """
+    stamp = push.get("timestamp")
+    now = datetime.now(timezone.utc)
+    if type(stamp) is not int:
+        raise ValueError("Missing push timestamp")
+    try:
+        sent = datetime.fromtimestamp(stamp, timezone.utc)
+    except (ValueError, OverflowError, OSError) as exc:
+        raise ValueError("Invalid push timestamp") from exc
+    if sent < now - REPLAY_WINDOW or sent > now + FUTURE_SKEW:
+        raise ValueError("Push outside replay window")
+    await session.execute(delete(ShopeePushReceipt).where(ShopeePushReceipt.expires_at < now))
+    try:
+        async with session.begin_nested():
+            session.add(ShopeePushReceipt(
+                fingerprint=hashlib.sha256(body).hexdigest(),
+                expires_at=sent + REPLAY_WINDOW,
+            ))
+            await session.flush()
+    except IntegrityError:
+        return False
+    return True
 
 
 def urai(body: bytes) -> dict[str, Any] | None:

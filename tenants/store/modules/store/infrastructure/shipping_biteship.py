@@ -365,10 +365,10 @@ async def lacak(tracking_id: str) -> HasilLacak:
 
 
 def webhook_sah(headers: Any) -> bool:
-    """True when no webhook secret is configured, or the request carries the configured header with the right value."""
+    """Active integration requires its configured shared-secret header."""
     rahasia = os.getenv("BITESHIP_WEBHOOK_SECRET", "").strip()
     if not rahasia:
-        return True
+        return not aktif()
     nama = os.getenv("BITESHIP_WEBHOOK_KEY", "").strip() or "X-Webhook-Secret"
     diterima = str(headers.get(nama) or "")
     return hmac.compare_digest(diterima.encode(), rahasia.encode())

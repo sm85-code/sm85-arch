@@ -109,11 +109,13 @@ async def me(user: AdminStore = Depends(get_current_admin)):
 @store_admin_router.post("/auth/ganti-password")
 async def ganti_password(
     payload: ChangePasswordIn,
+    response: Response,
     session: AsyncSession = Depends(get_db_store),
     user: AdminStore = Depends(get_current_admin),
 ):
     """Any admin changes their own password; the current one is required."""
     await services.change_admin_password(session, user, payload.current_password, payload.new_password)
+    set_admin_cookie(response, issue_admin_token(user))
     return {"ok": True}
 
 

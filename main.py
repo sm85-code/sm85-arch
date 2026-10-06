@@ -10,6 +10,7 @@ import logging
 from collections import defaultdict, deque
 from contextlib import asynccontextmanager
 from time import monotonic
+from uuid import uuid4
 
 from fastapi import FastAPI, Request
 from fastapi.middleware.cors import CORSMiddleware
@@ -90,7 +91,7 @@ app.add_middleware(
     allow_credentials=True,
     allow_methods=["GET", "POST", "PUT", "PATCH", "DELETE", "OPTIONS"],
     allow_headers=["Content-Type", "Authorization", "X-CSRF-Token", "X-Requested-With"],
-    expose_headers=["Content-Disposition"],
+    expose_headers=["Content-Disposition", "X-Request-ID"],
 )
 
 app.include_router(madrasah_router, prefix="/api/madrasah", tags=["Madrasah"])
@@ -146,15 +147,14 @@ class CsrfOriginMiddleware(BaseHTTPMiddleware):
                 return response
         try:
             response = await call_next(request)
-        except Exception as exc:
-            logger.exception("unhandled method=%s path=%s", request.method, request.url.path)
-            content = {"detail": "Terjadi kesalahan internal pada server"}
-            # bumi_lestari: jangan bocorkan detail exception ke klien (cukup di log server).
-            if not request.url.path.startswith("/api/bumi-lestari"):
-                content.update(
-                    error_type=type(exc).__name__, error_message=str(exc)[:500], path=request.url.path
-                )
-            response = JSONResponse(status_code=500, content=content)
+        except Exception:
+            tracking_id = uuid4().hex
+            logger.exception("unhandled tracking_id=%s method=%s", tracking_id, request.method)
+            response = JSONResponse(
+                status_code=500,
+                content={"detail": "Terjadi kesalahan internal pada server", "tracking_id": tracking_id},
+                headers={"X-Request-ID": tracking_id},
+            )
             _apply_cors(response, request.headers.get("origin"))
         if request.method in {"POST", "PUT", "PATCH", "DELETE"}:
             logger.info(

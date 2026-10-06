@@ -852,7 +852,7 @@ async def oauth_shopee_start(
     akun_id: str = Query(...),
     redirect_uri: str | None = None,
     session: AsyncSession = Depends(get_db_marketplace_erp),
-    _: UserMarketplaceErp = Depends(require_roles_marketplace_erp(*OWNER_ONLY)),
+    user: UserMarketplaceErp = Depends(require_roles_marketplace_erp(*OWNER_ONLY)),
 ):
     """Return the Shopee authorize URL. FE should redirect the browser there.
 
@@ -864,35 +864,35 @@ async def oauth_shopee_start(
     akun = await services.get_akun_marketplace(session, akun_id)
     if akun.platform != "shopee":
         raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Akun bukan platform shopee")
-    # Prefer caller-supplied redirect; else env; append akun_id path if using API callback.
-    base_redirect = (redirect_uri or os.getenv("SHOPEE_REDIRECT_URI") or "").strip()
+    from tenants.marketplace_erp.modules.marketplace_erp.infrastructure import oauth_security
+    from tenants.marketplace_erp.modules.marketplace_erp.infrastructure.token_crypto import keyring
+
+    keyring()  # do not authorize a shop if token storage cannot encrypt its credentials
+    configured = (os.getenv("SHOPEE_REDIRECT_URI") or "").strip()
+    base_redirect = (redirect_uri or configured).strip()
     if not base_redirect:
-        raise HTTPException(
-            status_code=status.HTTP_501_NOT_IMPLEMENTED,
-            detail="SHOPEE_REDIRECT_URI belum diisi",
-        )
-    # If redirect points at our callback root, ensure akun_id is in the path.
-    if base_redirect.rstrip("/").endswith("/oauth/shopee/callback"):
-        base_redirect = f"{base_redirect.rstrip('/')}/{akun_id}"
-    try:
-        url = erp_shopee.build_authorize_url(redirect_uri=base_redirect)
-    except HTTPException:
-        raise
+        raise HTTPException(status_code=501, detail="SHOPEE_REDIRECT_URI belum diisi")
+    nonce = await oauth_security.issue_nonce(session, akun_id, user)
+    target = oauth_security.callback_url(base_redirect, akun_id, nonce, configured)
+    url = erp_shopee.build_authorize_url(redirect_uri=target)
     return OAuthStartOut(platform="shopee", akun_id=akun_id, authorize_url=url)
 
 
 @marketplace_erp_router.get("/oauth/shopee/callback/{akun_id}")
+@marketplace_erp_router.get("/oauth/shopee/callback/{akun_id}/{nonce}")
 async def oauth_shopee_callback(
     akun_id: str,
     code: str = Query(...),
     shop_id: str | None = Query(None),
     main_account_id: str | None = Query(None),
+    nonce: str | None = None,
     session: AsyncSession = Depends(get_db_marketplace_erp),
+    user: UserMarketplaceErp = Depends(require_roles_marketplace_erp(*OWNER_ONLY)),
 ):
     """Exchange OAuth code for tokens and persist on AkunMarketplace.
 
-    Public callback (Shopee redirects here). akun_id in the path binds the
-    shop to the pending local row created before /oauth/shopee/start.
+    Requires the initiating owner session and its unused, unexpired nonce.
+    The nonce is carried inside Shopee's redirect path.
     Shopee returns ``shop_id`` when a shop account authorised, or ``main_account_id``
     when a main account authorised (possibly several shops at once).
     """
@@ -908,6 +908,9 @@ async def oauth_shopee_callback(
     akun = await services.get_akun_marketplace(session, akun_id)
     if akun.platform != "shopee":
         raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Akun bukan platform shopee")
+
+    from tenants.marketplace_erp.modules.marketplace_erp.infrastructure import oauth_security
+    await oauth_security.consume_nonce(session, akun_id, nonce, user)
 
     if main_account_id:
         payload = await erp_shopee.exchange_token(code=code, main_account_id=str(main_account_id))
@@ -1020,6 +1023,14 @@ async def terima_push_shopee(
         await services.catat_push(session, valid=False, ringkas=ringkas, hasil=hasil, catatan=_json.dumps(diagnosis), badan=badan)
         await session.commit()  # the log must survive the 401
         raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="Tanda tangan push tidak valid")
+    try:
+        fresh = await shopee_push.claim_push(session, badan, push)
+    except ValueError:
+        await services.catat_push(session, valid=False, ringkas=ringkas, hasil="timestamp_tidak_valid")
+        await session.commit()
+        raise HTTPException(status_code=401, detail="Waktu push tidak valid") from None
+    if not fresh:
+        return Response(status_code=status.HTTP_200_OK)
     if ringkas["kode"] in shopee_push.KODE_PESANAN and ringkas["shop_id"]:
         await services.catat_push(session, valid=True, ringkas=ringkas, hasil="diproses", badan=badan)
         await session.commit()  # logged before the background pull starts

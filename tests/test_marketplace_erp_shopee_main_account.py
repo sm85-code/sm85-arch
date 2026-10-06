@@ -9,6 +9,8 @@ from tenants.marketplace_erp.modules.marketplace_erp.application import services
 from tenants.marketplace_erp.modules.marketplace_erp.application.schemas import AkunMarketplaceIn
 from tenants.marketplace_erp.modules.marketplace_erp.infrastructure.adapters import erp_shopee
 from tenants.marketplace_erp.modules.marketplace_erp.infrastructure.database import MarketplaceErpBase
+from tenants.marketplace_erp.modules.marketplace_erp.infrastructure import oauth_security
+from tenants.marketplace_erp.modules.marketplace_erp.infrastructure.models import UserMarketplaceErp
 
 TOKENS = {
     "access_token": "at",
@@ -27,6 +29,13 @@ async def session():
     async with async_sessionmaker(engine, class_=AsyncSession, expire_on_commit=False)() as s:
         yield s
     await engine.dispose()
+
+
+async def _authorization(session, akun):
+    user = UserMarketplaceErp(nama="Owner", username="owner", password_hash="x", role="owner")
+    session.add(user)
+    await session.flush()
+    return user, await oauth_security.issue_nonce(session, akun.id, user)
 
 
 async def _placeholder(session, nama="Placeholder"):
@@ -88,7 +97,8 @@ async def test_callback_main_account_flow(session, monkeypatch):
     monkeypatch.setattr(erp_shopee, "get_shop_name", fake_name)
     akun = await _placeholder(session)
 
-    out = await router.oauth_shopee_callback(akun.id, code="c", shop_id=None, main_account_id="42", session=session)
+    user, nonce = await _authorization(session, akun)
+    out = await router.oauth_shopee_callback(akun.id, code="c", shop_id=None, main_account_id="42", nonce=nonce, session=session, user=user)
 
     assert seen == {"code": "c", "main_account_id": "42"}
     assert out["ok"] is True and len(out["toko"]) == 3
@@ -103,7 +113,8 @@ async def test_callback_shop_flow_unchanged(session, monkeypatch):
 
     monkeypatch.setattr(erp_shopee, "exchange_token", fake_exchange)
     akun = await _placeholder(session)
-    out = await router.oauth_shopee_callback(akun.id, code="c", shop_id="555", main_account_id=None, session=session)
+    user, nonce = await _authorization(session, akun)
+    out = await router.oauth_shopee_callback(akun.id, code="c", shop_id="555", main_account_id=None, nonce=nonce, session=session, user=user)
     assert out["id_toko_eksternal"] == "555" and out["status"] == "terhubung"
 
 

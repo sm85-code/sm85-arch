@@ -36,6 +36,7 @@ DEFAULT_PASSWORD = "password123"
 # are self-healed here. Postgres-only syntax -- skipped on SQLite (tests
 # build the schema fresh from metadata anyway).
 _SELF_HEAL_COLUMNS = (
+    "ALTER TABLE IF EXISTS mpe_users ADD COLUMN IF NOT EXISTS session_version INTEGER NOT NULL DEFAULT 0",
     "ALTER TABLE IF EXISTS mpe_users "
     "ADD COLUMN IF NOT EXISTS must_change_password BOOLEAN NOT NULL DEFAULT FALSE",
     # Usernames: the email is no longer required (it is an optional contact, also accepted at login).
@@ -205,6 +206,11 @@ async def _create_schema(engine) -> None:
     async with engine.begin() as conn:
         await conn.run_sync(MarketplaceErpBase.metadata.create_all)
         await _self_heal_columns(conn)
+    # Commit additive schema changes even when the encryption key is not ready.
+    # Token migration itself remains atomic and fails closed.
+    from tenants.marketplace_erp.modules.marketplace_erp.infrastructure.token_crypto import migrate_token_storage
+    async with engine.begin() as conn:
+        await migrate_token_storage(conn)
 
 
 async def ensure_marketplace_erp_schema() -> None:

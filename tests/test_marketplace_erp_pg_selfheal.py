@@ -60,7 +60,9 @@ async def test_self_heal_adds_must_change_password_column():
                     "WHERE table_schema = :s AND table_name = 'mpe_users'"
                 ), {"s": schema})
             }
-            assert "must_change_password" in cols
+            assert {"must_change_password", "session_version"} <= cols
+            version = (await conn.execute(text("SELECT session_version FROM mpe_users WHERE id='u1'"))).scalar_one()
+            assert version == 0
             flag = (await conn.execute(text("SELECT must_change_password FROM mpe_users WHERE id='u1'"))).scalar_one()
             assert flag is False
     except (OperationalError, InterfaceError, OSError, TimeoutError) as exc:

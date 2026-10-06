@@ -18,6 +18,7 @@ from sqlalchemy import Boolean, Date, DateTime, ForeignKey, Integer, Numeric, St
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 
 from tenants.marketplace_erp.modules.marketplace_erp.infrastructure.database import MarketplaceErpBase
+from tenants.marketplace_erp.modules.marketplace_erp.infrastructure.token_crypto import EncryptedToken
 
 
 def _uuid() -> str:
@@ -57,6 +58,7 @@ class UserMarketplaceErp(MarketplaceErpBase):
     # Optional contact email (also accepted at login). The owner of the account sets it in their profile.
     email: Mapped[Optional[str]] = mapped_column(String(255), nullable=True, unique=True, index=True)
     password_hash: Mapped[str] = mapped_column(String(255), nullable=False)
+    session_version: Mapped[int] = mapped_column(Integer, nullable=False, default=0, server_default="0")
     role: Mapped[str] = mapped_column(String(32), nullable=False, default="owner")
     # Added after Tahap 2: existing Postgres databases get this column via
     # seeder.ensure_marketplace_erp_schema() (ALTER TABLE ... ADD COLUMN IF
@@ -70,7 +72,7 @@ class UserMarketplaceErp(MarketplaceErpBase):
 
 class AkunMarketplace(MarketplaceErpBase):
     """One row = one shop authorized (or pending) on one platform.
-    Credentials stay as plain columns; never return tokens in list/summary."""
+    Credentials are encrypted at the SQL boundary; never return tokens in list/summary."""
 
     __tablename__ = "mpe_akun_marketplace"
 
@@ -78,8 +80,8 @@ class AkunMarketplace(MarketplaceErpBase):
     platform: Mapped[str] = mapped_column(String(16), nullable=False, index=True)
     nama_toko: Mapped[str] = mapped_column(String(255), nullable=False)
     id_toko_eksternal: Mapped[Optional[str]] = mapped_column(String(255), nullable=True, index=True)
-    access_token: Mapped[Optional[str]] = mapped_column(Text, nullable=True)
-    refresh_token: Mapped[Optional[str]] = mapped_column(Text, nullable=True)
+    access_token: Mapped[Optional[str]] = mapped_column(EncryptedToken(), nullable=True)
+    refresh_token: Mapped[Optional[str]] = mapped_column(EncryptedToken(), nullable=True)
     token_kedaluwarsa: Mapped[Optional[datetime]] = mapped_column(DateTime(timezone=True), nullable=True)
     status: Mapped[str] = mapped_column(String(16), nullable=False, default="belum_terhubung")
     catatan: Mapped[Optional[str]] = mapped_column(Text, nullable=True)
@@ -579,3 +581,25 @@ class KatalogShopee(MarketplaceErpBase):
     diambil_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=_utcnow)
     dikirim_toko_id: Mapped[Optional[str]] = mapped_column(String(64), nullable=True)
     dikirim_at: Mapped[Optional[datetime]] = mapped_column(DateTime(timezone=True), nullable=True)
+
+
+class ShopeeOAuthRequest(MarketplaceErpBase):
+    """Only a nonce hash is persisted; bind authorization to account and owner session."""
+
+    __tablename__ = "mpe_shopee_oauth_requests"
+
+    nonce_hash: Mapped[str] = mapped_column(String(64), primary_key=True)
+    akun_id: Mapped[str] = mapped_column(String(64), nullable=False, index=True)
+    user_id: Mapped[str] = mapped_column(String(64), nullable=False)
+    session_version: Mapped[int] = mapped_column(Integer, nullable=False)
+    expires_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False, index=True)
+    consumed: Mapped[bool] = mapped_column(Boolean, nullable=False, default=False)
+
+
+class ShopeePushReceipt(MarketplaceErpBase):
+    """Durable deduplication independent of the diagnostic log's retention limit."""
+
+    __tablename__ = "mpe_shopee_push_receipts"
+
+    fingerprint: Mapped[str] = mapped_column(String(64), primary_key=True)
+    expires_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False, index=True)

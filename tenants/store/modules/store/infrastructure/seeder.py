@@ -75,6 +75,8 @@ async def ensure_store_schema() -> None:
         return
     async with engine.begin() as conn:
         await conn.run_sync(StoreBase.metadata.create_all)
+        for table in ("store_admin_users", "store_buyer_users"):
+            await conn.execute(text(f"ALTER TABLE {table} ADD COLUMN IF NOT EXISTS session_version INTEGER NOT NULL DEFAULT 0"))
         await conn.execute(text("ALTER TABLE store_produk ADD COLUMN IF NOT EXISTS slug VARCHAR(160)"))
         await conn.execute(text("CREATE UNIQUE INDEX IF NOT EXISTS ix_store_produk_slug ON store_produk (slug)"))
         # Structured address (province > city > district > village + Kemendagri village code).

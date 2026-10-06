@@ -471,6 +471,9 @@ async def test_admin_settings_choose_couriers_and_pickup_address(session, monkey
 
 def test_webhook_secret_is_checked_only_when_configured(monkeypatch):
     monkeypatch.delenv("BITESHIP_WEBHOOK_SECRET", raising=False)
+    monkeypatch.setattr(bs, "aktif", lambda: True)
+    assert not bs.webhook_sah({})
+    monkeypatch.setattr(bs, "aktif", lambda: False)
     assert bs.webhook_sah({})
     monkeypatch.setenv("BITESHIP_WEBHOOK_SECRET", "s3cret")
     assert not bs.webhook_sah({})
