@@ -1,18 +1,21 @@
 """Versioned startup migration and identical generated PostgreSQL SQL."""
 from __future__ import annotations
 
-from sqlalchemy import select, text
+from sqlalchemy import text
 from sqlalchemy.dialects import postgresql
 from sqlalchemy.schema import CreateIndex, CreateTable
 from sqlalchemy.sql.ddl import sort_tables
 
 from tenants.bumi_lestari.modules.bumi_lestari.infrastructure.models import BlUser  # noqa: F401
-from tenants.bumi_lestari.modules.bumi_lestari.infrastructure.models_keu import KEU_MODELS, KeuVendorSlot
+from tenants.bumi_lestari.modules.bumi_lestari.infrastructure.models_keu import KEU_MODELS
 
 VERSION = "20261006_keu_initial"
 
-# Historical DDL is immutable; new product columns belong to the additive migration.
+# Released DDL/invariants are immutable; product/vendor changes use additive migrations.
 INITIAL_PRODUCT_DDL = "CREATE TABLE keu_produk (\n\tid VARCHAR(64) NOT NULL, \n\tsku VARCHAR(128) NOT NULL, \n\tnama VARCHAR(255) NOT NULL, \n\tjenis VARCHAR(16) NOT NULL, \n\tbiaya_acuan NUMERIC(20, 2) DEFAULT '0' NOT NULL, \n\taktif BOOLEAN DEFAULT 'true' NOT NULL, \n\tPRIMARY KEY (id), \n\tCONSTRAINT ck_keu_produk_jenis CHECK (jenis IN ('kayu', 'non_kayu')), \n\tCONSTRAINT ck_keu_produk_biaya CHECK (biaya_acuan >= 0), \n\tUNIQUE (sku)\n);"
+
+INITIAL_VENDOR_DDL = "CREATE TABLE keu_vendor (\n\tid VARCHAR(64) NOT NULL, \n\tnama VARCHAR(255) NOT NULL, \n\tjenis VARCHAR(16) NOT NULL, \n\tkontak VARCHAR(255) DEFAULT '' NOT NULL, \n\taktif BOOLEAN DEFAULT 'true' NOT NULL, \n\tcreated_at TIMESTAMP WITH TIME ZONE DEFAULT now() NOT NULL, \n\tPRIMARY KEY (id), \n\tCONSTRAINT ck_keu_vendor_jenis CHECK (jenis IN ('tukang_kayu', 'supplier'))\n);"
+INITIAL_VENDOR_SLOT_DDL = "CREATE TABLE keu_vendor_slot (\n\tjenis VARCHAR(16) NOT NULL, \n\tnomor INTEGER NOT NULL, \n\tvendor_id VARCHAR(64), \n\tPRIMARY KEY (jenis, nomor), \n\tCONSTRAINT uq_keu_vendor_slot_vendor UNIQUE (vendor_id), \n\tCONSTRAINT ck_keu_vendor_slot CHECK ((jenis = 'tukang_kayu' AND nomor BETWEEN 1 AND 5) OR (jenis = 'supplier' AND nomor BETWEEN 1 AND 3)), \n\tFOREIGN KEY(vendor_id) REFERENCES keu_vendor (id) ON DELETE RESTRICT\n);"
 
 # Statement boundaries are explicit: asyncpg executes exactly one statement per call.
 INVARIANTS = [
@@ -128,9 +131,11 @@ def sql() -> str:
                   "CREATE TABLE IF NOT EXISTS keu_schema_versions (version varchar(64) PRIMARY KEY, applied_at timestamptz NOT NULL DEFAULT now());",
                   f"DO $$ BEGIN IF EXISTS (SELECT 1 FROM keu_schema_versions WHERE version = '{VERSION}') THEN RAISE EXCEPTION 'Migration already applied'; END IF; END $$;"]
     for table in sort_tables([model.__table__ for model in KEU_MODELS]):
-        statements.append(INITIAL_PRODUCT_DDL if table.name == "keu_produk" else str(CreateTable(table).compile(dialect=dialect)).strip() + ";")
+        historical = {"keu_produk": INITIAL_PRODUCT_DDL, "keu_vendor": INITIAL_VENDOR_DDL, "keu_vendor_slot": INITIAL_VENDOR_SLOT_DDL}
+        statements.append(historical.get(table.name, str(CreateTable(table).compile(dialect=dialect)).strip() + ";"))
         for index in sorted(table.indexes, key=lambda obj: obj.name):
             statements.append(str(CreateIndex(index).compile(dialect=dialect)).strip() + ";")
+    # Historical artifact only; current startup never seeds a fixed set of slots.
     for jenis, count in (("tukang_kayu", 5), ("supplier", 3)):
         statements.append(f"INSERT INTO keu_vendor_slot (jenis, nomor) SELECT '{jenis}', n FROM generate_series(1, {count}) n;")
     statements.extend(statement.strip() + ";" for statement in INVARIANTS)
@@ -145,18 +150,18 @@ async def ensure_keu_schema(conn) -> None:
         exists = (await conn.execute(text("SELECT 1 FROM keu_schema_versions WHERE version=:v"), {"v": VERSION})).first()
         if exists:
             from .keu_product_migration import ensure_product_schema
+            from .keu_vendor_migration import ensure_vendor_schema
             await ensure_product_schema(conn)
+            await ensure_vendor_schema(conn)
             return
     # create_all is additive. Existing tenant tables must be initialized by the BUMI seeder first.
     await conn.run_sync(lambda sync: KEU_MODELS[0].metadata.create_all(sync, tables=[m.__table__ for m in KEU_MODELS]))
-    for jenis, count in (("tukang_kayu", 5), ("supplier", 3)):
-        for number in range(1, count + 1):
-            if not (await conn.execute(select(KeuVendorSlot).where(KeuVendorSlot.jenis == jenis, KeuVendorSlot.nomor == number))).first():
-                await conn.execute(KeuVendorSlot.__table__.insert().values(jenis=jenis, nomor=number))
     if conn.dialect.name == "postgresql":
         for statement in INVARIANTS:
             await conn.execute(text(statement))
         await conn.execute(text("INSERT INTO keu_schema_versions(version) VALUES (:v)"), {"v": VERSION})
 
     from .keu_product_migration import ensure_product_schema
+    from .keu_vendor_migration import ensure_vendor_schema
     await ensure_product_schema(conn)
+    await ensure_vendor_schema(conn)

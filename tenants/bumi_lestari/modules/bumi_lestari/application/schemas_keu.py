@@ -8,7 +8,7 @@ from datetime import date
 from decimal import Decimal
 from typing import Annotated, Literal
 
-from pydantic import AwareDatetime, BaseModel, ConfigDict, Field, JsonValue, StrictInt, StringConstraints, field_validator, model_validator
+from pydantic import AliasChoices, AwareDatetime, BaseModel, ConfigDict, Field, JsonValue, StrictBool, StrictInt, StringConstraints, field_validator, model_validator
 
 Id = Annotated[str, StringConstraints(strip_whitespace=True, min_length=1, max_length=64)]
 Ref = Annotated[str, StringConstraints(strip_whitespace=True, min_length=1, max_length=255)]
@@ -44,21 +44,41 @@ class PelangganIn(InputBase):
 
 
 class VendorIn(InputBase):
+    kode: str | None = Field(default=None, min_length=1, max_length=128)
     nama: str = Field(min_length=1, max_length=255)
-    jenis: Literal["tukang_kayu", "supplier"]
+    jenis: Literal["tukang_kayu", "supplier"] = Field(validation_alias=AliasChoices("jenis", "tipe"))
     kontak: str = Field(default="", max_length=255)
+    alamat: str = Field(default="", max_length=2000)
+    keterangan: str = Field(default="", max_length=2000)
+    aktif: StrictBool = True
+
+    @field_validator("jenis", mode="before")
+    @classmethod
+    def vendor_kind(cls, value):
+        return {"kayu": "tukang_kayu", "non_kayu": "supplier"}.get(value, value) if isinstance(value, str) else value
+
+
+class VendorEditIn(InputBase):
+    kode: str | None = Field(default=None, min_length=1, max_length=128)
+    nama: str | None = Field(default=None, min_length=1, max_length=255)
+    jenis: Literal["tukang_kayu", "supplier"] | None = Field(default=None, validation_alias=AliasChoices("jenis", "tipe"))
+    kontak: str | None = Field(default=None, max_length=255)
+    alamat: str | None = Field(default=None, max_length=2000)
+    keterangan: str | None = Field(default=None, max_length=2000)
+    aktif: StrictBool | None = None
+    vendor_kind = field_validator("jenis", mode="before")(VendorIn.vendor_kind.__func__)
+
+    @model_validator(mode="after")
+    def non_null_updates(self):
+        if not self.model_fields_set or any(getattr(self, key) is None for key in self.model_fields_set):
+            raise ValueError("Isi sedikitnya satu perubahan; nilai null tidak diizinkan")
+        return self
 
 
 class VendorSlotIn(InputBase):
     jenis: Literal["tukang_kayu", "supplier"]
-    nomor: Annotated[StrictInt, Field(ge=1, le=5)]
+    nomor: Annotated[StrictInt, Field(ge=1, le=2147483647)]
     vendor_id: Id
-
-    @model_validator(mode="after")
-    def batas_slot(self):
-        if self.jenis == "supplier" and self.nomor > 3:
-            raise ValueError("Slot supplier hanya 1 sampai 3")
-        return self
 
 
 class VarianIn(InputBase):

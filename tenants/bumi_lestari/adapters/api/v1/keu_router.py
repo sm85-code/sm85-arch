@@ -79,6 +79,21 @@ for _name, _schema in (("saluran", sc.SaluranIn), ("akun", sc.AkunIn), ("pelangg
     register_master(_name, svc.MASTERS[_name], _schema)
 
 
+@router.get("/vendor/{key}")
+async def vendor_detail(key: str, session: AsyncSession = DB):
+    return svc.record(await svc.get(session, m.KeuVendor, key))
+
+
+@router.patch("/vendor/{key}")
+async def save_vendor(key: str, payload: sc.VendorEditIn, session: AsyncSession = DB, actor: BlUser = ACTOR):
+    return await svc.save_vendor(session, actor, key, payload)
+
+
+@router.delete("/vendor/{key}")
+async def deactivate_vendor(key: str, session: AsyncSession = DB, actor: BlUser = ACTOR):
+    return await svc.deactivate_vendor(session, actor, key)
+
+
 @router.patch("/produk/{key}")
 async def save_product(key: str, payload: sc.ProdukEditIn, session: AsyncSession = DB, actor: BlUser = ACTOR):
     return await svc.save_product(session, actor, key, payload)
