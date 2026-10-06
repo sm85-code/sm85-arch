@@ -65,20 +65,35 @@ class KeuPelanggan(BumiLestariBase):
 
 class KeuVendor(BumiLestariBase):
     __tablename__ = "keu_vendor"
-    __table_args__ = (CheckConstraint("jenis IN ('tukang_kayu', 'supplier')", name="ck_keu_vendor_jenis"),)
+    __table_args__ = (
+        CheckConstraint("jenis IN ('tukang_kayu', 'supplier')", name="ck_keu_vendor_jenis"),
+        CheckConstraint("length(trim(kode)) > 0", name="ck_keu_vendor_kode"),
+    )
     id: Mapped[str] = pk()
+    kode: Mapped[str] = mapped_column(String(128), nullable=False, unique=True, default=lambda: f"VND-{new_id()}")
     nama: Mapped[str] = mapped_column(String(255), nullable=False)
     jenis: Mapped[str] = mapped_column(String(16), nullable=False)
     kontak: Mapped[str] = mapped_column(String(255), nullable=False, default="", server_default="")
+    alamat: Mapped[str] = mapped_column(Text, nullable=False, default="", server_default="")
+    keterangan: Mapped[str] = mapped_column(Text, nullable=False, default="", server_default="")
     aktif: Mapped[bool] = mapped_column(Boolean, nullable=False, default=True, server_default="true")
     created_at: Mapped[datetime] = created()
+
+    @property
+    def tipe(self) -> str:
+        # Preserve existing stored kinds and allocation references across upgrades.
+        return "kayu" if self.jenis == "tukang_kayu" else "non_kayu"
+
+    @property
+    def status(self) -> str:
+        return "aktif" if self.aktif else "non_aktif"
 
 
 class KeuVendorSlot(BumiLestariBase):
     __tablename__ = "keu_vendor_slot"
     __table_args__ = (
         UniqueConstraint("vendor_id", name="uq_keu_vendor_slot_vendor"),
-        CheckConstraint("(jenis = 'tukang_kayu' AND nomor BETWEEN 1 AND 5) OR (jenis = 'supplier' AND nomor BETWEEN 1 AND 3)", name="ck_keu_vendor_slot"),
+        CheckConstraint("jenis IN ('tukang_kayu', 'supplier') AND nomor >= 1", name="ck_keu_vendor_slot"),
     )
     jenis: Mapped[str] = mapped_column(String(16), primary_key=True)
     nomor: Mapped[int] = mapped_column(Integer, primary_key=True)

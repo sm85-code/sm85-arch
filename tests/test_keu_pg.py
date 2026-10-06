@@ -40,7 +40,7 @@ async def pg():
             await conn.execute(text("INSERT INTO bl_kategori(id,nama,jenis,aktif) VALUES('k','Penjualan','pemasukan',true)"))
             await conn.execute(text("INSERT INTO keu_saluran(id,nama,sistem,akun_ref,aktif) VALUES('s','Manual','manual','manual',true)"))
             await conn.execute(text("INSERT INTO keu_produk(id,sku,nama,jenis) VALUES('p','P','Kayu','kayu')"))
-            await conn.execute(text("INSERT INTO keu_vendor(id,nama,jenis) VALUES('v1','Test 1','tukang_kayu'),('v2','Test 2','tukang_kayu')"))
+            await conn.execute(text("INSERT INTO keu_vendor(id,kode,nama,jenis) VALUES('v1','V1','Test 1','tukang_kayu'),('v2','V2','Test 2','tukang_kayu')"))
             await conn.execute(text("UPDATE keu_vendor_slot SET vendor_id='v1' WHERE jenis='tukang_kayu' AND nomor=1"))
             await conn.execute(text("UPDATE keu_vendor_slot SET vendor_id='v2' WHERE jenis='tukang_kayu' AND nomor=2"))
             await conn.execute(text("INSERT INTO keu_pesanan(id,saluran_id,sumber_ref,nomor,tanggal,status_sumber,total_sumber) VALUES('o','s','o','o','2026-10-06','manual',20)"))
@@ -81,7 +81,7 @@ async def test_concurrent_allocations_cannot_exceed_quantity(pg):
             await conn.execute(text("UPDATE keu_item SET qty=1 WHERE id='i'"))
     with pytest.raises(IntegrityError):
         async with pg.begin() as conn:
-            await conn.execute(text("UPDATE keu_vendor SET jenis='supplier' WHERE id='v1'"))
+            await conn.execute(text("UPDATE keu_vendor SET jenis='supplier' WHERE id=(SELECT vendor_id FROM keu_alokasi_vendor LIMIT 1)"))
 
 
 @pytest.mark.asyncio
@@ -145,6 +145,87 @@ async def test_concurrent_source_products_share_one_child_sku(pg):
     with pytest.raises(IntegrityError):
         async with pg.begin() as conn:
             await conn.execute(text("INSERT INTO keu_alokasi_vendor(id,item_id,vendor_id,qty,biaya_satuan,dibuat_oleh) VALUES('blocked','i','v1',1,5,'u')"))
+
+
+@pytest.mark.asyncio
+async def test_dynamic_vendor_migration_preserves_legacy_ids_codes_and_history(pg):
+    from tenants.bumi_lestari.modules.bumi_lestari.infrastructure.keu_vendor_migration import VERSION, sql as vendor_sql
+    assert Path("keu_dynamic_vendors.sql").read_text() == vendor_sql()
+    async with pg.begin() as conn:
+        await conn.execute(text("INSERT INTO keu_alokasi_vendor(id,item_id,vendor_id,qty,biaya_satuan,dibuat_oleh) VALUES('historic','i','v1',1,5,'u')"))
+        await conn.execute(text("INSERT INTO keu_vendor(id,kode,nama,jenis,kontak,aktif) VALUES('legacy-free','MANUAL','Bebas','supplier','08123',false)"))
+        for column in ["kode", "alamat", "keterangan"]:
+            await conn.execute(text(f"ALTER TABLE keu_vendor DROP COLUMN {column} CASCADE"))
+        await conn.execute(text("DELETE FROM keu_schema_versions WHERE version=:v"), {"v": VERSION})
+        # Simulate the released, slot-constrained guards, then run the actual new artifact.
+        for statement in [INVARIANTS[3], INVARIANTS[6]]:
+            await conn.execute(text(statement))
+        native = await conn.get_raw_connection()
+        script = vendor_sql().replace("BEGIN;\n\n", "", 1).rsplit("COMMIT;", 1)[0]
+        await native.driver_connection.execute(script)
+        await native.driver_connection.execute(script)
+        await ensure_keu_schema(conn)
+        rows = (await conn.execute(text("SELECT id,kode,nama,jenis,kontak,aktif,alamat,keterangan FROM keu_vendor ORDER BY id"))).mappings().all()
+        mapped = {row["id"]: row for row in rows}
+        assert mapped["v1"]["kode"] == "tk-1" and mapped["v2"]["kode"] == "tk-2"
+        assert mapped["legacy-free"]["kode"] == "VND-legacy-free" and not mapped["legacy-free"]["aktif"]
+        assert mapped["legacy-free"]["kontak"] == "08123" and mapped["legacy-free"]["alamat"] == ""
+        assert (await conn.execute(text("SELECT vendor_id,qty,biaya_satuan FROM keu_alokasi_vendor WHERE id='historic'"))).one() == ("v1", 1, 5)
+        assert (await conn.execute(text("SELECT vendor_id FROM keu_vendor_slot WHERE jenis='tukang_kayu' AND nomor=1"))).scalar_one() == "v1"
+        # A dynamic vendor with no slot can allocate immediately after the migration.
+        await conn.execute(text("UPDATE keu_vendor SET aktif=true WHERE id='legacy-free'"))
+        await conn.execute(text("INSERT INTO keu_vendor(id,kode,nama,jenis) VALUES('free','FREE','Tukang tanpa slot','tukang_kayu')"))
+        await conn.execute(text("INSERT INTO keu_alokasi_vendor(id,item_id,vendor_id,qty,biaya_satuan,dibuat_oleh) VALUES('free-allocation','i','free',1,5,'u')"))
+
+
+@pytest.mark.asyncio
+async def test_dynamic_vendor_database_guards_and_no_slot_ceiling(pg):
+    async with pg.begin() as conn:
+        for index in range(12):
+            await conn.execute(text("INSERT INTO keu_vendor(id,kode,nama,jenis) VALUES(:id,:code,'Dinamis','tukang_kayu')"), {"id": f"dyn-{index}", "code": f"DYN-{index}"})
+        await conn.execute(text("INSERT INTO keu_vendor_slot(jenis,nomor,vendor_id) VALUES('tukang_kayu',99,'dyn-0')"))
+        await conn.execute(text("INSERT INTO keu_alokasi_vendor(id,item_id,vendor_id,qty,biaya_satuan,dibuat_oleh) VALUES('noslot','i','dyn-11',1,5,'u')"))
+        await conn.execute(text("UPDATE keu_vendor SET aktif=false WHERE id='dyn-11'"))
+        assert (await conn.execute(text("SELECT count(*) FROM keu_alokasi_vendor WHERE vendor_id='dyn-11'"))).scalar_one() == 1
+    for statement in [
+        "INSERT INTO keu_vendor(id,kode,nama,jenis) VALUES('dup','DYN-11','Duplikat','supplier')",
+        "UPDATE keu_vendor SET kode=' ' WHERE id='dyn-11'",
+        "UPDATE keu_vendor SET jenis='supplier' WHERE id='dyn-11'",
+        "INSERT INTO keu_alokasi_vendor(id,item_id,vendor_id,qty,biaya_satuan,dibuat_oleh) VALUES('inactive','i','dyn-11',1,5,'u')",
+        "INSERT INTO keu_alokasi_vendor(id,item_id,vendor_id,qty,biaya_satuan,dibuat_oleh) VALUES('wrong-kind','i','v2',1,5,'u')",
+    ]:
+        if "wrong-kind" in statement:
+            async with pg.begin() as conn:
+                await conn.execute(text("UPDATE keu_vendor_slot SET vendor_id=NULL WHERE vendor_id='v2'"))
+                await conn.execute(text("UPDATE keu_vendor SET jenis='supplier' WHERE id='v2'"))
+        with pytest.raises(IntegrityError):
+            async with pg.begin() as conn:
+                await conn.execute(text(statement))
+
+
+@pytest.mark.asyncio
+async def test_vendor_deactivation_serializes_with_allocation(pg):
+    from fastapi import HTTPException
+    from tenants.bumi_lestari.modules.bumi_lestari.application import keu_services as svc, schemas_keu as sc
+    from tenants.bumi_lestari.modules.bumi_lestari.infrastructure.models import BlUser
+    maker = async_sessionmaker(pg, expire_on_commit=False)
+    async def attempt(deactivate):
+        try:
+            async with maker.begin() as session:
+                user = await session.get(BlUser, "u")
+                if deactivate:
+                    await svc.deactivate_vendor(session, user, "v1")
+                else:
+                    await svc.allocate_vendor(session, user, sc.AlokasiVendorIn(item_id="i", vendor_id="v1", qty=1, biaya_satuan="5"))
+            return True
+        except HTTPException as error:
+            assert error.status_code == 422
+            return False
+    deactivated, allocated = await asyncio.wait_for(asyncio.gather(attempt(True), attempt(False)), timeout=15)
+    assert deactivated
+    async with pg.begin() as conn:
+        assert not (await conn.execute(text("SELECT aktif FROM keu_vendor WHERE id='v1'"))).scalar_one()
+        assert (await conn.execute(text("SELECT count(*) FROM keu_alokasi_vendor WHERE vendor_id='v1'"))).scalar_one() == int(allocated)
 
 
 @pytest.mark.asyncio

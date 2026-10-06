@@ -35,7 +35,10 @@ def json_value(value):
 
 
 def record(obj):
-    return {col.name: json_value(getattr(obj, col.name)) for col in obj.__table__.columns}
+    result = {col.name: json_value(getattr(obj, col.name)) for col in obj.__table__.columns}
+    if isinstance(obj, m.KeuVendor):
+        result.update(tipe=obj.tipe, status=obj.status)
+    return result
 
 
 async def get(session, model, key, *, lock=False):
@@ -119,6 +122,8 @@ async def page(session, model, limit=50, offset=0, search=None, status="pengerja
         if field is not None:
             escaped = search.replace("\\", "\\\\").replace("%", "\\%").replace("_", "\\_")
             fields = [field] if model is not m.KeuProduk else [model.nama, model.nama_asli, model.sku, model.sku_induk]
+            if model is m.KeuVendor:
+                fields = [model.nama, model.kode, model.kontak, model.alamat]
             stmt = stmt.where(or_(*(col.ilike(f"%{escaped}%", escape="\\") for col in fields)))
     count = (await session.execute(select(func.count()).select_from(stmt.subquery()))).scalar_one()
     rows = list((await session.execute(stmt.order_by(*model.__table__.primary_key.columns).limit(limit).offset(offset))).scalars())
@@ -135,6 +140,8 @@ async def page(session, model, limit=50, offset=0, search=None, status="pengerja
 
 async def create_master(session, user, name, payload):
     values = payload.model_dump()
+    if name == "vendor" and values.get("kode") is None:
+        values.pop("kode")
     if name == "produk":
         values.update(nama_asli=payload.nama, status="master", aktif=True)
     obj = MASTERS[name](**values)
@@ -142,6 +149,33 @@ async def create_master(session, user, name, payload):
     await session.flush()
     await audit(session, user, obj)
     return record(obj)
+
+
+async def save_vendor(session, user, key, payload):
+    # Serialize deactivation/type changes with new allocations of this vendor.
+    vendor = await get(session, m.KeuVendor, key, lock=True)
+    values = payload.model_dump(exclude_unset=True)
+    before = record(vendor)
+    if "jenis" in values and values["jenis"] != vendor.jenis:
+        used = (await session.execute(select(m.KeuAlokasiVendor.id).where(m.KeuAlokasiVendor.vendor_id == key).limit(1))).first()
+        if used:
+            bad("Jenis vendor dengan riwayat alokasi tidak dapat diubah; buat vendor baru", 409)
+        # Old slot links are compatibility configuration, never allocation history.
+        links = (await session.execute(select(m.KeuVendorSlot).where(m.KeuVendorSlot.vendor_id == key))).scalars()
+        for slot in links:
+            slot.vendor_id = None
+        await session.flush()
+    for field, value in values.items():
+        setattr(vendor, field, value)
+    await session.flush()
+    if record(vendor) != before:
+        await audit(session, user, vendor, "ubah-vendor", before)
+    return record(vendor)
+
+
+async def deactivate_vendor(session, user, key):
+    # Soft deletion preserves all production and financial foreign keys.
+    return await save_vendor(session, user, key, sc.VendorEditIn(aktif=False))
 
 
 async def save_product(session, user, key, payload):
@@ -204,17 +238,24 @@ async def slots(session):
 
 async def set_slot(session, user, code, payload):
     prefix, sep, number = code.partition("-")
-    if prefix not in {"tk", "sup"} or not sep or not number.isdigit():
+    if prefix not in {"tk", "sup"} or not sep or not number.isascii() or not number.isdigit() or len(number) > 10:
+        bad("Slot tidak ditemukan", 404)
+    if not 1 <= int(number) <= 2147483647:
         bad("Slot tidak ditemukan", 404)
     kind = "tukang_kayu" if prefix == "tk" else "supplier"
-    slot = (await session.execute(select(m.KeuVendorSlot).where(m.KeuVendorSlot.jenis == kind, m.KeuVendorSlot.nomor == int(number)).with_for_update())).scalar_one_or_none()
-    if slot is None:
-        bad("Slot tidak ditemukan", 404)
     if payload.jenis != kind:
         bad("Jenis vendor tidak sesuai slot")
-    vendor = await get(session, m.KeuVendor, slot.vendor_id, lock=True) if slot.vendor_id else m.KeuVendor(**payload.model_dump())
+    slot = (await session.execute(select(m.KeuVendorSlot).where(m.KeuVendorSlot.jenis == kind, m.KeuVendorSlot.nomor == int(number)).with_for_update())).scalar_one_or_none()
+    if slot is None:
+        # Legacy clients can request arbitrary slots; modern clients use /vendor CRUD.
+        slot = m.KeuVendorSlot(jenis=kind, nomor=int(number))
+        session.add(slot)
+    values = payload.model_dump(exclude={"kode"})
+    if payload.kode is not None:
+        values["kode"] = payload.kode
+    vendor = await get(session, m.KeuVendor, slot.vendor_id, lock=True) if slot.vendor_id else m.KeuVendor(**values)
     before = record(vendor) if slot.vendor_id else None
-    for key, value in payload.model_dump().items():
+    for key, value in values.items():
         setattr(vendor, key, value)
     session.add(vendor)
     await session.flush()
@@ -364,10 +405,9 @@ async def allocate_vendor(session, user, payload):
     if order.status in {"selesai", "batal"}:
         bad("Pesanan sudah selesai atau batal", 409)
     product = await get(session, m.KeuProduk, item.produk_id) if item.produk_id else None
-    vendor = await get(session, m.KeuVendor, payload.vendor_id)
-    slot = (await session.execute(select(m.KeuVendorSlot).where(m.KeuVendorSlot.vendor_id == vendor.id))).first()
-    if product is None or product.status != "master" or not product.aktif or not vendor.aktif or not slot:
-        bad("Pilih produk dan vendor aktif yang terdaftar di slot")
+    vendor = await get(session, m.KeuVendor, payload.vendor_id, lock=True)
+    if product is None or product.status != "master" or not product.aktif or not vendor.aktif:
+        bad("Pilih produk master dan vendor aktif")
     if vendor.jenis != ("tukang_kayu" if product.jenis == "kayu" else "supplier"):
         bad("Jenis vendor tidak sesuai produk")
     used = (await session.execute(select(func.coalesce(func.sum(m.KeuAlokasiVendor.qty), 0)).where(m.KeuAlokasiVendor.item_id == item.id, m.KeuAlokasiVendor.dibatalkan.is_(False)))).scalar_one()

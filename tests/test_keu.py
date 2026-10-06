@@ -41,16 +41,18 @@ def order_payload(sal, product, ref="o1", qty=2):
 
 
 @pytest.mark.asyncio
-async def test_slots_dynamic_and_no_fabricated_vendor_names(env):
+async def test_legacy_slots_are_on_demand_without_fixed_limits(env):
     s, u, sal, product, account, vendor = env
     rows = await svc.slots(s)
-    assert {r["kode"] for r in rows} == {"tk-1", "tk-2", "tk-3", "tk-4", "tk-5", "sup-1", "sup-2", "sup-3"}
+    assert {r["kode"] for r in rows} == {"tk-1"}
     assert sum(r["vendor"] is not None for r in rows) == 1
     updated = await svc.set_slot(s, u, "tk-1", sc.VendorIn(nama="Nama diubah", jenis="tukang_kayu"))
     assert updated["vendor_id"] == vendor["vendor_id"]
     assert updated["vendor"]["nama"] == "Nama diubah"
     with pytest.raises(HTTPException):
         await svc.set_slot(s, u, "sup-1", sc.VendorIn(nama="Salah jenis", jenis="tukang_kayu"))
+    extra = await svc.set_slot(s, u, "sup-99", sc.VendorIn(nama="Supplier tambahan", tipe="non_kayu"))
+    assert extra["vendor"]["tipe"] == "non_kayu"
 
 
 @pytest.mark.asyncio
