@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 from datetime import date
+from typing import Literal
 from pydantic import AwareDatetime
 
 from fastapi import APIRouter, Depends, File, Form, HTTPException, Query, Response, UploadFile
@@ -96,7 +97,12 @@ async def change_slot(kode: str, payload: sc.VendorIn, session: AsyncSession = D
 def register_list(path, model):
     async def listing(session: AsyncSession = DB, limit: int = Query(50, ge=1, le=200), offset: int = Query(0, ge=0), search: str | None = Query(None, max_length=128)):
         return await svc.page(session, model, limit, offset, search)
-    router.add_api_route(path, listing, methods=["GET"], response_model=sc.PageOut, name=f"keu-list-{model.__tablename__}")
+
+    async def order_listing(session: AsyncSession = DB, limit: int = Query(50, ge=1, le=200), offset: int = Query(0, ge=0), search: str | None = Query(None, max_length=128), status: Literal["pengerjaan", "batal", "semua"] = Query("pengerjaan")):
+        return await svc.page(session, model, limit, offset, search, status)
+
+    router.add_api_route(path, order_listing if model in {m.KeuPesanan, m.KeuItem} else listing,
+                        methods=["GET"], response_model=sc.PageOut, name=f"keu-list-{model.__tablename__}")
 
 
 for _path, _model in (("/pesanan", m.KeuPesanan), ("/item", m.KeuItem), ("/alokasi-vendor", m.KeuAlokasiVendor),

@@ -70,8 +70,50 @@ async def channel(session, key, *, manual=False):
     return row
 
 
-async def page(session, model, limit=50, offset=0, search=None):
+def cancelled_settlement():
+    # ERP sync preserves order_sn in rincian; allocations cover manually reconciled settlements.
+    source_order = select(m.KeuPesanan.id).where(m.KeuPesanan.saluran_id == m.KeuSettlement.saluran_id,
+        m.KeuPesanan.nomor == m.KeuSettlement.rincian["order_sn"].as_string(), m.KeuPesanan.status == "batal").exists()
+    allocated_order = select(m.KeuAlokasiSettlement.id).join(m.KeuItem, m.KeuItem.id == m.KeuAlokasiSettlement.item_id).join(
+        m.KeuPesanan, m.KeuPesanan.id == m.KeuItem.pesanan_id).where(
+        m.KeuAlokasiSettlement.settlement_id == m.KeuSettlement.id, m.KeuPesanan.status == "batal").exists()
+    return or_(source_order, allocated_order)
+
+
+def financial_transactions():
+    return or_(m.KeuTransaksi.settlement_id.is_(None),
+        ~m.KeuTransaksi.settlement_id.in_(select(m.KeuSettlement.id).where(cancelled_settlement())))
+
+
+async def guard_settlement_orders(session, settlement):
+    reference = settlement.rincian.get("order_sn") if isinstance(settlement.rincian, dict) else None
+    linked = select(m.KeuItem.pesanan_id).join(m.KeuAlokasiSettlement, m.KeuAlokasiSettlement.item_id == m.KeuItem.id).where(
+        m.KeuAlokasiSettlement.settlement_id == settlement.id)
+    match = m.KeuPesanan.id.in_(linked)
+    if isinstance(reference, str) and reference:
+        match = or_(match, (m.KeuPesanan.saluran_id == settlement.saluran_id) & (m.KeuPesanan.nomor == reference))
+    # Serialize posting with cancellation using the same parent order locks as allocation.
+    orders = (await session.execute(select(m.KeuPesanan).where(match).order_by(m.KeuPesanan.id).with_for_update())).scalars()
+    if any(order.status == "batal" for order in orders):
+        bad("Settlement pesanan dibatalkan tidak dapat diposting", 409)
+
+
+async def page(session, model, limit=50, offset=0, search=None, status="pengerjaan"):
     stmt = select(model)
+    if model in {m.KeuPesanan, m.KeuItem}:
+        if status not in {"pengerjaan", "batal", "semua"}:
+            bad("Filter status tidak dikenal")
+        if status != "semua":
+            condition = m.KeuPesanan.status == "batal" if status == "batal" else m.KeuPesanan.status != "batal"
+            stmt = stmt.where(condition) if model is m.KeuPesanan else stmt.where(m.KeuItem.pesanan_id.in_(select(m.KeuPesanan.id).where(condition)))
+    elif model is m.KeuSettlement:
+        stmt = stmt.where(~cancelled_settlement())
+    elif model is m.KeuAlokasiVendor:
+        stmt = stmt.where(m.KeuAlokasiVendor.item_id.in_(select(m.KeuItem.id).join(m.KeuPesanan, m.KeuPesanan.id == m.KeuItem.pesanan_id).where(m.KeuPesanan.status != "batal")))
+    elif model is m.KeuAlokasiSettlement:
+        stmt = stmt.where(~m.KeuAlokasiSettlement.settlement_id.in_(select(m.KeuSettlement.id).where(cancelled_settlement())))
+    elif model is m.KeuTransaksi:
+        stmt = stmt.where(financial_transactions())
     if search:
         field = getattr(model, "nama", getattr(model, "nomor", getattr(model, "sumber_ref", None)))
         if field is not None:
@@ -237,6 +279,11 @@ async def update_source_order(session, user, order, payload):
     before = record(order)
     order.status_sumber = payload.status_sumber
     order.sumber_updated_at = payload.sumber_updated_at
+    if order.status == "batal":
+        # Ignore all later financial/item revisions while keeping the source reference current.
+        await session.flush()
+        await audit(session, user, order, "sinkron-diabaikan", before)
+        return await order_detail(session, order.id)
     existing = {item.sumber_ref: item for item in (await session.execute(select(m.KeuItem).where(m.KeuItem.pesanan_id == order.id).with_for_update())).scalars()}
     locked = set((await session.execute(select(m.KeuAlokasiVendor.item_id).where(m.KeuAlokasiVendor.item_id.in_([i.id for i in existing.values()]), m.KeuAlokasiVendor.dibatalkan.is_(False)))).scalars())
     settled = set((await session.execute(select(m.KeuAlokasiSettlement.item_id).where(m.KeuAlokasiSettlement.item_id.in_([i.id for i in existing.values()])))).scalars())
@@ -286,12 +333,18 @@ async def map_item(session, user, key, payload):
 async def order_status(session, user, key, payload):
     order = await get(session, m.KeuPesanan, key, lock=True)
     transitions = {"draf": {"aktif", "batal"}, "aktif": {"selesai", "batal"}, "selesai": set(), "batal": set()}
+    if order.status == "batal" and payload.status == "batal":
+        return record(order)  # An identical retry cannot reactivate a cancelled order.
     if payload.status not in transitions[order.status]:
         bad("Transisi status tidak diizinkan", 409)
     if payload.status == "batal" and len(payload.alasan) < 3:
         bad("Alasan pembatalan wajib diisi")
     ids = list((await session.execute(select(m.KeuItem.id).where(m.KeuItem.pesanan_id == key))).scalars())
     if payload.status == "batal":
+        posted_source = (await session.execute(select(m.KeuSettlement.id).where(m.KeuSettlement.saluran_id == order.saluran_id,
+            m.KeuSettlement.rincian["order_sn"].as_string() == order.nomor, m.KeuSettlement.status != "draf").limit(1))).first()
+        if posted_source:
+            bad("Settlement sudah diposting; lakukan koreksi keuangan terlebih dahulu", 409)
         if (await session.execute(select(m.KeuAlokasiVendor.id).where(m.KeuAlokasiVendor.item_id.in_(ids), m.KeuAlokasiVendor.dibatalkan.is_(False)))).first() or (await session.execute(select(m.KeuAlokasiSettlement.id).where(m.KeuAlokasiSettlement.item_id.in_(ids)))).first():
             bad("Batalkan alokasi terlebih dahulu; settlement harus dikoreksi terpisah", 409)
     if payload.status in {"aktif", "selesai"}:
@@ -350,6 +403,14 @@ async def cancel_allocation(session, user, key, payload):
 
 async def create_settlement(session, user, payload, *, from_source=False):
     await channel(session, payload.saluran_id)
+    reference = payload.rincian.get("order_sn")
+    if isinstance(reference, str) and reference:
+        cancelled = (await session.execute(select(m.KeuPesanan.id).where(m.KeuPesanan.saluran_id == payload.saluran_id,
+            m.KeuPesanan.nomor == reference, m.KeuPesanan.status == "batal").limit(1))).first()
+        if cancelled:
+            if from_source:
+                return {"diabaikan": True, "sumber_ref": payload.sumber_ref}  # Source envelope remains in the inbox.
+            bad("Settlement untuk pesanan dibatalkan tidak dapat dicatat", 409)
     if not from_source:
         sal = await get(session, m.KeuSaluran, payload.saluran_id)
         if sal.sistem == "store":
@@ -412,11 +473,15 @@ async def transaction(session, user, payload, *, settlement_id=None):
 
 
 async def post_transaction(session, user, key):
+    row = await get(session, m.KeuTransaksi, key)
+    settlement = await get(session, m.KeuSettlement, row.settlement_id, lock=True) if row.settlement_id else None
     row = await get(session, m.KeuTransaksi, key, lock=True)
     if row.status == "terkirim":
         return record(row)
     if row.status != "draf":
         bad("Transaksi sudah terkunci", 409)
+    if settlement:
+        await guard_settlement_orders(session, settlement)
     await pastikan_bulan_terbuka(session, row.tanggal)
     await get(session, m.KeuAkun, row.akun_id, lock=True)
     before = record(row)
@@ -432,6 +497,7 @@ async def post_settlement(session, user, key, payload):
         return record(row)
     if row.status != "draf":
         bad("Settlement sudah terkunci", 409)
+    await guard_settlement_orders(session, row)
     await pastikan_bulan_terbuka(session, row.tanggal_cair)
     amounts = list((await session.execute(select(m.KeuAlokasiSettlement.jumlah).where(m.KeuAlokasiSettlement.settlement_id == key))).scalars())
     if not amounts or sum(amounts, Decimal("0")) != row.neto:
@@ -455,16 +521,19 @@ async def post_settlement(session, user, key, payload):
 async def dashboard(session):
     zero = Decimal("0")
     initial = (await session.execute(select(func.coalesce(func.sum(m.KeuAkun.saldo_awal), 0)))).scalar_one()
-    values = (await session.execute(select(m.KeuTransaksi.jenis, func.sum(m.KeuTransaksi.jumlah)).where(m.KeuTransaksi.status == "terkirim").group_by(m.KeuTransaksi.jenis))).all()
+    values = (await session.execute(select(m.KeuTransaksi.jenis, func.sum(m.KeuTransaksi.jumlah)).where(m.KeuTransaksi.status == "terkirim", financial_transactions()).group_by(m.KeuTransaksi.jenis))).all()
     totals = dict(values)
-    cost = (await session.execute(select(func.coalesce(func.sum(m.KeuAlokasiVendor.qty * m.KeuAlokasiVendor.biaya_satuan), 0)).where(m.KeuAlokasiVendor.dibatalkan.is_(False)))).scalar_one()
+    cost = (await session.execute(select(func.coalesce(func.sum(m.KeuAlokasiVendor.qty * m.KeuAlokasiVendor.biaya_satuan), 0)).join(m.KeuItem, m.KeuItem.id == m.KeuAlokasiVendor.item_id).join(m.KeuPesanan, m.KeuPesanan.id == m.KeuItem.pesanan_id).where(m.KeuAlokasiVendor.dibatalkan.is_(False), m.KeuPesanan.status != "batal"))).scalar_one()
     sales = (await session.execute(select(func.coalesce(func.sum(m.KeuPesanan.total_sumber), 0)).where(m.KeuPesanan.status != "batal"))).scalar_one()
     counts = {}
     for label, model, condition in (("pesanan", m.KeuPesanan, m.KeuPesanan.status != "batal"),
                                     ("belum_dipetakan", m.KeuItem, or_(m.KeuItem.produk_id.is_(None), m.KeuItem.produk_id.in_(select(m.KeuProduk.id).where(or_(m.KeuProduk.status != "master", m.KeuProduk.aktif.is_(False)))))),
-                                    ("settlement_draf", m.KeuSettlement, m.KeuSettlement.status == "draf"),
+                                    ("settlement_draf", m.KeuSettlement, (m.KeuSettlement.status == "draf") & ~cancelled_settlement()),
                                     ("masukan_gagal", m.KeuMasukan, m.KeuMasukan.status == "gagal")):
-        counts[label] = (await session.execute(select(func.count()).select_from(model).where(condition))).scalar_one()
+        stmt = select(func.count()).select_from(model).where(condition)
+        if model is m.KeuItem:
+            stmt = stmt.where(m.KeuItem.pesanan_id.in_(select(m.KeuPesanan.id).where(m.KeuPesanan.status != "batal")))
+        counts[label] = (await session.execute(stmt)).scalar_one()
     return {**counts, "saldo_kas": str(initial + totals.get("masuk", zero) - totals.get("keluar", zero)),
             "kas_masuk": str(totals.get("masuk", zero)), "kas_keluar": str(totals.get("keluar", zero)),
             "nilai_pesanan": str(sales), "biaya_vendor": str(cost)}
