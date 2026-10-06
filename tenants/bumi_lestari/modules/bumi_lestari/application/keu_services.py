@@ -213,7 +213,8 @@ async def create_order(session: AsyncSession, user: BlUser, payload: sc.PesananI
     else:
         segment = payload.segmen_snapshot
     values = payload.model_dump(exclude={"items", "segmen_snapshot"})
-    obj = m.KeuPesanan(**values, segmen_snapshot=segment)
+    # Source shipped/completed is a reference only: backfilled orders start in the local workflow.
+    obj = m.KeuPesanan(**values, segmen_snapshot=segment, status="draf")
     session.add(obj)
     await session.flush()
     for line in payload.items:
