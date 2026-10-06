@@ -157,7 +157,7 @@ def register_list(path, model):
     async def order_listing(session: AsyncSession = DB, limit: int = Query(50, ge=1, le=200), offset: int = Query(0, ge=0), search: str | None = Query(None, max_length=128), status: Literal["pengerjaan", "batal", "semua"] = Query("pengerjaan")):
         return await svc.page(session, model, limit, offset, search, status)
 
-    router.add_api_route(path, order_listing if model in {m.KeuPesanan, m.KeuItem} else listing,
+    router.add_api_route(path, order_listing if model in {m.KeuPesanan, m.KeuItem, m.KeuTransaksi, m.KeuSettlement} else listing,
                         methods=["GET"], response_model=sc.PageOut, name=f"keu-list-{model.__tablename__}")
 
 
@@ -257,3 +257,13 @@ async def pull(key: str, entitas: str = Query("order", pattern="^(order|settleme
 @router.post("/masukan/{key}/ulang")
 async def retry(key: str, session: AsyncSession = DB, actor: BlUser = ACTOR):
     return await keu_sync.retry(session, actor, key)
+
+
+@router.post("/transaksi/{key}/unpost")
+async def unpost_transaction(key: str, payload: sc.BatalIn, session: AsyncSession = DB, actor: BlUser = ACTOR):
+    return await svc.unpost_transaction(session, actor, key, payload)
+
+
+@router.post("/settlement/{key}/unpost")
+async def unpost_settlement(key: str, payload: sc.BatalIn, session: AsyncSession = DB, actor: BlUser = ACTOR):
+    return await svc.unpost_settlement(session, actor, key, payload)
