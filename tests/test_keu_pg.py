@@ -229,6 +229,76 @@ async def test_vendor_deactivation_serializes_with_allocation(pg):
 
 
 @pytest.mark.asyncio
+async def test_confirmed_reset_is_atomic_preserves_legacy_and_posting_guards(pg):
+    from datetime import date
+    from shared.security import hash_password
+    from tenants.bumi_lestari.modules.bumi_lestari.application import keu_reset, schemas_keu as sc
+    from tenants.bumi_lestari.modules.bumi_lestari.infrastructure.models import BlAkunKas, BlTransaksi, BlUser
+    maker = async_sessionmaker(pg, expire_on_commit=False)
+    async with maker.begin() as session:
+        user = await session.get(BlUser, "u")
+        user.password_hash = hash_password("Owner-password")
+        session.add(BlAkunKas(id="legacy", kode="LEGACY", nama="Legacy"))
+        await session.flush()
+        session.add(BlTransaksi(id="old", tanggal=date(2026, 10, 6), akun_id="legacy", kategori_id="k", jenis="masuk", jumlah=100, dibuat_oleh="u"))
+        await session.execute(text("INSERT INTO keu_alokasi_settlement(id,settlement_id,item_id,jumlah) VALUES('as','st','i',18)"))
+        await session.execute(text("UPDATE keu_settlement SET status='terkirim' WHERE id='st'"))
+        await session.execute(text("INSERT INTO keu_transaksi(id,saluran_id,sumber_ref,tanggal,akun_id,kategori_id,jenis,jumlah,dibuat_oleh,status) VALUES('tx','s','tx','2026-10-06','a','k','masuk',18,'u','terkirim')"))
+        await session.flush()
+        preview = await keu_reset.preview(session, user)
+    payload = sc.ResetKeuIn(challenge_id=preview["challenge_id"], token=preview["token"], konfirmasi="RESET-KEUANGAN", password="Owner-password")
+    # A later failure rolls the whole reset back, including TRUNCATE and consumed nonce.
+    with pytest.raises(RuntimeError):
+        async with maker.begin() as session:
+            user = await session.get(BlUser, "u")
+            await keu_reset.execute(session, user, payload)
+            raise RuntimeError("Rollback test")
+    async with pg.begin() as conn:
+        assert (await conn.execute(text("SELECT count(*) FROM keu_transaksi"))).scalar_one() == 1
+    async with maker.begin() as session:
+        user = await session.get(BlUser, "u")
+        result = await keu_reset.execute(session, user, payload)
+        assert result["counts"]["keu_transaksi"] == 1
+    async with pg.begin() as conn:
+        for model in keu_reset.RESET_MODELS:
+            assert (await conn.execute(text(f"SELECT count(*) FROM {model.__tablename__}"))).scalar_one() == 0
+        assert (await conn.execute(text("SELECT jumlah FROM bl_transaksi WHERE id='old'"))).scalar_one() == 100
+        assert (await conn.execute(text("SELECT count(*) FROM keu_vendor"))).scalar_one() == 2
+        assert (await conn.execute(text("SELECT count(*) FROM keu_produk"))).scalar_one() == 1
+        assert (await conn.execute(text("SELECT count(*) FROM keu_akun"))).scalar_one() == 1
+        assert (await conn.execute(text("SELECT count(*) FROM bl_audit_log WHERE aksi='reset-keu'"))).scalar_one() == 1
+        await conn.execute(text("INSERT INTO keu_transaksi(id,saluran_id,sumber_ref,tanggal,akun_id,kategori_id,jenis,jumlah,dibuat_oleh,status) VALUES('new','s','new','2026-10-06','a','k','masuk',18,'u','terkirim')"))
+    with pytest.raises(IntegrityError):
+        async with pg.begin() as conn:
+            await conn.execute(text("DELETE FROM keu_transaksi WHERE id='new'"))
+
+
+@pytest.mark.asyncio
+async def test_reset_confirmation_cannot_be_replayed_concurrently(pg):
+    from fastapi import HTTPException
+    from shared.security import hash_password
+    from tenants.bumi_lestari.modules.bumi_lestari.application import keu_reset, schemas_keu as sc
+    from tenants.bumi_lestari.modules.bumi_lestari.infrastructure.models import BlUser
+    maker = async_sessionmaker(pg, expire_on_commit=False)
+    async with maker.begin() as session:
+        user = await session.get(BlUser, "u")
+        user.password_hash = hash_password("Owner-password")
+        await session.flush()
+        preview = await keu_reset.preview(session, user)
+    payload = sc.ResetKeuIn(challenge_id=preview["challenge_id"], token=preview["token"], konfirmasi="RESET-KEUANGAN", password="Owner-password")
+    async def attempt():
+        try:
+            async with maker.begin() as session:
+                user = await session.get(BlUser, "u")
+                await keu_reset.execute(session, user, payload)
+            return True
+        except HTTPException as error:
+            assert error.status_code == 409
+            return False
+    assert sorted(await asyncio.wait_for(asyncio.gather(attempt(), attempt()), timeout=15)) == [False, True]
+
+
+@pytest.mark.asyncio
 async def test_order_cancellation_serializes_with_settlement_posting(pg):
     from fastapi import HTTPException
     from tenants.bumi_lestari.modules.bumi_lestari.application import keu_services as svc, schemas_keu as sc
