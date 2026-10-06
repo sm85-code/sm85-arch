@@ -201,6 +201,9 @@ class KeuSettlement(BumiLestariBase):
     neto: Mapped[Decimal] = mapped_column(Numeric(20, 2), nullable=False)
     rincian: Mapped[dict] = mapped_column(JSON_DATA, nullable=False, default=dict, server_default="{}")
     status: Mapped[str] = mapped_column(String(16), nullable=False, default="draf", server_default="draf")
+    alasan_batal: Mapped[str] = mapped_column(Text, nullable=False, default="", server_default="")
+    dibatalkan_oleh: Mapped[str | None] = mapped_column(ForeignKey("bl_users.id", ondelete="RESTRICT"))
+    dibatalkan_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
     created_at: Mapped[datetime] = created()
 
 
@@ -233,6 +236,9 @@ class KeuTransaksi(BumiLestariBase):
     status: Mapped[str] = mapped_column(String(16), nullable=False, default="draf", server_default="draf")
     keterangan: Mapped[str] = mapped_column(Text, nullable=False, default="", server_default="")
     dibuat_oleh: Mapped[str] = mapped_column(ForeignKey("bl_users.id", ondelete="RESTRICT"), nullable=False)
+    alasan_batal: Mapped[str] = mapped_column(Text, nullable=False, default="", server_default="")
+    dibatalkan_oleh: Mapped[str | None] = mapped_column(ForeignKey("bl_users.id", ondelete="RESTRICT"))
+    dibatalkan_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
     created_at: Mapped[datetime] = created()
 
 

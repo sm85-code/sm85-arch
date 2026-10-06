@@ -12,7 +12,7 @@ from sqlalchemy.ext.asyncio import async_sessionmaker, create_async_engine
 
 from tenants.bumi_lestari.modules.bumi_lestari.infrastructure.database import BumiLestariBase
 from tenants.bumi_lestari.modules.bumi_lestari.infrastructure.keu_migration import INVARIANTS, ensure_keu_schema, sql
-from tenants.bumi_lestari.modules.bumi_lestari.infrastructure.models_keu import KEU_MODELS
+from tenants.bumi_lestari.modules.bumi_lestari.infrastructure.models_keu import KEU_MODELS, KeuTransaksi
 
 pytestmark = pytest.mark.skipif(not os.getenv("TEST_DATABASE_URL"), reason="TEST_DATABASE_URL tidak tersedia")
 
@@ -331,3 +331,84 @@ async def test_order_cancellation_serializes_with_settlement_posting(pg):
         assert (order, settlement) == (("batal", "draf") if cancelled else ("draf", "terkirim"))
         dashboard = await svc.dashboard(session)
         assert float(dashboard["kas_masuk"]) == (0 if cancelled else 18)
+
+
+@pytest.mark.asyncio
+async def test_unpost_migration_idempotent_preserves_posted_history_and_guards(pg):
+    from tenants.bumi_lestari.modules.bumi_lestari.infrastructure.keu_unpost_migration import sql as unpost_sql
+    assert Path("keu_unpost.sql").read_text() == unpost_sql()
+    async with pg.begin() as conn:
+        await conn.execute(text("INSERT INTO keu_transaksi(id,saluran_id,sumber_ref,akun_id,kategori_id,tanggal,jenis,jumlah,status,dibuat_oleh) VALUES('tx','s','tx','a','k','2026-10-06','masuk',18,'terkirim','u')"))
+        native = await conn.get_raw_connection()
+        script = unpost_sql().replace("BEGIN;\n\n", "", 1).rsplit("COMMIT;", 1)[0]
+        await native.driver_connection.execute(script)
+        await native.driver_connection.execute(script)
+        await ensure_keu_schema(conn)
+        assert (await conn.execute(text("SELECT jumlah FROM keu_transaksi WHERE id='tx'"))).scalar_one() == 18
+        for update in ["status='dibatalkan'", "status='dibatalkan',alasan_batal='Koreksi',dibatalkan_oleh='u',dibatalkan_at=now(),jumlah=1", "status='draf'"]:
+            with pytest.raises(IntegrityError):
+                async with conn.begin_nested():
+                    await conn.execute(text("UPDATE keu_transaksi SET " + update + " WHERE id='tx'"))
+        await conn.execute(text("INSERT INTO bl_tutup_buku(id,periode,ditutup_oleh,ditutup_pada,snapshot,status) VALUES('closed','2026-10','u',now(),'{}','ditutup')"))
+        with pytest.raises(IntegrityError):
+            async with conn.begin_nested():
+                await conn.execute(text("UPDATE keu_transaksi SET status='dibatalkan',alasan_batal='Koreksi',dibatalkan_oleh='u',dibatalkan_at=now() WHERE id='tx'"))
+        await conn.execute(text("UPDATE bl_tutup_buku SET status='dibuka' WHERE periode='2026-10'"))
+        await conn.execute(text("UPDATE keu_transaksi SET status='dibatalkan',alasan_batal='Koreksi',dibatalkan_oleh='u',dibatalkan_at=now() WHERE id='tx'"))
+        for update in ["status='terkirim'", "alasan_batal='Rewrite audit'", "jumlah=19"]:
+            with pytest.raises(IntegrityError):
+                async with conn.begin_nested():
+                    await conn.execute(text("UPDATE keu_transaksi SET " + update + " WHERE id='tx'"))
+
+
+@pytest.mark.asyncio
+async def test_concurrent_unpost_single_audit_and_zero_active_balance(pg):
+    from tenants.bumi_lestari.modules.bumi_lestari.application import keu_services as svc, schemas_keu as sc
+    from tenants.bumi_lestari.modules.bumi_lestari.infrastructure.models import BlUser
+    maker = async_sessionmaker(pg, expire_on_commit=False)
+    async with pg.begin() as conn:
+        await conn.execute(text("INSERT INTO keu_transaksi(id,saluran_id,sumber_ref,akun_id,kategori_id,tanggal,jenis,jumlah,status,dibuat_oleh) VALUES('tx','s','tx','a','k','2026-10-06','masuk',18,'terkirim','u')"))
+    async def cancel():
+        async with maker.begin() as session:
+            user = await session.get(BlUser, "u")
+            return await svc.unpost_transaction(session, user, "tx", sc.BatalIn(alasan="Koreksi concurrent"))
+    first, second = await asyncio.gather(cancel(), cancel())
+    assert first == second
+    async with maker.begin() as session:
+        assert (await session.execute(text("SELECT count(*) FROM bl_audit_log WHERE aksi='unpost'"))).scalar_one() == 1
+        assert (await svc.dashboard(session))["kas_masuk"] == "0"
+        assert (await svc.page(session, KeuTransaksi))["total"] == 0
+
+
+@pytest.mark.asyncio
+async def test_settlement_unpost_atomic_rollback_and_linked_trigger_protection(pg):
+    from tenants.bumi_lestari.modules.bumi_lestari.application import keu_services as svc, schemas_keu as sc
+    from tenants.bumi_lestari.modules.bumi_lestari.infrastructure.models import BlUser
+    maker = async_sessionmaker(pg, expire_on_commit=False)
+    async with pg.begin() as conn:
+        await conn.execute(text("INSERT INTO keu_alokasi_settlement(id,settlement_id,item_id,jumlah) VALUES('as','st','i',18)"))
+    async with maker.begin() as session:
+        user = await session.get(BlUser, "u")
+        await svc.post_settlement(session, user, "st", sc.PostingSettlementIn(akun_id="a", kategori_id="k"))
+    async with pg.begin() as conn:
+        with pytest.raises(IntegrityError):
+            async with conn.begin_nested():
+                await conn.execute(text("UPDATE keu_settlement SET status='dibatalkan',alasan_batal='Koreksi',dibatalkan_oleh='u',dibatalkan_at=now() WHERE id='st'"))
+    with pytest.raises(RuntimeError):
+        async with maker.begin() as session:
+            user = await session.get(BlUser, "u")
+            await svc.unpost_settlement(session, user, "st", sc.BatalIn(alasan="Koreksi rollback"))
+            raise RuntimeError("rollback request")
+    async with pg.begin() as conn:
+        assert (await conn.execute(text("SELECT status FROM keu_settlement WHERE id='st'"))).scalar_one() == "terkirim"
+        assert (await conn.execute(text("SELECT status FROM keu_transaksi WHERE settlement_id='st'"))).scalar_one() == "terkirim"
+        assert (await conn.execute(text("SELECT count(*) FROM bl_audit_log WHERE aksi='unpost'"))).scalar_one() == 0
+    async def cancel():
+        async with maker.begin() as session:
+            user = await session.get(BlUser, "u")
+            return await svc.unpost_settlement(session, user, "st", sc.BatalIn(alasan="Koreksi final"))
+    first, second = await asyncio.gather(cancel(), cancel())
+    assert first == second
+    async with maker.begin() as session:
+        assert float((await svc.dashboard(session))["saldo_kas"]) == 0
+        assert (await session.execute(text("SELECT count(*) FROM bl_audit_log WHERE aksi='unpost'"))).scalar_one() == 2

@@ -1,7 +1,7 @@
 """Tenant-local keu operations; all commits belong to the request transaction."""
 from __future__ import annotations
 
-from datetime import date, datetime
+from datetime import date, datetime, timezone
 from decimal import Decimal
 
 from fastapi import HTTPException
@@ -43,7 +43,7 @@ def record(obj):
 
 async def get(session, model, key, *, lock=False):
     if lock:
-        obj = (await session.execute(select(model).where(model.id == key).with_for_update())).scalar_one_or_none()
+        obj = (await session.execute(select(model).where(model.id == key).with_for_update().execution_options(populate_existing=True))).scalar_one_or_none()
     else:
         obj = await session.get(model, key)
     if obj is None:
@@ -83,9 +83,12 @@ def cancelled_settlement():
     return or_(source_order, allocated_order)
 
 
-def financial_transactions():
+def financial_transactions(*, include_cancelled=False):
+    excluded = cancelled_settlement()
+    if not include_cancelled:
+        excluded = or_(excluded, m.KeuSettlement.status == "dibatalkan")
     return or_(m.KeuTransaksi.settlement_id.is_(None),
-        ~m.KeuTransaksi.settlement_id.in_(select(m.KeuSettlement.id).where(cancelled_settlement())))
+        ~m.KeuTransaksi.settlement_id.in_(select(m.KeuSettlement.id).where(excluded)))
 
 
 async def guard_settlement_orders(session, settlement):
@@ -116,7 +119,12 @@ async def page(session, model, limit=50, offset=0, search=None, status="pengerja
     elif model is m.KeuAlokasiSettlement:
         stmt = stmt.where(~m.KeuAlokasiSettlement.settlement_id.in_(select(m.KeuSettlement.id).where(cancelled_settlement())))
     elif model is m.KeuTransaksi:
-        stmt = stmt.where(financial_transactions())
+        stmt = stmt.where(financial_transactions(include_cancelled=status != "pengerjaan"))
+    if model in {m.KeuTransaksi, m.KeuSettlement}:
+        if status not in {"pengerjaan", "batal", "semua"}:
+            bad("Filter status tidak dikenal")
+        if status != "semua":
+            stmt = stmt.where(model.status == "dibatalkan" if status == "batal" else model.status != "dibatalkan")
     if search:
         field = getattr(model, "nama", getattr(model, "nomor", getattr(model, "sumber_ref", None)))
         if field is not None:
@@ -575,6 +583,8 @@ async def post_transaction(session, user, key):
     if row.status != "draf":
         bad("Transaksi sudah terkunci", 409)
     if settlement:
+        if settlement.status == "dibatalkan":
+            bad("Settlement sudah dibatalkan", 409)
         await guard_settlement_orders(session, settlement)
     await pastikan_bulan_terbuka(session, row.tanggal)
     account = await get(session, m.KeuAkun, row.akun_id, lock=True)
@@ -611,6 +621,55 @@ async def post_settlement(session, user, key, payload):
     row.status = "terkirim"
     await session.flush()
     await audit(session, user, row, "posting", before)
+    return record(row)
+
+
+async def cancel_posted(session, user, row, reason):
+    before = record(row)
+    row.status = "dibatalkan"
+    row.alasan_batal = reason
+    row.dibatalkan_oleh = user.id
+    row.dibatalkan_at = datetime.now(timezone.utc)
+    await session.flush()
+    await audit(session, user, row, "unpost", before, reason)
+
+
+async def unpost_settlement(session, user, key, payload):
+    row = await get(session, m.KeuSettlement, key, lock=True)
+    if row.status == "dibatalkan":
+        return record(row)
+    if row.status != "terkirim":
+        bad("Hanya settlement terposting yang dapat dibatalkan", 409)
+    await pastikan_bulan_terbuka(session, row.tanggal_cair)
+    transactions = (await session.execute(select(m.KeuTransaksi).where(
+        m.KeuTransaksi.settlement_id == key).order_by(m.KeuTransaksi.id).with_for_update()
+        .execution_options(populate_existing=True))).scalars().all()
+    if any(tx.status == "draf" for tx in transactions):
+        bad("Settlement memiliki transaksi draf yang tidak konsisten", 409)
+    for tx in transactions:
+        await pastikan_bulan_terbuka(session, tx.tanggal)
+    for account_id in sorted({tx.akun_id for tx in transactions}):
+        await get(session, m.KeuAkun, account_id, lock=True)
+    for tx in transactions:
+        if tx.status == "terkirim":
+            await cancel_posted(session, user, tx, payload.alasan)
+    await cancel_posted(session, user, row, payload.alasan)
+    return record(row)
+
+
+async def unpost_transaction(session, user, key, payload):
+    row = await get(session, m.KeuTransaksi, key)
+    if row.settlement_id:
+        await unpost_settlement(session, user, row.settlement_id, payload)
+        return record(await get(session, m.KeuTransaksi, key, lock=True))
+    row = await get(session, m.KeuTransaksi, key, lock=True)
+    if row.status == "dibatalkan":
+        return record(row)
+    if row.status != "terkirim":
+        bad("Hanya transaksi terposting yang dapat dibatalkan", 409)
+    await pastikan_bulan_terbuka(session, row.tanggal)
+    await get(session, m.KeuAkun, row.akun_id, lock=True)
+    await cancel_posted(session, user, row, payload.alasan)
     return record(row)
 
 
