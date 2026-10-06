@@ -210,9 +210,13 @@ async def _self_heal_columns(conn) -> None:
 
 
 async def _create_schema(engine) -> None:
+    from tenants.bumi_lestari.modules.bumi_lestari.infrastructure.keu_migration import ensure_keu_schema
     async with engine.begin() as conn:
+        if conn.dialect.name == "postgresql":
+            await conn.execute(text("SELECT pg_advisory_xact_lock(61062026)"))
         await conn.run_sync(BumiLestariBase.metadata.create_all)
         await _self_heal_columns(conn)
+        await ensure_keu_schema(conn)
 
 
 async def ensure_bumi_lestari_schema() -> None:

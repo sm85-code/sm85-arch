@@ -12,6 +12,7 @@ from datetime import date
 from fastapi import APIRouter, Depends, HTTPException, Request, Response, status
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from tenants.bumi_lestari.adapters.api.v1.keu_router import router as keu_router
 from tenants.bumi_lestari.baru.router import router as baru_router
 from tenants.bumi_lestari.baru.uji import uji
 from tenants.bumi_lestari.modules.bumi_lestari.application import services
@@ -49,6 +50,7 @@ from tenants.bumi_lestari.modules.bumi_lestari.infrastructure.models import BlUs
 from tenants.bumi_lestari.modules.bumi_lestari.infrastructure.seeder import seed_bumi_lestari
 
 bumi_lestari_router = APIRouter()
+bumi_lestari_router.include_router(keu_router)
 bumi_lestari_router.include_router(baru_router)
 bumi_lestari_router.include_router(uji)
 
