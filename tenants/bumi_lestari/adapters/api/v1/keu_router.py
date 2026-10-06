@@ -78,6 +78,11 @@ for _name, _schema in (("saluran", sc.SaluranIn), ("akun", sc.AkunIn), ("pelangg
     register_master(_name, svc.MASTERS[_name], _schema)
 
 
+@router.patch("/produk/{key}")
+async def save_product(key: str, payload: sc.ProdukEditIn, session: AsyncSession = DB, actor: BlUser = ACTOR):
+    return await svc.save_product(session, actor, key, payload)
+
+
 @router.get("/vendor-slot")
 async def slots(session: AsyncSession = DB):
     return await svc.slots(session)

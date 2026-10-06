@@ -5,7 +5,7 @@ from datetime import date, datetime
 from decimal import Decimal
 
 from fastapi import HTTPException
-from sqlalchemy import func, select
+from sqlalchemy import func, or_, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from tenants.bumi_lestari.modules.bumi_lestari.application.audit_core import catat_audit
@@ -76,7 +76,8 @@ async def page(session, model, limit=50, offset=0, search=None):
         field = getattr(model, "nama", getattr(model, "nomor", getattr(model, "sumber_ref", None)))
         if field is not None:
             escaped = search.replace("\\", "\\\\").replace("%", "\\%").replace("_", "\\_")
-            stmt = stmt.where(field.ilike(f"%{escaped}%", escape="\\"))
+            fields = [field] if model is not m.KeuProduk else [model.nama, model.nama_asli, model.sku, model.sku_induk]
+            stmt = stmt.where(or_(*(col.ilike(f"%{escaped}%", escape="\\") for col in fields)))
     count = (await session.execute(select(func.count()).select_from(stmt.subquery()))).scalar_one()
     rows = list((await session.execute(stmt.order_by(*model.__table__.primary_key.columns).limit(limit).offset(offset))).scalars())
     output = [record(row) for row in rows]
@@ -91,11 +92,66 @@ async def page(session, model, limit=50, offset=0, search=None):
 
 
 async def create_master(session, user, name, payload):
-    obj = MASTERS[name](**payload.model_dump())
+    values = payload.model_dump()
+    if name == "produk":
+        values.update(nama_asli=payload.nama, status="master", aktif=True)
+    obj = MASTERS[name](**values)
     session.add(obj)
     await session.flush()
     await audit(session, user, obj)
     return record(obj)
+
+
+async def save_product(session, user, key, payload):
+    product = await get(session, m.KeuProduk, key, lock=True)
+    if product.jenis != payload.jenis:
+        allocated = (await session.execute(select(m.KeuAlokasiVendor.id).join(m.KeuItem, m.KeuItem.id == m.KeuAlokasiVendor.item_id)
+                     .where(m.KeuItem.produk_id == key, m.KeuAlokasiVendor.dibatalkan.is_(False)).limit(1))).first()
+        if allocated:
+            bad("Batalkan alokasi sebelum mengganti jenis produk", 409)
+    before = record(product)
+    for field, value in payload.model_dump().items():
+        setattr(product, field, value)
+    product.status, product.aktif = "master", True
+    await session.flush()
+    await audit(session, user, product, "simpan-master", before)
+    return record(product)
+
+
+async def source_product(session, user, line):
+    source = line.produk_sumber
+    if source is None:
+        if line.produk_id:
+            await get(session, m.KeuProduk, line.produk_id)
+        return line.produk_id
+    if line.produk_id:
+        product = await get(session, m.KeuProduk, line.produk_id)
+        if product.sku != source.sku:
+            bad("SKU sumber tidak sesuai produk yang dipetakan", 409)
+        return product.id
+    product = (await session.execute(select(m.KeuProduk).where(m.KeuProduk.sku == source.sku))).scalar_one_or_none()
+    if product:
+        return product.id  # Never overwrite an alias, HPP or locally edited variants on repeat pulls.
+    from sqlalchemy.dialects.postgresql import insert as pg_insert
+    from sqlalchemy.dialects.sqlite import insert as sqlite_insert
+    insert = pg_insert if session.bind.dialect.name == "postgresql" else sqlite_insert
+    values = source.model_dump()
+    values.update(id=m.new_id(), nama=source.nama_asli, jenis=None, status="draf", aktif=False, biaya_acuan=Decimal("0"))
+    # A unique child SKU is shared across channels; concurrent pulls cannot create duplicates.
+    created_id = (await session.execute(insert(m.KeuProduk).values(**values).on_conflict_do_nothing(index_elements=["sku"])
+                                       .returning(m.KeuProduk.id))).scalar_one_or_none()
+    product = (await session.execute(select(m.KeuProduk).where(m.KeuProduk.sku == source.sku))).scalar_one()
+    if created_id:
+        await audit(session, user, product, "draf-sumber")
+    return product.id
+
+
+async def prepare_lines(session, user, payload):
+    lines = []
+    for line in payload.items:
+        product_id = await source_product(session, user, line)
+        lines.append(line.model_copy(update={"produk_id": product_id}))
+    return payload.model_copy(update={"items": lines})
 
 
 async def slots(session):
@@ -137,17 +193,18 @@ async def create_order(session: AsyncSession, user: BlUser, payload: sc.PesananI
     # Channel lock serializes manual imports/source upserts sharing the same key.
     await session.execute(select(m.KeuSaluran).where(m.KeuSaluran.id == saluran.id).with_for_update())
     old = (await session.execute(select(m.KeuPesanan).where(m.KeuPesanan.saluran_id == saluran.id, m.KeuPesanan.sumber_ref == payload.sumber_ref).with_for_update())).scalar_one_or_none()
+    if old and from_source:
+        return await update_source_order(session, user, old, payload)
+    payload = await prepare_lines(session, user, payload)
     if old:
-        if from_source:
-            return await update_source_order(session, user, old, payload)
         current = await order_detail(session, old.id)
         expected = payload.model_dump()
         # Idempotent retry must not silently discard a different order with the same reference.
         same = all(getattr(old, k) == v for k, v in expected.items() if k not in {"items", "sumber_updated_at", "segmen_snapshot"})
         expected_segment = (await get(session, m.KeuPelanggan, payload.pelanggan_id)).segmen if payload.pelanggan_id else payload.segmen_snapshot
         same = same and old.segmen_snapshot == expected_segment
-        actual_items = [sc.ItemIn.model_validate({k: r[k] for k in sc.ItemIn.model_fields}).model_dump() for r in current["items"]]
-        if same and sorted(actual_items, key=lambda r: r["sumber_ref"]) == sorted(expected["items"], key=lambda r: r["sumber_ref"]):
+        actual_items = [sc.ItemIn.model_validate({k: r[k] for k in sc.ItemIn.model_fields if k in r}).model_dump(exclude={"produk_sumber"}) for r in current["items"]]
+        if same and sorted(actual_items, key=lambda r: r["sumber_ref"]) == sorted([line.model_dump(exclude={"produk_sumber"}) for line in payload.items], key=lambda r: r["sumber_ref"]):
             return current
         bad("Referensi pesanan sudah dipakai dengan data berbeda", 409)
     if payload.pelanggan_id:
@@ -162,7 +219,7 @@ async def create_order(session: AsyncSession, user: BlUser, payload: sc.PesananI
     for line in payload.items:
         if line.produk_id:
             await get(session, m.KeuProduk, line.produk_id)
-        session.add(m.KeuItem(pesanan_id=obj.id, **line.model_dump()))
+        session.add(m.KeuItem(pesanan_id=obj.id, **line.model_dump(exclude={"produk_sumber"})))
     await session.flush()
     await audit(session, user, obj)
     return await order_detail(session, obj.id)
@@ -194,12 +251,15 @@ async def update_source_order(session, user, order, payload):
         if set(existing) - {i.sumber_ref for i in payload.items}:
             bad("Item sumber hilang; tinjau pembatalan secara manual", 409)
         order.total_sumber = payload.total_sumber
+        payload = await prepare_lines(session, user, payload)
         for item in payload.items:
             row = existing.get(item.sumber_ref)
             if row is None:
-                session.add(m.KeuItem(pesanan_id=order.id, **item.model_dump()))
+                session.add(m.KeuItem(pesanan_id=order.id, **item.model_dump(exclude={"produk_sumber"})))
             else:
-                for key, value in item.model_dump(exclude={"produk_id"}).items():
+                if row.produk_id is None:
+                    row.produk_id = item.produk_id
+                for key, value in item.model_dump(exclude={"produk_id", "produk_sumber"}).items():
                     setattr(row, key, value)
     await session.flush()
     await audit(session, user, order, "sinkron", before)
@@ -212,7 +272,9 @@ async def map_item(session, user, key, payload):
         bad("Pesanan sudah selesai atau batal", 409)
     if (await session.execute(select(m.KeuAlokasiVendor.id).where(m.KeuAlokasiVendor.item_id == key, m.KeuAlokasiVendor.dibatalkan.is_(False)))).first():
         bad("Batalkan alokasi sebelum mengganti produk", 409)
-    await get(session, m.KeuProduk, payload.produk_id)
+    product = await get(session, m.KeuProduk, payload.produk_id)
+    if product.status != "master" or not product.aktif:
+        bad("Simpan produk sebagai master sebelum melakukan pemetaan", 409)
     before = record(item)
     item.produk_id = payload.produk_id
     await session.flush()
@@ -250,7 +312,7 @@ async def allocate_vendor(session, user, payload):
     product = await get(session, m.KeuProduk, item.produk_id) if item.produk_id else None
     vendor = await get(session, m.KeuVendor, payload.vendor_id)
     slot = (await session.execute(select(m.KeuVendorSlot).where(m.KeuVendorSlot.vendor_id == vendor.id))).first()
-    if product is None or not product.aktif or not vendor.aktif or not slot:
+    if product is None or product.status != "master" or not product.aktif or not vendor.aktif or not slot:
         bad("Pilih produk dan vendor aktif yang terdaftar di slot")
     if vendor.jenis != ("tukang_kayu" if product.jenis == "kayu" else "supplier"):
         bad("Jenis vendor tidak sesuai produk")
@@ -398,7 +460,7 @@ async def dashboard(session):
     sales = (await session.execute(select(func.coalesce(func.sum(m.KeuPesanan.total_sumber), 0)).where(m.KeuPesanan.status != "batal"))).scalar_one()
     counts = {}
     for label, model, condition in (("pesanan", m.KeuPesanan, m.KeuPesanan.status != "batal"),
-                                    ("belum_dipetakan", m.KeuItem, m.KeuItem.produk_id.is_(None)),
+                                    ("belum_dipetakan", m.KeuItem, or_(m.KeuItem.produk_id.is_(None), m.KeuItem.produk_id.in_(select(m.KeuProduk.id).where(or_(m.KeuProduk.status != "master", m.KeuProduk.aktif.is_(False)))))),
                                     ("settlement_draf", m.KeuSettlement, m.KeuSettlement.status == "draf"),
                                     ("masukan_gagal", m.KeuMasukan, m.KeuMasukan.status == "gagal")):
         counts[label] = (await session.execute(select(func.count()).select_from(model).where(condition))).scalar_one()

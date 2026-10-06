@@ -3,11 +3,12 @@ from __future__ import annotations
 
 import hashlib
 import json
+from urllib.parse import urlsplit
 from datetime import date
 from decimal import Decimal
 from typing import Annotated, Literal
 
-from pydantic import AwareDatetime, BaseModel, ConfigDict, Field, JsonValue, StrictInt, StringConstraints, model_validator
+from pydantic import AwareDatetime, BaseModel, ConfigDict, Field, JsonValue, StrictInt, StringConstraints, field_validator, model_validator
 
 Id = Annotated[str, StringConstraints(strip_whitespace=True, min_length=1, max_length=64)]
 Ref = Annotated[str, StringConstraints(strip_whitespace=True, min_length=1, max_length=255)]
@@ -60,14 +61,46 @@ class VendorSlotIn(InputBase):
         return self
 
 
-class ProdukIn(InputBase):
+class VarianIn(InputBase):
+    kategori: str = Field(min_length=1, max_length=128)
+    nilai: str = Field(min_length=1, max_length=255)
+
+
+class ProdukSumberIn(InputBase):
     sku: str = Field(min_length=1, max_length=128)
+    sku_induk: str | None = Field(default=None, min_length=1, max_length=128)
+    nama_asli: str = Field(min_length=1, max_length=255)
+    gambar_url: str = Field(default="", max_length=2048)
+    varian_list: list[VarianIn] = Field(default_factory=list)
+    harga_jual: NonNegativeMoney = Decimal("0")
+
+    @field_validator("gambar_url")
+    @classmethod
+    def image_url(cls, value):
+        if value:
+            parts = urlsplit(value)
+            if parts.scheme not in {"http", "https"} or not parts.hostname or parts.username or parts.password:
+                raise ValueError("Gambar harus berupa URL HTTP/HTTPS tanpa kredensial")
+        return value
+
+
+class ProdukEditIn(InputBase):
     nama: str = Field(min_length=1, max_length=255)
     jenis: Literal["kayu", "non_kayu"]
     biaya_acuan: NonNegativeMoney = Decimal("0")
+    varian_list: list[VarianIn] = Field(default_factory=list)
+
+
+class ProdukIn(ProdukEditIn):
+    sku: str = Field(min_length=1, max_length=128)
+    sku_induk: str | None = Field(default=None, min_length=1, max_length=128)
+    gambar_url: str = Field(default="", max_length=2048)
+    harga_jual: NonNegativeMoney = Decimal("0")
+    image_url = field_validator("gambar_url")(ProdukSumberIn.image_url.__func__)
 
 
 class ItemIn(InputBase):
+    produk_sumber: ProdukSumberIn | None = None
     sumber_ref: Ref
     produk_id: Id | None = None
     nama_snapshot: str = Field(min_length=1, max_length=255)

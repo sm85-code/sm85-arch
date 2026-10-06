@@ -13,6 +13,7 @@ from sqlalchemy.orm import selectinload
 
 from tenants.bumi_lestari.modules.bumi_lestari.application import keu_services as svc, schemas_keu as sc
 from tenants.bumi_lestari.modules.bumi_lestari.infrastructure import models_keu as m
+from tenants.bumi_lestari.modules.bumi_lestari.application.keu_product_sources import product_metadata
 
 
 async def source_options():
@@ -143,12 +144,13 @@ async def pull(session, user, key, entity, *, tanggal_awal=None, tanggal_akhir=N
         if source.bind.dialect.name == "postgresql":
             await source.execute(text("SET TRANSACTION READ ONLY"))
         rows = (await source.execute(query)).scalars().all()
+        metadata = await product_metadata(source, channel.sistem, rows[:100]) if entity == "order" else {}
         has_more = len(rows) > 100
         next_page = None
         for source_row in rows[:100]:
             if entity == "order":
                 lines = [{"sumber_ref": f"{line.__tablename__}:{line.id}", "produk_id": None,
-                          "nama_snapshot": line.nama_produk,
+                          "nama_snapshot": line.nama_produk, "produk_sumber": metadata.get(line.id),
                           "varian_snapshot": line.model_name if channel.sistem == "marketplace_erp" else line.nama_varian,
                           "qty": line.qty, "harga_satuan": str(line.harga_satuan), "subtotal_sumber": str(line.subtotal)}
                          for line in source_row.items]

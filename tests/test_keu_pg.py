@@ -97,3 +97,51 @@ async def test_reconciliation_and_posted_records_immutable(pg):
         with pytest.raises(IntegrityError):
             async with pg.begin() as conn:
                 await conn.execute(text(statement))
+
+
+@pytest.mark.asyncio
+async def test_product_additive_migration_preserves_legacy_and_is_repeatable(pg):
+    from tenants.bumi_lestari.modules.bumi_lestari.infrastructure.keu_product_migration import VERSION, sql as product_sql
+    assert Path("keu_product_metadata.sql").read_text() == product_sql()
+    async with pg.begin() as conn:
+        for column in ["sku_induk", "nama_asli", "gambar_url", "varian_list", "harga_jual", "status"]:
+            await conn.execute(text(f"ALTER TABLE keu_produk DROP COLUMN {column} CASCADE"))
+        await conn.execute(text("ALTER TABLE keu_produk ALTER COLUMN jenis SET NOT NULL"))
+        await conn.execute(text("UPDATE keu_produk SET biaya_acuan=123.45"))
+        await conn.execute(text("DELETE FROM keu_schema_versions WHERE version=:v"), {"v": VERSION})
+        native = await conn.get_raw_connection()
+        script = product_sql().replace("BEGIN;\n\n", "", 1).rsplit("COMMIT;", 1)[0]
+        await native.driver_connection.execute(script)
+        await native.driver_connection.execute(script)
+        await ensure_keu_schema(conn)
+        row = (await conn.execute(text("SELECT id,sku,nama,nama_asli,jenis,biaya_acuan,status,aktif,varian_list FROM keu_produk"))).mappings().one()
+        assert row["id"] == "p" and row["sku"] == "P" and row["nama_asli"] == row["nama"] == "Kayu"
+        assert str(row["biaya_acuan"]) == "123.45" and row["status"] == "master" and row["aktif"]
+        assert row["varian_list"] == []
+    for statement in ["UPDATE keu_produk SET varian_list='{}'::jsonb", "UPDATE keu_produk SET harga_jual=-1", "UPDATE keu_produk SET jenis=NULL WHERE status='master'"]:
+        with pytest.raises(IntegrityError):
+            async with pg.begin() as conn:
+                await conn.execute(text(statement))
+
+
+@pytest.mark.asyncio
+async def test_concurrent_source_products_share_one_child_sku(pg):
+    from tenants.bumi_lestari.modules.bumi_lestari.application import keu_services as svc, schemas_keu as sc
+    from tenants.bumi_lestari.modules.bumi_lestari.infrastructure.models import BlUser
+    maker = async_sessionmaker(pg, expire_on_commit=False)
+    async def create():
+        async with maker.begin() as session:
+            user = await session.get(BlUser, "u")
+            line = sc.ItemIn(sumber_ref="source", nama_snapshot="Source", qty=1, harga_satuan="10", subtotal_sumber="10",
+                produk_sumber=sc.ProdukSumberIn(sku="CONCURRENT", nama_asli="Source"))
+            return await svc.source_product(session, user, line)
+    keys = await asyncio.gather(create(), create())
+    assert keys[0] == keys[1]
+    async with pg.begin() as conn:
+        assert (await conn.execute(text("SELECT count(*) FROM keu_produk WHERE sku='CONCURRENT'"))).scalar_one() == 1
+        # An unconfirmed draft is blocked even when raw SQL assigns a product kind.
+        await conn.execute(text("UPDATE keu_produk SET jenis='kayu' WHERE sku='CONCURRENT'"))
+        await conn.execute(text("UPDATE keu_item SET produk_id=:p WHERE id='i'"), {"p": keys[0]})
+    with pytest.raises(IntegrityError):
+        async with pg.begin() as conn:
+            await conn.execute(text("INSERT INTO keu_alokasi_vendor(id,item_id,vendor_id,qty,biaya_satuan,dibuat_oleh) VALUES('blocked','i','v1',1,5,'u')"))
