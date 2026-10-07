@@ -29,6 +29,8 @@ from tenants.marketplace_erp.modules.marketplace_erp.application.schemas import 
     ShopeeProdukStatusIn,
     BatalkanPesananIn,
     PembatalanPembeliIn,
+    ReturOut,
+    ReturDaftarOut,
     AkunMarketplaceIn,
     AkunMarketplaceOut,
     AkunMarketplacePatch,
@@ -1716,3 +1718,28 @@ async def laporan_iklan(
     if sampai < dari:
         raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="sampai sebelum dari")
     return await services.laporan_iklan(session, campaign_id, dari=dari, sampai=sampai)
+
+
+@marketplace_erp_router.get("/akun/{akun_id}/retur", response_model=ReturDaftarOut)
+async def daftar_retur_marketplace(
+    akun_id: str,
+    dari: date,
+    sampai: date,
+    halaman: int = Query(1, ge=1),
+    per_halaman: int = Query(40, ge=1, le=100),
+    session: AsyncSession = Depends(get_db_marketplace_erp),
+    user: UserMarketplaceErp = Depends(require_roles_marketplace_erp(*OWNER_OR_STAFF)),
+):
+    await pastikan_akses_akun(user, session, akun_id)
+    return await services.daftar_retur_marketplace(session, akun_id, dari, sampai, halaman, per_halaman)
+
+
+@marketplace_erp_router.get("/akun/{akun_id}/retur/{nomor_retur}", response_model=ReturOut)
+async def detail_retur_marketplace(
+    akun_id: str,
+    nomor_retur: str,
+    session: AsyncSession = Depends(get_db_marketplace_erp),
+    user: UserMarketplaceErp = Depends(require_roles_marketplace_erp(*OWNER_OR_STAFF)),
+):
+    await pastikan_akses_akun(user, session, akun_id)
+    return await services.detail_retur_marketplace(session, akun_id, nomor_retur)

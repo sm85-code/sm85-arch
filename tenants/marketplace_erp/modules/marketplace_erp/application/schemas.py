@@ -763,3 +763,50 @@ class ProdukKeluargaNamaIn(BaseModel):
         if not value:
             raise ValueError("Nama produk induk tidak boleh kosong")
         return value
+
+
+# Read-only returns remain independent from order, inventory and settlement statuses.
+class ReturItemOut(BaseModel):
+    item_id: str | None = None
+    model_id: str | None = None
+    nama: str
+    sku: str | None = None
+    sku_varian: str | None = None
+    qty: int | None = None
+    harga: Decimal | None = None
+    nominal_refund: Decimal | None = None
+
+
+class ReturOut(BaseModel):
+    akun_id: str
+    platform: str
+    nama_toko: str
+    pesanan_id: str | None = None
+    nomor_retur: str
+    nomor_pesanan: str
+    status: str
+    alasan: str | None = None
+    alasan_pembeli: str | None = None
+    alasan_peninjauan: str | None = None
+    nominal_refund: Decimal | None = None
+    mata_uang: str | None = None
+    perlu_pengembalian_barang: bool | None = None
+    solusi: int | None = None
+    dibuat_at: int | None = None
+    diperbarui_at: int | None = None
+    tenggat_at: int | None = None
+    tenggat_kirim_at: int | None = None
+    tenggat_penjual_at: int | None = None
+    nomor_resi: str | None = None
+    kurir: str | None = None
+    status_negosiasi: str | None = None
+    status_bukti: str | None = None
+    status_kompensasi: str | None = None
+    items: list[ReturItemOut] = Field(default_factory=list)
+
+
+class ReturDaftarOut(BaseModel):
+    items: list[ReturOut]
+    halaman: int
+    per_halaman: int
+    ada_lagi: bool

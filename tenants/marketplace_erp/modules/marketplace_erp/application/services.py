@@ -3270,3 +3270,34 @@ async def kelola_produk_shopee(session: AsyncSession, katalog_id: str, *, fields
         # The mutation was confirmed. A failed read must not present it as failed or prompt a duplicate write.
         warnings.append(f"Perubahan berhasil, tetapi snapshot belum diperbarui. Sinkronkan katalog: {exc.detail}")
     return {"ok": True, "snapshot_diperbarui": refreshed, "warnings": warnings, "request_id": result.get("request_id")}
+
+
+async def _lengkapi_retur(session: AsyncSession, akun: AkunMarketplace, rows: list[dict]) -> None:
+    numbers = {r["nomor_pesanan"] for r in rows}
+    ids = dict((await session.execute(select(Pesanan.id_eksternal, Pesanan.id).where(
+        Pesanan.akun_id == akun.id, Pesanan.platform == akun.platform, Pesanan.id_eksternal.in_(numbers),
+    ))).all()) if numbers else {}
+    for row in rows:
+        row.update(akun_id=akun.id, platform=akun.platform, nama_toko=akun.nama_toko,
+                   pesanan_id=ids.get(row["nomor_pesanan"]))
+
+
+async def daftar_retur_marketplace(session: AsyncSession, akun_id: str, dari: date, sampai: date,
+                                   halaman: int = 1, per_halaman: int = 40) -> dict:
+    from tenants.marketplace_erp.modules.marketplace_erp.infrastructure.adapters import erp_shopee_returns
+    akun = await get_akun_marketplace(session, akun_id)
+    if akun.platform != "shopee":
+        raise HTTPException(status_code=409, detail=f"API retur {akun.platform} belum tersedia.")
+    result = await erp_shopee_returns.daftar_retur(session, akun, dari, sampai, halaman, per_halaman)
+    await _lengkapi_retur(session, akun, result["items"])
+    return result
+
+
+async def detail_retur_marketplace(session: AsyncSession, akun_id: str, nomor_retur: str) -> dict:
+    from tenants.marketplace_erp.modules.marketplace_erp.infrastructure.adapters import erp_shopee_returns
+    akun = await get_akun_marketplace(session, akun_id)
+    if akun.platform != "shopee":
+        raise HTTPException(status_code=409, detail=f"API retur {akun.platform} belum tersedia.")
+    result = await erp_shopee_returns.detail_retur(session, akun, nomor_retur)
+    await _lengkapi_retur(session, akun, [result])
+    return result
