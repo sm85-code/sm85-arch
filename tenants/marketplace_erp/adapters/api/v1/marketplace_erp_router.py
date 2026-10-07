@@ -25,6 +25,8 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from tenants.marketplace_erp.modules.marketplace_erp.application import services
 from tenants.marketplace_erp.modules.marketplace_erp.application.schemas import (
     KatalogKirimIn,
+    ShopeeProdukEditIn,
+    ShopeeProdukStatusIn,
     BatalkanPesananIn,
     AkunMarketplaceIn,
     AkunMarketplaceOut,
@@ -1369,6 +1371,26 @@ async def get_katalog_shopee(
 ):
     k, nama_toko = await services.get_katalog_shopee(session, katalog_id)
     return services.katalog_out(k, nama_toko, lengkap=True)
+
+
+@marketplace_erp_router.patch("/katalog-shopee/{katalog_id}/produk")
+async def edit_produk_shopee(
+    katalog_id: str, payload: ShopeeProdukEditIn,
+    session: AsyncSession = Depends(get_db_marketplace_erp),
+    _: UserMarketplaceErp = Depends(require_roles_marketplace_erp(*OWNER_ONLY)),
+):
+    data = payload.model_dump(exclude_none=True)
+    fields = {("item_name" if key == "nama" else "item_sku"): value for key, value in data.items()}
+    return await services.kelola_produk_shopee(session, katalog_id, fields=fields)
+
+
+@marketplace_erp_router.post("/katalog-shopee/{katalog_id}/status")
+async def status_produk_shopee(
+    katalog_id: str, payload: ShopeeProdukStatusIn,
+    session: AsyncSession = Depends(get_db_marketplace_erp),
+    _: UserMarketplaceErp = Depends(require_roles_marketplace_erp(*OWNER_ONLY)),
+):
+    return await services.kelola_produk_shopee(session, katalog_id, unlist=payload.unlist)
 
 
 @marketplace_erp_router.post("/katalog-shopee/kirim-toko")

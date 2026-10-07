@@ -1861,3 +1861,42 @@ def debug_sign_fingerprint() -> str:
 
 # Silence unused import warning for json in case future body dumps need it
 _ = json
+
+
+async def ubah_info_produk(session: Any, akun: Any, item_id: int, fields: dict) -> dict:
+    """Update only submitted name/SKU; leave model, price, stock and shipping metadata untouched."""
+    path = "/api/v2/product/update_item"
+    allowed = {key: value for key, value in fields.items() if key in {"item_name", "item_sku"}}
+    if not allowed or len(allowed) != len(fields):
+        raise HTTPException(status_code=422, detail="Field edit produk tidak didukung")
+    data = await signed_shop_request(session, akun, path, method="POST", body={"item_id": item_id, **allowed})
+    response = data.get("response") or {}
+    if str(response.get("item_id")) != str(item_id):
+        raise ShopeeAPIError(path, "unconfirmed_response", "Perubahan belum terkonfirmasi; periksa/sinkronkan katalog sebelum mencoba kembali.", data.get("request_id"))
+    return data
+
+
+async def ubah_status_produk(session: Any, akun: Any, item_id: int, unlist: bool) -> dict:
+    path = "/api/v2/product/unlist_item"
+    data = await signed_shop_request(session, akun, path, method="POST", body={"item_list": [{"item_id": item_id, "unlist": unlist}]})
+    response = data.get("response") or {}
+    for failed in response.get("failure_list") or []:
+        if str(failed.get("item_id")) == str(item_id):
+            raise ShopeeAPIError(path, "item_rejected", str(failed.get("failed_reason") or "Perubahan status ditolak"), data.get("request_id"))
+    if not any(str(row.get("item_id")) == str(item_id) and row.get("unlist") is unlist for row in response.get("success_list") or []):
+        raise ShopeeAPIError(path, "unconfirmed_response", "Status belum terkonfirmasi; periksa/sinkronkan katalog sebelum mencoba kembali.", data.get("request_id"))
+    return data
+
+
+async def ambil_satu_produk(session: Any, akun: Any, item_id: int) -> dict:
+    data = await signed_shop_request(session, akun, _PATH_ITEM_BASE, params={"item_id_list": str(item_id)})
+    item = next((row for row in (data.get("response") or {}).get("item_list") or [] if str(row.get("item_id")) == str(item_id)), None)
+    if item is None:
+        raise HTTPException(status_code=424, detail="Snapshot produk belum tersedia")
+    models = None
+    if item.get("has_model"):
+        result = await signed_shop_request(session, akun, _PATH_MODEL_LIST, params={"item_id": item_id})
+        models = result.get("response") or {}
+        if not models.get("model"):
+            raise HTTPException(status_code=424, detail="Snapshot varian belum lengkap")
+    return normalisasi_katalog(item, models)
