@@ -28,6 +28,7 @@ from tenants.marketplace_erp.modules.marketplace_erp.application.schemas import 
     ShopeeProdukEditIn,
     ShopeeProdukStatusIn,
     BatalkanPesananIn,
+    PembatalanPembeliIn,
     AkunMarketplaceIn,
     AkunMarketplaceOut,
     AkunMarketplacePatch,
@@ -831,7 +832,7 @@ async def opsi_pengiriman_pesanan(
     await pastikan_akses_akun(user, session, pesanan.akun_id)
     pesanan, akun = await services._pesanan_marketplace(session, pesanan_id)
     from tenants.marketplace_erp.modules.marketplace_erp.infrastructure.adapters import erp_shopee
-    if pesanan.status != "to_ship" or pesanan.status_marketplace in erp_shopee.STATUS_SUDAH_DIPROSES:
+    if pesanan.status != "to_ship" or pesanan.status_marketplace == "IN_CANCEL" or pesanan.status_marketplace in erp_shopee.STATUS_SUDAH_DIPROSES:
         raise HTTPException(status_code=409, detail="Pesanan tidak membutuhkan pengaturan pengiriman.")
     return await erp_shopee.opsi_pengiriman(session, akun, pesanan.id_eksternal)
 
@@ -862,6 +863,18 @@ async def batalkan_pesanan_marketplace(
     pesanan = await services.get_pesanan(session, pesanan_id)
     await pastikan_akses_akun(user, session, pesanan.akun_id)
     return await services.batalkan_pesanan_marketplace(session, pesanan_id, payload.alasan)
+
+
+@marketplace_erp_router.post("/pesanan/{pesanan_id}/pembatalan-pembeli", response_model=PesananOut)
+async def tangani_pembatalan_pembeli(
+    pesanan_id: str,
+    payload: PembatalanPembeliIn,
+    session: AsyncSession = Depends(get_db_marketplace_erp),
+    user: UserMarketplaceErp = Depends(require_roles_marketplace_erp(*OWNER_OR_STAFF)),
+):
+    pesanan = await services.get_pesanan(session, pesanan_id)
+    await pastikan_akses_akun(user, session, pesanan.akun_id)
+    return await services.tangani_pembatalan_pembeli(session, pesanan_id, payload.operasi)
 
 
 @marketplace_erp_router.get("/pesanan/{pesanan_id}/resi")
