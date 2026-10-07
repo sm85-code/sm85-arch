@@ -226,3 +226,17 @@ async def test_fifo_rounding_exact_batch_cost_and_cancelled_order_exclusion(env)
     for entry in reversed(entries):
         await ledger.unpost(s,u,entry['id'],old.BatalIn(alasan='Koreksi FIFO'))
     assert sum(batch['qty'] for batch in await inventory.batches(s,product['id']))==3
+
+
+@pytest.mark.asyncio
+async def test_pending_to_shipped_retains_order_date_not_escrow_update_date(env):
+    s,u,sal,product,_,_=env
+    await initialize(env)
+    pending=test_keu.order_payload(sal,product).model_copy(update={"status_sumber":"pending"})
+    order=await svc.create_order(s,u,pending,from_source=True)
+    assert (await s.execute(select(f.KeuJurnal))).first() is None
+    shipped=pending.model_copy(update={"status_sumber":"shipped","sumber_updated_at":datetime(2026,10,7,tzinfo=timezone.utc)})
+    await svc.create_order(s,u,shipped,from_source=True)
+    journal=(await s.execute(select(f.KeuJurnal))).scalar_one()
+    assert journal.tanggal==DAY and journal.rincian["provenance_tanggal"]=="tanggal_pesanan"
+    assert await accounting.order_balance(s,order['id'],"PIUTANG-KIRIM")==20

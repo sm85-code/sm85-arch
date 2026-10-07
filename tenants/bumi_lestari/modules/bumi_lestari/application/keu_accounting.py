@@ -53,8 +53,8 @@ async def source_order(session, user, order, *, first=False, historical=False):
     if position is None:
         return
     day = order.tanggal
-    provenance = "tanggal_pesanan_backfill"
-    if not first and order.sumber_updated_at:
+    provenance = "tanggal_pesanan_backfill" if first else "tanggal_pesanan"
+    if position == "escrow" and not first and order.sumber_updated_at:
         stamp = order.sumber_updated_at
         if stamp.tzinfo is None:
             stamp = stamp.replace(tzinfo=timezone.utc)
