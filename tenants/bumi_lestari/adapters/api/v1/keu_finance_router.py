@@ -13,6 +13,9 @@ from tenants.bumi_lestari.modules.bumi_lestari.infrastructure.models import BlKa
 
 
 def install(router, DB, ACTOR):
+    from .keu_expenses_router import install as install_expenses
+    install_expenses(router, DB, ACTOR)
+
     @router.get("/buku")
     async def book(session: AsyncSession = DB):
         settings = await ledger.book(session, required=False)

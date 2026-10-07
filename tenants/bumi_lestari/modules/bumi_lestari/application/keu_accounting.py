@@ -69,12 +69,15 @@ async def source_order(session, user, order, *, first=False, historical=False):
 async def cash_transaction(session, user, tx, *, historical=False):
     if await ledger.book(session, required=False) is None or tx.status != "terkirim" or tx.settlement_id:
         return
+    await ledger.chart(session)
     mapping = await session.get(f.KeuKategoriCoa, tx.kategori_id)
     category = await svc.get(session, BlKategori, tx.kategori_id)
     defaults = {
         categories.KATEGORI_SETORAN_MODAL: ("MODAL", "pendanaan"),
         categories.KATEGORI_PRIVE: ("DISTRIBUSI", "pendanaan"),
         categories.KATEGORI_BAGI_HASIL: ("DISTRIBUSI", "pendanaan"),
+        categories.KATEGORI_GAJI: ("BEBAN-GAJI", "operasional"),
+        categories.KATEGORI_BIAYA_IKLAN: ("BEBAN-IKLAN", "operasional"),
         categories.KATEGORI_PRODUKSI: ("HPP-MANUAL", "operasional"),
         categories.KATEGORI_TAGIHAN: ("BEBAN-LANGGANAN", "operasional"),
         categories.KATEGORI_BIAYA_MARKETPLACE: ("BEBAN-MARKETPLACE", "operasional"),
@@ -145,7 +148,8 @@ async def vendor_hpp(session, user, order, *, historical=False):
     total = sum(amounts.values(), ZERO)
     if total:
         lines = [ledger.line(await ledger.coa(session, "HPP-VENDOR"), total, pesanan_id=order.id)]
-        lines.extend(ledger.line(await ledger.coa(session, "UTANG-VENDOR"), -amount, vendor_id=vendor_id, pesanan_id=order.id)
+        debt_account = await ledger.coa(session, "UTANG-VENDOR")
+        lines.extend(ledger.line(debt_account, -amount, vendor_id=vendor_id, pesanan_id=order.id)
                      for vendor_id, amount in sorted(amounts.items()) if amount)
         await ledger.post(session, user, f"order:{order.id}:hpp-vendor", "hpp_vendor", order.tanggal, lines,
                           f"HPP vendor {order.nomor}", pesanan_id=order.id, historical=historical)
