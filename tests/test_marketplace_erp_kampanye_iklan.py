@@ -114,7 +114,7 @@ async def test_a_write_calls_shopee_with_the_validated_body_and_is_logged(monkey
 
     async def fake(session, akun_, path, **kw):
         kirim.update(path=path, **kw)
-        return {"response": []}
+        return {"response": [{"campaign_id": 9}]}
 
     monkeypatch.setattr(erp_shopee, "signed_shop_request", fake)
     with caplog.at_level("WARNING"):

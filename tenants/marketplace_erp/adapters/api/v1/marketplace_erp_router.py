@@ -99,6 +99,8 @@ from tenants.store.modules.store.application import services as store_services
 from tenants.store.modules.store.infrastructure import database as store_database
 from tenants.store.modules.store.infrastructure.media_import import import_foto_dari_url
 
+from .workflow_router import router as workflow_router
+
 logger = logging.getLogger(__name__)
 
 marketplace_erp_router = APIRouter()
@@ -1813,3 +1815,6 @@ async def kelola_barang_promosi(
 ):
     await pastikan_akses_akun(user, session, akun_id)
     return await services.kelola_barang_promosi(session, akun_id, promosi_id, payload)
+
+
+marketplace_erp_router.include_router(workflow_router)
