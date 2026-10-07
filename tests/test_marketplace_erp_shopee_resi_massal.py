@@ -150,6 +150,60 @@ async def test_service_prints_processed_orders_of_one_shop_and_courier(session, 
 
 
 @pytest.mark.asyncio
+async def test_combined_mixed_label_formats_download_as_zip(session, monkeypatch):
+    import io
+    import zipfile
+
+    akun = await _toko(session)
+    html = await _pesanan(session, akun, "HTML", kurir="HTML Courier")
+    pdf = await _pesanan(session, akun, "PDF", kurir="PDF Courier")
+
+    async def fake_banyak(sess, akun_, pesanan, tipe=None):
+        if pesanan[0][0] == "HTML":
+            return b"<!doctype html><html>AWB</html>"
+        return _pdf(1)
+
+    monkeypatch.setattr(erp_shopee, "unduh_resi_banyak", fake_banyak)
+    result = await services.unduh_resi_gabungan(session, [html.id, pdf.id])
+    assert result["mime_type"] == "application/zip" and result["nama_file"].endswith(".zip")
+    assert result["berhasil"] == 2 and result["gagal"] == []
+    with zipfile.ZipFile(io.BytesIO(result["pdf"])) as archive:
+        assert archive.namelist() == ["resi-1.html", "resi-2.pdf"]
+        assert archive.read("resi-1.html").startswith(b"<!doctype html>")
+    assert html.resi_dicetak_at is not None and pdf.resi_dicetak_at is not None
+
+
+@pytest.mark.asyncio
+async def test_single_html_label_uses_attachment_and_correct_filename(session, monkeypatch):
+    akun = await _toko(session)
+    order = await _pesanan(session, akun, "HTML")
+
+    async def fake_label(*args, **kwargs):
+        return b"<!doctype html><html>AWB</html>"
+
+    monkeypatch.setattr(erp_shopee, "unduh_resi", fake_label)
+    result = await router.cetak_resi_pesanan(order.id, tipe=None, session=session,
+                                            user=SimpleNamespace(role="owner", id="u1"))
+    assert result.media_type == "text/html"
+    assert result.headers["content-disposition"] == 'attachment; filename="resi-HTML.html"'
+
+
+@pytest.mark.asyncio
+async def test_invalid_pdf_is_reported_without_marking_printed(session, monkeypatch):
+    akun = await _toko(session)
+    order = await _pesanan(session, akun, "BADPDF")
+
+    async def fake_banyak(*args, **kwargs):
+        return b"%PDF-1.4 corrupt"
+
+    monkeypatch.setattr(erp_shopee, "unduh_resi_banyak", fake_banyak)
+    with pytest.raises(HTTPException) as exc:
+        await services.unduh_resi_gabungan(session, [order.id])
+    assert "tidak valid" in exc.value.detail
+    assert order.resi_dicetak_at is None
+
+
+@pytest.mark.asyncio
 async def test_service_refuses_unprocessed_and_mixed_selections(session, monkeypatch):
     akun, lain = await _toko(session, "A"), await _toko(session, "B")
     lain.id_toko_eksternal = "6"

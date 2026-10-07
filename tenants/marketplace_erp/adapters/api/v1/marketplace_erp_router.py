@@ -704,6 +704,16 @@ def _nama_pengguna(user) -> str | None:
     return getattr(user, "nama", None) or getattr(user, "email", None)
 
 
+def _respons_resi(content: bytes, nama_file: str) -> Response:
+    from tenants.marketplace_erp.modules.marketplace_erp.infrastructure.adapters import erp_shopee
+
+    mime, _ = erp_shopee.format_dokumen_resi(content)
+    disposition = "inline" if mime == "application/pdf" else "attachment"
+    return Response(content=content, media_type=mime,
+                    headers={"Content-Disposition": f'{disposition}; filename="{nama_file}"',
+                             "X-Content-Type-Options": "nosniff"})
+
+
 @marketplace_erp_router.post("/pesanan/{pesanan_id}/resi/tandai", response_model=PesananOut)
 async def tandai_resi_dicetak(
     pesanan_id: str,
@@ -728,7 +738,7 @@ async def cetak_resi_massal(
         pesanan = await services.get_pesanan(session, pesanan_id)
         await pastikan_akses_akun(user, session, pesanan.akun_id)
     pdf, nama_file = await services.unduh_resi_massal(session, payload.pesanan_ids, payload.tipe, _nama_pengguna(user))
-    return Response(content=pdf, media_type="application/pdf", headers={"Content-Disposition": f'inline; filename="{nama_file}"'})
+    return _respons_resi(pdf, nama_file)
 
 
 @marketplace_erp_router.post("/pesanan/resi-gabungan")
@@ -843,7 +853,7 @@ async def cetak_resi_pesanan(
     pesanan = await services.get_pesanan(session, pesanan_id)
     await pastikan_akses_akun(user, session, pesanan.akun_id)
     pdf, nama_file = await services.unduh_resi_pesanan(session, pesanan_id, tipe, _nama_pengguna(user))
-    return Response(content=pdf, media_type="application/pdf", headers={"Content-Disposition": f'inline; filename="{nama_file}"'})
+    return _respons_resi(pdf, nama_file)
 
 
 @marketplace_erp_router.post("/pesanan/{pesanan_id}/pengiriman", response_model=PesananOut)

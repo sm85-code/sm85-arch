@@ -31,6 +31,15 @@ from shared.egress import proxies_for
 
 _log = logging.getLogger(__name__)
 
+
+class ShopeeAPIError(HTTPException):
+    """A structured rejection from Shopee, distinct from an uncertain transport failure."""
+
+    def __init__(self, api_path: str, error: str, message: str, request_id: str | None = None):
+        self.request_id = request_id
+        reference = f" (request_id: {request_id})" if request_id else ""
+        super().__init__(status_code=502, detail=f"Shopee {api_path} gagal: {error} {message}{reference}".strip())
+
 SHOPEE_PARTNER_ID = os.getenv("SHOPEE_PARTNER_ID", "").strip()
 SHOPEE_PARTNER_KEY = os.getenv("SHOPEE_PARTNER_KEY", "").strip()
 SHOPEE_REDIRECT_URI = os.getenv("SHOPEE_REDIRECT_URI", "").strip()
@@ -433,7 +442,7 @@ async def _call_shop_api(
         else:
             resp = requests.post(url, json=body or {}, timeout=timeout, proxies=proxies_for("SHOPEE_PROXY_URL"))
         try:
-            return resp.json()
+            data = resp.json()
         except Exception as exc:  # noqa: BLE001
             if raw and resp.ok and resp.content:
                 return {"_bytes": resp.content}
@@ -441,16 +450,19 @@ async def _call_shop_api(
                 status_code=status.HTTP_502_BAD_GATEWAY,
                 detail=f"Shopee response bukan JSON (HTTP {resp.status_code})",
             ) from exc
+        if not isinstance(data, dict):
+            raise HTTPException(status_code=502, detail="Format respons Shopee tidak valid.")
+        if resp.status_code >= 500 or (not resp.ok and not data.get("error")):
+            raise HTTPException(status_code=502, detail=f"Shopee tidak menjawab dengan sukses (HTTP {resp.status_code}).")
+        return data
 
     data = await asyncio.to_thread(_do)
     if "_bytes" in data:
         return data
     # Shopee reports failures as error/message, often with HTTP 200.
     if data.get("error"):
-        raise HTTPException(
-            status_code=status.HTTP_502_BAD_GATEWAY,
-            detail=f"Shopee {api_path} gagal: {data.get('error')} {data.get('message', '')}".strip(),
-        )
+        _log.warning("Shopee rejection path=%s request_id=%s", api_path, data.get("request_id"))
+        raise ShopeeAPIError(api_path, str(data["error"]), str(data.get("message", "")), data.get("request_id"))
     return data
 
 
@@ -1410,7 +1422,7 @@ def pilih_parameter_kirim(param: dict, nama_toko: str) -> dict:
     info = param.get("info_needed") or {}
     pickup = param.get("pickup") or {}
     addresses = pickup.get("address_list") or []
-    if addresses:
+    if "pickup" in info and addresses:
         needed = info.get("pickup") or []
         if "tracking_number" in needed:
             raise HTTPException(
@@ -1435,7 +1447,7 @@ def pilih_parameter_kirim(param: dict, nama_toko: str) -> dict:
 
     dropoff = param.get("dropoff") or {}
     needed = info.get("dropoff") or []
-    if "dropoff" in info or "dropoff" in param:
+    if "dropoff" in info:
         if "tracking_no" in needed or "tracking_number" in needed:
             raise HTTPException(
                 status_code=status.HTTP_409_CONFLICT,
@@ -1470,7 +1482,7 @@ def opsi_parameter_kirim(param: dict, nama_toko: str) -> dict:
     opsi = []
     for metode, supported in (("dropoff", {"branch_id", "sender_real_name"}),
                               ("pickup", {"address_id", "pickup_time_id"})):
-        if metode not in info and metode not in param:
+        if metode not in info:
             continue
         needed = info.get(metode) or []
         data = param.get(metode) or {}
@@ -1542,17 +1554,28 @@ def parameter_kirim_eksplisit(param: dict, nama_toko: str, pengaturan: dict) -> 
     return {metode: body}
 
 
-async def pastikan_belum_diproses(session: Any, akun: Any, order_sn: str) -> None:
-    data = await signed_shop_request(session, akun, _PATH_ORDER_DETAIL, params={"order_sn_list": order_sn})
+async def pastikan_belum_diproses(session: Any, akun: Any, order_sn: str) -> dict:
+    data = await signed_shop_request(session, akun, _PATH_ORDER_DETAIL,
+                                     params={"order_sn_list": order_sn, "response_optional_fields": "package_list"})
     orders = (data.get("response") or {}).get("order_list") or []
     order = next((o for o in orders if o.get("order_sn") == order_sn), None)
     if not order or order.get("order_status") not in {"READY_TO_SHIP", "RETRY_SHIP"}:
         raise HTTPException(status_code=409, detail="Pesanan tidak siap diproses atau sudah diproses di Shopee. Sinkronkan status terlebih dahulu.")
+    if len(order.get("package_list") or []) > 1:
+        raise HTTPException(status_code=409, detail="Pesanan memiliki beberapa paket. Proses pengiriman melalui Seller Centre Shopee.")
+    return order
 
 
 async def opsi_pengiriman(session: Any, akun: Any, order_sn: str) -> dict:
+    order = await pastikan_belum_diproses(session, akun, order_sn)
     data = await signed_shop_request(session, akun, _PATH_SHIP_PARAM, params={"order_sn": order_sn})
-    return opsi_parameter_kirim(data.get("response") or {}, akun.nama_toko)
+    opsi = opsi_parameter_kirim(data.get("response") or {}, akun.nama_toko)
+    if order["order_status"] == "RETRY_SHIP":
+        opsi["opsi"] = [o for o in opsi["opsi"] if o["metode"] == "pickup"]
+        opsi["aksi"] = "pickup_ulang"
+    else:
+        opsi["aksi"] = "pengiriman"
+    return opsi
 
 
 async def ambil_nomor_resi(session: Any, akun: Any, order_sn: str) -> str | None:
@@ -1569,15 +1592,22 @@ async def proses_pengiriman(session: Any, akun: Any, order_sn: str, pengaturan: 
     """Arrange shipment on Shopee (get_shipping_parameter -> ship_order) and fetch the tracking number."""
     if not live_sync_enabled() or not _akun_configured(akun):
         raise ShopeeNotConfigured("Shopee live sync nonaktif atau akun belum terhubung.")
-    if pengaturan is not None:
-        await pastikan_belum_diproses(session, akun, order_sn)
+    order = await pastikan_belum_diproses(session, akun, order_sn)
     data = await signed_shop_request(session, akun, _PATH_SHIP_PARAM, params={"order_sn": order_sn})
     mode = (parameter_kirim_eksplisit(data.get("response") or {}, akun.nama_toko, pengaturan)
             if pengaturan is not None else pilih_parameter_kirim(data.get("response") or {}, akun.nama_toko))
+    if pengaturan is None and "non_integrated" not in mode:
+        metode = next(iter(mode))
+        mode = parameter_kirim_eksplisit(data.get("response") or {}, akun.nama_toko, {"metode": metode, **mode[metode]})
+    path = _PATH_SHIP_ORDER
+    if order["order_status"] == "RETRY_SHIP":
+        if "pickup" not in mode:
+            raise HTTPException(status_code=409, detail="Penjadwalan ulang hanya mendukung pickup. Gunakan Seller Centre untuk metode lainnya.")
+        path = "/api/v2/logistics/update_shipping_order"
     try:
-        await signed_shop_request(session, akun, _PATH_SHIP_ORDER, method="POST", body={"order_sn": order_sn, **mode})
+        await signed_shop_request(session, akun, path, method="POST", body={"order_sn": order_sn, **mode})
     except HTTPException as exc:
-        if " gagal:" in str(exc.detail):
+        if isinstance(exc, ShopeeAPIError):
             raise HTTPException(status_code=424, detail=exc.detail) from exc
         raise HTTPException(status_code=409, detail="Hasil pengaturan pengiriman belum dapat dipastikan. Sinkronkan status sebelum mencoba lagi.") from exc
     except Exception as exc:
@@ -1611,6 +1641,21 @@ def pilih_template_resi(hasil: dict, tipe: str | None) -> str:
 
 # Shopee prints at most this many labels per download, all from one courier.
 MAKS_RESI_MASSAL = 50
+
+
+def format_dokumen_resi(content: bytes) -> tuple[str, str]:
+    """Detect the actual label format; never serve an unknown body as a PDF."""
+    import io
+    import zipfile
+
+    if content.lstrip().startswith(b"%PDF-"):
+        return "application/pdf", "pdf"
+    if zipfile.is_zipfile(io.BytesIO(content)):
+        return "application/zip", "zip"
+    awal = content.lstrip(b"\xef\xbb\xbf \t\r\n")[:1024].lower()
+    if awal.startswith((b"<!doctype html", b"<html")):
+        return "text/html", "html"
+    raise HTTPException(status_code=424, detail="Format file resi dari Shopee tidak dikenali. Unduh melalui Seller Centre.")
 
 
 def _gagal(result_list: list[dict]) -> str | None:
@@ -1708,6 +1753,7 @@ async def unduh_resi_banyak(
     pdf = data.get("_bytes")
     if not pdf:
         raise HTTPException(status_code=status.HTTP_424_FAILED_DEPENDENCY, detail="Shopee tidak mengirim file resi.")
+    format_dokumen_resi(pdf)
     return pdf
 
 
