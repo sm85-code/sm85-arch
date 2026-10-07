@@ -5,10 +5,10 @@ from datetime import date
 from typing import Literal
 from pydantic import AwareDatetime
 
-from fastapi import APIRouter, Depends, File, Form, HTTPException, Query, Response, UploadFile
+from fastapi import APIRouter, Depends, File, Form, HTTPException, Query, Request, Response, UploadFile
 from fastapi.routing import APIRoute
 from sqlalchemy import select
-from sqlalchemy.exc import IntegrityError
+from sqlalchemy.exc import DBAPIError, IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from tenants.bumi_lestari.modules.bumi_lestari.application import keu_import, keu_reset, keu_services as svc, keu_sync, schemas_keu as sc
@@ -38,7 +38,20 @@ async def finance_user(user: BlUser = Depends(require_roles_bumi_lestari("admin"
 
 
 router = APIRouter(prefix="/keu", route_class=SafeWriteRoute, dependencies=[Depends(finance_user)])
-DB = Depends(get_db_bumi_lestari)
+async def financial_db(request: Request, session: AsyncSession = Depends(get_db_bumi_lestari)):
+    if request.method != "GET":
+        from tenants.bumi_lestari.modules.bumi_lestari.application import keu_ledger
+        try:
+            if session.bind.dialect.name == "postgresql":
+                from sqlalchemy import text
+                await session.execute(text("SET LOCAL lock_timeout = '5s'"))
+            await keu_ledger.lock(session)
+        except DBAPIError:
+            raise HTTPException(409, "Keuangan sedang diproses; coba kembali setelah transaksi selesai") from None
+    return session
+
+
+DB = Depends(financial_db)
 ACTOR = Depends(finance_user)
 
 
@@ -267,3 +280,8 @@ async def unpost_transaction(key: str, payload: sc.BatalIn, session: AsyncSessio
 @router.post("/settlement/{key}/unpost")
 async def unpost_settlement(key: str, payload: sc.BatalIn, session: AsyncSession = DB, actor: BlUser = ACTOR):
     return await svc.unpost_settlement(session, actor, key, payload)
+
+
+from .keu_finance_router import install as install_finance  # noqa: E402
+
+install_finance(router, DB, ACTOR)

@@ -13,6 +13,7 @@ from tenants.bumi_lestari.modules.bumi_lestari.application.services import pasti
 from tenants.bumi_lestari.modules.bumi_lestari.application import schemas_keu as sc
 from tenants.bumi_lestari.modules.bumi_lestari.infrastructure import models_keu as m
 from tenants.bumi_lestari.modules.bumi_lestari.infrastructure.models import BlKategori, BlUser
+from tenants.bumi_lestari.modules.bumi_lestari.infrastructure import models_keu_finance as fm
 
 MASTERS = {"saluran": m.KeuSaluran, "akun": m.KeuAkun, "pelanggan": m.KeuPelanggan,
            "vendor": m.KeuVendor, "produk": m.KeuProduk}
@@ -147,7 +148,11 @@ async def page(session, model, limit=50, offset=0, search=None, status="pengerja
 
 
 async def create_master(session, user, name, payload):
+    from . import keu_ledger
+    await keu_ledger.lock(session)
     values = payload.model_dump()
+    if name == "akun" and values.get("saldo_awal") and await keu_ledger.book(session, required=False):
+        bad("Buku besar sudah aktif; saldo akun baru dicatat melalui jurnal modal, bukan saldo_awal", 409)
     if name == "vendor" and values.get("kode") is None:
         values.pop("kode")
     if name == "produk":
@@ -156,6 +161,8 @@ async def create_master(session, user, name, payload):
     session.add(obj)
     await session.flush()
     await audit(session, user, obj)
+    if name == "akun" and await keu_ledger.book(session, required=False):
+        await keu_ledger.chart(session)
     return record(obj)
 
 
@@ -222,6 +229,8 @@ async def master_status(session, user, name, key, payload):
 
 
 async def edit_master(session, user, name, key, payload):
+    from . import keu_ledger
+    await keu_ledger.lock(session)
     obj = await get(session, MASTERS[name], key, lock=True)
     values = payload.model_dump()
     protected = {"akun": {"jenis", "saldo_awal"}, "saluran": {"sistem", "akun_ref"}}
@@ -332,6 +341,8 @@ async def order_detail(session, key):
 
 
 async def create_order(session: AsyncSession, user: BlUser, payload: sc.PesananIn, *, from_source=False):
+    from . import keu_ledger
+    await keu_ledger.lock(session)
     saluran = await channel(session, payload.saluran_id, manual=not from_source)
     # Channel lock serializes manual imports/source upserts sharing the same key.
     await session.execute(select(m.KeuSaluran).where(m.KeuSaluran.id == saluran.id).with_for_update())
@@ -368,10 +379,14 @@ async def create_order(session: AsyncSession, user: BlUser, payload: sc.PesananI
         session.add(m.KeuItem(pesanan_id=obj.id, **line.model_dump(exclude={"produk_sumber"})))
     await session.flush()
     await audit(session, user, obj)
+    from . import keu_accounting
+    await keu_accounting.source_order(session, user, obj, first=True)
     return await order_detail(session, obj.id)
 
 
 async def update_source_order(session, user, order, payload):
+    from . import keu_ledger
+    await keu_ledger.lock(session)
     if order.sumber_updated_at and payload.sumber_updated_at:
         old_time = order.sumber_updated_at
         if old_time.tzinfo is None:
@@ -379,6 +394,8 @@ async def update_source_order(session, user, order, payload):
             old_time = old_time.replace(tzinfo=timezone.utc)
         if payload.sumber_updated_at < old_time:
             return await order_detail(session, order.id)
+    if order.total_sumber != payload.total_sumber and (await session.execute(select(fm.KeuJurnal.id).where(fm.KeuJurnal.pesanan_id == order.id, fm.KeuJurnal.status == "terkirim").limit(1))).first():
+        bad("Nilai sumber sudah dijurnal; lakukan rekonsiliasi keuangan terlebih dahulu", 409)
     before = record(order)
     order.status_sumber = payload.status_sumber
     order.sumber_updated_at = payload.sumber_updated_at
@@ -414,10 +431,15 @@ async def update_source_order(session, user, order, payload):
                     setattr(row, key, value)
     await session.flush()
     await audit(session, user, order, "sinkron", before)
+    from . import keu_accounting
+    await keu_accounting.source_order(session, user, order)
     return await order_detail(session, order.id)
 
 
 async def map_item(session, user, key, payload):
+    from . import keu_inventory
+    if await keu_inventory.used_item(session, key):
+        bad("Batalkan pemakaian stok sebelum mengganti pemetaan", 409)
     item, order = await lock_item(session, key)
     if order.status in {"selesai", "batal"}:
         bad("Pesanan sudah selesai atau batal", 409)
@@ -434,6 +456,8 @@ async def map_item(session, user, key, payload):
 
 
 async def order_status(session, user, key, payload):
+    from . import keu_ledger
+    await keu_ledger.lock(session)
     order = await get(session, m.KeuPesanan, key, lock=True)
     transitions = {"draf": {"aktif", "batal"}, "aktif": {"selesai", "batal"}, "selesai": set(), "batal": set()}
     if order.status == "batal" and payload.status == "batal":
@@ -444,25 +468,36 @@ async def order_status(session, user, key, payload):
         bad("Alasan pembatalan wajib diisi")
     ids = list((await session.execute(select(m.KeuItem.id).where(m.KeuItem.pesanan_id == key))).scalars())
     if payload.status == "batal":
+        from . import keu_inventory
+        if any([await keu_inventory.used_item(session, item_id) for item_id in ids]):
+            bad("Batalkan pemakaian stok terlebih dahulu", 409)
         posted_source = (await session.execute(select(m.KeuSettlement.id).where(m.KeuSettlement.saluran_id == order.saluran_id,
-            m.KeuSettlement.rincian["order_sn"].as_string() == order.nomor, m.KeuSettlement.status != "draf").limit(1))).first()
+            m.KeuSettlement.rincian["order_sn"].as_string() == order.nomor, m.KeuSettlement.status == "terkirim").limit(1))).first()
         if posted_source:
             bad("Settlement sudah diposting; lakukan koreksi keuangan terlebih dahulu", 409)
-        if (await session.execute(select(m.KeuAlokasiVendor.id).where(m.KeuAlokasiVendor.item_id.in_(ids), m.KeuAlokasiVendor.dibatalkan.is_(False)))).first() or (await session.execute(select(m.KeuAlokasiSettlement.id).where(m.KeuAlokasiSettlement.item_id.in_(ids)))).first():
+        if (await session.execute(select(m.KeuAlokasiVendor.id).where(m.KeuAlokasiVendor.item_id.in_(ids), m.KeuAlokasiVendor.dibatalkan.is_(False)))).first() or (await session.execute(select(m.KeuAlokasiSettlement.id).join(m.KeuSettlement, m.KeuSettlement.id == m.KeuAlokasiSettlement.settlement_id).where(m.KeuAlokasiSettlement.item_id.in_(ids), m.KeuSettlement.status != "dibatalkan"))).first():
             bad("Batalkan alokasi terlebih dahulu; settlement harus dikoreksi terpisah", 409)
     if payload.status in {"aktif", "selesai"}:
         for item in (await session.execute(select(m.KeuItem).where(m.KeuItem.pesanan_id == key).with_for_update())).scalars():
             allocated = (await session.execute(select(func.coalesce(func.sum(m.KeuAlokasiVendor.qty), 0)).where(m.KeuAlokasiVendor.item_id == item.id, m.KeuAlokasiVendor.dibatalkan.is_(False)))).scalar_one()
+            from . import keu_inventory
+            allocated += await keu_inventory.used_item(session, item.id)
             if not item.produk_id or allocated != item.qty:
                 bad("Petakan produk dan lengkapi alokasi vendor sebelum memajukan status", 409)
+    if payload.status == "batal":
+        await keu_ledger.cancel_order(session, user, order.id, payload.alasan)
     before = record(order)
     order.status = payload.status
     await session.flush()
     await audit(session, user, order, "status", before, payload.alasan)
+    from . import keu_accounting
+    await keu_accounting.vendor_hpp(session, user, order)
     return record(order)
 
 
 async def allocate_vendor(session, user, payload):
+    from . import keu_ledger
+    await keu_ledger.lock(session)
     item, order = await lock_item(session, payload.item_id)
     if order.status in {"selesai", "batal"}:
         bad("Pesanan sudah selesai atau batal", 409)
@@ -476,6 +511,8 @@ async def allocate_vendor(session, user, payload):
     row = (await session.execute(select(m.KeuAlokasiVendor).where(m.KeuAlokasiVendor.item_id == item.id, m.KeuAlokasiVendor.vendor_id == vendor.id))).scalar_one_or_none()
     if row and not row.dibatalkan:
         bad("Vendor sudah dialokasikan untuk item ini", 409)
+    from . import keu_inventory
+    used += await keu_inventory.used_item(session, item.id)
     if used + payload.qty > item.qty:
         bad("Kuantitas alokasi melebihi item", 409)
     if row:
@@ -491,6 +528,8 @@ async def allocate_vendor(session, user, payload):
 
 
 async def cancel_allocation(session, user, key, payload):
+    from . import keu_ledger
+    await keu_ledger.lock(session)
     row = await get(session, m.KeuAlokasiVendor, key)
     _, order = await lock_item(session, row.item_id)
     if order.status in {"selesai", "batal"}:
@@ -575,6 +614,8 @@ async def transaction(session, user, payload, *, settlement_id=None):
 
 
 async def post_transaction(session, user, key):
+    from . import keu_ledger
+    await keu_ledger.lock(session)
     row = await get(session, m.KeuTransaksi, key)
     settlement = await get(session, m.KeuSettlement, row.settlement_id, lock=True) if row.settlement_id else None
     row = await get(session, m.KeuTransaksi, key, lock=True)
@@ -594,10 +635,14 @@ async def post_transaction(session, user, key):
     row.status = "terkirim"
     await session.flush()
     await audit(session, user, row, "posting", before)
+    from . import keu_accounting
+    await keu_accounting.cash_transaction(session, user, row)
     return record(row)
 
 
 async def post_settlement(session, user, key, payload):
+    from . import keu_ledger
+    await keu_ledger.lock(session)
     row = await get(session, m.KeuSettlement, key, lock=True)
     if row.status == "terkirim":
         return record(row)
@@ -621,6 +666,8 @@ async def post_settlement(session, user, key, payload):
     row.status = "terkirim"
     await session.flush()
     await audit(session, user, row, "posting", before)
+    from . import keu_accounting
+    await keu_accounting.settlement(session, user, row)
     return record(row)
 
 
@@ -632,9 +679,13 @@ async def cancel_posted(session, user, row, reason):
     row.dibatalkan_at = datetime.now(timezone.utc)
     await session.flush()
     await audit(session, user, row, "unpost", before, reason)
+    from . import keu_ledger
+    await keu_ledger.cancel_references(session, user, row, reason)
 
 
 async def unpost_settlement(session, user, key, payload):
+    from . import keu_ledger
+    await keu_ledger.lock(session)
     row = await get(session, m.KeuSettlement, key, lock=True)
     if row.status == "dibatalkan":
         return record(row)
@@ -658,6 +709,8 @@ async def unpost_settlement(session, user, key, payload):
 
 
 async def unpost_transaction(session, user, key, payload):
+    from . import keu_ledger
+    await keu_ledger.lock(session)
     row = await get(session, m.KeuTransaksi, key)
     if row.settlement_id:
         await unpost_settlement(session, user, row.settlement_id, payload)
@@ -689,6 +742,11 @@ async def dashboard(session):
         if model is m.KeuItem:
             stmt = stmt.where(m.KeuItem.pesanan_id.in_(select(m.KeuPesanan.id).where(m.KeuPesanan.status != "batal")))
         counts[label] = (await session.execute(stmt)).scalar_one()
+    from . import keu_ledger
+    if await keu_ledger.book(session, required=False):
+        cash = (await session.execute(select(fm.KeuJurnalBaris.arus, func.sum(fm.KeuJurnalBaris.debet), func.sum(fm.KeuJurnalBaris.kredit)).join(fm.KeuJurnal, fm.KeuJurnal.id == fm.KeuJurnalBaris.jurnal_id).join(fm.KeuCoa, fm.KeuCoa.id == fm.KeuJurnalBaris.coa_id).where(keu_ledger.visible(), fm.KeuCoa.kas_akun_id.is_not(None), fm.KeuJurnal.jenis != "pembukaan").group_by(fm.KeuJurnalBaris.arus))).all()
+        totals = {"masuk": sum((debet for arus, debet, kredit in cash if arus != "mutasi"), zero), "keluar": sum((kredit for arus, debet, kredit in cash if arus != "mutasi"), zero)}
+        initial = (await session.execute(select(func.coalesce(func.sum(fm.KeuJurnalBaris.debet-fm.KeuJurnalBaris.kredit), 0)).join(fm.KeuJurnal, fm.KeuJurnal.id == fm.KeuJurnalBaris.jurnal_id).join(fm.KeuCoa, fm.KeuCoa.id == fm.KeuJurnalBaris.coa_id).where(keu_ledger.visible(), fm.KeuCoa.kas_akun_id.is_not(None), fm.KeuJurnal.jenis == "pembukaan"))).scalar_one()
     return {**counts, "saldo_kas": str(initial + totals.get("masuk", zero) - totals.get("keluar", zero)),
             "kas_masuk": str(totals.get("masuk", zero)), "kas_keluar": str(totals.get("keluar", zero)),
             "nilai_pesanan": str(sales), "biaya_vendor": str(cost)}

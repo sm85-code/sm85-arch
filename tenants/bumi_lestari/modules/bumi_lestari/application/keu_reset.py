@@ -12,11 +12,12 @@ from sqlalchemy.sql.ddl import sort_tables
 from shared.security import verify_password
 from . import keu_services as svc
 from .audit_core import catat_audit
-from ..infrastructure import models_keu as m
+from ..infrastructure import models_keu as m, models_keu_finance as f
 from ..infrastructure.models import BlAuditLog
 
 RESET_MODELS = (m.KeuPesanan, m.KeuItem, m.KeuAlokasiVendor, m.KeuSettlement,
-                m.KeuAlokasiSettlement, m.KeuTransaksi, m.KeuImpor, m.KeuMasukan, m.KeuCursor)
+                m.KeuAlokasiSettlement, m.KeuTransaksi, m.KeuImpor, m.KeuMasukan, m.KeuCursor,
+                f.KeuBuku, f.KeuJurnal, f.KeuJurnalBaris, f.KeuStokMutasi, f.KeuStokPemakaian)
 
 
 def owner(user):
@@ -58,6 +59,8 @@ async def inventory(session):
 
 async def preview(session, user):
     owner(user)
+    from . import keu_ledger
+    await keu_ledger.lock(session)
     try:
         await lock_tables(session)
         counts, fingerprint = await inventory(session)
@@ -75,6 +78,8 @@ async def preview(session, user):
 
 async def execute(session, user, payload):
     owner(user)
+    from . import keu_ledger
+    await keu_ledger.lock(session)
     if not verify_password(payload.password.get_secret_value(), user.password_hash):
         svc.bad("Password owner tidak sesuai", 403)
     challenge = (await session.execute(select(BlAuditLog).where(BlAuditLog.id == payload.challenge_id).with_for_update())).scalar_one_or_none()
