@@ -437,14 +437,28 @@ async def _call_shop_api(
     url = f"{_host()}{api_path}?{urlencode(query, doseq=True)}"
 
     def _do() -> dict:
-        if method.upper() == "GET":
-            resp = requests.get(url, timeout=timeout, proxies=proxies_for("SHOPEE_PROXY_URL"))
-        else:
-            resp = requests.post(url, json=body or {}, timeout=timeout, proxies=proxies_for("SHOPEE_PROXY_URL"))
+        try:
+            if method.upper() == "GET":
+                resp = requests.get(
+                    url, timeout=timeout, proxies=proxies_for("SHOPEE_PROXY_URL"), allow_redirects=False
+                )
+            else:
+                resp = requests.post(
+                    url,
+                    json=body or {},
+                    timeout=timeout,
+                    proxies=proxies_for("SHOPEE_PROXY_URL"),
+                    allow_redirects=False,
+                )
+        except requests.RequestException as exc:
+            raise HTTPException(
+                status_code=502,
+                detail="Koneksi Shopee terputus. Jika mengirim perubahan, periksa status sebelum mencoba ulang.",
+            ) from exc
         try:
             data = resp.json()
         except Exception as exc:  # noqa: BLE001
-            if raw and resp.ok and resp.content:
+            if raw and 200 <= resp.status_code < 300 and resp.content:
                 return {"_bytes": resp.content}
             raise HTTPException(
                 status_code=status.HTTP_502_BAD_GATEWAY,
@@ -452,15 +466,18 @@ async def _call_shop_api(
             ) from exc
         if not isinstance(data, dict):
             raise HTTPException(status_code=502, detail="Format respons Shopee tidak valid.")
-        if resp.status_code >= 500 or (not resp.ok and not data.get("error")):
-            raise HTTPException(status_code=502, detail=f"Shopee tidak menjawab dengan sukses (HTTP {resp.status_code}).")
+        if resp.status_code >= 500 or (not 200 <= resp.status_code < 300 and not str(data.get("error") or "").strip()):
+            reference = f" (request_id: {data['request_id']})" if data.get("request_id") else ""
+            failure = HTTPException(status_code=502, detail=f"Shopee tidak menjawab dengan sukses (HTTP {resp.status_code}).{reference}")
+            failure.request_id = data.get("request_id")
+            raise failure
         return data
 
     data = await asyncio.to_thread(_do)
     if "_bytes" in data:
         return data
     # Shopee reports failures as error/message, often with HTTP 200.
-    if data.get("error"):
+    if str(data.get("error") or "").strip():
         _log.warning("Shopee rejection path=%s request_id=%s", api_path, data.get("request_id"))
         raise ShopeeAPIError(api_path, str(data["error"]), str(data.get("message", "")), data.get("request_id"))
     return data

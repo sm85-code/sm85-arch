@@ -71,6 +71,12 @@ async def upload(session, akun, content: bytes, *, nomor_retur: str | None = Non
                 path, "unconfirmed_upload", "URL bukti belum terkonfirmasi.", data.get("request_id")
             )
         return {"url": r["url"], "request_id": data.get("request_id")}
+    entries = r.get("image_info_list") or []
+    for entry in entries:
+        if str(entry.get("error") or "").strip():
+            raise shopee.ShopeeAPIError(
+                path, str(entry["error"]), str(entry.get("message") or ""), data.get("request_id")
+            )
     image = r.get("image_info") or {}
     if not image:
         entries = r.get("image_info_list") or []

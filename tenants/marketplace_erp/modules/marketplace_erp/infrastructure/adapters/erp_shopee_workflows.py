@@ -95,7 +95,8 @@ def validate_publication(payload, meta):
             ):
                 reject("Pilihan atribut tidak boleh duplikat.")
             for val in chosen.attribute_value_list:
-                ref = values.get(val.value_id)
+                custom = val.value_id == 0 and info.get("input_type") in (2, 3, 5)
+                ref = None if custom else values.get(val.value_id)
                 if ref is None and (val.value_id != 0 or info.get("input_type") not in (2, 3, 5)):
                     reject("Pilihan atribut tidak tersedia pada kategori tujuan.")
                 if ref and val.original_value_name != ref.get("name"):
@@ -181,8 +182,16 @@ def parent_body(p):
         ],
         "brand": {"brand_id": p.brand_id, "original_brand_name": p.brand_name},
         "item_dangerous": p.item_dangerous,
-        **({"size_chart": p.size_chart} if p.size_chart else {}),
-        **({"size_chart_id": p.size_chart_id} if p.size_chart_id else {}),
+        **(
+            {
+                "size_chart_info": {
+                    **({"size_chart": p.size_chart} if p.size_chart else {}),
+                    **({"size_chart_id": p.size_chart_id} if p.size_chart_id else {}),
+                }
+            }
+            if p.size_chart or p.size_chart_id
+            else {}
+        ),
         **({"gtin_code": p.gtin_code} if p.gtin_code else {}),
     }
 
