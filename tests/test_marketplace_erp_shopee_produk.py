@@ -68,7 +68,7 @@ def test_normalisasi_item_without_variants():
         "id_eksternal": "9001",
         "nama_produk": "Kaos Polos",
         "sku": "KAOS",
-        "harga": Decimal("50000"),
+        "harga": Decimal("60000"),
         "stok": 7,
         "aktif": True,
     }
@@ -255,3 +255,20 @@ async def test_kirim_stok_harga_groups_by_item_and_reports_failures(live, monkey
     assert out["stok_ok"] == 1 and out["harga_ok"] == 0
     alasan = {(g["id_eksternal"], g["alasan"].split(":")[0]) for g in out["gagal"]}
     assert ("9001:12", "stok") in alasan and ("9001:11", "harga") in alasan and ("bukan-shopee", "id_eksternal bukan format Shopee") in alasan
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("failure", ["cursor", "base", "models", "response"])
+async def test_incomplete_catalogue_is_not_imported(live, monkeypatch, failure):
+    async def fake_request(session, akun, path, **kwargs):
+        if path == erp_shopee._PATH_ITEM_LIST:
+            if failure == "response":
+                return {}
+            return {"response": {"item": [{"item_id": 1}], "has_next_page": failure == "cursor", "next_offset": 0}}
+        if path == erp_shopee._PATH_ITEM_BASE:
+            return {"response": {"item_list": [] if failure == "base" else [{"item_id": 1, "has_model": True}]}}
+        return {"response": {"model": []}}
+    monkeypatch.setattr(erp_shopee, "signed_shop_request", fake_request)
+    with pytest.raises(HTTPException) as exc:
+        await erp_shopee.sync_produk(None, live)
+    assert exc.value.status_code == 424

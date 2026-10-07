@@ -52,7 +52,7 @@ async def test_by_default_orders_stay_when_the_shop_is_removed(session):
 
 
 @pytest.mark.asyncio
-async def test_a_product_with_stock_history_can_be_deleted(session):
+async def test_product_with_stock_history_cannot_be_deleted(session):
     from decimal import Decimal as D
 
     from sqlalchemy import func, select
@@ -64,9 +64,11 @@ async def test_a_product_with_stock_history_can_be_deleted(session):
     asli = await services.create_produk(session, ProdukIn(sku_induk="ASLI-1", nama="Asli", harga_dasar=D("9000"), stok=5))
     await services.adjust_stok(session, StokAdjustIn(produk_id=uji.id, qty_delta=3, catatan="restock"))
     await services.adjust_stok(session, StokAdjustIn(produk_id=asli.id, qty_delta=1))
-    await services.delete_produk(session, uji.id)
-    assert [p.sku_induk for p in (await session.execute(select(Produk))).scalars()] == ["ASLI-1"]
-    # Only the deleted product's history is gone.
-    sisa = (await session.execute(select(func.count()).select_from(StokLedger).where(StokLedger.produk_id == uji.id))).scalar_one()
-    assert sisa == 0
+    from fastapi import HTTPException
+
+    with pytest.raises(HTTPException) as exc:
+        await services.delete_produk(session, uji.id)
+    assert exc.value.status_code == 409
+    assert len((await session.execute(select(Produk))).scalars().all()) == 2
+    assert (await session.execute(select(func.count()).select_from(StokLedger).where(StokLedger.produk_id == uji.id))).scalar_one() >= 2
     assert (await session.execute(select(func.count()).select_from(StokLedger).where(StokLedger.produk_id == asli.id))).scalar_one() >= 1

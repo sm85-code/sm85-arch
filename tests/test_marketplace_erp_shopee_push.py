@@ -206,3 +206,8 @@ async def test_push_pulls_the_shop_it_names_and_ignores_unknown_ones(session, mo
     monkeypatch.setattr(services, "sinkron_semua_pesanan", fake)
     assert await services.sinkron_karena_push(session, "727720655") == "ok"
     assert dipanggil[0][0] == [akun] and dipanggil[0][1]["jeda_detik"] == 3
+
+
+def test_callback_registration_and_verification_share_configured_url(monkeypatch):
+    monkeypatch.setenv("SHOPEE_PUSH_URL", "https://example.test/custom-hook")
+    assert shopee_push.callback_url() == shopee_push.kandidat_url("http://internal/", {})[0]

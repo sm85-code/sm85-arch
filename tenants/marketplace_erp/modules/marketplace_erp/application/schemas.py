@@ -317,6 +317,7 @@ class ProdukListingOut(BaseModel):
 class StokAdjustIn(BaseModel):
     produk_id: str
     qty_delta: int
+    expected_stock: Optional[int] = None
     catatan: Optional[str] = None
     gudang_id: Optional[str] = None
 

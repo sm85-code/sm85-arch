@@ -1084,7 +1084,7 @@ async def baca_pengaturan_push(_: UserMarketplaceErp = Depends(require_roles_mar
         jarak = await erp_shopee.baca_push()
     except Exception as exc:  # noqa: BLE001
         jarak = {"error": str(exc)}
-    return {"callback_url": shopee_push.CALLBACK_URL, "nyala": shopee_push.PUSH_AKTIF, "shopee": jarak}
+    return {"callback_url": shopee_push.callback_url(), "nyala": shopee_push.PUSH_AKTIF, "shopee": jarak}
 
 
 @marketplace_erp_router.post("/shopee/push/pengaturan")
@@ -1093,8 +1093,8 @@ async def simpan_pengaturan_push(_: UserMarketplaceErp = Depends(require_roles_m
     from tenants.marketplace_erp.modules.marketplace_erp.infrastructure import shopee_push
     from tenants.marketplace_erp.modules.marketplace_erp.infrastructure.adapters import erp_shopee
 
-    hasil = await erp_shopee.atur_push(callback_url=shopee_push.CALLBACK_URL, nyala=shopee_push.PUSH_AKTIF)
-    return {"ok": True, "callback_url": shopee_push.CALLBACK_URL, "nyala": shopee_push.PUSH_AKTIF, "shopee": hasil}
+    hasil = await erp_shopee.atur_push(callback_url=shopee_push.callback_url(), nyala=shopee_push.PUSH_AKTIF)
+    return {"ok": True, "callback_url": shopee_push.callback_url(), "nyala": shopee_push.PUSH_AKTIF, "shopee": hasil}
 
 
 @marketplace_erp_router.get("/shopee/push/log")
