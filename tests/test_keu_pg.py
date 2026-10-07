@@ -412,3 +412,114 @@ async def test_settlement_unpost_atomic_rollback_and_linked_trigger_protection(p
     async with maker.begin() as session:
         assert float((await svc.dashboard(session))["saldo_kas"]) == 0
         assert (await session.execute(text("SELECT count(*) FROM bl_audit_log WHERE aksi='unpost'"))).scalar_one() == 2
+
+
+async def finance_setup(session):
+    from datetime import date
+    from tenants.bumi_lestari.modules.bumi_lestari.application import keu_accounting as accounting, schemas_keu_finance as sc
+    from tenants.bumi_lestari.modules.bumi_lestari.infrastructure.models import BlUser
+    user=await session.get(BlUser,'u')
+    await accounting.initialize(session,user,sc.BukuIn(tanggal_awal=date(2026,10,6),metode_stok='fifo',tanggal_status='updated_at',histori=True,konfirmasi='AKTIFKAN-BUKU-KEU'))
+    return user
+
+
+def test_financial_sql_is_complete_and_reproducible():
+    from tenants.bumi_lestari.modules.bumi_lestari.infrastructure.keu_finance_migration import sql as finance_sql
+    from tenants.bumi_lestari.modules.bumi_lestari.infrastructure.models_keu_finance import FINANCE_MODELS
+    assert Path('keu_complete_finance.sql').read_text()==finance_sql()
+    assert all(model.__tablename__.startswith('keu_') for model in FINANCE_MODELS)
+    assert 'TRUNCATE' not in finance_sql() and 'DROP TABLE' not in finance_sql()
+
+
+@pytest.mark.asyncio
+async def test_finance_pg_transfer_concurrent_retry_balance_and_unpost(pg):
+    from datetime import date
+    from decimal import Decimal
+    from tenants.bumi_lestari.modules.bumi_lestari.application import keu_ledger as ledger, schemas_keu_finance as sc, schemas_keu as old
+    from tenants.bumi_lestari.modules.bumi_lestari.infrastructure.models import BlUser
+    maker=async_sessionmaker(pg,expire_on_commit=False)
+    async with maker.begin() as session:
+        await session.execute(text("UPDATE keu_akun SET saldo_awal=500 WHERE id='a'"))
+        await session.execute(text("INSERT INTO keu_akun(id,kode,nama,jenis) VALUES('bank','BANK','Bank','bank')"))
+        await finance_setup(session)
+    payload=sc.MutasiIn(referensi='concurrent',tanggal=date(2026,10,6),akun_asal_id='a',akun_tujuan_id='bank',nominal='100',biaya_admin='2')
+    async def transfer():
+        async with maker.begin() as session:
+            return await ledger.transfer(session,await session.get(BlUser,'u'),payload)
+    one,two=await asyncio.gather(transfer(),transfer())
+    assert one['id']==two['id']
+    async with maker.begin() as session:
+        reports=await ledger.reports(session,date(2026,10,6),date(2026,10,6))
+        assert Decimal(reports['neraca']['total_aset'])==498
+        assert Decimal(reports['neraca']['selisih'])==0
+        assert Decimal(reports['arus_kas']['kelompok']['mutasi']['neto'])==0
+        assert Decimal(reports['arus_kas']['kelompok']['operasional']['neto'])==-2
+        await ledger.unpost(session,await session.get(BlUser,'u'),one['id'],old.BatalIn(alasan='Koreksi transfer'))
+    async with maker.begin() as session:
+        assert Decimal((await ledger.reports(session,date(2026,10,6),date(2026,10,6)))['neraca']['total_aset'])==500
+    for statement in ["UPDATE keu_jurnal_baris SET debet=debet+1 WHERE jurnal_id=:id AND debet>0","UPDATE keu_jurnal SET status='terkirim' WHERE id=:id"]:
+        with pytest.raises(IntegrityError):
+            async with pg.begin() as conn:
+                await conn.execute(text(statement),{'id':one['id']})
+    with pytest.raises(IntegrityError):
+        async with pg.begin() as conn:
+            await conn.execute(text("INSERT INTO keu_jurnal(id,sumber_key,jenis,tanggal,dibuat_oleh) VALUES('bad','bad','manual','2026-10-06','u')"))
+            await conn.execute(text("INSERT INTO keu_jurnal_baris(id,jurnal_id,nomor,coa_id,debet,kredit,arus) VALUES('bad-line','bad',1,(SELECT id FROM keu_coa WHERE kas_akun_id='a'),1,0,'operasional')"))
+            await conn.execute(text("UPDATE keu_jurnal SET status='terkirim' WHERE id='bad'"))
+
+
+@pytest.mark.asyncio
+async def test_finance_pg_fifo_exact_cost_capacity_and_immutable_audit(pg):
+    from datetime import date
+    from decimal import Decimal
+    from tenants.bumi_lestari.modules.bumi_lestari.application import keu_inventory as inventory, keu_ledger as ledger, schemas_keu_finance as sc, schemas_keu as old
+    maker=async_sessionmaker(pg,expire_on_commit=False)
+    async with maker.begin() as session:
+        user=await finance_setup(session)
+        await inventory.receive(session,user,sc.StokMasukIn(referensi='batch1',tanggal=date(2026,10,6),produk_id='p',qty=1,biaya_total='5.01',sumber='pembelian',akun_kas_id='a'))
+        await inventory.receive(session,user,sc.StokMasukIn(referensi='batch2',tanggal=date(2026,10,6),produk_id='p',qty=2,biaya_total='14',sumber='produksi',vendor_id='v1'))
+        out=await inventory.fulfill(session,user,sc.StokKeluarIn(referensi='use',tanggal=date(2026,10,6),item_id='i',qty=2))
+    async with pg.begin() as conn:
+        assert (await conn.execute(text("SELECT nilai FROM keu_stok_mutasi WHERE jenis='keluar'"))).scalar_one()==Decimal('12.01')
+        assert (await conn.execute(text("SELECT sum(nilai) FROM keu_stok_pemakaian"))).scalar_one()==Decimal('12.01')
+    for statement in ["UPDATE keu_item SET qty=1 WHERE id='i'", "UPDATE keu_stok_pemakaian SET nilai=1", "UPDATE keu_stok_mutasi SET qty=4", "INSERT INTO keu_alokasi_vendor(id,item_id,vendor_id,qty,biaya_satuan,dibuat_oleh) VALUES('over','i','v1',1,5,'u')"]:
+        with pytest.raises(IntegrityError):
+            async with pg.begin() as conn:
+                await conn.execute(text(statement))
+    async with maker.begin() as session:
+        from tenants.bumi_lestari.modules.bumi_lestari.infrastructure.models import BlUser
+        user=await session.get(BlUser,'u')
+        report=await ledger.reports(session,date(2026,10,6),date(2026,10,6))
+        assert Decimal(report['neraca']['selisih'])==0 and Decimal(report['laba_rugi']['hpp'])==Decimal('12.01')
+        await ledger.unpost(session,user,out['id'],old.BatalIn(alasan='Koreksi stok'))
+    async with maker.begin() as session:
+        assert sum(batch['qty'] for batch in await inventory.batches(session,'p'))==3
+
+
+@pytest.mark.asyncio
+async def test_finance_pg_historical_migration_closed_period_and_atomic_rollback(pg):
+    from fastapi import HTTPException
+    from sqlalchemy import select
+    from tenants.bumi_lestari.modules.bumi_lestari.infrastructure.models_keu_finance import KeuJurnal, KeuBuku
+    maker=async_sessionmaker(pg,expire_on_commit=False)
+    async with pg.begin() as conn:
+        await conn.execute(text("INSERT INTO keu_transaksi(id,saluran_id,sumber_ref,tanggal,akun_id,kategori_id,jenis,jumlah,dibuat_oleh,status) VALUES('hist','s','hist','2026-10-06','a','k','masuk',18,'u','terkirim')"))
+        await conn.execute(text("INSERT INTO bl_tutup_buku(id,periode,status,ditutup_oleh,ditutup_pada,snapshot) VALUES('closed','2026-10','ditutup','u',now(),'{}')"))
+    async with maker.begin() as session:
+        await finance_setup(session)
+    async with maker.begin() as session:
+        assert len((await session.execute(select(KeuJurnal))).scalars().all())==1
+    # Activation is all-or-nothing when existing source settlement cannot be reconciled.
+    async with pg.begin() as conn:
+        await conn.execute(text("TRUNCATE keu_buku,keu_jurnal,keu_jurnal_baris,keu_stok_mutasi,keu_stok_pemakaian"))
+        await conn.execute(text("UPDATE bl_tutup_buku SET status='dibuka' WHERE id='closed'"))
+        await conn.execute(text("UPDATE keu_pesanan SET total_sumber=1 WHERE id='o'"))
+        await conn.execute(text("INSERT INTO keu_alokasi_settlement(id,settlement_id,item_id,jumlah) VALUES('a-st','st','i',18)"))
+        await conn.execute(text("UPDATE keu_settlement SET status='terkirim' WHERE id='st'"))
+        await conn.execute(text("INSERT INTO keu_transaksi(id,saluran_id,sumber_ref,tanggal,akun_id,kategori_id,jenis,jumlah,dibuat_oleh,status,settlement_id) VALUES('st-tx','s','st-tx','2026-10-06','a','k','masuk',18,'u','terkirim','st')"))
+    with pytest.raises(HTTPException):
+        async with maker.begin() as session:
+            await finance_setup(session)
+    async with maker.begin() as session:
+        assert (await session.execute(select(KeuBuku))).first() is None
+        assert (await session.execute(select(KeuJurnal))).first() is None

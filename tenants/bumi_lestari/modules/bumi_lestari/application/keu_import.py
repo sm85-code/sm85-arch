@@ -191,6 +191,8 @@ def grouped(kind, channel_id, rows):
 
 
 async def apply(session, user, key):
+    from . import keu_ledger
+    await keu_ledger.lock(session)
     batch = await svc.get(session, m.KeuImpor, key, lock=True)
     if batch.status == "diterapkan":
         return await detail(session, key)

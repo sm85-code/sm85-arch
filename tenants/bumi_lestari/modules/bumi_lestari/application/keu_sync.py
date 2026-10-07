@@ -97,6 +97,8 @@ def validate_range(tanggal_awal, tanggal_akhir, setelah_at, setelah_ref):
 
 async def pull(session, user, key, entity, *, tanggal_awal=None, tanggal_akhir=None,
                setelah_at=None, setelah_ref=None):
+    from . import keu_ledger
+    await keu_ledger.lock(session)
     bounds = validate_range(tanggal_awal, tanggal_akhir, setelah_at, setelah_ref)
     if entity not in {"order", "settlement"}:
         svc.bad("Entitas sinkronisasi tidak dikenal")

@@ -159,6 +159,8 @@ async def ensure_keu_schema(conn) -> None:
             await ensure_vendor_schema(conn)
             from .keu_unpost_migration import ensure_unpost_schema
             await ensure_unpost_schema(conn)
+            from .keu_finance_migration import ensure_finance_schema
+            await ensure_finance_schema(conn)
             return
     # create_all is additive. Existing tenant tables must be initialized by the BUMI seeder first.
     await conn.run_sync(lambda sync: KEU_MODELS[0].metadata.create_all(sync, tables=[m.__table__ for m in KEU_MODELS]))
@@ -173,3 +175,5 @@ async def ensure_keu_schema(conn) -> None:
     await ensure_vendor_schema(conn)
     from .keu_unpost_migration import ensure_unpost_schema
     await ensure_unpost_schema(conn)
+    from .keu_finance_migration import ensure_finance_schema
+    await ensure_finance_schema(conn)
