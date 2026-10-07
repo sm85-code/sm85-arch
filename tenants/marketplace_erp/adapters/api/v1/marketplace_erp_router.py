@@ -53,6 +53,8 @@ from tenants.marketplace_erp.modules.marketplace_erp.application.schemas import 
     ResiMassalIn,
     TandaiResiIn,
     ProdukIn,
+    ProdukKeluargaIn,
+    ProdukKeluargaNamaIn,
     ProdukListingIn,
     ProdukListingOut,
     ProdukListingPatch,
@@ -409,6 +411,27 @@ async def publish_produk_ke_toko(
         "foto_disalin": foto_key is not None,
         "produk": store_services.produk_out(toko_produk),
     }
+
+
+@marketplace_erp_router.get("/produk-keluarga")
+async def list_produk_keluarga(session: AsyncSession = Depends(get_db_marketplace_erp), _: UserMarketplaceErp = Depends(require_roles_marketplace_erp(*OWNER_ONLY))):
+    return await services.list_produk_keluarga(session)
+
+
+@marketplace_erp_router.post("/produk-keluarga")
+async def create_produk_keluarga(payload: ProdukKeluargaIn, session: AsyncSession = Depends(get_db_marketplace_erp), _: UserMarketplaceErp = Depends(require_roles_marketplace_erp(*OWNER_ONLY))):
+    return await services.create_produk_keluarga(session, payload)
+
+
+@marketplace_erp_router.patch("/produk-keluarga/{keluarga_id}")
+async def rename_produk_keluarga(keluarga_id: str, payload: ProdukKeluargaNamaIn, session: AsyncSession = Depends(get_db_marketplace_erp), _: UserMarketplaceErp = Depends(require_roles_marketplace_erp(*OWNER_ONLY))):
+    return await services.rename_produk_keluarga(session, keluarga_id, payload.nama)
+
+
+@marketplace_erp_router.delete("/produk-keluarga/{keluarga_id}")
+async def delete_produk_keluarga(keluarga_id: str, session: AsyncSession = Depends(get_db_marketplace_erp), _: UserMarketplaceErp = Depends(require_roles_marketplace_erp(*OWNER_ONLY))):
+    await services.delete_produk_keluarga(session, keluarga_id)
+    return {"ok": True}
 
 
 @marketplace_erp_router.get("/produk/{produk_id}", response_model=ProdukOut)

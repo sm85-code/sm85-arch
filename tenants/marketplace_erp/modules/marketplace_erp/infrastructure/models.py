@@ -605,3 +605,21 @@ class ShopeePushReceipt(MarketplaceErpBase):
 
     fingerprint: Mapped[str] = mapped_column(String(64), primary_key=True)
     expires_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False, index=True)
+
+
+class ProdukKeluarga(MarketplaceErpBase):
+    """Marketplace-neutral parent. Inventory belongs only to existing Produk SKU rows."""
+    __tablename__ = "mpe_produk_keluarga"
+    id: Mapped[str] = mapped_column(String(64), primary_key=True, default=_uuid)
+    nama: Mapped[str] = mapped_column(String(255), nullable=False)
+    tier_json: Mapped[str] = mapped_column(Text, nullable=False)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=_utcnow)
+
+
+class ProdukVarian(MarketplaceErpBase):
+    __tablename__ = "mpe_produk_varian"
+    __table_args__ = (UniqueConstraint("keluarga_id", "signature", name="uq_mpe_varian_kombinasi"),)
+    produk_id: Mapped[str] = mapped_column(String(64), ForeignKey("mpe_produk.id", ondelete="CASCADE"), primary_key=True)
+    keluarga_id: Mapped[str] = mapped_column(String(64), ForeignKey("mpe_produk_keluarga.id", ondelete="RESTRICT"), nullable=False, index=True)
+    opsi_json: Mapped[str] = mapped_column(Text, nullable=False)
+    signature: Mapped[str] = mapped_column(String(64), nullable=False)
