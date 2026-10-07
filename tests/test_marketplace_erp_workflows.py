@@ -152,7 +152,8 @@ async def test_publication_receipt_prevents_duplicate_parent_on_timeout_or_succe
 
 
 @pytest.mark.asyncio
-async def test_variant_failure_leaves_parent_hidden_and_receipt_with_item_id(session, monkeypatch):
+@pytest.mark.parametrize("bad_models", [[], [{"tier_index": [0], "model_id": 7}, {"tier_index": [1], "model_id": 7}]])
+async def test_variant_failure_leaves_parent_hidden_and_receipt_with_item_id(session, monkeypatch, bad_models):
     account = await services.create_akun_marketplace(session, AkunMarketplaceIn(platform="shopee", nama_toko="A"))
 
     async def meta(*args):
@@ -166,7 +167,7 @@ async def test_variant_failure_leaves_parent_hidden_and_receipt_with_item_id(ses
             assert kw["body"]["item_status"] == "UNLIST"
             return {"response": {"item_id": 99}}
         assert (await workflows.receipt(session, account.id, payload.operation_id)).item_id == "99"
-        return {"response": {"item_id": 99, "model": []}}
+        return {"response": {"item_id": 99, "model": bad_models}}
 
     async def delay(*args):
         pass
@@ -176,8 +177,8 @@ async def test_variant_failure_leaves_parent_hidden_and_receipt_with_item_id(ses
     monkeypatch.setattr(workflows.asyncio, "sleep", delay)
     data = body() | {
         "aktif": True,
-        "tiers": [{"name": "Warna", "options": [{"option": "Merah"}]}],
-        "models": [{"tier_index": [0], "price": "15000"}],
+        "tiers": [{"name": "Warna", "options": [{"option": "Merah"}, {"option": "Biru"}]}],
+        "models": [{"tier_index": [0], "price": "15000"}, {"tier_index": [1], "price": "15000"}],
     }
     payload = PublishIn(**data)
     result = await workflows.publish(session, account.id, payload)
@@ -328,3 +329,53 @@ async def test_public_media_upload_has_partner_signature_only(monkeypatch):
     monkeypatch.setattr(upload.requests, "post", send)
     result = await upload.upload(None, SimpleNamespace(), b"\xff\xd8\xfffake")
     assert result["image_id"] == "image"
+
+
+@pytest.mark.asyncio
+async def test_preflight_failure_has_durable_editable_receipt(session, monkeypatch):
+    account = await services.create_akun_marketplace(session, AkunMarketplaceIn(platform="shopee", nama_toko="A"))
+
+    async def unavailable(*args):
+        raise HTTPException(503, "metadata unavailable")
+
+    async def forbidden(*args, **kwargs):
+        pytest.fail("preflight failure must never write to Shopee")
+
+    monkeypatch.setattr(adapter, "metadata", unavailable)
+    monkeypatch.setattr(shopee, "signed_shop_request", forbidden)
+    payload = PublishIn(**body())
+    result = await workflows.publish(session, account.id, payload)
+    assert result["status"] == "belum_dikirim" and result["item_id"] is None
+    assert "metadata unavailable" in result["warnings"]
+    assert await workflows.publish(session, account.id, payload) == result
+    assert (await workflows.receipt(session, account.id, payload.operation_id)).status == "belum_dikirim"
+
+
+def test_size_chart_nested_contract_and_custom_attribute_sentinel():
+    payload = PublishIn(**(body() | {"size_chart": "chart-image"}))
+    result = adapter.parent_body(payload)
+    assert result["size_chart_info"] == {"size_chart": "chart-image"}
+    assert "size_chart" not in result
+    meta = metadata()
+    meta["attributes"] = [
+        {
+            "attribute_id": 1,
+            "mandatory": True,
+            "attribute_info": {"input_type": 3},
+            "attribute_value_list": [{"value_id": 0, "name": "Others"}],
+        }
+    ]
+    payload = PublishIn(
+        **(
+            body()
+            | {
+                "attribute_list": [
+                    {
+                        "attribute_id": 1,
+                        "attribute_value_list": [{"value_id": 0, "original_value_name": "Custom material"}],
+                    }
+                ]
+            }
+        )
+    )
+    adapter.validate_publication(payload, meta)

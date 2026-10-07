@@ -48,18 +48,37 @@ async def publish(session, akun_id, payload):
     if existing:
         return result_from_record(existing, payload_hash)
     akun = await services.akun_shopee_pengelolaan(session, akun_id, "publikasi produk")
-    meta = await adapter.metadata(session, akun, payload.category_id)
-    adapter.validate_publication(payload, meta)
-    record = PublikasiMarketplace(akun_id=akun_id, operation_id=str(payload.operation_id), payload_hash=payload_hash)
+    record = PublikasiMarketplace(
+        akun_id=akun_id, operation_id=str(payload.operation_id), payload_hash=payload_hash, status="memeriksa"
+    )
     session.add(record)
     try:
-        await session.commit()  # Claim is durable BEFORE add_item. Never replay the same operation.
+        await session.commit()  # Record before metadata too, so interrupted preflight can be inspected.
     except IntegrityError:
         await session.rollback()
         existing = await receipt(session, akun_id, payload.operation_id)
         if existing:
             return result_from_record(existing, payload_hash)
         raise
+    # Preflight has made no marketplace writes. Its failures can safely return an editable draft.
+    try:
+        meta = await adapter.metadata(session, akun, payload.category_id)
+        adapter.validate_publication(payload, meta)
+    except (HTTPException, requests.RequestException, ValueError, TypeError) as exc:
+        result = {
+            "ok": False,
+            "status": "belum_dikirim",
+            "item_id": None,
+            "warnings": [
+                str(getattr(exc, "detail", "Metadata Shopee belum tersedia.")),
+                "Belum ada produk yang dikirim. Perbaiki data atau muat ulang metadata sebelum melanjutkan.",
+            ],
+            "request_id": getattr(exc, "request_id", None),
+        }
+        record.status = result["status"]
+        record.result_json = json.dumps(result)
+        await session.commit()
+        return result | {"operation_id": record.operation_id}
     result = {"ok": False, "status": "belum_pasti", "item_id": None, "warnings": [], "request_id": None}
     try:
         data = await shopee.signed_shop_request(
@@ -101,7 +120,8 @@ async def publish(session, akun_id, payload):
                 str(response.get("item_id")) != str(ident)
                 or actual != expected
                 or len(models) != len(expected)
-                or any(not m.get("model_id") for m in models)
+                or any(type(m.get("model_id")) is not int or m["model_id"] <= 0 for m in models)
+                or len({m["model_id"] for m in models}) != len(models)
             ):
                 raise shopee.ShopeeAPIError(
                     "init_tier_variation",
@@ -114,12 +134,18 @@ async def publish(session, akun_id, payload):
             data = await shopee.ubah_status_produk(session, akun, ident, False)
             result["request_id"] = data.get("request_id")
         result.update(ok=True, status="aktif" if payload.aktif else "disembunyikan")
+        record.status = result["status"]
+        record.result_json = json.dumps(result)
+        await session.commit()
         try:
             snapshot = await shopee.ambil_satu_produk(session, akun, ident)
             await services.simpan_katalog_shopee(session, akun, [snapshot], lengkap=False)
-        except HTTPException as exc:
-            result["warnings"].append(f"Produk dibuat; snapshot belum tersedia. Sinkronkan katalog: {exc.detail}")
+        except (HTTPException, requests.RequestException, ValueError, TypeError) as exc:
+            result["warnings"].append(
+                f"Produk dibuat; snapshot belum tersedia. Sinkronkan katalog: {getattr(exc, 'detail', 'Data belum lengkap')}"
+            )
     except (HTTPException, requests.RequestException, ValueError, TypeError) as exc:
+        result["request_id"] = getattr(exc, "request_id", None) or result["request_id"]
         result["item_id"] = record.item_id
         result["status"] = "sebagian" if record.item_id else "belum_pasti"
         result["warnings"].append(str(getattr(exc, "detail", "Koneksi Shopee terputus; hasil belum pasti.")))

@@ -634,3 +634,20 @@ def test_zip_label_detected_and_downloaded_as_attachment():
     response = router._respons_resi(content.getvalue(), "resi.zip")
     assert response.media_type == "application/zip"
     assert response.headers["content-disposition"] == 'attachment; filename="resi.zip"'
+
+
+@pytest.mark.asyncio
+async def test_whitespace_success_and_transport_failure_do_not_leak_signed_url(live, monkeypatch):
+    monkeypatch.setattr(requests, "get", lambda *a, **k: SimpleNamespace(
+        status_code=200, json=lambda: {"error": " ", "response": {"return_sn": "R1"}}))
+    data = await erp_shopee._call_shop_api(access_token="secret", shop_id="5", api_path="/x")
+    assert data["response"]["return_sn"] == "R1"
+
+    def timeout(*args, **kwargs):
+        assert kwargs["allow_redirects"] is False
+        raise requests.Timeout("https://provider.example?access_token=secret")
+
+    monkeypatch.setattr(requests, "get", timeout)
+    with pytest.raises(HTTPException) as exc:
+        await erp_shopee._call_shop_api(access_token="secret", shop_id="5", api_path="/x")
+    assert exc.value.status_code == 502 and "secret" not in exc.value.detail
