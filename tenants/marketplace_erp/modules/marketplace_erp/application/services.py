@@ -524,10 +524,12 @@ async def update_produk(session: AsyncSession, produk_id: str, payload: ProdukPa
 
 
 async def delete_produk(session: AsyncSession, produk_id: str) -> None:
-    """Delete a product with its stock history, reservations and listings. Order lines that pointed at it keep
-    their text and simply lose the link. (Done in bulk: letting the ORM delete the product would try to detach
-    the stock ledger rows instead, and ``produk_id`` there is NOT NULL.)"""
+    """Delete unused products; preserve products referenced by transaction history."""
     produk = await get_produk(session, produk_id)
+    used = (await session.execute(select(func.count()).select_from(StokLedger).where(StokLedger.produk_id == produk_id))).scalar_one()
+    ordered = (await session.execute(select(func.count()).select_from(ItemPesanan).where(ItemPesanan.produk_id == produk_id))).scalar_one()
+    if used or ordered:
+        raise HTTPException(status_code=409, detail="Produk memiliki riwayat transaksi. Nonaktifkan produk untuk mempertahankan histori.")
     listing_ids = select(ProdukListing.id).where(ProdukListing.produk_id == produk_id)
     await session.execute(update(ItemPesanan).where(ItemPesanan.listing_id.in_(listing_ids)).values(listing_id=None))
     await session.execute(update(ItemPesanan).where(ItemPesanan.produk_id == produk_id).values(produk_id=None))
@@ -969,6 +971,8 @@ async def adjust_stok(session: AsyncSession, payload: StokAdjustIn) -> Produk:
     if not produk:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Produk tidak ditemukan")
 
+    if payload.expected_stock is not None and produk.stok != payload.expected_stock:
+        raise HTTPException(status_code=409, detail="Stok berubah sejak ditampilkan. Muat ulang lalu periksa jumlahnya.")
     new_stok = produk.stok + payload.qty_delta
     if new_stok < 0:
         raise HTTPException(
@@ -3030,6 +3034,7 @@ async def laporan_iklan(session: AsyncSession, campaign_id: str, *, dari: dateti
             .where(
                 ItemPesanan.produk_id == campaign.produk_id,
                 Pesanan.status.in_(_STATUS_TERHITUNG_PENJUALAN),
+                Pesanan.akun_id == campaign.akun_id,
                 Pesanan.created_at >= dari,
                 Pesanan.created_at <= sampai,
             )

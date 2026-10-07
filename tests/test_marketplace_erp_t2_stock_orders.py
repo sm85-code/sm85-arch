@@ -280,3 +280,14 @@ async def test_invalid_status_transition_rejected(session):
 async def test_default_gudang_created(session):
     rows = await services.list_gudang(session)
     assert any(g.kode == "DEFAULT" for g in rows)
+
+
+@pytest.mark.asyncio
+async def test_absolute_stock_adjustment_rejects_stale_snapshot(session):
+    produk = await _sku(session, stok=5)
+    await services.adjust_stok(session, StokAdjustIn(produk_id=produk.id, qty_delta=3))
+    with pytest.raises(HTTPException) as exc:
+        await services.adjust_stok(session, StokAdjustIn(produk_id=produk.id, qty_delta=5, expected_stock=5))
+    assert exc.value.status_code == 409
+    assert produk.stok == 8
+    assert len(await services.list_stok_ledger(session, produk_id=produk.id)) == 2

@@ -509,6 +509,12 @@ def _harga(price_info: Any) -> Decimal | None:
     return Decimal(str(value)) if value is not None else None
 
 
+def _harga_dasar(price_info: Any) -> Decimal | None:
+    info = (price_info or [{}])[0] if isinstance(price_info, list) else (price_info or {})
+    value = info.get("original_price")
+    return Decimal(str(value)) if value is not None else _harga(price_info)
+
+
 def _stok(stock_info_v2: Any) -> int | None:
     summary = ((stock_info_v2 or {}).get("summary_info")) or {}
     value = summary.get("total_available_stock")
@@ -543,7 +549,7 @@ def normalisasi_item(item: dict, model_resp: dict | None = None) -> list[dict]:
                     "id_eksternal": kunci_listing(item_id, model["model_id"]),
                     "nama_produk": f"{nama} - {_nama_model(model, model_resp.get('tier_variation') or [])}"[:255],
                     "sku": str(model.get("model_sku") or "").strip(),
-                    "harga": _harga(model.get("price_info")),
+                    "harga": _harga_dasar(model.get("price_info")),
                     "stok": _stok(model.get("stock_info_v2")),
                     "aktif": aktif and str(model.get("model_status") or "MODEL_NORMAL") == "MODEL_NORMAL",
                 }
@@ -554,7 +560,7 @@ def normalisasi_item(item: dict, model_resp: dict | None = None) -> list[dict]:
             "id_eksternal": kunci_listing(item_id),
             "nama_produk": nama[:255],
             "sku": str(item.get("item_sku") or "").strip(),
-            "harga": _harga(item.get("price_info")),
+            "harga": _harga_dasar(item.get("price_info")),
             "stok": _stok(item.get("stock_info_v2")),
             "aktif": aktif,
         }
@@ -720,11 +726,18 @@ async def ambil_item_mentah(session: Any, akun: Any) -> list[tuple[dict, dict | 
                 "item_status": list(STATUS_KATALOG),
             },
         )
-        resp = data.get("response") or {}
+        resp = data.get("response")
+        if not isinstance(resp, dict) or "item" not in resp:
+            raise HTTPException(status_code=424, detail="Daftar katalog Shopee tidak lengkap; data lokal dipertahankan.")
         item_ids += [int(i["item_id"]) for i in resp.get("item") or []]
         if not resp.get("has_next_page"):
             break
-        offset = int(resp.get("next_offset") or 0)
+        following = int(resp.get("next_offset") or 0)
+        if following <= offset:
+            raise HTTPException(status_code=424, detail="Pagination katalog Shopee tidak lengkap; data lokal dipertahankan.")
+        offset = following
+    else:
+        raise HTTPException(status_code=424, detail="Katalog Shopee melebihi batas halaman; data lokal dipertahankan.")
 
     items: list[dict] = []
     for i in range(0, len(item_ids), _ITEM_BASE_BATCH):
@@ -733,6 +746,9 @@ async def ambil_item_mentah(session: Any, akun: Any) -> list[tuple[dict, dict | 
             session, akun, _PATH_ITEM_BASE, params={"item_id_list": ",".join(map(str, batch))}
         )
         items += (data.get("response") or {}).get("item_list") or []
+
+    if {int(i["item_id"]) for i in items} != set(item_ids):
+        raise HTTPException(status_code=424, detail="Detail katalog Shopee tidak lengkap; data lokal dipertahankan.")
 
     gate = asyncio.Semaphore(_MODEL_CONCURRENCY)
 
@@ -746,7 +762,10 @@ async def ambil_item_mentah(session: Any, akun: Any) -> list[tuple[dict, dict | 
                 if str(item.get("item_status") or "NORMAL").upper() in ("NORMAL", "UNLIST"):
                     raise
                 return None  # a banned / under-review item may have no readable variants: keep the item itself
-        return data.get("response") or {}
+        response = data.get("response") or {}
+        if not response.get("model") and str(item.get("item_status") or "NORMAL").upper() in ("NORMAL", "UNLIST"):
+            raise HTTPException(status_code=424, detail="Varian Shopee tidak lengkap; data lokal dipertahankan.")
+        return response
 
     model_resps = await asyncio.gather(*(_models(it) for it in items))
     return list(zip(items, model_resps))
@@ -943,6 +962,7 @@ async def sync_pesanan(
 
     order_sn_list: list[str] = []
     cursor = ""
+    seen_cursors: set[str] = set()
     for _ in range(_ORDER_LIST_MAX_PAGES):
         params: dict[str, Any] = {
             "time_range_field": "update_time",
@@ -956,8 +976,13 @@ async def sync_pesanan(
         resp = data.get("response") or {}
         order_sn_list += [o["order_sn"] for o in resp.get("order_list") or []]
         cursor = resp.get("next_cursor") or ""
-        if not resp.get("more") or not cursor:
+        if not resp.get("more"):
             break
+        if not cursor or cursor in seen_cursors:
+            raise HTTPException(status_code=424, detail="Pagination pesanan Shopee tidak lengkap; watermark dipertahankan.")
+        seen_cursors.add(cursor)
+    else:
+        raise HTTPException(status_code=424, detail="Pesanan Shopee melebihi batas halaman; watermark dipertahankan.")
 
     for sn in lengkapi or []:
         if sn not in order_sn_list:
@@ -972,7 +997,10 @@ async def sync_pesanan(
             _PATH_ORDER_DETAIL,
             params={"order_sn_list": ",".join(batch), "response_optional_fields": _ORDER_DETAIL_FIELDS},
         )
-        rows += [normalisasi_pesanan(o) for o in (data.get("response") or {}).get("order_list") or []]
+        details = (data.get("response") or {}).get("order_list") or []
+        if {str(o["order_sn"]) for o in details} != set(batch):
+            raise HTTPException(status_code=424, detail="Detail pesanan Shopee tidak lengkap; watermark dipertahankan.")
+        rows += [normalisasi_pesanan(o) for o in details]
 
     import asyncio
 
@@ -1057,6 +1085,8 @@ async def daftar_escrow(session: Any, akun: Any, dari: int, sampai: int) -> list
                 )
             if not resp.get("more"):
                 break
+        else:
+            raise HTTPException(status_code=424, detail="Daftar dana Shopee melebihi batas halaman; sinkronisasi belum lengkap.")
         awal = akhir
     return keluar
 
@@ -1813,7 +1843,7 @@ SHOPEE_STATUS_MAP = {
     "TO_CONFIRM_RECEIVE": "shipped",
     "COMPLETED": "completed",
     "CANCELLED": "cancelled",
-    "IN_CANCEL": "cancelled",
+    "IN_CANCEL": "to_ship",
 }
 
 
