@@ -735,11 +735,14 @@ class ShopeeProdukEditIn(BaseModel):
     model_config = ConfigDict(extra="forbid")
     nama: Optional[str] = Field(default=None, min_length=1, max_length=255)
     sku: Optional[str] = Field(default=None, max_length=128)
+    deskripsi: Optional[str] = Field(default=None, min_length=1, max_length=3000)
 
     @model_validator(mode="after")
     def perubahan_valid(self):
-        if self.nama is None and self.sku is None:
-            raise ValueError("Isi nama atau SKU yang akan diperbarui")
+        if self.nama is None and self.sku is None and self.deskripsi is None:
+            raise ValueError("Isi nama, SKU, atau deskripsi yang akan diperbarui")
+        if self.deskripsi is not None and not self.deskripsi.strip():
+            raise ValueError("Deskripsi tidak boleh kosong")
         if self.nama is not None:
             self.nama = self.nama.strip()
             if not self.nama:
@@ -810,3 +813,72 @@ class ReturDaftarOut(BaseModel):
     halaman: int
     per_halaman: int
     ada_lagi: bool
+
+
+class PromosiIn(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+    nama: str = Field(min_length=1, max_length=255)
+    mulai_at: int = Field(gt=0)
+    selesai_at: int = Field(gt=0)
+
+    @field_validator("nama")
+    @classmethod
+    def nama_tidak_kosong(cls, value):
+        if not value.strip():
+            raise ValueError("Nama promosi tidak boleh kosong")
+        return value.strip()
+
+
+class PromosiProdukIn(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+    operasi: Literal["tambah", "ubah", "hapus"]
+    katalog_id: str
+    model_id: str | None = Field(default=None, pattern=r"^[0-9]+$")
+    harga: Decimal | None = Field(default=None, gt=0, allow_inf_nan=False)
+    batas_pembelian: int = Field(default=0, ge=0)
+
+    @model_validator(mode="after")
+    def harga_wajib(self):
+        if self.operasi != "hapus" and self.harga is None:
+            raise ValueError("Harga promosi wajib diisi")
+        return self
+
+
+class PromosiBarangOut(BaseModel):
+    item_id: str
+    model_id: str | None = None
+    nama: str
+    nama_varian: str | None = None
+    harga_asli: str | None = None
+    harga_promo: str | None = None
+    stok_promo: int | None = None
+    batas_pembelian: int | None = None
+
+
+class PromosiOut(BaseModel):
+    id: str
+    nama: str
+    status: str
+    mulai_at: int
+    selesai_at: int
+    barang: list[PromosiBarangOut] = Field(default_factory=list)
+
+
+class PromosiHalamanOut(BaseModel):
+    items: list[PromosiOut]
+    halaman: int
+    ada_lagi: bool
+
+
+class PromosiDetailOut(PromosiOut):
+    halaman: int
+    ada_lagi: bool
+
+
+class MutasiMarketplaceOut(BaseModel):
+    ok: bool
+    id: str | None = None
+    request_id: str | None = None
+    warnings: list[str] = Field(default_factory=list)
+    gagal: list[dict] = Field(default_factory=list)
+    retur: ReturOut | None = None

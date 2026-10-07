@@ -3301,3 +3301,43 @@ async def detail_retur_marketplace(session: AsyncSession, akun_id: str, nomor_re
     result = await erp_shopee_returns.detail_retur(session, akun, nomor_retur)
     await _lengkapi_retur(session, akun, [result])
     return result
+
+
+async def akun_shopee_pengelolaan(session: AsyncSession, akun_id: str, fitur: str = "promosi") -> AkunMarketplace:
+    akun = await get_akun_marketplace(session, akun_id)
+    if akun.platform != "shopee":
+        raise HTTPException(status_code=409, detail=f"API {fitur} {akun.platform} belum tersedia.")
+    return akun
+
+
+async def kelola_barang_promosi(session: AsyncSession, akun_id: str, promosi_id: str, payload) -> dict:
+    from tenants.marketplace_erp.modules.marketplace_erp.infrastructure.adapters import erp_shopee_promotions
+    akun = await akun_shopee_pengelolaan(session, akun_id)
+    katalog, nama_toko = await get_katalog_shopee(session, payload.katalog_id)
+    if katalog.akun_id != akun.id:
+        raise HTTPException(status_code=409, detail="Produk harus berasal dari toko promosi yang dipilih.")
+    info = katalog_out(katalog, nama_toko, lengkap=True)
+    variants = info["varian"]
+    if info.get("has_model") and not variants:
+        raise HTTPException(status_code=409, detail="Snapshot varian belum lengkap. Sinkronkan katalog sebelum mengubah promosi.")
+    model_id = payload.model_id
+    if variants:
+        if model_id is None or not any(str(v.get("model_id")) == model_id for v in variants):
+            raise HTTPException(status_code=409, detail="Pilih varian yang sesuai; sinkronkan katalog jika varian belum lengkap.")
+    elif model_id not in {None, "0"}:
+        raise HTTPException(status_code=409, detail="Produk ini tidak memiliki varian yang dipilih.")
+    else:
+        model_id = None
+    await erp_shopee_promotions.detail(session, akun, promosi_id)
+    return await erp_shopee_promotions.barang(session, akun, promosi_id, katalog.item_id, model_id, payload)
+
+
+async def konfirmasi_retur_marketplace(session: AsyncSession, akun_id: str, nomor_retur: str) -> dict:
+    from tenants.marketplace_erp.modules.marketplace_erp.infrastructure.adapters import erp_shopee_returns
+    akun = await akun_shopee_pengelolaan(session, akun_id, "retur")
+    result = await erp_shopee_returns.konfirmasi_retur(session, akun, nomor_retur)
+    try:
+        result["retur"] = await detail_retur_marketplace(session, akun_id, nomor_retur)
+    except HTTPException as exc:
+        result["warnings"].append(f"Persetujuan berhasil; detail belum diperbarui. Segarkan retur: {exc.detail}")
+    return result

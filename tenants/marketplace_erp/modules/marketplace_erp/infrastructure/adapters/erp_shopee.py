@@ -1891,9 +1891,9 @@ _ = json
 
 
 async def ubah_info_produk(session: Any, akun: Any, item_id: int, fields: dict) -> dict:
-    """Update only submitted name/SKU; leave model, price, stock and shipping metadata untouched."""
+    """Update only submitted name/SKU/description; preserve other item and model metadata."""
     path = "/api/v2/product/update_item"
-    allowed = {key: value for key, value in fields.items() if key in {"item_name", "item_sku"}}
+    allowed = {key: value for key, value in fields.items() if key in {"item_name", "item_sku", "description"}}
     if not allowed or len(allowed) != len(fields):
         raise HTTPException(status_code=422, detail="Field edit produk tidak didukung")
     data = await signed_shop_request(session, akun, path, method="POST", body={"item_id": item_id, **allowed})

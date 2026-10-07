@@ -19,7 +19,7 @@ from types import SimpleNamespace
 from typing import Annotated
 from datetime import date, datetime, timezone
 
-from fastapi import APIRouter, BackgroundTasks, Body, Depends, HTTPException, Query, Request, Response, status
+from fastapi import APIRouter, BackgroundTasks, Body, Depends, HTTPException, Path, Query, Request, Response, status
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from tenants.marketplace_erp.modules.marketplace_erp.application import services
@@ -31,6 +31,11 @@ from tenants.marketplace_erp.modules.marketplace_erp.application.schemas import 
     PembatalanPembeliIn,
     ReturOut,
     ReturDaftarOut,
+    PromosiIn,
+    PromosiProdukIn,
+    PromosiHalamanOut,
+    PromosiDetailOut,
+    MutasiMarketplaceOut,
     AkunMarketplaceIn,
     AkunMarketplaceOut,
     AkunMarketplacePatch,
@@ -1418,7 +1423,8 @@ async def edit_produk_shopee(
     _: UserMarketplaceErp = Depends(require_roles_marketplace_erp(*OWNER_ONLY)),
 ):
     data = payload.model_dump(exclude_none=True)
-    fields = {("item_name" if key == "nama" else "item_sku"): value for key, value in data.items()}
+    names = {"nama": "item_name", "sku": "item_sku", "deskripsi": "description"}
+    fields = {names[key]: value for key, value in data.items()}
     return await services.kelola_produk_shopee(session, katalog_id, fields=fields)
 
 
@@ -1743,3 +1749,67 @@ async def detail_retur_marketplace(
 ):
     await pastikan_akses_akun(user, session, akun_id)
     return await services.detail_retur_marketplace(session, akun_id, nomor_retur)
+
+
+@marketplace_erp_router.post("/akun/{akun_id}/retur/{nomor_retur}/konfirmasi", response_model=MutasiMarketplaceOut)
+async def konfirmasi_retur_marketplace(
+    akun_id: str, nomor_retur: str,
+    session: AsyncSession = Depends(get_db_marketplace_erp),
+    user: UserMarketplaceErp = Depends(require_roles_marketplace_erp(*OWNER_OR_STAFF)),
+):
+    await pastikan_akses_akun(user, session, akun_id)
+    return await services.konfirmasi_retur_marketplace(session, akun_id, nomor_retur)
+
+
+@marketplace_erp_router.get("/akun/{akun_id}/promosi", response_model=PromosiHalamanOut)
+async def daftar_promosi(
+    akun_id: str, status_filter: str = Query("all", pattern="^(all|upcoming|ongoing|expired)$"), halaman: int = Query(1, ge=1),
+    session: AsyncSession = Depends(get_db_marketplace_erp),
+    user: UserMarketplaceErp = Depends(require_roles_marketplace_erp(*OWNER_ONLY)),
+):
+    await pastikan_akses_akun(user, session, akun_id)
+    from tenants.marketplace_erp.modules.marketplace_erp.infrastructure.adapters import erp_shopee_promotions as adapter
+    return await adapter.daftar(session, await services.akun_shopee_pengelolaan(session, akun_id), status_filter, halaman)
+
+
+@marketplace_erp_router.get("/akun/{akun_id}/promosi/{promosi_id}", response_model=PromosiDetailOut)
+async def detail_promosi(
+    akun_id: str, promosi_id: str = Path(pattern=r"^[1-9][0-9]*$"), halaman: int = Query(1, ge=1),
+    session: AsyncSession = Depends(get_db_marketplace_erp),
+    user: UserMarketplaceErp = Depends(require_roles_marketplace_erp(*OWNER_ONLY)),
+):
+    await pastikan_akses_akun(user, session, akun_id)
+    from tenants.marketplace_erp.modules.marketplace_erp.infrastructure.adapters import erp_shopee_promotions as adapter
+    return await adapter.detail(session, await services.akun_shopee_pengelolaan(session, akun_id), promosi_id, halaman)
+
+
+@marketplace_erp_router.post("/akun/{akun_id}/promosi", response_model=MutasiMarketplaceOut)
+async def buat_promosi(
+    akun_id: str, payload: PromosiIn,
+    session: AsyncSession = Depends(get_db_marketplace_erp),
+    user: UserMarketplaceErp = Depends(require_roles_marketplace_erp(*OWNER_ONLY)),
+):
+    await pastikan_akses_akun(user, session, akun_id)
+    from tenants.marketplace_erp.modules.marketplace_erp.infrastructure.adapters import erp_shopee_promotions as adapter
+    return await adapter.buat(session, await services.akun_shopee_pengelolaan(session, akun_id), payload)
+
+
+@marketplace_erp_router.post("/akun/{akun_id}/promosi/{promosi_id}/akhiri", response_model=MutasiMarketplaceOut)
+async def akhiri_promosi(
+    akun_id: str, promosi_id: str = Path(pattern=r"^[1-9][0-9]*$"), hapus: bool = Query(False),
+    session: AsyncSession = Depends(get_db_marketplace_erp),
+    user: UserMarketplaceErp = Depends(require_roles_marketplace_erp(*OWNER_ONLY)),
+):
+    await pastikan_akses_akun(user, session, akun_id)
+    from tenants.marketplace_erp.modules.marketplace_erp.infrastructure.adapters import erp_shopee_promotions as adapter
+    return await adapter.akhiri(session, await services.akun_shopee_pengelolaan(session, akun_id), promosi_id, hapus)
+
+
+@marketplace_erp_router.post("/akun/{akun_id}/promosi/{promosi_id}/barang", response_model=MutasiMarketplaceOut)
+async def kelola_barang_promosi(
+    akun_id: str, payload: PromosiProdukIn, promosi_id: str = Path(pattern=r"^[1-9][0-9]*$"),
+    session: AsyncSession = Depends(get_db_marketplace_erp),
+    user: UserMarketplaceErp = Depends(require_roles_marketplace_erp(*OWNER_ONLY)),
+):
+    await pastikan_akses_akun(user, session, akun_id)
+    return await services.kelola_barang_promosi(session, akun_id, promosi_id, payload)
