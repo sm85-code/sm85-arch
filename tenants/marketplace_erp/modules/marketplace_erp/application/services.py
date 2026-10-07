@@ -1961,6 +1961,8 @@ async def proses_pesanan_marketplace(session: AsyncSession, pesanan_id: str, pen
             status_code=status.HTTP_409_CONFLICT,
             detail=f"Pesanan berstatus '{pesanan.status}', hanya pesanan 'to_ship' yang bisa diproses.",
         )
+    if pesanan.status_marketplace == "IN_CANCEL":
+        raise HTTPException(status_code=409, detail="Tangani permintaan pembatalan pembeli sebelum memproses pengiriman.")
     if pesanan.status_marketplace in erp_shopee.STATUS_SUDAH_DIPROSES:
         raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail="Pesanan sudah diproses di Shopee.")
     # Keep the old adapter invocation valid for existing callers and integrations.
@@ -2123,6 +2125,35 @@ async def unduh_resi_gabungan(
     nama = f"resi-{berhasil[0].id_eksternal}.{ekstensi}" if len(berhasil) == 1 else f"resi-{len(berhasil)}-pesanan.{ekstensi}"
     return {"pdf": keluar.getvalue(), "nama_file": nama, "mime_type": mime,
             "berhasil": len(berhasil), "gagal": gagal, "jumlah_pdf": len(pdfs)}
+
+
+async def tangani_pembatalan_pembeli(session: AsyncSession, pesanan_id: str, operasi: str) -> Pesanan:
+    """Submit a buyer decision once; release reservations only on a confirmed CANCELLED status."""
+    from tenants.marketplace_erp.modules.marketplace_erp.infrastructure.adapters import erp_shopee
+
+    pesanan, akun = await _pesanan_marketplace(session, pesanan_id)
+    await session.execute(select(Pesanan.id).where(Pesanan.id == pesanan.id).with_for_update())
+    await session.refresh(pesanan, attribute_names=["status", "status_marketplace"])
+    if pesanan.status_marketplace != "IN_CANCEL" or pesanan.status not in {"unpaid", "to_ship"}:
+        raise HTTPException(status_code=409, detail="Pesanan tidak memiliki permintaan pembatalan pembeli yang dapat ditangani.")
+    await erp_shopee.tangani_pembatalan_pembeli(session, akun, pesanan.id_eksternal, operasi)
+    keputusan = "diterima" if operasi == "ACCEPT" else "ditolak"
+    catatan = f"Keputusan pembatalan pembeli {keputusan} di Shopee."
+    # A successful write must stay successful even if its follow-up read fails or lags.
+    try:
+        mentah = await erp_shopee.ambil_status_pesanan(session, akun, pesanan.id_eksternal)
+    except HTTPException as exc:
+        pesanan.catatan_sinkron = f"{catatan} Status belum diperbarui: {exc.detail} Sinkronkan status; jangan kirim keputusan ulang."
+    else:
+        await _samakan_status_pesanan(session, pesanan, erp_shopee.SHOPEE_STATUS_MAP[mentah])
+        pesanan.status_marketplace = mentah
+        if mentah == "IN_CANCEL":
+            pesanan.catatan_sinkron = f"{catatan} Menunggu pembaruan status Shopee. Sinkronkan status; jangan kirim keputusan ulang."
+        elif pesanan.status == erp_shopee.SHOPEE_STATUS_MAP[mentah]:
+            pesanan.tersinkron_marketplace = True
+            pesanan.catatan_sinkron = f"{catatan} Status mengikuti Shopee ({mentah})."
+    await session.flush()
+    return pesanan
 
 
 async def batalkan_pesanan_marketplace(session: AsyncSession, pesanan_id: str, alasan: str) -> Pesanan:

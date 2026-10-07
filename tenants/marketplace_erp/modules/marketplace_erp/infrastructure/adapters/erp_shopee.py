@@ -1795,10 +1795,37 @@ async def unduh_resi(session: Any, akun: Any, order_sn: str, nomor_resi: str | N
 # --- Cancel ---------------------------------------------------------------------------
 
 _PATH_CANCEL = "/api/v2/order/cancel_order"
+_PATH_BUYER_CANCEL = "/api/v2/order/handle_buyer_cancellation"
 # Seller-side reasons Shopee accepts for every region (UNDELIVERABLE_AREA is TW/MY only).
 ALASAN_BATAL = ("CUSTOMER_REQUEST", "OUT_OF_STOCK", "COD_NOT_SUPPORTED")
 # Raw Shopee statuses from which a seller can still cancel ("before the order has been shipped").
 STATUS_BISA_DIBATALKAN = frozenset({"UNPAID", "READY_TO_SHIP", "PROCESSED", "RETRY_SHIP"})
+
+
+async def ambil_status_pesanan(session: Any, akun: Any, order_sn: str) -> str:
+    data = await signed_shop_request(session, akun, _PATH_ORDER_DETAIL, params={"order_sn_list": order_sn})
+    orders = (data.get("response") or {}).get("order_list") or []
+    order = next((o for o in orders if o.get("order_sn") == order_sn), None)
+    if not order or order.get("order_status") not in SHOPEE_STATUS_MAP:
+        raise ShopeeAPIError(_PATH_ORDER_DETAIL, "unconfirmed_status",
+                             "Status pesanan yang diminta tidak dikonfirmasi Shopee.", data.get("request_id"))
+    return order["order_status"]
+
+
+async def tangani_pembatalan_pembeli(session: Any, akun: Any, order_sn: str, operasi: str) -> None:
+    if not live_sync_enabled() or not _akun_configured(akun):
+        raise ShopeeNotConfigured("Shopee live sync nonaktif atau akun belum terhubung.")
+    if operasi not in {"ACCEPT", "REJECT"}:
+        raise HTTPException(status_code=400, detail="Keputusan pembatalan tidak dikenal.")
+    # Recheck remotely: a cached IN_CANCEL may have already been handled in Seller Centre.
+    if await ambil_status_pesanan(session, akun, order_sn) != "IN_CANCEL":
+        raise HTTPException(status_code=409, detail="Permintaan pembatalan sudah berubah di Shopee. Sinkronkan status terlebih dahulu.")
+    data = await signed_shop_request(session, akun, _PATH_BUYER_CANCEL, method="POST",
+                                     body={"order_sn": order_sn, "operation": operasi})
+    updated = (data.get("response") or {}).get("update_time")
+    if not isinstance(updated, int) or isinstance(updated, bool) or updated <= 0:
+        raise ShopeeAPIError(_PATH_BUYER_CANCEL, "unconfirmed_response",
+                             "Keputusan belum terkonfirmasi. Sinkronkan status sebelum mengirim ulang.", data.get("request_id"))
 
 
 async def batalkan_pesanan(session: Any, akun: Any, order_sn: str, alasan: str) -> None:

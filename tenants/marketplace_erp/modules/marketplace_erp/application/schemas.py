@@ -442,6 +442,11 @@ class BatalkanPesananIn(BaseModel):
     alasan: str = "CUSTOMER_REQUEST"
 
 
+class PembatalanPembeliIn(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+    operasi: Literal["ACCEPT", "REJECT"]
+
+
 class TandaiResiIn(BaseModel):
     dicetak: bool = True
 
