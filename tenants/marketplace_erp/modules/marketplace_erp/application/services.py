@@ -708,7 +708,7 @@ async def impor_listing_marketplace(session: AsyncSession, akun: AkunMarketplace
     return hasil
 
 
-async def simpan_katalog_shopee(session: AsyncSession, akun: AkunMarketplace, entries: list[dict]) -> dict:
+async def simpan_katalog_shopee(session: AsyncSession, akun: AkunMarketplace, entries: list[dict], *, lengkap: bool = True) -> dict:
     """Store the pulled Shopee catalogue for one shop (upsert per item). Only reference data: no Produk,
     stock or listing is created and Shopee is not touched. Items that disappeared from the shop are removed
     unless they were already sent to the store (that row is kept so the link is not lost)."""
@@ -744,7 +744,7 @@ async def simpan_katalog_shopee(session: AsyncSession, akun: AkunMarketplace, en
         row.status = e["status"]
         row.diambil_at = sekarang
     dihapus = 0
-    for hilang in ada.values():
+    for hilang in ada.values() if lengkap else []:
         if hilang.dikirim_toko_id is None:
             await session.delete(hilang)
             dihapus += 1
@@ -3114,3 +3114,28 @@ async def laporan_iklan(session: AsyncSession, campaign_id: str, *, dari: dateti
 
 # Re-export reason tuple for tests / docs
 __all_reasons__ = REASON_STOK_LEDGER
+
+
+async def kelola_produk_shopee(session: AsyncSession, katalog_id: str, *, fields: dict | None = None, unlist: bool | None = None) -> dict:
+    from tenants.marketplace_erp.modules.marketplace_erp.infrastructure.adapters import erp_shopee
+
+    katalog, _ = await get_katalog_shopee(session, katalog_id)
+    akun = await get_akun_marketplace(session, katalog.akun_id)
+    if fields is not None:
+        result = await erp_shopee.ubah_info_produk(session, akun, int(katalog.item_id), fields)
+    else:
+        if unlist is None:
+            raise HTTPException(status_code=422, detail="Pilih operasi produk")
+        result = await erp_shopee.ubah_status_produk(session, akun, int(katalog.item_id), unlist)
+    warnings = [str(result["warning"])] if result.get("warning") else []
+    refreshed = False
+    try:
+        snapshot = await erp_shopee.ambil_satu_produk(session, akun, int(katalog.item_id))
+        if unlist is not None and snapshot.get("status") != ("UNLIST" if unlist else "NORMAL"):
+            raise HTTPException(status_code=424, detail="Status snapshot belum mengikuti perubahan yang dikonfirmasi Shopee")
+        await simpan_katalog_shopee(session, akun, [snapshot], lengkap=False)
+        refreshed = True
+    except HTTPException as exc:
+        # The mutation was confirmed. A failed read must not present it as failed or prompt a duplicate write.
+        warnings.append(f"Perubahan berhasil, tetapi snapshot belum diperbarui. Sinkronkan katalog: {exc.detail}")
+    return {"ok": True, "snapshot_diperbarui": refreshed, "warnings": warnings, "request_id": result.get("request_id")}

@@ -688,3 +688,24 @@ class KatalogKirimIn(BaseModel):
     aktif: bool = False
     # An item already sent is skipped (the store copy may have been edited); true refreshes it from Shopee.
     timpa: bool = False
+
+
+class ShopeeProdukEditIn(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+    nama: Optional[str] = Field(default=None, min_length=1, max_length=255)
+    sku: Optional[str] = Field(default=None, max_length=128)
+
+    @model_validator(mode="after")
+    def perubahan_valid(self):
+        if self.nama is None and self.sku is None:
+            raise ValueError("Isi nama atau SKU yang akan diperbarui")
+        if self.nama is not None:
+            self.nama = self.nama.strip()
+            if not self.nama:
+                raise ValueError("Nama tidak boleh kosong")
+        return self
+
+
+class ShopeeProdukStatusIn(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+    unlist: bool
