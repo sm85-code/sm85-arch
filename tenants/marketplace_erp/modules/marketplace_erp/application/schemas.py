@@ -3,7 +3,7 @@ from __future__ import annotations
 import re
 from datetime import datetime
 from decimal import Decimal
-from typing import Optional
+from typing import Literal, Optional
 
 from pydantic import BaseModel, ConfigDict, EmailStr, Field, field_validator, model_validator
 
@@ -401,9 +401,34 @@ class ResiGabunganIn(BaseModel):
     tipe: Optional[str] = Field(default=None, pattern="^(THERMAL_AIR_WAYBILL|NORMAL_AIR_WAYBILL)$")
 
 
+class PengaturanPengirimanIn(BaseModel):
+    metode: Literal["dropoff", "pickup"]
+    address_id: Optional[int] = Field(default=None, gt=0)
+    pickup_time_id: Optional[str] = Field(default=None, min_length=1, max_length=128)
+    branch_id: Optional[int] = Field(default=None, gt=0)
+    sender_real_name: Optional[str] = Field(default=None, min_length=1, max_length=255)
+
+    model_config = ConfigDict(extra="forbid")
+
+    @model_validator(mode="after")
+    def validate_method_fields(self):
+        if self.metode == "dropoff" and (self.address_id is not None or self.pickup_time_id is not None):
+            raise ValueError("Drop Off tidak menggunakan alamat/jadwal pickup")
+        if self.metode == "pickup" and (self.branch_id is not None or self.sender_real_name is not None):
+            raise ValueError("Pickup tidak menggunakan cabang/nama pengirim drop-off")
+        return self
+
+
 class ProsesMassalIn(BaseModel):
     # Each order costs several marketplace calls, so one request is capped; the UI sends chunks.
     pesanan_ids: list[str] = Field(min_length=1, max_length=25)
+    pengaturan: dict[str, PengaturanPengirimanIn] = Field(default_factory=dict)
+
+    @model_validator(mode="after")
+    def validate_settings(self):
+        if self.pengaturan and set(self.pengaturan) != set(self.pesanan_ids):
+            raise ValueError("Pengaturan harus mencakup tepat semua pesanan yang diproses")
+        return self
 
 
 class ItemPesananOut(BaseModel):
@@ -434,6 +459,7 @@ class PesananOut(BaseModel):
     tersinkron_marketplace: bool
     catatan_sinkron: Optional[str]
     status_marketplace: Optional[str] = None
+    metode_pengiriman: Optional[str] = None
     resi_dicetak_at: Optional[datetime] = None
     resi_dicetak_oleh: Optional[str] = None
     kurir: Optional[str] = None

@@ -16,6 +16,7 @@ import logging
 import os
 import secrets as pysecrets
 from types import SimpleNamespace
+from typing import Annotated
 from datetime import date, datetime, timezone
 
 from fastapi import APIRouter, BackgroundTasks, Body, Depends, HTTPException, Query, Request, Response, status
@@ -45,6 +46,7 @@ from tenants.marketplace_erp.modules.marketplace_erp.application.schemas import 
     PesananOut,
     PesananStatusIn,
     ProsesMassalIn,
+    PengaturanPengirimanIn,
     ResiGabunganIn,
     ResiMassalIn,
     TandaiResiIn,
@@ -763,7 +765,11 @@ async def proses_massal_pesanan(
             pesanan = await services.get_pesanan(session, pesanan_id)
             info["id_eksternal"] = pesanan.id_eksternal
             await pastikan_akses_akun(pengguna, session, pesanan.akun_id)
-            await services.proses_pesanan_marketplace(session, pesanan_id)
+            setting = payload.pengaturan.get(pesanan_id)
+            if setting is None:
+                await services.proses_pesanan_marketplace(session, pesanan_id)
+            else:
+                await services.proses_pesanan_marketplace(session, pesanan_id, setting.model_dump(exclude_none=True))
             await session.commit()  # Shopee already acted: keep this order even if a later one fails
             info["ok"] = True
         except HTTPException as exc:
@@ -780,16 +786,34 @@ async def proses_massal_pesanan(
     }
 
 
+@marketplace_erp_router.get("/pesanan/{pesanan_id}/opsi-pengiriman")
+async def opsi_pengiriman_pesanan(
+    pesanan_id: str,
+    session: AsyncSession = Depends(get_db_marketplace_erp),
+    user: UserMarketplaceErp = Depends(require_roles_marketplace_erp(*OWNER_OR_STAFF)),
+):
+    pesanan = await services.get_pesanan(session, pesanan_id)
+    await pastikan_akses_akun(user, session, pesanan.akun_id)
+    pesanan, akun = await services._pesanan_marketplace(session, pesanan_id)
+    from tenants.marketplace_erp.modules.marketplace_erp.infrastructure.adapters import erp_shopee
+    if pesanan.status != "to_ship" or pesanan.status_marketplace in erp_shopee.STATUS_SUDAH_DIPROSES:
+        raise HTTPException(status_code=409, detail="Pesanan tidak membutuhkan pengaturan pengiriman.")
+    return await erp_shopee.opsi_pengiriman(session, akun, pesanan.id_eksternal)
+
+
 @marketplace_erp_router.post("/pesanan/{pesanan_id}/proses", response_model=PesananOut)
 async def proses_pesanan_marketplace(
     pesanan_id: str,
     session: AsyncSession = Depends(get_db_marketplace_erp),
     user: UserMarketplaceErp = Depends(require_roles_marketplace_erp(*OWNER_OR_STAFF)),
+    payload: Annotated[PengaturanPengirimanIn | None, Body()] = None,
 ):
-    """Arrange shipment on the marketplace (courier pickup). Shopee orders pulled by sync only."""
+    """Arrange Drop Off/Pickup on Shopee; omitted settings preserve legacy automatic selection."""
     pesanan = await services.get_pesanan(session, pesanan_id)
     await pastikan_akses_akun(user, session, pesanan.akun_id)
-    return await services.proses_pesanan_marketplace(session, pesanan_id)
+    if payload is None:
+        return await services.proses_pesanan_marketplace(session, pesanan_id)
+    return await services.proses_pesanan_marketplace(session, pesanan_id, payload.model_dump(exclude_none=True))
 
 
 @marketplace_erp_router.post("/pesanan/{pesanan_id}/batalkan", response_model=PesananOut)
