@@ -30,6 +30,7 @@ from tenants.marketplace_erp.modules.marketplace_erp.application.schemas import 
     ProdukListingIn,
     ProdukListingPatch,
     ProdukPatch,
+    ProdukVarianOpsi,
     RegisterIn,
     SettlementIn,
     SettlementPatch,
@@ -57,6 +58,8 @@ from tenants.marketplace_erp.modules.marketplace_erp.infrastructure.models impor
     Pesanan,
     Produk,
     ProdukListing,
+    ProdukKeluarga,
+    ProdukVarian,
     Settlement,
     SettlementPesanan,
     ShopeePush,
@@ -438,15 +441,102 @@ async def hubungkan_shopee_akun_utama(
 # --- Produk (SKU induk) --------------------------------------------------------
 
 
+async def list_produk_keluarga(session: AsyncSession) -> list[dict]:
+    import json
+    rows = (await session.execute(select(ProdukKeluarga).order_by(ProdukKeluarga.nama))).scalars()
+    return [{"id": row.id, "nama": row.nama, "tiers": json.loads(row.tier_json)} for row in rows]
+
+
+async def create_produk_keluarga(session: AsyncSession, payload) -> dict:
+    import json
+    row = ProdukKeluarga(nama=payload.nama, tier_json=json.dumps(payload.tiers))
+    session.add(row)
+    await session.flush()
+    return {"id": row.id, "nama": row.nama, "tiers": payload.tiers}
+
+
+async def rename_produk_keluarga(session: AsyncSession, keluarga_id: str, nama: str) -> dict:
+    import json
+    row = (await session.execute(select(ProdukKeluarga).where(ProdukKeluarga.id == keluarga_id).with_for_update())).scalar_one_or_none()
+    if row is None:
+        raise HTTPException(status_code=404, detail="Produk induk tidak ditemukan")
+    row.nama = nama
+    await session.flush()
+    return {"id": row.id, "nama": row.nama, "tiers": json.loads(row.tier_json)}
+
+
+async def delete_produk_keluarga(session: AsyncSession, keluarga_id: str) -> None:
+    row = (await session.execute(select(ProdukKeluarga).where(ProdukKeluarga.id == keluarga_id).with_for_update())).scalar_one_or_none()
+    if row is None:
+        raise HTTPException(status_code=404, detail="Produk induk tidak ditemukan")
+    if (await session.execute(select(ProdukVarian.produk_id).where(ProdukVarian.keluarga_id == keluarga_id).limit(1))).first():
+        raise HTTPException(status_code=409, detail="Produk induk masih memiliki SKU varian. Lepaskan pengelompokan terlebih dahulu.")
+    await session.delete(row)
+    await session.flush()
+
+
+async def _detail_keluarga(session: AsyncSession, produk: list[Produk]) -> None:
+    import json
+    for row in produk:
+        row.keluarga_id, row.nama_induk, row.opsi_varian = None, None, []
+    if not produk:
+        return
+    rows = (await session.execute(select(ProdukVarian, ProdukKeluarga.nama).join(
+        ProdukKeluarga, ProdukKeluarga.id == ProdukVarian.keluarga_id
+    ).where(ProdukVarian.produk_id.in_([row.id for row in produk])))).all()
+    by_id = {row.id: row for row in produk}
+    for variant, nama in rows:
+        row = by_id[variant.produk_id]
+        row.keluarga_id, row.nama_induk = variant.keluarga_id, nama
+        row.opsi_varian = json.loads(variant.opsi_json)
+
+
+async def _simpan_varian(session: AsyncSession, produk_id: str, keluarga_id: str | None, opsi: list) -> None:
+    import hashlib
+    import json
+    await session.execute(select(Produk.id).where(Produk.id == produk_id).with_for_update())
+    row = await session.get(ProdukVarian, produk_id)
+    if keluarga_id is None:
+        if opsi:
+            raise HTTPException(status_code=422, detail="Pilih produk induk untuk menyimpan pilihan varian")
+        if row:
+            await session.delete(row)
+            await session.flush()
+        return
+    # Lock the parent so competing writes cannot choose the same combination after the duplicate check.
+    keluarga = (await session.execute(select(ProdukKeluarga).where(ProdukKeluarga.id == keluarga_id).with_for_update())).scalar_one_or_none()
+    if keluarga is None:
+        raise HTTPException(status_code=404, detail="Produk induk tidak ditemukan")
+    tiers = json.loads(keluarga.tier_json)
+    values = {option.tier.casefold(): option.opsi for option in opsi}
+    if len(values) != len(opsi) or set(values) != {tier.casefold() for tier in tiers}:
+        raise HTTPException(status_code=422, detail="Isi tepat satu pilihan untuk setiap jenis varian produk induk")
+    normalized = [{"tier": tier, "opsi": values[tier.casefold()]} for tier in tiers]
+    signature = hashlib.sha256(json.dumps([option["opsi"].casefold() for option in normalized]).encode()).hexdigest()
+    exists_variant = (await session.execute(select(ProdukVarian.produk_id).where(
+        ProdukVarian.keluarga_id == keluarga_id, ProdukVarian.signature == signature, ProdukVarian.produk_id != produk_id
+    ))).first()
+    if exists_variant:
+        raise HTTPException(status_code=409, detail="Kombinasi pilihan varian sudah dipakai SKU lain")
+    if row is None:
+        row = ProdukVarian(produk_id=produk_id)
+        session.add(row)
+    row.keluarga_id, row.opsi_json, row.signature = keluarga_id, json.dumps(normalized), signature
+    await session.flush()
+
+
 async def list_produk(session: AsyncSession) -> list[Produk]:
     stmt = select(Produk).order_by(Produk.created_at.desc())
-    return list((await session.execute(stmt)).scalars().all())
+    rows = list((await session.execute(stmt)).scalars().all())
+    await _detail_keluarga(session, rows)
+    return rows
 
 
 async def get_produk(session: AsyncSession, produk_id: str) -> Produk:
     produk = await session.get(Produk, produk_id)
     if not produk:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Produk tidak ditemukan")
+    await _detail_keluarga(session, [produk])
     return produk
 
 
@@ -495,12 +585,18 @@ async def create_produk(session: AsyncSession, payload: ProdukIn) -> Produk:
             )
         )
         await session.flush()
+    await _simpan_varian(session, produk.id, payload.keluarga_id, payload.opsi_varian)
+    await _detail_keluarga(session, [produk])
     return produk
 
 
 async def update_produk(session: AsyncSession, produk_id: str, payload: ProdukPatch) -> Produk:
     produk = await get_produk(session, produk_id)
     data = payload.model_dump(exclude_unset=True)
+    grouping = "keluarga_id" in data or "opsi_varian" in data
+    keluarga_id = data.pop("keluarga_id", produk.keluarga_id)
+    data.pop("opsi_varian", None)
+    opsi = payload.opsi_varian if "opsi_varian" in payload.model_fields_set else [ProdukVarianOpsi.model_validate(option) for option in produk.opsi_varian]
     # Direct stok patch is allowed as an admin override but must go through
     # adjust so the ledger stays the SSOT. Reject raw stok overwrite here.
     if "stok" in data:
@@ -517,9 +613,12 @@ async def update_produk(session: AsyncSession, produk_id: str, payload: ProdukPa
             data["hari_proses"] = normalisasi_proses(data["preorder"], data.get("hari_proses", produk.hari_proses))
         except ValueError as exc:
             raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=str(exc)) from exc
+    if grouping:
+        await _simpan_varian(session, produk_id, keluarga_id, [] if keluarga_id is None and "opsi_varian" not in payload.model_fields_set else opsi)
     for field, value in data.items():
         setattr(produk, field, value)
     await session.flush()
+    await _detail_keluarga(session, [produk])
     return produk
 
 
@@ -536,6 +635,7 @@ async def delete_produk(session: AsyncSession, produk_id: str) -> None:
     await session.execute(delete(StokLedger).where(StokLedger.produk_id == produk_id))
     await session.execute(delete(StokReservasi).where(StokReservasi.produk_id == produk_id))
     await session.execute(delete(ProdukListing).where(ProdukListing.produk_id == produk_id))
+    await session.execute(delete(ProdukVarian).where(ProdukVarian.produk_id == produk_id))
     await session.refresh(produk)
     await session.delete(produk)
     await session.flush()

@@ -217,7 +217,38 @@ def normalisasi_proses(preorder: bool, hari: int) -> int:
     return hari
 
 
+class ProdukVarianOpsi(BaseModel):
+    tier: str = Field(min_length=1, max_length=64)
+    opsi: str = Field(min_length=1, max_length=128)
+
+    @field_validator("tier", "opsi")
+    @classmethod
+    def bersihkan(cls, value):
+        value = value.strip()
+        if not value:
+            raise ValueError("Jenis dan pilihan varian tidak boleh kosong")
+        return value
+
+
+class ProdukKeluargaIn(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+    nama: str = Field(min_length=1, max_length=255)
+    tiers: list[str] = Field(min_length=1, max_length=5)
+
+    @model_validator(mode="after")
+    def valid_tiers(self):
+        self.nama = self.nama.strip()
+        self.tiers = [tier.strip() for tier in self.tiers]
+        if not self.nama or any(not tier or len(tier) > 64 for tier in self.tiers):
+            raise ValueError("Nama produk induk dan jenis varian wajib diisi")
+        if len({tier.casefold() for tier in self.tiers}) != len(self.tiers):
+            raise ValueError("Jenis varian tidak boleh berulang")
+        return self
+
+
 class ProdukIn(BaseModel):
+    keluarga_id: Optional[str] = None
+    opsi_varian: list[ProdukVarianOpsi] = Field(default_factory=list)
     sku_induk: str
     nama: str
     deskripsi: str = ""
@@ -238,6 +269,8 @@ class ProdukIn(BaseModel):
 
 
 class ProdukPatch(BaseModel):
+    keluarga_id: Optional[str] = None
+    opsi_varian: list[ProdukVarianOpsi] = Field(default_factory=list)
     nama: Optional[str] = None
     deskripsi: Optional[str] = None
     harga_dasar: Optional[Decimal] = None
@@ -253,6 +286,9 @@ class ProdukPatch(BaseModel):
 
 
 class ProdukOut(BaseModel):
+    nama_induk: Optional[str] = None
+    keluarga_id: Optional[str] = None
+    opsi_varian: list[ProdukVarianOpsi] = Field(default_factory=list)
     id: str
     sku_induk: str
     nama: str
@@ -709,3 +745,16 @@ class ShopeeProdukEditIn(BaseModel):
 class ShopeeProdukStatusIn(BaseModel):
     model_config = ConfigDict(extra="forbid")
     unlist: bool
+
+
+class ProdukKeluargaNamaIn(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+    nama: str = Field(min_length=1, max_length=255)
+
+    @field_validator("nama")
+    @classmethod
+    def nama_valid(cls, value):
+        value = value.strip()
+        if not value:
+            raise ValueError("Nama produk induk tidak boleh kosong")
+        return value

@@ -78,3 +78,32 @@ async def test_self_heal_adds_must_change_password_column():
         except Exception:
             pass
         await engine.dispose()
+
+
+@pytest.mark.asyncio
+async def test_product_family_tables_are_added_without_rewriting_existing_skus():
+    from sqlalchemy import insert, select
+    from sqlalchemy.ext.asyncio import create_async_engine
+    from tenants.marketplace_erp.modules.marketplace_erp.infrastructure.database import MarketplaceErpBase
+    from tenants.marketplace_erp.modules.marketplace_erp.infrastructure.models import Produk, ProdukKeluarga, ProdukVarian
+
+    schema = f"mpe_family_{uuid.uuid4().hex[:8]}"
+    engine = create_async_engine(_asyncpg_url())
+    try:
+        async with engine.begin() as conn:
+            await conn.execute(text(f'CREATE SCHEMA "{schema}"'))
+            await conn.execute(text(f'SET LOCAL search_path TO "{schema}"'))
+            old_tables = [table for table in MarketplaceErpBase.metadata.sorted_tables if table.name not in {'mpe_produk_keluarga', 'mpe_produk_varian'}]
+            await conn.run_sync(lambda sync: MarketplaceErpBase.metadata.create_all(sync, tables=old_tables))
+            await conn.execute(insert(Produk).values(id='old', sku_induk='OLD-SKU', nama='Judul Lama - Merah', harga_dasar=15000, stok=9))
+            await conn.run_sync(MarketplaceErpBase.metadata.create_all)
+            await conn.run_sync(MarketplaceErpBase.metadata.create_all)
+            old = (await conn.execute(select(Produk.nama, Produk.stok, Produk.harga_dasar).where(Produk.id == 'old'))).one()
+            assert old.nama == 'Judul Lama - Merah' and old.stok == 9 and old.harga_dasar == 15000
+            await conn.execute(insert(ProdukKeluarga).values(id='parent', nama='Kaos', tier_json='["Warna"]'))
+            await conn.execute(insert(ProdukVarian).values(produk_id='old', keluarga_id='parent', opsi_json='[{"tier":"Warna","opsi":"Merah"}]', signature='red'))
+            assert (await conn.execute(select(Produk.stok).where(Produk.id == 'old'))).scalar_one() == 9
+    finally:
+        async with engine.begin() as conn:
+            await conn.execute(text(f'DROP SCHEMA IF EXISTS "{schema}" CASCADE'))
+        await engine.dispose()
