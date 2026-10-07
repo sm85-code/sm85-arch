@@ -467,7 +467,7 @@ async def _call_shop_api(
         if not isinstance(data, dict):
             raise HTTPException(status_code=502, detail="Format respons Shopee tidak valid.")
         if resp.status_code >= 500 or (not 200 <= resp.status_code < 300 and not str(data.get("error") or "").strip()):
-            reference = f" (request_id: {data["request_id"]})" if data.get("request_id") else ""
+            reference = f" (request_id: {data['request_id']})" if data.get("request_id") else ""
             failure = HTTPException(status_code=502, detail=f"Shopee tidak menjawab dengan sukses (HTTP {resp.status_code}).{reference}")
             failure.request_id = data.get("request_id")
             raise failure
