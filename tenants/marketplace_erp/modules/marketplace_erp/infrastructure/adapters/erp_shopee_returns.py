@@ -105,3 +105,12 @@ async def detail_retur(session, akun, nomor_retur: str) -> dict:
     except (ValueError, TypeError, InvalidOperation) as exc:
         raise ShopeeAPIError(PATH_DETAIL, "incomplete_response", "Detail retur yang diminta tidak dikonfirmasi Shopee.", data.get("request_id")) from exc
     return row
+
+
+async def konfirmasi_retur(session, akun, nomor_retur: str) -> dict:
+    await detail_retur(session, akun, nomor_retur)
+    path = "/api/v2/returns/confirm"
+    data = await signed_shop_request(session, akun, path, method="POST", body={"return_sn": nomor_retur})
+    if (data.get("response") or {}).get("return_sn") != nomor_retur:
+        raise ShopeeAPIError(path, "unconfirmed_response", "Persetujuan belum terkonfirmasi. Segarkan sebelum mencoba ulang.", data.get("request_id"))
+    return {"ok": True, "request_id": data.get("request_id"), "warnings": []}
