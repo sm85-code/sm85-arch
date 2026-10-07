@@ -1808,6 +1808,9 @@ async def proses_pesanan_marketplace(session: AsyncSession, pesanan_id: str, pen
         hasil = await erp_shopee.proses_pengiriman(session, akun, pesanan.id_eksternal)
     else:
         hasil = await erp_shopee.proses_pengiriman(session, akun, pesanan.id_eksternal, pengaturan=pengaturan)
+    if pesanan.status_marketplace == "RETRY_SHIP":
+        pesanan.resi_dicetak_at = None
+        pesanan.resi_dicetak_oleh = None
     pesanan.metode_pengiriman = hasil.get("metode_pengiriman")
     pesanan.status_marketplace = hasil["status_marketplace"]
     if hasil["nomor_resi"]:
@@ -1847,8 +1850,9 @@ async def unduh_resi_massal(
         )
     akun = semua[0][1]
     pdf = await erp_shopee.unduh_resi_banyak(session, akun, [(p.id_eksternal, p.nomor_resi) for p, _ in semua], tipe)
+    _, ekstensi = erp_shopee.format_dokumen_resi(pdf)
     _tandai_dicetak([p for p, _ in semua], oleh)
-    nama = f"resi-{semua[0][0].id_eksternal}.pdf" if len(semua) == 1 else f"resi-{len(semua)}-pesanan.pdf"
+    nama = f"resi-{semua[0][0].id_eksternal}.{ekstensi}" if len(semua) == 1 else f"resi-{len(semua)}-pesanan.{ekstensi}"
     return pdf, nama
 
 
@@ -1899,7 +1903,14 @@ async def unduh_resi_gabungan(
 
     async def satu_kelompok(anggota: list) -> bytes:
         akun = anggota[0][1]
-        return await erp_shopee.unduh_resi_banyak(session, akun, [(p.id_eksternal, p.nomor_resi) for p, _ in anggota], tipe)
+        dokumen = await erp_shopee.unduh_resi_banyak(session, akun, [(p.id_eksternal, p.nomor_resi) for p, _ in anggota], tipe)
+        mime, _ = erp_shopee.format_dokumen_resi(dokumen)
+        if mime == "application/pdf":
+            try:
+                PdfReader(io.BytesIO(dokumen))
+            except Exception as exc:
+                raise HTTPException(status_code=424, detail="File PDF resi dari Shopee tidak valid.") from exc
+        return dokumen
 
     for anggota_penuh in kelompok.values():
         for awal in range(0, len(anggota_penuh), erp_shopee.MAKS_RESI_MASSAL):
@@ -1930,14 +1941,28 @@ async def unduh_resi_gabungan(
     if not pdfs:
         contoh = "; ".join(f"#{g['id_eksternal'] or g['id']}: {g['pesan']}" for g in gagal[:3])
         raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail=f"Tidak ada resi yang berhasil dibuat. {contoh}".strip())
-    penulis = PdfWriter()
-    for pdf in pdfs:
-        penulis.append(PdfReader(io.BytesIO(pdf)))
+    formats = [erp_shopee.format_dokumen_resi(pdf) for pdf in pdfs]
     keluar = io.BytesIO()
-    penulis.write(keluar)
+    if all(mime == "application/pdf" for mime, _ in formats):
+        penulis = PdfWriter()
+        for pdf in pdfs:
+            penulis.append(PdfReader(io.BytesIO(pdf)))
+        penulis.write(keluar)
+        mime, ekstensi = "application/pdf", "pdf"
+    elif len(pdfs) == 1:
+        keluar.write(pdfs[0])
+        mime, ekstensi = formats[0]
+    else:
+        import zipfile
+
+        with zipfile.ZipFile(keluar, "w", zipfile.ZIP_DEFLATED) as arsip:
+            for i, (dokumen, (_, ext)) in enumerate(zip(pdfs, formats), start=1):
+                arsip.writestr(f"resi-{i}.{ext}", dokumen)
+        mime, ekstensi = "application/zip", "zip"
     _tandai_dicetak(berhasil, oleh)
-    nama = f"resi-{berhasil[0].id_eksternal}.pdf" if len(berhasil) == 1 else f"resi-{len(berhasil)}-pesanan.pdf"
-    return {"pdf": keluar.getvalue(), "nama_file": nama, "berhasil": len(berhasil), "gagal": gagal, "jumlah_pdf": len(pdfs)}
+    nama = f"resi-{berhasil[0].id_eksternal}.{ekstensi}" if len(berhasil) == 1 else f"resi-{len(berhasil)}-pesanan.{ekstensi}"
+    return {"pdf": keluar.getvalue(), "nama_file": nama, "mime_type": mime,
+            "berhasil": len(berhasil), "gagal": gagal, "jumlah_pdf": len(pdfs)}
 
 
 async def batalkan_pesanan_marketplace(session: AsyncSession, pesanan_id: str, alasan: str) -> Pesanan:
@@ -1993,8 +2018,9 @@ async def unduh_resi_pesanan(
     if pesanan.status_marketplace not in erp_shopee.STATUS_SUDAH_DIPROSES:
         raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail="Proses pesanan di Shopee dulu sebelum mencetak resi.")
     pdf = await erp_shopee.unduh_resi(session, akun, pesanan.id_eksternal, pesanan.nomor_resi, tipe)
+    _, ekstensi = erp_shopee.format_dokumen_resi(pdf)
     _tandai_dicetak([pesanan], oleh)
-    return pdf, f"resi-{pesanan.id_eksternal}.pdf"
+    return pdf, f"resi-{pesanan.id_eksternal}.{ekstensi}"
 
 
 async def delete_pesanan(session: AsyncSession, pesanan_id: str) -> None:

@@ -93,6 +93,8 @@ async def test_proses_pengiriman_calls_param_then_ship_then_tracking(live, monke
 
     async def fake(session, akun, path, *, method="GET", body=None, params=None, **_):
         calls.append((path, method, body, params))
+        if path == erp_shopee._PATH_ORDER_DETAIL:
+            return {"response": {"order_list": [{"order_sn": "SN1", "order_status": "READY_TO_SHIP"}]}}
         if path == erp_shopee._PATH_SHIP_PARAM:
             return {"response": PICKUP_PARAM}
         if path == erp_shopee._PATH_TRACKING:
@@ -103,8 +105,8 @@ async def test_proses_pengiriman_calls_param_then_ship_then_tracking(live, monke
     out = await erp_shopee.proses_pengiriman(None, live, "SN1")
 
     assert out == {"status_marketplace": "PROCESSED", "nomor_resi": "ID123", "metode_pengiriman": "pickup"}
-    assert [c[0] for c in calls] == [erp_shopee._PATH_SHIP_PARAM, erp_shopee._PATH_SHIP_ORDER, erp_shopee._PATH_TRACKING]
-    assert calls[1][1:3] == ("POST", {"order_sn": "SN1", "pickup": {"address_id": 2, "pickup_time_id": "t2"}})
+    assert [c[0] for c in calls] == [erp_shopee._PATH_ORDER_DETAIL, erp_shopee._PATH_SHIP_PARAM, erp_shopee._PATH_SHIP_ORDER, erp_shopee._PATH_TRACKING]
+    assert calls[2][1:3] == ("POST", {"order_sn": "SN1", "pickup": {"address_id": 2, "pickup_time_id": "t2"}})
 
 
 # --- service: process + follow Shopee afterwards ------------------------------------------
@@ -314,7 +316,7 @@ async def test_unduh_resi_template_choice(live, monkeypatch):
 
 
 # Explicit shipping methods must never fall back to a different method.
-@pytest.mark.parametrize("param", [{"info_needed": {"dropoff": []}}, {"dropoff": {}}])
+@pytest.mark.parametrize("param", [{"info_needed": {"dropoff": []}}, {"info_needed": {"dropoff": []}, "dropoff": {}}])
 def test_empty_dropoff_is_available_and_can_be_submitted(param):
     assert erp_shopee.parameter_kirim_eksplisit(param, "Toko", {"metode": "dropoff"}) == {"dropoff": {}}
     assert erp_shopee.pilih_parameter_kirim(param, "Toko") == {"dropoff": {}}
@@ -490,3 +492,145 @@ def test_shipping_routes_expose_optional_single_body_and_bulk_settings():
     assert body.get("required", False) is False
     assert "/api/marketplace-erp/pesanan/{pesanan_id}/opsi-pengiriman" in paths
     assert "pengaturan" in schema["components"]["schemas"]["ProsesMassalIn"]["properties"]
+
+
+def test_response_objects_do_not_advertise_unsupported_modes():
+    param = {"info_needed": {"dropoff": []}, "pickup": PICKUP_PARAM["pickup"], "dropoff": {}}
+    assert [o["metode"] for o in erp_shopee.opsi_parameter_kirim(param, "Toko")["opsi"]] == ["dropoff"]
+    assert erp_shopee.pilih_parameter_kirim(param, "Toko") == {"dropoff": {}}
+    with pytest.raises(HTTPException):
+        erp_shopee.parameter_kirim_eksplisit(param, "Toko", {"metode": "pickup", "address_id": 1})
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("explicit", [True, False])
+async def test_multipackage_is_blocked_before_shipping_even_for_legacy_clients(live, monkeypatch, explicit):
+    calls = []
+
+    async def fake(session, akun, path, **kwargs):
+        calls.append(path)
+        assert kwargs["params"]["response_optional_fields"] == "package_list"
+        return {"response": {"order_list": [{"order_sn": "SN1", "order_status": "READY_TO_SHIP",
+                                              "package_list": [{"package_number": "P1"}, {"package_number": "P2"}]}]}}
+
+    monkeypatch.setattr(erp_shopee, "signed_shop_request", fake)
+    with pytest.raises(HTTPException) as exc:
+        await erp_shopee.proses_pengiriman(None, live, "SN1", {"metode": "dropoff"} if explicit else None)
+    assert "beberapa paket" in exc.value.detail
+    assert calls == [erp_shopee._PATH_ORDER_DETAIL]
+
+
+@pytest.mark.asyncio
+async def test_retry_shipping_offers_only_pickup_and_uses_update_endpoint(live, monkeypatch):
+    calls = []
+
+    async def fake(session, akun, path, **kwargs):
+        calls.append((path, kwargs))
+        if path == erp_shopee._PATH_ORDER_DETAIL:
+            return {"response": {"order_list": [{"order_sn": "SN1", "order_status": "RETRY_SHIP"}]}}
+        if path == erp_shopee._PATH_SHIP_PARAM:
+            return {"response": PICKUP_PARAM}
+        return {}
+
+    monkeypatch.setattr(erp_shopee, "signed_shop_request", fake)
+    opsi = await erp_shopee.opsi_pengiriman(None, live, "SN1")
+    assert opsi["aksi"] == "pickup_ulang" and [o["metode"] for o in opsi["opsi"]] == ["pickup"]
+    setting = {"metode": "pickup", "address_id": 1, "pickup_time_id": "x1"}
+    result = await erp_shopee.proses_pengiriman(None, live, "SN1", setting)
+    assert result["metode_pengiriman"] == "pickup"
+    update = next(kwargs for path, kwargs in calls if path == "/api/v2/logistics/update_shipping_order")
+    assert update["body"] == {"order_sn": "SN1", "pickup": {"address_id": 1, "pickup_time_id": "x1"}}
+    assert not any(path == erp_shopee._PATH_SHIP_ORDER for path, _ in calls)
+    with pytest.raises(HTTPException):
+        await erp_shopee.proses_pengiriman(None, live, "SN1", {"metode": "dropoff"})
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("response_error,expected", [(True, 424), (False, 409)])
+async def test_ship_rejection_is_distinct_from_ambiguous_transport_failure(live, monkeypatch, response_error, expected):
+    calls = []
+
+    async def fake(session, akun, path, **kwargs):
+        calls.append(path)
+        if path == erp_shopee._PATH_ORDER_DETAIL:
+            return {"response": {"order_list": [{"order_sn": "SN1", "order_status": "READY_TO_SHIP"}]}}
+        if path == erp_shopee._PATH_SHIP_PARAM:
+            return {"response": {"info_needed": {"dropoff": []}}}
+        if response_error:
+            raise erp_shopee.ShopeeAPIError(path, "invalid_status", "Not ready", "request-123")
+        raise HTTPException(status_code=502, detail="Transport gagal: not a structured Shopee rejection")
+
+    monkeypatch.setattr(erp_shopee, "signed_shop_request", fake)
+    with pytest.raises(HTTPException) as exc:
+        await erp_shopee.proses_pengiriman(None, live, "SN1", {"metode": "dropoff"})
+    assert exc.value.status_code == expected
+    assert calls.count(erp_shopee._PATH_SHIP_ORDER) == 1
+    assert ("request-123" in exc.value.detail) == response_error
+
+
+@pytest.mark.asyncio
+async def test_http_error_with_json_success_shape_is_not_accepted(live, monkeypatch):
+    monkeypatch.setattr(requests, "get", lambda *a, **k: SimpleNamespace(
+        ok=False, status_code=503, json=lambda: {"error": "", "response": {}}))
+    with pytest.raises(HTTPException) as exc:
+        await erp_shopee._call_shop_api(access_token="at", shop_id="5", api_path="/x")
+    assert exc.value.status_code == 502
+
+
+@pytest.mark.parametrize("body,mime,extension", [(b"%PDF-1.4 label", "application/pdf", "pdf"),
+                                                (b"<!DOCTYPE html><html>label</html>", "text/html", "html")])
+def test_label_format_and_response_headers(body, mime, extension):
+    assert erp_shopee.format_dokumen_resi(body) == (mime, extension)
+    response = router._respons_resi(body, f"resi.{extension}")
+    assert response.media_type == mime
+    assert response.headers["content-disposition"].startswith("inline" if extension == "pdf" else "attachment")
+    assert response.headers["x-content-type-options"] == "nosniff"
+
+
+def test_unknown_label_body_is_not_served_as_pdf():
+    with pytest.raises(HTTPException) as exc:
+        erp_shopee.format_dokumen_resi(b"upstream error")
+    assert exc.value.status_code == 424
+
+
+@pytest.mark.asyncio
+async def test_successful_pickup_reschedule_clears_old_print_mark(session, monkeypatch):
+    from datetime import datetime, timezone
+
+    _, pesanan, _ = await _pesanan_sync(session, mentah="RETRY_SHIP")
+    pesanan.resi_dicetak_at = datetime.now(timezone.utc)
+    pesanan.resi_dicetak_oleh = "old printer"
+
+    async def fake(*args, **kwargs):
+        return {"status_marketplace": "PROCESSED", "nomor_resi": None, "metode_pengiriman": "pickup"}
+
+    monkeypatch.setattr(erp_shopee, "proses_pengiriman", fake)
+    result = await services.proses_pesanan_marketplace(session, pesanan.id, {"metode": "pickup"})
+    assert result.status_marketplace == "PROCESSED" and result.metode_pengiriman == "pickup"
+    assert result.resi_dicetak_at is None and result.resi_dicetak_oleh is None
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("http_status,structured_rejection", [(200, True), (503, False)])
+async def test_structured_error_retains_request_id_but_server_failure_remains_uncertain(live, monkeypatch, http_status, structured_rejection):
+    monkeypatch.setattr(requests, "get", lambda *a, **k: SimpleNamespace(
+        ok=http_status == 200, status_code=http_status,
+        json=lambda: {"error": "invalid_status", "message": "Not ready", "request_id": "req-123"}))
+    with pytest.raises(HTTPException) as exc:
+        await erp_shopee._call_shop_api(access_token="at", shop_id="5", api_path="/x")
+    assert isinstance(exc.value, erp_shopee.ShopeeAPIError) == structured_rejection
+    if structured_rejection:
+        assert exc.value.request_id == "req-123" and "req-123" in exc.value.detail
+
+
+def test_zip_label_detected_and_downloaded_as_attachment():
+    import io
+    import zipfile
+
+    content = io.BytesIO()
+    with zipfile.ZipFile(content, "w") as archive:
+        archive.writestr("label.html", "<html>AWB</html>")
+    assert erp_shopee.format_dokumen_resi(content.getvalue()) == ("application/zip", "zip")
+    response = router._respons_resi(content.getvalue(), "resi.zip")
+    assert response.media_type == "application/zip"
+    assert response.headers["content-disposition"] == 'attachment; filename="resi.zip"'
