@@ -1347,7 +1347,7 @@ async def daftar_kampanye_iklan(session: Any, akun: Any, hari: int = 7) -> dict:
 
 def _aman_angka(nilai: Any, nama: str, *, maks: Decimal | None = None) -> float:
     angka = _desimal(nilai)
-    if angka is None or angka <= 0:
+    if angka is None or not angka.is_finite() or angka <= 0:
         raise HTTPException(status_code=422, detail=f"{nama} harus angka lebih dari 0")
     if maks is not None and angka > maks:
         raise HTTPException(status_code=422, detail=f"{nama} melebihi batas Rp {maks:,.0f}".replace(",", "."))
@@ -1374,7 +1374,9 @@ def susun_kata_kunci(campaign_id: int, payload: dict) -> dict:
     if not isinstance(daftar, list) or not daftar:
         raise HTTPException(status_code=422, detail="kata_kunci wajib berisi minimal satu kata")
     pilihan = []
-    for k in daftar[:50]:
+    if len(daftar) > 50:
+        raise HTTPException(status_code=422, detail="Maksimal 50 perubahan kata kunci per permintaan")
+    for k in daftar:
         aksi = str(k.get("aksi") or "")
         kata = str(k.get("kata") or "").strip()
         if aksi not in AKSI_KATA_KUNCI or not kata:

@@ -623,3 +623,17 @@ class ProdukVarian(MarketplaceErpBase):
     keluarga_id: Mapped[str] = mapped_column(String(64), ForeignKey("mpe_produk_keluarga.id", ondelete="RESTRICT"), nullable=False, index=True)
     opsi_json: Mapped[str] = mapped_column(Text, nullable=False)
     signature: Mapped[str] = mapped_column(String(64), nullable=False)
+
+
+class PublikasiMarketplace(MarketplaceErpBase):
+    """Durable receipt claimed before external creation; prevents duplicate parents after uncertain calls."""
+    __tablename__ = "mpe_publikasi_marketplace"
+    __table_args__ = (UniqueConstraint("akun_id", "operation_id", name="uq_mpe_publikasi_operation"),)
+    id: Mapped[str] = mapped_column(String(64), primary_key=True, default=_uuid)
+    akun_id: Mapped[str] = mapped_column(String(64), ForeignKey("mpe_akun_marketplace.id", ondelete="CASCADE"), index=True)
+    operation_id: Mapped[str] = mapped_column(String(64))
+    payload_hash: Mapped[str] = mapped_column(String(64))
+    status: Mapped[str] = mapped_column(String(32), default="mengirim")
+    item_id: Mapped[Optional[str]] = mapped_column(String(32), nullable=True)
+    result_json: Mapped[str] = mapped_column(Text, default="{}")
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=_utcnow)

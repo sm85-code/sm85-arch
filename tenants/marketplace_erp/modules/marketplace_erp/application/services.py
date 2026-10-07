@@ -2917,7 +2917,10 @@ async def ubah_iklan_shopee(session: AsyncSession, akun: AkunMarketplace, jenis:
         "iklan shopee %s oleh %s (toko %s): %s", jenis, getattr(pengguna, "username", None) or getattr(pengguna, "id", "?"), akun.nama_toko,
         {k: v for k, v in body.items() if k != "reference_id"},
     )
-    return await erp_shopee.signed_shop_request(session, akun, path, method="POST", body=body)
+    from tenants.marketplace_erp.modules.marketplace_erp.infrastructure import shopee_iklan
+    shopee_iklan.validasi_nilai(body)
+    data = await erp_shopee.signed_shop_request(session, akun, path, method="POST", body=body)
+    return shopee_iklan.konfirmasi_mutasi(path, data, campaign_id)
 
 
 ADS_AI_BATAS_HARIAN = int(os.getenv("ADS_AI_BATAS_HARIAN", "30"))
