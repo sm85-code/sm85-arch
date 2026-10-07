@@ -49,10 +49,14 @@ def tanda_tangan(key: str, url: str, body: bytes) -> str:
     return hmac.new(key.encode(), url.encode() + b"|" + body, hashlib.sha256).hexdigest()
 
 
+def callback_url() -> str:
+    """Exact public callback shared by registration and signature verification."""
+    return os.getenv("SHOPEE_PUSH_URL", "").strip() or CALLBACK_URL
+
+
 def kandidat_url(url_terlihat: str, header: dict[str, str]) -> list[str]:
-    """The callback URL as Shopee has it: the configured one first, then what the request looked like
-    (behind the platform's proxy the scheme/host may differ from what was typed into Open Platform)."""
-    return [os.getenv("SHOPEE_PUSH_URL", "").strip() or CALLBACK_URL]
+    """Trust the configured callback, independent of reverse-proxy headers."""
+    return [callback_url()]
 
 
 def sidik_jari_kunci(key: str) -> dict[str, Any]:

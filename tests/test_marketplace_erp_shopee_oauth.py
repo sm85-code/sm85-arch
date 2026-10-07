@@ -161,7 +161,7 @@ async def test_pastikan_token_segar_rotates_and_commits(monkeypatch):
 
 
 @pytest.mark.asyncio
-async def test_pastikan_token_segar_marks_expired_when_refresh_fails(monkeypatch):
+async def test_pastikan_token_segar_preserves_authorization_when_refresh_fails(monkeypatch):
     async def fail(**_):
         raise HTTPException(status_code=502, detail="Shopee refresh gagal")
 
@@ -169,7 +169,8 @@ async def test_pastikan_token_segar_marks_expired_when_refresh_fails(monkeypatch
     session, akun = _FakeSession(), _akun(-5)
     with pytest.raises(HTTPException):
         await erp_shopee.pastikan_token_segar(session, akun)
-    assert akun.status == "token_kadaluarsa" and session.commits == 1
+    assert akun.status == "terhubung" and session.commits == 0
+    assert (akun.access_token, akun.refresh_token) == ("at-old", "rt-old")
 
 
 @pytest.mark.asyncio

@@ -318,8 +318,8 @@ async def pastikan_token_segar(session: Any, akun: Any) -> None:
         )
         apply_token_payload(akun, payload, shop_id=str(akun.id_toko_eksternal))
     except HTTPException:
-        akun.status = "token_kadaluarsa"
-        await session.commit()
+        # A failed upstream call does not prove authorization was revoked.
+        # Preserve the token pair and status so transient failures can be retried.
         raise
     await session.commit()
 
