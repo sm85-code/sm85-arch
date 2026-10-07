@@ -1435,7 +1435,7 @@ def pilih_parameter_kirim(param: dict, nama_toko: str) -> dict:
 
     dropoff = param.get("dropoff") or {}
     needed = info.get("dropoff") or []
-    if dropoff.get("branch_list") or needed:
+    if "dropoff" in info or "dropoff" in param:
         if "tracking_no" in needed or "tracking_number" in needed:
             raise HTTPException(
                 status_code=status.HTTP_409_CONFLICT,
@@ -1464,23 +1464,127 @@ def pilih_parameter_kirim(param: dict, nama_toko: str) -> dict:
     )
 
 
+def opsi_parameter_kirim(param: dict, nama_toko: str) -> dict:
+    """Expose only the available modes and fields the ERP can safely submit."""
+    info = param.get("info_needed") or {}
+    opsi = []
+    for metode, supported in (("dropoff", {"branch_id", "sender_real_name"}),
+                              ("pickup", {"address_id", "pickup_time_id"})):
+        if metode not in info and metode not in param:
+            continue
+        needed = info.get(metode) or []
+        data = param.get(metode) or {}
+        addresses = data.get("address_list") or []
+        branches = data.get("branch_list") or []
+        reason = None
+        if set(needed) - supported:
+            reason = "Kurir membutuhkan parameter yang belum didukung ERP; gunakan Seller Centre Shopee."
+        elif metode == "pickup" and ("address_id" in needed or "pickup_time_id" in needed) and not addresses:
+            reason = "Shopee tidak mengembalikan alamat pickup."
+        elif metode == "pickup" and "pickup_time_id" in needed and not any(a.get("time_slot_list") for a in addresses):
+            reason = "Shopee tidak mengembalikan jadwal pickup."
+        elif metode == "dropoff" and "branch_id" in needed and not branches:
+            reason = "Shopee tidak mengembalikan cabang drop-off."
+        opsi.append({
+            "metode": metode, "tersedia": reason is None, "alasan": reason, "wajib": needed,
+            "nama_pengirim": nama_toko,
+            "alamat": [{
+                "address_id": a["address_id"],
+                "label": ", ".join(str(a.get(k) or "") for k in
+                                   ("address", "district", "city", "state") if a.get(k)) or str(a["address_id"]),
+                "rekomendasi": bool(set(a.get("address_flag") or []) & {"pickup_address", "default_address"}),
+                "jadwal": [{"pickup_time_id": str(t["pickup_time_id"]),
+                            "label": str(t.get("time_text") or t["pickup_time_id"]),
+                            "tanggal": t.get("date"),
+                            "rekomendasi": "recommended" in (t.get("flags") or [])}
+                           for t in a.get("time_slot_list") or []],
+            } for a in addresses],
+            "cabang": [{"branch_id": b["branch_id"],
+                        "label": str(b.get("branch_name") or b.get("name") or b["branch_id"])} for b in branches],
+        })
+    return {"opsi": opsi}
+
+
+def parameter_kirim_eksplisit(param: dict, nama_toko: str, pengaturan: dict) -> dict:
+    """Validate against freshly fetched provider options; never silently switch modes."""
+    metode = pengaturan.get("metode")
+    opsi = next((o for o in opsi_parameter_kirim(param, nama_toko)["opsi"] if o["metode"] == metode), None)
+    if not opsi or not opsi["tersedia"]:
+        raise HTTPException(status_code=409, detail=(opsi or {}).get("alasan") or "Metode pengiriman tidak tersedia untuk pesanan ini.")
+    allowed = {"metode", "address_id", "pickup_time_id"} if metode == "pickup" else {"metode", "branch_id", "sender_real_name"}
+    if set(pengaturan) - allowed:
+        raise HTTPException(status_code=409, detail="Parameter tidak sesuai metode pengiriman.")
+    needed = opsi["wajib"]
+    body = {}
+    if metode == "pickup":
+        address_id = pengaturan.get("address_id")
+        address = next((a for a in opsi["alamat"] if a["address_id"] == address_id), None)
+        if address_id is not None or "address_id" in needed or "pickup_time_id" in needed:
+            if address is None:
+                raise HTTPException(status_code=409, detail="Alamat pickup tidak tersedia. Muat ulang opsi pengiriman.")
+            body["address_id"] = address_id
+        slot = pengaturan.get("pickup_time_id")
+        if slot is not None or "pickup_time_id" in needed:
+            if not address or not any(t["pickup_time_id"] == slot for t in address["jadwal"]):
+                raise HTTPException(status_code=409, detail="Jadwal pickup tidak tersedia. Muat ulang opsi pengiriman.")
+            body["pickup_time_id"] = slot
+    else:
+        branch_id = pengaturan.get("branch_id")
+        if branch_id is not None or "branch_id" in needed:
+            if not any(b["branch_id"] == branch_id for b in opsi["cabang"]):
+                raise HTTPException(status_code=409, detail="Cabang drop-off tidak tersedia. Muat ulang opsi pengiriman.")
+            body["branch_id"] = branch_id
+        sender = str(pengaturan.get("sender_real_name") or "").strip()
+        if "sender_real_name" in needed or "sender_real_name" in pengaturan:
+            if not sender:
+                raise HTTPException(status_code=409, detail="Nama pengirim wajib diisi.")
+            body["sender_real_name"] = sender
+    return {metode: body}
+
+
+async def pastikan_belum_diproses(session: Any, akun: Any, order_sn: str) -> None:
+    data = await signed_shop_request(session, akun, _PATH_ORDER_DETAIL, params={"order_sn_list": order_sn})
+    orders = (data.get("response") or {}).get("order_list") or []
+    order = next((o for o in orders if o.get("order_sn") == order_sn), None)
+    if not order or order.get("order_status") not in {"READY_TO_SHIP", "RETRY_SHIP"}:
+        raise HTTPException(status_code=409, detail="Pesanan tidak siap diproses atau sudah diproses di Shopee. Sinkronkan status terlebih dahulu.")
+
+
+async def opsi_pengiriman(session: Any, akun: Any, order_sn: str) -> dict:
+    data = await signed_shop_request(session, akun, _PATH_SHIP_PARAM, params={"order_sn": order_sn})
+    return opsi_parameter_kirim(data.get("response") or {}, akun.nama_toko)
+
+
 async def ambil_nomor_resi(session: Any, akun: Any, order_sn: str) -> str | None:
     """Best-effort tracking number; None when Shopee has none yet or the call fails."""
+    import requests
     try:
         data = await signed_shop_request(session, akun, _PATH_TRACKING, params={"order_sn": order_sn})
-    except HTTPException:
+    except (HTTPException, requests.RequestException):
         return None
     return str((data.get("response") or {}).get("tracking_number") or "").strip() or None
 
 
-async def proses_pengiriman(session: Any, akun: Any, order_sn: str) -> dict:
+async def proses_pengiriman(session: Any, akun: Any, order_sn: str, pengaturan: dict | None = None) -> dict:
     """Arrange shipment on Shopee (get_shipping_parameter -> ship_order) and fetch the tracking number."""
     if not live_sync_enabled() or not _akun_configured(akun):
         raise ShopeeNotConfigured("Shopee live sync nonaktif atau akun belum terhubung.")
+    if pengaturan is not None:
+        await pastikan_belum_diproses(session, akun, order_sn)
     data = await signed_shop_request(session, akun, _PATH_SHIP_PARAM, params={"order_sn": order_sn})
-    mode = pilih_parameter_kirim(data.get("response") or {}, akun.nama_toko)
-    await signed_shop_request(session, akun, _PATH_SHIP_ORDER, method="POST", body={"order_sn": order_sn, **mode})
-    return {"status_marketplace": "PROCESSED", "nomor_resi": await ambil_nomor_resi(session, akun, order_sn)}
+    mode = (parameter_kirim_eksplisit(data.get("response") or {}, akun.nama_toko, pengaturan)
+            if pengaturan is not None else pilih_parameter_kirim(data.get("response") or {}, akun.nama_toko))
+    try:
+        await signed_shop_request(session, akun, _PATH_SHIP_ORDER, method="POST", body={"order_sn": order_sn, **mode})
+    except HTTPException as exc:
+        if " gagal:" in str(exc.detail):
+            raise HTTPException(status_code=424, detail=exc.detail) from exc
+        raise HTTPException(status_code=409, detail="Hasil pengaturan pengiriman belum dapat dipastikan. Sinkronkan status sebelum mencoba lagi.") from exc
+    except Exception as exc:
+        # Once sent, a timeout/non-JSON response cannot establish whether Shopee acted.
+        raise HTTPException(status_code=409, detail="Hasil pengaturan pengiriman belum dapat dipastikan. Sinkronkan status sebelum mencoba lagi.") from exc
+    return {"status_marketplace": "PROCESSED", "nomor_resi": await ambil_nomor_resi(session, akun, order_sn),
+            "metode_pengiriman": next(iter(mode))}
 
 
 # Label templates: thermal is Shopee's 100x150 mm label (about A6), normal is an A4 sheet with a small label.

@@ -1791,8 +1791,8 @@ async def _pesanan_marketplace(session: AsyncSession, pesanan_id: str) -> tuple[
     return pesanan, akun
 
 
-async def proses_pesanan_marketplace(session: AsyncSession, pesanan_id: str) -> Pesanan:
-    """Arrange shipment on Shopee for a pulled order (courier pickup) and store the tracking number."""
+async def proses_pesanan_marketplace(session: AsyncSession, pesanan_id: str, pengaturan: dict | None = None) -> Pesanan:
+    """Arrange shipment using explicit or legacy automatic settings; retain the actual method."""
     from tenants.marketplace_erp.modules.marketplace_erp.infrastructure.adapters import erp_shopee
 
     pesanan, akun = await _pesanan_marketplace(session, pesanan_id)
@@ -1803,12 +1803,20 @@ async def proses_pesanan_marketplace(session: AsyncSession, pesanan_id: str) -> 
         )
     if pesanan.status_marketplace in erp_shopee.STATUS_SUDAH_DIPROSES:
         raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail="Pesanan sudah diproses di Shopee.")
-    hasil = await erp_shopee.proses_pengiriman(session, akun, pesanan.id_eksternal)
+    # Keep the old adapter invocation valid for existing callers and integrations.
+    if pengaturan is None:
+        hasil = await erp_shopee.proses_pengiriman(session, akun, pesanan.id_eksternal)
+    else:
+        hasil = await erp_shopee.proses_pengiriman(session, akun, pesanan.id_eksternal, pengaturan=pengaturan)
+    pesanan.metode_pengiriman = hasil.get("metode_pengiriman")
     pesanan.status_marketplace = hasil["status_marketplace"]
     if hasil["nomor_resi"]:
         pesanan.nomor_resi = hasil["nomor_resi"]
     pesanan.tersinkron_marketplace = True
-    pesanan.catatan_sinkron = "Diproses di Shopee, menunggu kurir pickup"
+    metode = pesanan.metode_pengiriman
+    pesanan.catatan_sinkron = ("Diproses di Shopee, menunggu penyerahan ke gerai" if metode == "dropoff"
+                              else "Diproses di Shopee, menunggu kurir pickup" if metode == "pickup"
+                              else "Diproses di Shopee, menunggu kurir / penyerahan paket")
     await session.flush()
     return pesanan
 

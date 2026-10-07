@@ -48,6 +48,7 @@ _SELF_HEAL_COLUMNS = (
     "ALTER TABLE IF EXISTS mpe_akun_marketplace ADD COLUMN IF NOT EXISTS watermark_sinkron_pesanan TIMESTAMPTZ NULL",
     "ALTER TABLE IF EXISTS mpe_akun_marketplace ADD COLUMN IF NOT EXISTS sinkron_penuh_pesanan_at TIMESTAMPTZ NULL",
     "ALTER TABLE IF EXISTS mpe_pesanan ADD COLUMN IF NOT EXISTS status_marketplace VARCHAR(32) NULL",
+    "ALTER TABLE IF EXISTS mpe_pesanan ADD COLUMN IF NOT EXISTS metode_pengiriman VARCHAR(16) NULL",
     "ALTER TABLE IF EXISTS mpe_pesanan ADD COLUMN IF NOT EXISTS resi_dicetak_at TIMESTAMPTZ NULL",
     "ALTER TABLE IF EXISTS mpe_pesanan ADD COLUMN IF NOT EXISTS resi_dicetak_oleh VARCHAR(255) NULL",
     "ALTER TABLE IF EXISTS mpe_pesanan ADD COLUMN IF NOT EXISTS kurir VARCHAR(64) NULL",

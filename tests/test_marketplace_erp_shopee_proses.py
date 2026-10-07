@@ -102,7 +102,7 @@ async def test_proses_pengiriman_calls_param_then_ship_then_tracking(live, monke
     monkeypatch.setattr(erp_shopee, "signed_shop_request", fake)
     out = await erp_shopee.proses_pengiriman(None, live, "SN1")
 
-    assert out == {"status_marketplace": "PROCESSED", "nomor_resi": "ID123"}
+    assert out == {"status_marketplace": "PROCESSED", "nomor_resi": "ID123", "metode_pengiriman": "pickup"}
     assert [c[0] for c in calls] == [erp_shopee._PATH_SHIP_PARAM, erp_shopee._PATH_SHIP_ORDER, erp_shopee._PATH_TRACKING]
     assert calls[1][1:3] == ("POST", {"order_sn": "SN1", "pickup": {"address_id": 2, "pickup_time_id": "t2"}})
 
@@ -311,3 +311,182 @@ async def test_unduh_resi_template_choice(live, monkeypatch):
     with pytest.raises(HTTPException) as exc:  # asking for a template the courier does not offer
         await erp_shopee.unduh_resi(None, live, "SN1", tipe="THERMAL_AIR_WAYBILL")
     assert exc.value.status_code == 409 and "NORMAL_AIR_WAYBILL" in exc.value.detail
+
+
+# Explicit shipping methods must never fall back to a different method.
+@pytest.mark.parametrize("param", [{"info_needed": {"dropoff": []}}, {"dropoff": {}}])
+def test_empty_dropoff_is_available_and_can_be_submitted(param):
+    assert erp_shopee.parameter_kirim_eksplisit(param, "Toko", {"metode": "dropoff"}) == {"dropoff": {}}
+    assert erp_shopee.pilih_parameter_kirim(param, "Toko") == {"dropoff": {}}
+
+
+def test_explicit_dropoff_wins_even_when_pickup_exists():
+    param = {**PICKUP_PARAM, "dropoff": {}}
+    assert erp_shopee.parameter_kirim_eksplisit(param, "Toko", {"metode": "dropoff"}) == {"dropoff": {}}
+
+
+@pytest.mark.parametrize("setting", [
+    {"metode": "pickup", "address_id": 999, "pickup_time_id": "t2"},
+    {"metode": "pickup", "address_id": 1, "pickup_time_id": "t2"},
+    {"metode": "pickup", "address_id": 2},
+    {"metode": "pickup", "address_id": 2, "pickup_time_id": "expired"},
+    {"metode": "pickup", "address_id": 2, "pickup_time_id": "t2", "branch_id": 77},
+])
+def test_invalid_pickup_fields_are_refused(setting):
+    with pytest.raises(HTTPException) as exc:
+        erp_shopee.parameter_kirim_eksplisit(PICKUP_PARAM, "Toko", setting)
+    assert exc.value.status_code == 409
+
+
+def test_branch_and_sender_are_validated():
+    param = {"info_needed": {"dropoff": ["branch_id", "sender_real_name"]},
+             "dropoff": {"branch_list": [{"branch_id": 77}, {"branch_id": 78}]}}
+    assert erp_shopee.parameter_kirim_eksplisit(param, "Toko", {
+        "metode": "dropoff", "branch_id": 78, "sender_real_name": " Budi "
+    }) == {"dropoff": {"branch_id": 78, "sender_real_name": "Budi"}}
+    for setting in ({"metode": "dropoff", "branch_id": 99, "sender_real_name": "Budi"},
+                    {"metode": "dropoff", "branch_id": 77, "sender_real_name": " "}):
+        with pytest.raises(HTTPException):
+            erp_shopee.parameter_kirim_eksplisit(param, "Toko", setting)
+
+
+def test_unsupported_required_fields_disable_only_that_mode():
+    param = {"info_needed": {"dropoff": ["tracking_no"], "pickup": ["address_id"]},
+             "pickup": PICKUP_PARAM["pickup"]}
+    options = {o["metode"]: o for o in erp_shopee.opsi_parameter_kirim(param, "Toko")["opsi"]}
+    assert options["pickup"]["tersedia"] is True
+    assert options["dropoff"]["tersedia"] is False
+    with pytest.raises(HTTPException):
+        erp_shopee.parameter_kirim_eksplisit(param, "Toko", {"metode": "dropoff"})
+
+
+def test_shipping_schema_rejects_cross_method_fields_and_incomplete_batch_settings():
+    from pydantic import ValidationError
+    from tenants.marketplace_erp.modules.marketplace_erp.application.schemas import PengaturanPengirimanIn, ProsesMassalIn
+    for payload in ({"metode": "unknown"}, {"metode": "dropoff", "address_id": 1},
+                    {"metode": "pickup", "branch_id": 77}, {"metode": "pickup", "address_id": -1}):
+        with pytest.raises(ValidationError):
+            PengaturanPengirimanIn(**payload)
+    assert ProsesMassalIn(pesanan_ids=["a"]).pengaturan == {}  # old client
+    with pytest.raises(ValidationError):
+        ProsesMassalIn(pesanan_ids=["a", "b"], pengaturan={"a": {"metode": "dropoff"}})
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("metode,setting,body", [
+    ("dropoff", {"metode": "dropoff"}, {"dropoff": {}}),
+    ("pickup", {"metode": "pickup", "address_id": 1, "pickup_time_id": "x1"},
+     {"pickup": {"address_id": 1, "pickup_time_id": "x1"}}),
+])
+async def test_explicit_shipping_checks_remote_status_and_sends_exact_body(live, monkeypatch, metode, setting, body):
+    calls = []
+    async def fake(session, akun, path, **kwargs):
+        calls.append((path, kwargs))
+        if path == erp_shopee._PATH_ORDER_DETAIL:
+            return {"response": {"order_list": [{"order_sn": "SN1", "order_status": "READY_TO_SHIP"}]}}
+        if path == erp_shopee._PATH_SHIP_PARAM:
+            return {"response": PICKUP_PARAM}
+        if path == erp_shopee._PATH_TRACKING:
+            raise requests.Timeout("tracking not ready")
+        return {}
+    monkeypatch.setattr(erp_shopee, "signed_shop_request", fake)
+    out = await erp_shopee.proses_pengiriman(None, live, "SN1", setting)
+    assert out["metode_pengiriman"] == metode and out["nomor_resi"] is None
+    assert next(kwargs["body"] for path, kwargs in calls if path == erp_shopee._PATH_SHIP_ORDER) == {"order_sn": "SN1", **body}
+
+
+@pytest.mark.asyncio
+async def test_remote_processed_status_prevents_resubmission(live, monkeypatch):
+    calls = []
+    async def fake(session, akun, path, **kwargs):
+        calls.append(path)
+        return {"response": {"order_list": [{"order_sn": "SN1", "order_status": "PROCESSED"}]}}
+    monkeypatch.setattr(erp_shopee, "signed_shop_request", fake)
+    with pytest.raises(HTTPException) as exc:
+        await erp_shopee.proses_pengiriman(None, live, "SN1", {"metode": "dropoff"})
+    assert exc.value.status_code == 409 and calls == [erp_shopee._PATH_ORDER_DETAIL]
+
+
+@pytest.mark.asyncio
+async def test_ship_timeout_is_not_retried_and_reports_uncertainty(live, monkeypatch):
+    calls = []
+    async def fake(session, akun, path, **kwargs):
+        calls.append(path)
+        if path == erp_shopee._PATH_ORDER_DETAIL:
+            return {"response": {"order_list": [{"order_sn": "SN1", "order_status": "READY_TO_SHIP"}]}}
+        if path == erp_shopee._PATH_SHIP_PARAM:
+            return {"response": {"info_needed": {"dropoff": []}}}
+        raise requests.Timeout("provider might have accepted shipment")
+    monkeypatch.setattr(erp_shopee, "signed_shop_request", fake)
+    with pytest.raises(HTTPException) as exc:
+        await erp_shopee.proses_pengiriman(None, live, "SN1", {"metode": "dropoff"})
+    assert "Sinkronkan" in exc.value.detail
+    assert calls.count(erp_shopee._PATH_SHIP_ORDER) == 1
+
+
+@pytest.mark.asyncio
+async def test_explicit_dropoff_persists_method_across_sync_and_allows_label(session, monkeypatch):
+    akun, pesanan, row = await _pesanan_sync(session)
+    async def fake(session, akun, order_sn, pengaturan=None):
+        assert pengaturan == {"metode": "dropoff"}
+        return {"status_marketplace": "PROCESSED", "nomor_resi": None, "metode_pengiriman": "dropoff"}
+    monkeypatch.setattr(erp_shopee, "proses_pengiriman", fake)
+    out = await services.proses_pesanan_marketplace(session, pesanan.id, {"metode": "dropoff"})
+    assert out.metode_pengiriman == "dropoff" and out.status == "to_ship"
+    assert "gerai" in out.catatan_sinkron
+    await services.impor_pesanan_marketplace(session, akun, [{**row, "status_mentah": "PROCESSED"}])
+    assert out.metode_pengiriman == "dropoff"
+    async def fake_label(*args, **kwargs):
+        return b"%PDF-1.4 dropoff"
+    monkeypatch.setattr(erp_shopee, "unduh_resi", fake_label)
+    resp = await router.cetak_resi_pesanan(pesanan.id, tipe=None, session=session, user=SimpleNamespace(role="owner", id="u1"))
+    assert resp.body.startswith(b"%PDF")
+
+
+@pytest.mark.asyncio
+async def test_options_and_explicit_process_enforce_staff_shop_access(session, monkeypatch):
+    _, pesanan, _ = await _pesanan_sync(session)
+    staff = SimpleNamespace(role="staff", id="unassigned")
+    async def forbidden(*args, **kwargs):
+        pytest.fail("Shopee must not be contacted for unauthorized staff")
+    monkeypatch.setattr(erp_shopee, "opsi_pengiriman", forbidden)
+    monkeypatch.setattr(erp_shopee, "proses_pengiriman", forbidden)
+    for endpoint in (router.opsi_pengiriman_pesanan, router.proses_pesanan_marketplace):
+        with pytest.raises(HTTPException) as exc:
+            await endpoint(pesanan.id, session=session, user=staff)
+        assert exc.value.status_code == 403
+
+
+@pytest.mark.asyncio
+async def test_explicit_bulk_preserves_success_when_later_order_fails(session, monkeypatch):
+    from tenants.marketplace_erp.modules.marketplace_erp.application.schemas import ProsesMassalIn
+    akun, pesanan, row = await _pesanan_sync(session)
+    await services.impor_pesanan_marketplace(session, akun, [{**row, "id_eksternal": "SN2"}])
+    await session.commit()
+    orders = sorted(await services.list_pesanan(session, platform="shopee"), key=lambda p: p.id_eksternal)
+    settings = {p.id: {"metode": "dropoff"} for p in orders}
+    async def fake(session, akun, order_sn, pengaturan=None):
+        assert pengaturan == {"metode": "dropoff"}
+        if order_sn == "SN2":
+            raise HTTPException(status_code=409, detail="Metode tidak tersedia")
+        return {"status_marketplace": "PROCESSED", "nomor_resi": None, "metode_pengiriman": "dropoff"}
+    monkeypatch.setattr(erp_shopee, "proses_pengiriman", fake)
+    first_id = pesanan.id
+    out = await router.proses_massal_pesanan(ProsesMassalIn(pesanan_ids=[p.id for p in orders], pengaturan=settings),
+                                            session=session, user=SimpleNamespace(role="owner", id="u1"))
+    assert (out["berhasil"], out["gagal"]) == (1, 1)
+    session.expire_all()
+    stored = await services.get_pesanan(session, first_id)
+    assert stored.metode_pengiriman == "dropoff" and stored.status_marketplace == "PROCESSED"
+
+
+def test_shipping_routes_expose_optional_single_body_and_bulk_settings():
+    from fastapi import FastAPI
+    app = FastAPI()
+    app.include_router(router.marketplace_erp_router, prefix="/api/marketplace-erp")
+    schema = app.openapi()
+    paths = schema["paths"]
+    body = paths["/api/marketplace-erp/pesanan/{pesanan_id}/proses"]["post"]["requestBody"]
+    assert body.get("required", False) is False
+    assert "/api/marketplace-erp/pesanan/{pesanan_id}/opsi-pengiriman" in paths
+    assert "pengaturan" in schema["components"]["schemas"]["ProsesMassalIn"]["properties"]
