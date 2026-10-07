@@ -523,3 +523,49 @@ async def test_finance_pg_historical_migration_closed_period_and_atomic_rollback
     async with maker.begin() as session:
         assert (await session.execute(select(KeuBuku))).first() is None
         assert (await session.execute(select(KeuJurnal))).first() is None
+
+
+@pytest.mark.asyncio
+async def test_expenses_pg_classification_concurrent_retry_vendor_hpp_and_unpost(pg):
+    from datetime import date
+    from decimal import Decimal
+    from tenants.bumi_lestari.modules.bumi_lestari.application import keu_accounting as accounting, keu_expenses as expenses, keu_ledger as ledger, keu_services as svc, schemas_keu as old, schemas_keu_finance as finance
+    from tenants.bumi_lestari.modules.bumi_lestari.application.schemas_keu_expenses import PengeluaranIn
+    from tenants.bumi_lestari.modules.bumi_lestari.infrastructure.models import BlUser
+    maker=async_sessionmaker(pg,expire_on_commit=False)
+    day=date(2026,10,6)
+    async with maker.begin() as session:
+        user=await finance_setup(session)
+        await svc.allocate_vendor(session,user,old.AlokasiVendorIn(item_id='i',vendor_id='v1',qty=2,biaya_satuan='5'))
+        await svc.order_status(session,user,'o',old.PesananStatusIn(status='aktif'))
+        await svc.order_status(session,user,'o',old.PesananStatusIn(status='selesai'))
+    payload=PengeluaranIn(referensi='same',tanggal=day,akun_kas_id='a',tab='bahan',kategori='cat',jumlah='10',keterangan='Cat 50% _ Natural')
+    async def create():
+        async with maker.begin() as session:
+            return await expenses.create(session,await session.get(BlUser,'u'),payload)
+    one,two=await asyncio.gather(create(),create())
+    assert one['id']==two['id']
+    async with maker.begin() as session:
+        user=await session.get(BlUser,'u')
+        for key,tab,amount in [('listrik','operasional','3'),('gaji','gaji_iklan','4'),('ads_shopee','gaji_iklan','2')]:
+            await expenses.create(session,user,PengeluaranIn(referensi=key,tanggal=day,akun_kas_id='a',tab=tab,kategori=key,jumlah=amount,keterangan=key+' Test'))
+        payment=await accounting.pay_vendor(session,user,finance.BayarVendorIn(referensi='pay',tanggal=day,vendor_id='v1',akun_kas_id='a',jumlah='10'))
+    async with maker.begin() as session:
+        report=await ledger.reports(session,day,day)
+        assert Decimal(report['laba_rugi']['hpp'])==20
+        assert Decimal(report['laba_rugi']['beban_operasional'])==9
+        assert Decimal(report['neraca']['selisih'])==0
+        rows=await expenses.listing(session,'bahan',day,day,'50% _','pengerjaan',50,0)
+        assert rows['total']==1 and rows['rows'][0]['id']==one['id']
+        assert (await expenses.listing(session,'gaji_iklan',day,day,'','pengerjaan',50,0))['total']==2
+        assert (await expenses.listing(session,'operasional',day,day,'','pengerjaan',50,0))['total']==1
+        vendors=await expenses.listing(session,'vendor',day,day,'Test 1','pengerjaan',50,0)
+        assert vendors['total']==1 and vendors['rows'][0]['vendor_nama']=='Test 1'
+        assert vendors['rows'][0]['akun_nama']=='Kas'
+        await ledger.unpost(session,await session.get(BlUser,'u'),payment['id'],old.BatalIn(alasan='Koreksi pelunasan'))
+        await ledger.unpost(session,await session.get(BlUser,'u'),one['id'],old.BatalIn(alasan='Koreksi bahan'))
+    async with maker.begin() as session:
+        report=await ledger.reports(session,day,day)
+        assert Decimal(report['laba_rugi']['hpp'])==10
+        assert (await expenses.listing(session,'bahan',day,day,'','pengerjaan',50,0))['total']==0
+        assert (await expenses.listing(session,'vendor',day,day,'','batal',50,0))['total']==1
