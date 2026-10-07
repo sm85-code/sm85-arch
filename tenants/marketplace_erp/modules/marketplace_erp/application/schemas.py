@@ -298,6 +298,24 @@ class ProdukListingPatch(BaseModel):
     aktif: Optional[bool] = None
 
 
+class ListingMarketplaceDetail(BaseModel):
+    item_id: str
+    model_id: Optional[str] = None
+    nama_produk: str
+    sku: str
+    opsi: list[dict[str, str]] = Field(default_factory=list)
+    harga: Optional[Decimal] = None
+    harga_asli: Optional[Decimal] = None
+    berat_gram: Optional[int] = None
+    panjang_cm: Optional[Decimal] = None
+    lebar_cm: Optional[Decimal] = None
+    tinggi_cm: Optional[Decimal] = None
+    preorder: Optional[bool] = None
+    hari_kirim: Optional[int] = None
+    ikut_produk: list[str] = Field(default_factory=list)
+    diambil_at: datetime
+
+
 class ProdukListingOut(BaseModel):
     id: str
     produk_id: str
@@ -307,6 +325,8 @@ class ProdukListingOut(BaseModel):
     harga_jual: Optional[Decimal]
     stok_listing: Optional[int]
     aktif: bool
+
+    detail_marketplace: Optional[ListingMarketplaceDetail] = None
 
     model_config = ConfigDict(from_attributes=True)
 

@@ -7,7 +7,7 @@ from datetime import date, datetime, timedelta, timezone
 from decimal import Decimal
 
 from fastapi import HTTPException, status
-from sqlalchemy import and_, case, delete, exists, func, literal, or_, select, update
+from sqlalchemy import and_, case, delete, exists, func, literal, or_, select, tuple_, update
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import selectinload
@@ -544,11 +544,67 @@ async def delete_produk(session: AsyncSession, produk_id: str) -> None:
 # --- Produk Listing -----------------------------------------------------------
 
 
+async def _lengkapi_detail_listing(session: AsyncSession, listings: list[ProdukListing]) -> None:
+    """Attach read-only marketplace snapshots by exact shop/item/model IDs, never parse titles."""
+    import json
+
+    keyed = []
+    for listing in listings:
+        listing.detail_marketplace = None
+        if listing.platform != "shopee":
+            continue
+        item_id, separator, model_id = listing.id_eksternal.partition(":")
+        keyed.append((listing, item_id, model_id if separator else None))
+    if not keyed:
+        return
+    pairs = {(listing.akun_id, item_id) for listing, item_id, _ in keyed}
+    rows = (await session.execute(select(KatalogShopee).where(
+        tuple_(KatalogShopee.akun_id, KatalogShopee.item_id).in_(pairs)
+    ))).scalars().all()
+    catalogue = {(row.akun_id, row.item_id): row for row in rows}
+    for listing, item_id, model_id in keyed:
+        row = catalogue.get((listing.akun_id, item_id))
+        if row is None:
+            continue
+        variants = json.loads(row.varian_json or "[]")
+        variant = next((v for v in variants if str(v.get("model_id")) == model_id), None) if model_id else None
+        if (model_id and variant is None) or (not model_id and variants):
+            continue  # Historical/ambiguous data needs a fresh catalogue sync, not a guessed variant.
+        detail = json.loads(row.detail_json or "{}")
+        source = variant or {}
+        inherited = []
+        values = {}
+        for key in ("berat_gram", "panjang_cm", "lebar_cm", "tinggi_cm"):
+            value = source.get(key)
+            if value is None:
+                value = getattr(row, key)
+                if variant is not None:
+                    inherited.append(key)
+            values[key] = value
+        preorder = source.get("preorder")
+        days = source.get("hari_kirim")
+        if preorder is None:
+            preorder = detail.get("is_pre_order")
+            days = detail.get("days_to_ship")
+            if variant is not None:
+                inherited.append("preorder")
+        listing.detail_marketplace = {
+            "item_id": item_id, "model_id": model_id, "nama_produk": row.nama,
+            "sku": source.get("sku", row.sku), "opsi": source.get("opsi") or [],
+            "harga": source.get("harga") or (row.harga_min if variant is None else None),
+            "harga_asli": source.get("harga_asli"), **values,
+            "preorder": preorder, "hari_kirim": days, "ikut_produk": inherited,
+            "diambil_at": row.diambil_at,
+        }
+
+
 async def list_listing(session: AsyncSession, *, produk_id: str | None = None) -> list[ProdukListing]:
     stmt = select(ProdukListing).order_by(ProdukListing.created_at.desc())
     if produk_id:
         stmt = stmt.where(ProdukListing.produk_id == produk_id)
-    return list((await session.execute(stmt)).scalars().all())
+    listings = list((await session.execute(stmt)).scalars().all())
+    await _lengkapi_detail_listing(session, listings)
+    return listings
 
 
 async def create_listing(session: AsyncSession, payload: ProdukListingIn) -> ProdukListing:
