@@ -637,3 +637,27 @@ class PublikasiMarketplace(MarketplaceErpBase):
     item_id: Mapped[Optional[str]] = mapped_column(String(32), nullable=True)
     result_json: Mapped[str] = mapped_column(Text, default="{}")
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=_utcnow)
+
+
+class SinkronMarketplace(MarketplaceErpBase):
+    """Read-only pull queue. Each request advances one bounded, replayable unit."""
+    __tablename__ = "mpe_sinkron_marketplace"
+    __table_args__ = (UniqueConstraint("user_id", "active_key", name="uq_mpe_sync_active"),)
+    active_key: Mapped[Optional[str]] = mapped_column(String(64), nullable=True)
+    id: Mapped[str] = mapped_column(String(64), primary_key=True, default=_uuid)
+    user_id: Mapped[str] = mapped_column(String(64), index=True)
+    status: Mapped[str] = mapped_column(String(32), default="berjalan")
+    state_json: Mapped[str] = mapped_column(Text, default="{}")
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=_utcnow)
+
+
+class PesanMarketplaceReceipt(MarketplaceErpBase):
+    __tablename__ = "mpe_pesan_marketplace_receipt"
+    __table_args__ = (UniqueConstraint("akun_id", "operation_id", name="uq_mpe_chat_operation"),)
+    id: Mapped[str] = mapped_column(String(64), primary_key=True, default=_uuid)
+    akun_id: Mapped[str] = mapped_column(String(64), ForeignKey("mpe_akun_marketplace.id", ondelete="CASCADE"))
+    operation_id: Mapped[str] = mapped_column(String(64))
+    payload_hash: Mapped[str] = mapped_column(String(64))
+    status: Mapped[str] = mapped_column(String(32), default="belum_pasti")
+    result_json: Mapped[str] = mapped_column(Text, default="{}")
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=_utcnow)

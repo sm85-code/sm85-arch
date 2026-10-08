@@ -40,7 +40,7 @@ def incomplete(path, data, exc=None):
 
 async def daftar(session, akun, status="all", halaman=1):
     path = BASE + "get_discount_list"
-    data = await signed_shop_request(session, akun, path, params={"discount_status": status, "page_no": halaman, "page_size": 40})
+    data = await signed_shop_request(session, akun, path, params={"discount_status": status, "page_no": halaman, "page_size": 40}, timeout=15)
     try:
         r = data["response"]
         if not isinstance(r["discount_list"], list) or type(r["more"]) is not bool:

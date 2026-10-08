@@ -22,6 +22,9 @@ from datetime import date, datetime, timezone
 from fastapi import APIRouter, BackgroundTasks, Body, Depends, HTTPException, Path, Query, Request, Response, status
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from .sync_router import router as sync_router
+from .chat_router import router as chat_router
+
 from tenants.marketplace_erp.modules.marketplace_erp.application import services
 from tenants.marketplace_erp.modules.marketplace_erp.application.schemas import (
     KatalogKirimIn,
@@ -618,20 +621,8 @@ async def daftar_pesanan(
         akun_id=akun_id, akun_diizinkan=await akun_ids_diizinkan(user, session), tahap=tahap, resi=resi, q=q,
         dari=dari, sampai=sampai, urut=urut, halaman=halaman, per_halaman=per_halaman,
     )
-    import json
     await services.lengkapi_foto_item(session, hasil["items"])
-    baris = []
-    for p in hasil["items"]:
-        data = PesananOut.model_validate(p).model_dump()
-        data.update({k: v for k, v in json.loads(getattr(p, "detail_json", None) or "{}").items() if v not in (None, "")})
-        baris.append(data)
-    for data in baris:
-        for item in data.get("items") or []:
-            if not item.get("model_name") and " - " in (item.get("nama_produk") or ""):
-                nama, model = item["nama_produk"].rsplit(" - ", 1)
-                item["nama_produk"] = nama
-                item["model_name"] = model
-    hasil["items"] = baris
+    hasil["items"] = [PesananOut.model_validate(p).model_dump(mode="json") for p in hasil["items"]]
     return hasil
 
 
@@ -1818,3 +1809,7 @@ async def kelola_barang_promosi(
 
 
 marketplace_erp_router.include_router(workflow_router)
+
+marketplace_erp_router.include_router(sync_router)
+
+marketplace_erp_router.include_router(chat_router)

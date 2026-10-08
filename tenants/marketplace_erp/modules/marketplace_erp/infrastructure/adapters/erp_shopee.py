@@ -342,7 +342,9 @@ async def signed_shop_request(
         )
     if not _akun_configured(akun):
         raise ShopeeNotConfigured("Akun Shopee belum punya access_token / id_toko_eksternal.")
+    started = time.monotonic()
     await pastikan_token_segar(session, akun)
+    _log.info("shopee_request phase=token_ready path=%s account=%s elapsed_ms=%d", api_path, akun.id if hasattr(akun, "id") else "", (time.monotonic() - started) * 1000)
 
     return await _call_shop_api(
         access_token=str(akun.access_token),
@@ -440,13 +442,13 @@ async def _call_shop_api(
         try:
             if method.upper() == "GET":
                 resp = requests.get(
-                    url, timeout=timeout, proxies=proxies_for("SHOPEE_PROXY_URL"), allow_redirects=False
+                    url, timeout=(min(5.0, timeout), timeout), proxies=proxies_for("SHOPEE_PROXY_URL"), allow_redirects=False
                 )
             else:
                 resp = requests.post(
                     url,
                     json=body or {},
-                    timeout=timeout,
+                    timeout=(min(5.0, timeout), timeout),
                     proxies=proxies_for("SHOPEE_PROXY_URL"),
                     allow_redirects=False,
                 )
@@ -473,7 +475,13 @@ async def _call_shop_api(
             raise failure
         return data
 
-    data = await asyncio.to_thread(_do)
+    started = time.monotonic()
+    try:
+        data = await asyncio.to_thread(_do)
+    except HTTPException as exc:
+        _log.warning("shopee_request phase=provider_failed path=%s http=%s elapsed_ms=%d", api_path, exc.status_code, (time.monotonic() - started) * 1000)
+        raise
+    _log.info("shopee_request phase=provider_done path=%s request_id=%s elapsed_ms=%d", api_path, data.get("request_id", ""), (time.monotonic() - started) * 1000)
     if "_bytes" in data:
         return data
     # Shopee reports failures as error/message, often with HTTP 200.
@@ -608,7 +616,7 @@ def _detail_item(item: dict) -> dict:
     atribut = []
     for a in item.get("attribute_list") or []:
         nama = a.get("original_attribute_name") or ""
-        nilai = ", ".join(str(v.get("original_value_name") or "") for v in a.get("attribute_value_list") or [] if v.get("original_value_name"))
+        nilai = ", ".join((str(v.get("original_value_name") or "") + (" " + str(v["value_unit"]) if v.get("value_unit") else "")) for v in a.get("attribute_value_list") or [] if v.get("original_value_name"))
         if nama:
             atribut.append(f"{nama}: {nilai}" if nilai else nama)
     kurir = [str(x.get("logistic_name") or "") for x in item.get("logistic_info") or [] if x.get("enabled") and x.get("logistic_name")]
@@ -630,6 +638,7 @@ def _detail_item(item: dict) -> dict:
         "wholesales": "; ".join(grosir),
         "video_info": bool(item.get("video_info")),
         "size_chart": item.get("size_chart") or "",
+        "size_chart_id": item.get("size_chart_id"),
         "gtin_code": item.get("gtin_code") or "",
     }
 
@@ -659,7 +668,7 @@ def _varian_katalog(model: dict, tier_variation: list[dict], sumbu: str) -> dict
         "sumbu": sumbu,
         "opsi": opsi,
         "sku": str(model.get("model_sku") or "").strip(),
-        "harga": str(_harga(model.get("price_info")) or ""),
+        "harga": str(sekarang) if sekarang is not None else "",
         "harga_asli": str(asli) if asli is not None and sekarang is not None and asli > sekarang else None,
         "promo": bool(model.get("has_promotion")),
         "stok": _stok(model.get("stock_info_v2")),
@@ -693,12 +702,17 @@ def normalisasi_katalog(item: dict, model_resp: dict | None = None) -> dict:
     sumbu = [x for x in sumbu if x]
     varian = []
     if item.get("has_model") and model_resp:
-        tier_asli = model_resp.get("tier_variation") or []
+        tier_asli = model_resp.get("tier_variation") or [
+            {"name": t.get("variation_name", ""), "option_list": [
+                {"option": o.get("variation_option_name", ""), "image": o.get("image") or {"image_url": o.get("image_url")}}
+                for o in t.get("variation_option_list") or []]}
+            for t in model_resp.get("standardise_tier_variation") or []
+        ]
         for model in model_resp.get("model") or []:
             if model.get("model_id"):
                 varian.append(_varian_katalog(model, tier_asli, ", ".join(sumbu)))
     harga_semua = [Decimal(v["harga"]) for v in varian if v["harga"]] or [h for h in [_harga(item.get("price_info"))] if h is not None]
-    stok = sum(v["stok"] or 0 for v in varian) if varian else _stok(item.get("stock_info_v2"))
+    stok = (sum(v["stok"] for v in varian) if all(v["stok"] is not None for v in varian) else None) if varian else _stok(item.get("stock_info_v2"))
     dim = item.get("dimension") or {}
     return {
         "item_id": str(item["item_id"]),
@@ -860,7 +874,7 @@ async def kirim_stok_harga(session: Any, akun: Any, rows: list[dict]) -> dict:
 _PATH_ORDER_LIST = "/api/v2/order/get_order_list"
 _PATH_ORDER_DETAIL = "/api/v2/order/get_order_detail"
 # item_list / buyer_username / total_amount are not returned unless asked for.
-_ORDER_DETAIL_FIELDS = "buyer_username,item_list,total_amount,shipping_carrier,payment_method,estimated_shipping_fee,actual_shipping_fee,note,pay_time,cancel_by,cancel_reason,buyer_cancel_reason,package_list,recipient_address,cod,ship_by_date"
+_ORDER_DETAIL_FIELDS = "buyer_username,item_list,total_amount,shipping_carrier,payment_method,estimated_shipping_fee,actual_shipping_fee,actual_shipping_fee_confirmed,note,pay_time,cancel_by,cancel_reason,buyer_cancel_reason,package_list,recipient_address,cod,ship_by_date"
 # Shopee rejects a time_from..time_to span over 15 days; stay a minute under.
 _ORDER_WINDOW_SECONDS = 15 * 24 * 3600 - 60
 # An incremental pull starts this much before the previous one, so a change that landed while it ran is not missed.
@@ -903,7 +917,11 @@ def normalisasi_pesanan(order: dict) -> dict:
             continue
         nama = str(it.get("item_name") or "").strip()
         model = str(it.get("model_name") or "").strip()
-        price = it.get("model_discounted_price") or it.get("model_original_price") or 0
+        price = it.get("model_discounted_price")
+        if price is None:
+            price = it.get("model_original_price")
+        if price is None:
+            price = 0
         items.append(
             {
                 "nama_produk": nama[:255] or "(tanpa nama)",
@@ -943,6 +961,8 @@ def normalisasi_pesanan(order: dict) -> dict:
             "estimated_shipping_fee": order.get("estimated_shipping_fee"),
             "actual_shipping_fee": order.get("actual_shipping_fee"),
             "note": order.get("note") or "",
+            "message_to_seller": order.get("message_to_seller") or "",
+            "actual_shipping_fee_confirmed": order.get("actual_shipping_fee_confirmed"),
             "pay_time": order.get("pay_time"),
             "cancel_by": order.get("cancel_by") or "",
             "cancel_reason": order.get("cancel_reason") or order.get("buyer_cancel_reason") or "",
@@ -1048,10 +1068,16 @@ ESCROW_WINDOW_SECONDS = 15 * 24 * 3600 - 60
 
 
 def _uang(value: Any) -> Decimal:
-    try:
-        return Decimal(str(value if value not in (None, "") else 0))
-    except Exception:  # noqa: BLE001 - a malformed number from Shopee must not stop a whole sync
+    """Storage defaults remain compatible; malformed provider amounts are never fabricated as zero."""
+    if value in (None, ""):
         return Decimal("0")
+    try:
+        result = Decimal(str(value))
+        if not result.is_finite():
+            raise ValueError("non-finite")
+        return result
+    except Exception as exc:
+        raise HTTPException(424, "Nilai uang Shopee tidak valid; data lama dipertahankan") from exc
 
 
 def normalisasi_escrow(order_sn: str, dirilis: datetime | None, payout: Any, detail: dict | None) -> dict:
@@ -1934,14 +1960,14 @@ async def ubah_status_produk(session: Any, akun: Any, item_id: int, unlist: bool
     return data
 
 
-async def ambil_satu_produk(session: Any, akun: Any, item_id: int) -> dict:
-    data = await signed_shop_request(session, akun, _PATH_ITEM_BASE, params={"item_id_list": str(item_id)})
+async def ambil_satu_produk(session: Any, akun: Any, item_id: int, *, timeout: float = 25.0) -> dict:
+    data = await signed_shop_request(session, akun, _PATH_ITEM_BASE, params={"item_id_list": str(item_id)}, timeout=timeout)
     item = next((row for row in (data.get("response") or {}).get("item_list") or [] if str(row.get("item_id")) == str(item_id)), None)
     if item is None:
         raise HTTPException(status_code=424, detail="Snapshot produk belum tersedia")
     models = None
     if item.get("has_model"):
-        result = await signed_shop_request(session, akun, _PATH_MODEL_LIST, params={"item_id": item_id})
+        result = await signed_shop_request(session, akun, _PATH_MODEL_LIST, params={"item_id": item_id}, timeout=timeout)
         models = result.get("response") or {}
         if not models.get("model"):
             raise HTTPException(status_code=424, detail="Snapshot varian belum lengkap")

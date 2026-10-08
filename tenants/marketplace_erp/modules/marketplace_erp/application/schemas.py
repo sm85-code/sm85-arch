@@ -511,6 +511,28 @@ class ItemPesananOut(BaseModel):
 
 
 class PesananOut(BaseModel):
+    @model_validator(mode="before")
+    @classmethod
+    def snapshot_fields(cls, value):
+        """Use the same typed snapshot in list, detail and action responses."""
+        import json
+
+        if isinstance(value, dict):
+            return value
+        data = {name: getattr(value, name) for name in cls.model_fields if hasattr(value, name)}
+        try:
+            snapshot = json.loads(getattr(value, "detail_json", None) or "{}")
+        except (ValueError, TypeError):
+            snapshot = {}
+        fields = {
+            "payment_method", "currency", "cod", "days_to_ship", "ship_by_date", "pay_time",
+            "estimated_shipping_fee", "actual_shipping_fee", "actual_shipping_fee_confirmed",
+            "message_to_seller", "note", "cancel_by", "cancel_reason", "penerima", "kota",
+        }
+        if isinstance(snapshot, dict):
+            data.update({k: v for k, v in snapshot.items() if k in fields and v is not None})
+        return data
+
     id: str
     platform: str
     id_eksternal: str
@@ -533,8 +555,12 @@ class PesananOut(BaseModel):
     currency: str = ""
     cod: bool = False
     days_to_ship: Optional[int] = None
-    estimated_shipping_fee: Optional[str] = None
-    actual_shipping_fee: Optional[str] = None
+    estimated_shipping_fee: Optional[Decimal] = None
+    actual_shipping_fee: Optional[Decimal] = None
+    actual_shipping_fee_confirmed: Optional[bool] = None
+    ship_by_date: Optional[int] = None
+    pay_time: Optional[int] = None
+    message_to_seller: str = ""
     note: str = ""
     cancel_by: str = ""
     cancel_reason: str = ""
