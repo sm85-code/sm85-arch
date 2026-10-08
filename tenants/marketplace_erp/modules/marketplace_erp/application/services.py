@@ -1723,7 +1723,7 @@ async def impor_pesanan_marketplace(session: AsyncSession, akun: AkunMarketplace
     listing_by_eksternal: dict[str, ProdukListing] = {}
     if kandidat:
         stmt = select(ProdukListing).where(
-            ProdukListing.platform == akun.platform, ProdukListing.id_eksternal.in_(kandidat)
+            ProdukListing.platform == akun.platform, ProdukListing.akun_id == akun.id, ProdukListing.id_eksternal.in_(kandidat)
         )
         for listing in (await session.execute(stmt)).scalars():
             listing_by_eksternal[listing.id_eksternal] = listing
@@ -1778,7 +1778,16 @@ async def impor_pesanan_marketplace(session: AsyncSession, akun: AkunMarketplace
             pesanan = await get_pesanan(session, pesanan.id)
         else:
             lama = (await session.execute(select(ItemPesanan).where(ItemPesanan.pesanan_id == pesanan.id))).scalars().all()
-            for item, sumber in zip(lama, row["items"]):
+            sumber_by_id = {}
+            for sumber in row["items"]:
+                key = (str(sumber.get("item_id") or ""), str(sumber.get("model_id") or "0"))
+                sumber_by_id.setdefault(key, []).append(sumber)
+            for item in lama:
+                key = (str(item.item_id_eksternal or ""), str(item.model_id_eksternal or "0"))
+                candidates = sumber_by_id.get(key, [])
+                if len(candidates) != 1:
+                    continue  # Ambiguous package/promotion lines must not overwrite ERP history.
+                sumber = candidates[0]
                 item.nama_produk = sumber["nama_produk"]
                 item.model_name = sumber.get("model_name") or ""
                 item.item_sku = sumber.get("item_sku") or ""
@@ -2545,13 +2554,32 @@ SETTLEMENT_HARI_MAKS = 90
 
 
 def settlement_pesanan_out(r: SettlementPesanan, nama_toko: str | None = None) -> dict:
+    import json
+
+    try:
+        source = json.loads(r.rincian or "{}")
+    except (TypeError, ValueError):
+        source = {}
+    if not isinstance(source, dict):
+        source = {}
+    provider_fields = {
+        "penjualan": ("order_original_price", "original_price"),
+        "voucher_penjual": ("voucher_from_seller",), "komisi": ("commission_fee",),
+        "layanan": ("service_fee",), "transaksi": ("seller_transaction_fee",),
+        "ongkir": ("final_shipping_fee",), "subsidi_ongkir": ("shopee_shipping_rebate",),
+        "penyesuaian": ("total_adjustment_amount",), "escrow": ("escrow_amount_after_adjustment", "escrow_amount"),
+    }
+    amounts = {k: getattr(r, k) for k in _KOLOM_UANG_SETTLEMENT}
+    for name, keys in provider_fields.items():
+        if not any(source.get(key) not in (None, "") for key in keys):
+            amounts[name] = None
     return {
         "id": r.id,
         "akun_id": r.akun_id,
         "nama_toko": nama_toko,
         "order_sn": r.order_sn,
         "dirilis_at": r.dirilis_at,
-        **{k: getattr(r, k) for k in _KOLOM_UANG_SETTLEMENT},
+        **amounts,
     }
 
 

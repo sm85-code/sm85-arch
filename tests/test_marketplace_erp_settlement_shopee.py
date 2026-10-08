@@ -5,6 +5,7 @@ from types import SimpleNamespace
 
 import pytest
 import pytest_asyncio
+from fastapi import HTTPException
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker, create_async_engine
 
 from tenants.marketplace_erp.modules.marketplace_erp.application import services
@@ -61,7 +62,9 @@ def test_normalisasi_escrow_maps_the_money_fields():
 def test_normalisasi_escrow_survives_missing_detail_and_bad_numbers():
     row = erp_shopee.normalisasi_escrow("X2", None, 5000, None)
     assert row["jumlah_cair"] == Decimal(5000) and row["komisi"] == Decimal(0)
-    assert erp_shopee._uang("abc") == Decimal(0) and erp_shopee._uang(None) == Decimal(0)
+    assert erp_shopee._uang(None) == Decimal(0)
+    with pytest.raises(HTTPException):
+        erp_shopee._uang("abc")
 
 
 def _fake_shopee(monkeypatch, *, daftar, detail_dipanggil):
@@ -153,7 +156,6 @@ async def test_sinkron_settlement_akun_stores_new_orders_only_and_validates_days
     monkeypatch.setattr(erp_shopee, "sync_settlement", fake)
     assert (await services.sinkron_settlement_akun(session, akun, 15))["baru"] == 2
     assert (await services.sinkron_settlement_akun(session, akun, 15))["baru"] == 0 and panggilan[1] == {"N1", "N2"}
-    from fastapi import HTTPException
 
     for hari in (0, 91):
         with pytest.raises(HTTPException) as exc:
