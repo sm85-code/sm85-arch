@@ -343,6 +343,7 @@ async def signed_shop_request(
     if not _akun_configured(akun):
         raise ShopeeNotConfigured("Akun Shopee belum punya access_token / id_toko_eksternal.")
     started = time.monotonic()
+    _log.info("shopee_request phase=token_start path=%s", api_path)
     await pastikan_token_segar(session, akun)
     _log.info("shopee_request phase=token_ready path=%s account=%s elapsed_ms=%d", api_path, akun.id if hasattr(akun, "id") else "", (time.monotonic() - started) * 1000)
 
@@ -452,6 +453,11 @@ async def _call_shop_api(
                     proxies=proxies_for("SHOPEE_PROXY_URL"),
                     allow_redirects=False,
                 )
+        except requests.Timeout as exc:
+            raise HTTPException(
+                status_code=502,
+                detail="Shopee atau proxy keluar tidak merespons tepat waktu. Coba lagi; jika mengirim perubahan, periksa status terlebih dahulu.",
+            ) from exc
         except requests.RequestException as exc:
             raise HTTPException(
                 status_code=502,
@@ -477,7 +483,16 @@ async def _call_shop_api(
 
     started = time.monotonic()
     try:
-        data = await asyncio.to_thread(_do)
+        if method.upper() == "GET":
+            # requests read timeout resets between chunks; bound the whole read
+            # too. Only reads may be cancelled here, never token rotation/writes.
+            try:
+                async with asyncio.timeout(timeout + min(5.0, timeout)):
+                    data = await asyncio.to_thread(_do)
+            except TimeoutError as exc:
+                raise HTTPException(status_code=504, detail="Pembacaan data Shopee melewati batas waktu. Coba lagi sebentar.") from exc
+        else:
+            data = await asyncio.to_thread(_do)
     except HTTPException as exc:
         _log.warning("shopee_request phase=provider_failed path=%s http=%s elapsed_ms=%d", api_path, exc.status_code, (time.monotonic() - started) * 1000)
         raise

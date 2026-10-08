@@ -651,3 +651,22 @@ async def test_whitespace_success_and_transport_failure_do_not_leak_signed_url(l
     with pytest.raises(HTTPException) as exc:
         await erp_shopee._call_shop_api(access_token="secret", shop_id="5", api_path="/x")
     assert exc.value.status_code == 502 and "secret" not in exc.value.detail
+
+
+@pytest.mark.asyncio
+async def test_read_deadline_returns_json_timeout_without_replaying_request(live, monkeypatch):
+    import time
+
+    calls = []
+
+    def slow(*args, **kwargs):
+        calls.append(1)
+        time.sleep(0.08)
+        return SimpleNamespace(status_code=200, json=lambda: {'response': {}})
+
+    monkeypatch.setattr(requests, 'get', slow)
+    with pytest.raises(HTTPException) as exc:
+        await erp_shopee._call_shop_api(access_token='secret', shop_id='5', api_path='/api/v2/discount/get_discount_list', timeout=0.01)
+    assert exc.value.status_code == 504
+    assert 'secret' not in exc.value.detail
+    assert calls == [1]
