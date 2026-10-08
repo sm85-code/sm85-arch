@@ -201,3 +201,64 @@ async def test_orders_without_order_time_are_listed_for_completion_until_filled(
     assert await services.id_pesanan_tanpa_waktu_pesan(session, a) == ["OLD1"]  # only this shop, only the missing ones
     await services.impor_pesanan_marketplace(session, a, [_order("OLD1", "unpaid", "UNPAID")])
     assert await services.id_pesanan_tanpa_waktu_pesan(session, a) == []
+
+
+@pytest.mark.asyncio
+async def test_staff_dashboard_and_catalog_are_scoped_including_empty_assignments(session, data):
+    from tenants.marketplace_erp.adapters.api.v1 import marketplace_erp_router as api
+    from tenants.marketplace_erp.modules.marketplace_erp.infrastructure.models import UserMarketplaceErp, KatalogShopee, Produk
+    from fastapi import HTTPException
+
+    a, b = data
+    staff = UserMarketplaceErp(nama='Staff', username='staff_scope', password_hash='unused', role='staff')
+    session.add(staff)
+    ca = KatalogShopee(akun_id=a.id, item_id='11', nama='Produk A')
+    cb = KatalogShopee(akun_id=b.id, item_id='22', nama='Produk B')
+    session.add_all([ca, cb, Produk(sku_induk='HIDDEN', nama='Unrelated global stock', harga_dasar=100, stok=0)])
+    await session.flush()
+    await services.assign_staff_banyak(session, staff.id, [a.id])
+    period = {'dari': SEKARANG - timedelta(days=30), 'sampai': SEKARANG}
+    result = await api.laporan_dashboard(**period, batas_stok_kritis=5, session=session, user=staff)
+    assert result['jumlah_toko'] == 1
+    assert result['total_omzet'] == 900
+    assert {row['akun_id'] for row in result['per_toko']} == {a.id}
+    assert all(t['nama_toko'] == a.nama_toko for p in result['produk_terlaris'] for t in p['toko'])
+    assert result['stok_kritis'] == []
+    criteria = dict(akun_id=None, q=None, status=None, belum_dikirim=False, urut='toko:asc', halaman=1, per_halaman=48)
+    catalog = await api.list_katalog_shopee(**criteria, session=session, user=staff)
+    assert catalog['total'] == 1 and catalog['items'][0]['id'] == ca.id
+    summary = await api.ringkasan_katalog_shopee(status=None, akun_id=None, session=session, user=staff)
+    assert summary['total'] == 1 and [t['akun_id'] for t in summary['toko']] == [a.id]
+    assert (await api.get_katalog_shopee(ca.id, session, staff))['id'] == ca.id
+    with pytest.raises(HTTPException) as exc:
+        await api.get_katalog_shopee(cb.id, session, staff)
+    assert exc.value.status_code == 403
+    with pytest.raises(HTTPException) as exc:
+        await api.list_katalog_shopee(**{**criteria, 'akun_id': b.id}, session=session, user=staff)
+    assert exc.value.status_code == 403
+    from types import SimpleNamespace
+    staff = SimpleNamespace(id='unassigned', role='staff')
+    empty = await api.laporan_dashboard(**period, batas_stok_kritis=5, session=session, user=staff)
+    assert empty['total_pesanan'] == empty['jumlah_toko'] == 0 and empty['data_sejak'] is None
+    assert (await api.list_katalog_shopee(**criteria, session=session, user=staff))['total'] == 0
+
+
+@pytest.mark.asyncio
+async def test_batch_assignments_allow_several_staff_for_same_shop_and_validate_before_write(session, data):
+    from tenants.marketplace_erp.modules.marketplace_erp.infrastructure.models import UserMarketplaceErp
+    from fastapi import HTTPException
+
+    a, b = data
+    users = [UserMarketplaceErp(nama=f'Staff{i}', username=f'batch_staff{i}', password_hash='unused', role='staff') for i in range(2)]
+    session.add_all(users)
+    await session.flush()
+    rows = await services.assign_staff_banyak(session, users[0].id, [a.id, b.id, a.id])
+    assert len(rows) == 2
+    replay = await services.assign_staff_banyak(session, users[0].id, [a.id, b.id])
+    assert [r.id for r in replay] == [r.id for r in rows]
+    # A second staff can receive the same shop; this does not revoke the first staff's assignments.
+    second = await services.assign_staff_banyak(session, users[1].id, [a.id])
+    assert second[0].akun_id == a.id and second[0].user_id != rows[0].user_id
+    with pytest.raises(HTTPException):
+        await services.assign_staff_banyak(session, users[1].id, [b.id, 'missing-shop'])
+    assert {r.akun_id for r in await services.list_staff_akun(session, user_id=users[1].id)} == {a.id}

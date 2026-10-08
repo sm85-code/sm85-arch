@@ -905,6 +905,7 @@ async def list_katalog_shopee(
     session: AsyncSession,
     *,
     akun_id: str | None = None,
+    akun_diizinkan: list[str] | None = None,
     q: str | None = None,
     status: str | None = None,
     belum_dikirim: bool = False,
@@ -928,6 +929,8 @@ async def list_katalog_shopee(
     }[kunci]
     urutan = ((kolom.desc() if turun else kolom.asc()).nulls_last(), func.lower(AkunMarketplace.nama_toko), func.lower(KatalogShopee.nama))
     cond = []
+    if akun_diizinkan is not None:
+        cond.append(KatalogShopee.akun_id.in_(akun_diizinkan))
     if akun_id:
         cond.append(KatalogShopee.akun_id == akun_id)
     if q and q.strip():
@@ -961,16 +964,20 @@ def _status_katalog(status: str) -> str:
     return nilai
 
 
-async def jumlah_katalog_per_toko(session: AsyncSession, status: str | None = None) -> dict[str, int]:
+async def jumlah_katalog_per_toko(session: AsyncSession, status: str | None = None, *, akun_diizinkan: list[str] | None = None) -> dict[str, int]:
     stmt = select(KatalogShopee.akun_id, func.count()).group_by(KatalogShopee.akun_id)
+    if akun_diizinkan is not None:
+        stmt = stmt.where(KatalogShopee.akun_id.in_(akun_diizinkan))
     if status and status.strip():
         stmt = stmt.where(KatalogShopee.status == _status_katalog(status))
     return {a: int(n) for a, n in (await session.execute(stmt)).all()}
 
 
-async def jumlah_katalog_per_status(session: AsyncSession, akun_id: str | None = None) -> dict[str, int]:
+async def jumlah_katalog_per_status(session: AsyncSession, akun_id: str | None = None, *, akun_diizinkan: list[str] | None = None) -> dict[str, int]:
     """Product count per Shopee status (every status of STATUS_KATALOG is present, 0 when none)."""
     stmt = select(KatalogShopee.status, func.count()).group_by(KatalogShopee.status)
+    if akun_diizinkan is not None:
+        stmt = stmt.where(KatalogShopee.akun_id.in_(akun_diizinkan))
     if akun_id:
         stmt = stmt.where(KatalogShopee.akun_id == akun_id)
     jumlah = {s: int(n) for s, n in (await session.execute(stmt)).all()}
@@ -2425,7 +2432,7 @@ _TAHAP_TERHITUNG_OMZET = ("perlu_diproses", "menunggu_kurir", "dikirim", "selesa
 
 
 async def laporan_dashboard(
-    session: AsyncSession, *, dari: datetime, sampai: datetime, batas_stok_kritis: int = _DEFAULT_BATAS_STOK_KRITIS
+    session: AsyncSession, *, dari: datetime, sampai: datetime, batas_stok_kritis: int = _DEFAULT_BATAS_STOK_KRITIS, akun_diizinkan: list[str] | None = None
 ) -> dict:
     """Everything the dashboard tables show for the period, by the date the buyer placed each order:
     totals, a row per shop (counts per stage + revenue), orders per stage, best sellers with the shops that
@@ -2439,7 +2446,8 @@ async def laporan_dashboard(
 
     tgl = _tgl_pesanan()
     tahap_expr = _ekspresi_tahap()
-    jendela = [tgl >= dari, tgl <= sampai]
+    scope = [Pesanan.akun_id.in_(akun_diizinkan)] if akun_diizinkan is not None else []
+    jendela = [tgl >= dari, tgl <= sampai, *scope]
     rows = (
         await session.execute(
             select(Pesanan.akun_id, tahap_expr.label("t"), Pesanan.total, tgl.label("tgl")).where(*jendela)
@@ -2449,7 +2457,7 @@ async def laporan_dashboard(
     toko_rows = {
         a.id: a
         for a in await list_akun_marketplace(session)
-        if a.id_toko_eksternal
+        if a.id_toko_eksternal and (akun_diizinkan is None or a.id in akun_diizinkan)
     }
     per_toko: dict[str | None, dict] = {}
 
@@ -2516,13 +2524,14 @@ async def laporan_dashboard(
     for e in produk_terlaris:
         e["toko"].sort(key=lambda x: -x["qty"])
 
-    data_sejak = (await session.execute(select(func.min(tgl)))).scalar_one_or_none()
+    data_sejak = (await session.execute(select(func.min(tgl)).where(*scope))).scalar_one_or_none()
 
+    stok_scope = [Produk.id.in_(select(ProdukListing.produk_id).where(ProdukListing.akun_id.in_(akun_diizinkan)))] if akun_diizinkan is not None else []
     stok_kritis = [
         {"produk_id": p.id, "sku_induk": p.sku_induk, "nama": p.nama, "stok": p.stok}
         for p in (
             await session.execute(
-                select(Produk).where(Produk.aktif.is_(True), Produk.stok <= batas_stok_kritis).order_by(Produk.stok.asc())
+                select(Produk).where(Produk.aktif.is_(True), Produk.stok <= batas_stok_kritis, *stok_scope).order_by(Produk.stok.asc())
             )
         ).scalars()
     ]
@@ -3372,3 +3381,21 @@ async def konfirmasi_retur_marketplace(session: AsyncSession, akun_id: str, nomo
     except HTTPException as exc:
         result["warnings"].append(f"Persetujuan berhasil; detail belum diperbarui. Segarkan retur: {exc.detail}")
     return result
+
+
+async def assign_staff_banyak(session: AsyncSession, user_id: str, akun_ids: list[str]) -> list[StaffAkunMarketplace]:
+    """Validate the entire additive assignment before changing anything; repeated requests are safe."""
+    user = (await session.execute(select(UserMarketplaceErp).where(UserMarketplaceErp.id == user_id).with_for_update())).scalar_one_or_none()
+    if not user or user.role != "staff":
+        raise HTTPException(422, "Pilih pengguna dengan role staf")
+    ids = list(dict.fromkeys(akun_ids))
+    for akun_id in ids:
+        await get_akun_marketplace(session, akun_id)
+    existing = {r.akun_id: r for r in await list_staff_akun(session, user_id=user_id)}
+    for akun_id in ids:
+        if akun_id not in existing:
+            row = StaffAkunMarketplace(user_id=user_id, akun_id=akun_id)
+            session.add(row)
+            existing[akun_id] = row
+    await session.flush()
+    return [existing[akun_id] for akun_id in ids]
