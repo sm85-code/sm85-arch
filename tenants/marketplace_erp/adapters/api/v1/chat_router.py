@@ -203,7 +203,7 @@ async def deliver(session, akun, conversation_id, body, target=None):
 
 
 class ReadIn(BaseModel):
-    message_id: str = Field(min_length=1, max_length=128)
+    message_id: str | None = Field(default=None, min_length=1, max_length=128)
 
 
 @router.post("/akun/{akun_id}/chat/{conversation_id}/dibaca")
@@ -215,10 +215,16 @@ async def read(
     user: UserMarketplaceErp = Depends(staff),
 ):
     akun = await account(session, user, akun_id, "chat")
-    await provider.conversation(session, akun, conversation_id)
-    history = await provider.messages(session, akun, conversation_id)
-    if body.message_id not in {str(m["message_id"]) for m in history["messages"]}:
-        raise HTTPException(409, "Pesan terakhir berubah; segarkan percakapan terlebih dahulu")
+    target = await provider.conversation(session, akun, conversation_id)
+    message_id = body.message_id or target.get("latest_message_id")
+    if not message_id:
+        raise HTTPException(424, "Shopee belum menyediakan ID pesan terakhir. Sinkronkan percakapan dan coba lagi.")
+    message_id = str(message_id)
+    # The scoped conversation is authoritative even when get_message returns an empty page.
+    if message_id != str(target.get("latest_message_id") or ""):
+        history = await provider.messages(session, akun, conversation_id)
+        if message_id not in {str(m["message_id"]) for m in history["messages"]}:
+            raise HTTPException(409, "Pesan terakhir berubah; segarkan percakapan terlebih dahulu")
     from tenants.marketplace_erp.modules.marketplace_erp.infrastructure.adapters.erp_shopee import signed_shop_request
 
     await signed_shop_request(
@@ -226,7 +232,7 @@ async def read(
         akun,
         provider.BASE + "read_conversation",
         method="POST",
-        body={"conversation_id": conversation_id, "last_read_message_id": body.message_id},
+        body={"conversation_id": conversation_id, "last_read_message_id": message_id},
     )
     return {"ok": True}
 

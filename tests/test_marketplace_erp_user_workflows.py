@@ -436,3 +436,43 @@ async def test_chat_keeps_history_with_dual_shop_or_missing_role_fields(monkeypa
     monkeypatch.setattr(erp_shopee, "signed_shop_request", request)
     result = await erp_shopee_chat.messages(None, SimpleNamespace(id_toko_eksternal="123"), "c1")
     assert result["messages"] == rows
+
+
+@pytest.mark.asyncio
+async def test_chat_read_uses_scoped_latest_id_even_without_message_history(session, monkeypatch):
+    akun, user = await setup(session)
+    calls = []
+
+    async def conversation(*args):
+        return {"conversation_id": "c1", "to_id": 77, "shop_id": 123, "latest_message_id": "latest"}
+
+    async def forbidden(*args):
+        raise AssertionError("No history fetch is needed for authoritative latest ID")
+
+    async def request(*args, **kwargs):
+        calls.append(kwargs["body"])
+        return {"response": {}}
+
+    monkeypatch.setattr(erp_shopee_chat, "conversation", conversation)
+    monkeypatch.setattr(erp_shopee_chat, "messages", forbidden)
+    monkeypatch.setattr(erp_shopee, "signed_shop_request", request)
+    assert await chat_router.read(akun.id, "c1", chat_router.ReadIn(), session, user) == {"ok": True}
+    assert await chat_router.read(akun.id, "c1", chat_router.ReadIn(message_id="latest"), session, user) == {"ok": True}
+    assert calls == [{"conversation_id": "c1", "last_read_message_id": "latest"}] * 2
+
+
+@pytest.mark.asyncio
+async def test_chat_read_rejects_unknown_message_without_marking(session, monkeypatch):
+    akun, user = await setup(session)
+
+    async def conversation(*args):
+        return {"conversation_id": "c1", "to_id": 77, "shop_id": 123, "latest_message_id": "latest"}
+
+    async def messages(*args):
+        return {"messages": []}
+
+    monkeypatch.setattr(erp_shopee_chat, "conversation", conversation)
+    monkeypatch.setattr(erp_shopee_chat, "messages", messages)
+    with pytest.raises(HTTPException) as exc:
+        await chat_router.read(akun.id, "c1", chat_router.ReadIn(message_id="foreign"), session, user)
+    assert exc.value.status_code == 409
