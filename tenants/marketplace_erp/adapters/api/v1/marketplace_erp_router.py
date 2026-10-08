@@ -1319,7 +1319,7 @@ async def sync_settlement_akun(
     akun_id: str,
     hari: int = Query(15, ge=1, le=90, description="berapa hari ke belakang"),
     session: AsyncSession = Depends(get_db_marketplace_erp),
-    _: UserMarketplaceErp = Depends(require_roles_marketplace_erp(*OWNER_ONLY)),
+    _: UserMarketplaceErp = Depends(require_roles_marketplace_erp(*ADMIN_ONLY)),
 ):
     """Pull what Shopee released to this shop (money per order). Already stored orders are not read again;
     ``sisa`` > 0 means more is waiting: pull again."""
@@ -1542,7 +1542,7 @@ async def list_settlement(
     akun_id: str | None = None,
     status_filter: str | None = Query(None, alias="status"),
     session: AsyncSession = Depends(get_db_marketplace_erp),
-    _: UserMarketplaceErp = Depends(require_roles_marketplace_erp(*OWNER_ONLY)),
+    _: UserMarketplaceErp = Depends(require_roles_marketplace_erp(*ADMIN_ONLY)),
 ):
     return await services.list_settlement(session, akun_id=akun_id, status_filter=status_filter)
 
@@ -1553,7 +1553,7 @@ async def ringkasan_settlement_pesanan(
     sampai: datetime | None = None,
     q: str | None = Query(None, max_length=64),
     session: AsyncSession = Depends(get_db_marketplace_erp),
-    _: UserMarketplaceErp = Depends(require_roles_marketplace_erp(*OWNER_ONLY)),
+    _: UserMarketplaceErp = Depends(require_roles_marketplace_erp(*ADMIN_ONLY)),
 ):
     """Money released by Shopee, totals per shop for the period (by release date)."""
     return await services.ringkasan_settlement_pesanan(session, dari=dari, sampai=sampai, q=q)
@@ -1569,7 +1569,7 @@ async def list_settlement_pesanan(
     halaman: int = Query(1, ge=1),
     per_halaman: int = Query(50, ge=1, le=200),
     session: AsyncSession = Depends(get_db_marketplace_erp),
-    _: UserMarketplaceErp = Depends(require_roles_marketplace_erp(*OWNER_ONLY)),
+    _: UserMarketplaceErp = Depends(require_roles_marketplace_erp(*ADMIN_ONLY)),
 ):
     """Money released by Shopee per order, with the shop name on every row."""
     return await services.list_settlement_pesanan(
@@ -1581,7 +1581,7 @@ async def list_settlement_pesanan(
 async def create_settlement(
     payload: SettlementIn,
     session: AsyncSession = Depends(get_db_marketplace_erp),
-    _: UserMarketplaceErp = Depends(require_roles_marketplace_erp(*OWNER_ONLY)),
+    _: UserMarketplaceErp = Depends(require_roles_marketplace_erp(*ADMIN_ONLY)),
 ):
     return await services.create_settlement(session, payload)
 
@@ -1590,7 +1590,7 @@ async def create_settlement(
 async def get_settlement(
     settlement_id: str,
     session: AsyncSession = Depends(get_db_marketplace_erp),
-    _: UserMarketplaceErp = Depends(require_roles_marketplace_erp(*OWNER_ONLY)),
+    _: UserMarketplaceErp = Depends(require_roles_marketplace_erp(*ADMIN_ONLY)),
 ):
     return await services.get_settlement(session, settlement_id)
 
@@ -1600,7 +1600,7 @@ async def update_settlement(
     settlement_id: str,
     payload: SettlementPatch,
     session: AsyncSession = Depends(get_db_marketplace_erp),
-    _: UserMarketplaceErp = Depends(require_roles_marketplace_erp(*OWNER_ONLY)),
+    _: UserMarketplaceErp = Depends(require_roles_marketplace_erp(*ADMIN_ONLY)),
 ):
     return await services.update_settlement(session, settlement_id, payload)
 
