@@ -154,3 +154,25 @@ async def test_promotion_failure_log_identifies_field_without_payload(monkeypatc
     assert 'diagnostic-id' in caplog.text and 'status_filter=ongoing' in caplog.text
     assert 'nama' in caplog.text and 'string_type' in caplog.text
     assert 'buyer-private' not in caplog.text
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize('status', ['all', 'ongoing', 'upcoming', 'expired'])
+async def test_empty_discount_page_with_omitted_list(monkeypatch, status):
+    async def fake(*args, **kwargs):
+        assert kwargs['params']['discount_status'] == status
+        return {'response': {'more': False}, 'request_id': 'empty-page'}
+
+    monkeypatch.setattr(promo, 'signed_shop_request', fake)
+    assert await promo.daftar(None, None, status, 1) == {'items': [], 'halaman': 1, 'ada_lagi': False}
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize('response', [{'more': True}, {}, {'more': False, 'discount_list': None}])
+async def test_missing_or_invalid_discount_page_is_not_silently_empty(monkeypatch, response):
+    async def fake(*args, **kwargs):
+        return {'response': response, 'request_id': 'invalid-page'}
+
+    monkeypatch.setattr(promo, 'signed_shop_request', fake)
+    with pytest.raises(erp_shopee.ShopeeAPIError):
+        await promo.daftar(None, None, 'ongoing', 1)
