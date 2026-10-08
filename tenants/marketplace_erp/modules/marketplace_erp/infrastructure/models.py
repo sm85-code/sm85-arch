@@ -661,13 +661,3 @@ class PesanMarketplaceReceipt(MarketplaceErpBase):
     status: Mapped[str] = mapped_column(String(32), default="belum_pasti")
     result_json: Mapped[str] = mapped_column(Text, default="{}")
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=_utcnow)
-
-
-class PercakapanBelanja(MarketplaceErpBase):
-    """Explicit, reversible ERP inbox classification; never deletes marketplace chat."""
-
-    __tablename__ = "mpe_percakapan_belanja"
-    akun_id: Mapped[str] = mapped_column(ForeignKey("mpe_akun_marketplace.id", ondelete="CASCADE"), primary_key=True)
-    conversation_id: Mapped[str] = mapped_column(String(128), primary_key=True)
-    nama: Mapped[str] = mapped_column(String(255), nullable=False)
-    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=_utcnow)
