@@ -372,52 +372,17 @@ async def test_chat_latest_page_anchors_at_now_and_tracks_sender(monkeypatch):
         return {
             "response": {
                 "conversations": [
-                    {
-                        "conversation_id": "c1",
-                        "latest_message_id": "m1",
-                        "shop_id": 123,
-                        "to_id": 77,
-                        "latest_message_from_id": 77,
-                        "unread_count": 0,
-                    },
-                    {
-                        "conversation_id": "c2",
-                        "latest_message_id": "m2",
-                        "shop_id": 123,
-                        "to_id": 88,
-                        "latest_message_from_id": 123,
-                        "unread_count": 1,
-                    },
-                    {"conversation_id": "c3", "latest_message_id": "m3", "shop_id": 123, "to_id": 99},
-                    {"conversation_id": "c4", "shop_id": 123, "to_id": 123, "latest_message_from_id": 456},
+                    {"shop_id": 123, "to_id": 77, "latest_message_from_id": 77, "unread_count": 0},
+                    {"shop_id": 123, "to_id": 88, "latest_message_from_id": 123, "unread_count": 1},
+                    {"shop_id": 123, "to_id": 99},
+                    {"shop_id": 456, "to_id": 123, "latest_message_from_id": 456},
                 ],
                 "page_result": {"more": True},
             }
         }
 
-    async def history(**kwargs):
-        cid = kwargs["params"]["conversation_id"]
-        index = int(cid[1:])
-        return {
-            "response": {
-                "messages": [
-                    {
-                        "conversation_id": cid,
-                        "message_id": f"m{index}",
-                        "created_timestamp": 1791446400,
-                        "from_id": {1: 77, 2: 123}.get(index),
-                        "to_id": {1: 123, 2: 88}.get(index),
-                        "from_shop_id": 456 if index == 4 else (123 if index == 2 else 0),
-                        "to_shop_id": 0 if index == 2 else 123,
-                    }
-                ]
-            }
-        }
-
-    erp_shopee_chat._ROLE_CACHE.clear()
-    monkeypatch.setattr(erp_shopee, "_call_shop_api", history)
     monkeypatch.setattr(erp_shopee, "signed_shop_request", request)
-    result = await erp_shopee_chat.inbox(None, SimpleNamespace(id_toko_eksternal="123", access_token="test"))
+    result = await erp_shopee_chat.inbox(None, SimpleNamespace(id_toko_eksternal="123"))
     assert calls[0] == {
         "direction": "older",
         "type": "all",
@@ -425,10 +390,7 @@ async def test_chat_latest_page_anchors_at_now_and_tracks_sender(monkeypatch):
         "next_timestamp_nano": "1791446400000000000",
     }
     assert [c["needs_reply"] for c in result["conversations"]] == [True, False, None]
-    assert result["role_unverified_count"] == 1
-    await erp_shopee_chat.inbox(
-        None, SimpleNamespace(id_toko_eksternal="123", access_token="test"), "1730787900123456789", True
-    )
+    await erp_shopee_chat.inbox(None, SimpleNamespace(id_toko_eksternal="123"), "1730787900123456789", True)
     assert calls[1]["next_timestamp_nano"] == "1730787900123456789"
     assert calls[1]["direction"] == "older" and calls[1]["type"] == "unread"
 
@@ -456,25 +418,21 @@ async def test_chat_rejects_buyer_side_and_unknown_shop_conversations(monkeypatc
 
 
 @pytest.mark.asyncio
-async def test_chat_mixed_history_excludes_buying_side_but_preserves_system(monkeypatch):
-    akun = SimpleNamespace(id_toko_eksternal="123")
+async def test_chat_keeps_history_with_dual_shop_or_missing_role_fields(monkeypatch):
     rows = [
-        {"message_id": "buyer", "conversation_id": "c1", "from_shop_id": 0, "to_shop_id": 123, "message_type": "text"},
-        {"message_id": "seller", "conversation_id": "c1", "from_shop_id": 123, "to_shop_id": 0, "message_type": "text"},
         {
-            "message_id": "shopping",
+            "message_id": "dual",
             "conversation_id": "c1",
             "from_shop_id": 456,
             "to_shop_id": 123,
-            "message_type": "text",
+            "content": {"text": "Pesan sah"},
         },
-        {"message_id": "system", "conversation_id": "c1", "message_type": "notification"},
-        {"message_id": "unknown", "conversation_id": "c1", "message_type": "text"},
+        {"message_id": "missing", "conversation_id": "c1", "content": {"text": "Tetap terbaca"}},
     ]
 
     async def request(*args, **kwargs):
         return {"response": {"messages": rows}}
 
     monkeypatch.setattr(erp_shopee, "signed_shop_request", request)
-    result = await erp_shopee_chat.messages(None, akun, "c1")
-    assert [m["message_id"] for m in result["messages"]] == ["buyer", "seller", "system"]
+    result = await erp_shopee_chat.messages(None, SimpleNamespace(id_toko_eksternal="123"), "c1")
+    assert result["messages"] == rows
