@@ -908,3 +908,8 @@ class MutasiMarketplaceOut(BaseModel):
     warnings: list[str] = Field(default_factory=list)
     gagal: list[dict] = Field(default_factory=list)
     retur: ReturOut | None = None
+
+
+class StaffAkunBanyakIn(BaseModel):
+    user_id: str = Field(min_length=1, max_length=64)
+    akun_ids: list[str] = Field(min_length=1, max_length=200)

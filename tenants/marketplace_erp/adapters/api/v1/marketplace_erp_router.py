@@ -77,6 +77,7 @@ from tenants.marketplace_erp.modules.marketplace_erp.application.schemas import 
     SettlementOut,
     SettlementPatch,
     StaffAkunIn,
+    StaffAkunBanyakIn,
     StaffAkunOut,
     StokAdjustIn,
     StokLedgerOut,
@@ -584,6 +585,15 @@ async def assign_staff_akun(
     _: UserMarketplaceErp = Depends(require_roles_marketplace_erp(*OWNER_ONLY)),
 ):
     return await services.assign_staff_akun(session, payload)
+
+
+@marketplace_erp_router.post("/staff-akun/banyak", response_model=list[StaffAkunOut])
+async def assign_staff_banyak(
+    payload: StaffAkunBanyakIn,
+    session: AsyncSession = Depends(get_db_marketplace_erp),
+    _: UserMarketplaceErp = Depends(require_roles_marketplace_erp(*OWNER_ONLY)),
+):
+    return await services.assign_staff_banyak(session, payload.user_id, payload.akun_ids)
 
 
 @marketplace_erp_router.delete("/staff-akun/{staff_akun_id}")
@@ -1373,11 +1383,14 @@ async def list_katalog_shopee(
     halaman: int = Query(1, ge=1),
     per_halaman: int = Query(48, ge=1, le=100),
     session: AsyncSession = Depends(get_db_marketplace_erp),
-    _: UserMarketplaceErp = Depends(require_roles_marketplace_erp(*OWNER_OR_STAFF)),
+    user: UserMarketplaceErp = Depends(require_roles_marketplace_erp(*OWNER_OR_STAFF)),
 ):
     """Products pulled from the Shopee shops, each row tagged with its shop. Never merged across shops."""
+    if akun_id:
+        await pastikan_akses_akun(user, session, akun_id)
+    allowed = await akun_ids_diizinkan(user, session)
     return await services.list_katalog_shopee(
-        session, akun_id=akun_id, q=q, status=status, belum_dikirim=belum_dikirim, urut=urut, halaman=halaman, per_halaman=per_halaman
+        session, akun_id=akun_id, akun_diizinkan=allowed, q=q, status=status, belum_dikirim=belum_dikirim, urut=urut, halaman=halaman, per_halaman=per_halaman
     )
 
 
@@ -1386,16 +1399,19 @@ async def ringkasan_katalog_shopee(
     status: str | None = Query(None, description="hitung toko hanya untuk status ini (kosong = semua)"),
     akun_id: str | None = Query(None, description="hitung status hanya untuk toko ini (kosong = semua)"),
     session: AsyncSession = Depends(get_db_marketplace_erp),
-    _: UserMarketplaceErp = Depends(require_roles_marketplace_erp(*OWNER_OR_STAFF)),
+    user: UserMarketplaceErp = Depends(require_roles_marketplace_erp(*OWNER_OR_STAFF)),
 ):
     """Filter options: products per Shopee shop (within ``status``) and per Shopee status (within ``akun_id``);
     shops never synced show 0."""
-    jumlah = await services.jumlah_katalog_per_toko(session, status)
-    toko = [a for a in await services.list_akun_marketplace(session, platform="shopee") if a.id_toko_eksternal]
+    if akun_id:
+        await pastikan_akses_akun(user, session, akun_id)
+    allowed = await akun_ids_diizinkan(user, session)
+    jumlah = await services.jumlah_katalog_per_toko(session, status, akun_diizinkan=allowed)
+    toko = [a for a in await services.list_akun_marketplace(session, platform="shopee") if a.id_toko_eksternal and (allowed is None or a.id in allowed)]
     return {
         "total": sum(jumlah.values()),
         "toko": [{"akun_id": a.id, "nama_toko": a.nama_toko, "jumlah": jumlah.get(a.id, 0)} for a in toko],
-        "status": await services.jumlah_katalog_per_status(session, akun_id),
+        "status": await services.jumlah_katalog_per_status(session, akun_id, akun_diizinkan=allowed),
     }
 
 
@@ -1403,9 +1419,10 @@ async def ringkasan_katalog_shopee(
 async def get_katalog_shopee(
     katalog_id: str,
     session: AsyncSession = Depends(get_db_marketplace_erp),
-    _: UserMarketplaceErp = Depends(require_roles_marketplace_erp(*OWNER_OR_STAFF)),
+    user: UserMarketplaceErp = Depends(require_roles_marketplace_erp(*OWNER_OR_STAFF)),
 ):
     k, nama_toko = await services.get_katalog_shopee(session, katalog_id)
+    await pastikan_akses_akun(user, session, k.akun_id)
     return services.katalog_out(k, nama_toko, lengkap=True)
 
 
@@ -1627,12 +1644,12 @@ async def laporan_dashboard(
     sampai: datetime = Query(...),
     batas_stok_kritis: int = Query(5, ge=0, le=100000),
     session: AsyncSession = Depends(get_db_marketplace_erp),
-    _: UserMarketplaceErp = Depends(require_roles_marketplace_erp(*OWNER_ONLY)),
+    user: UserMarketplaceErp = Depends(require_roles_marketplace_erp(*OWNER_OR_STAFF)),
 ):
     """The tables of the dashboard (per shop, per stage, best sellers, per day, low stock) for one period."""
     if sampai < dari:
         raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="sampai sebelum dari")
-    return await services.laporan_dashboard(session, dari=dari, sampai=sampai, batas_stok_kritis=batas_stok_kritis)
+    return await services.laporan_dashboard(session, dari=dari, sampai=sampai, batas_stok_kritis=batas_stok_kritis, akun_diizinkan=await akun_ids_diizinkan(user, session))
 
 
 # --- Tahap 4: Iklan (ads) -------------------------------------------------------
