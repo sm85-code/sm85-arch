@@ -372,16 +372,17 @@ async def test_chat_latest_page_anchors_at_now_and_tracks_sender(monkeypatch):
         return {
             "response": {
                 "conversations": [
-                    {"to_id": 77, "latest_message_from_id": 77, "unread_count": 0},
-                    {"to_id": 88, "latest_message_from_id": 123, "unread_count": 1},
-                    {"to_id": 99},
+                    {"shop_id": 123, "to_id": 77, "latest_message_from_id": 77, "unread_count": 0},
+                    {"shop_id": 123, "to_id": 88, "latest_message_from_id": 123, "unread_count": 1},
+                    {"shop_id": 123, "to_id": 99},
+                    {"shop_id": 456, "to_id": 123, "latest_message_from_id": 456},
                 ],
                 "page_result": {"more": True},
             }
         }
 
     monkeypatch.setattr(erp_shopee, "signed_shop_request", request)
-    result = await erp_shopee_chat.inbox(None, None)
+    result = await erp_shopee_chat.inbox(None, SimpleNamespace(id_toko_eksternal="123"))
     assert calls[0] == {
         "direction": "older",
         "type": "all",
@@ -389,6 +390,28 @@ async def test_chat_latest_page_anchors_at_now_and_tracks_sender(monkeypatch):
         "next_timestamp_nano": "1791446400000000000",
     }
     assert [c["needs_reply"] for c in result["conversations"]] == [True, False, None]
-    await erp_shopee_chat.inbox(None, None, "1730787900123456789", True)
+    await erp_shopee_chat.inbox(None, SimpleNamespace(id_toko_eksternal="123"), "1730787900123456789", True)
     assert calls[1]["next_timestamp_nano"] == "1730787900123456789"
     assert calls[1]["direction"] == "older" and calls[1]["type"] == "unread"
+
+
+@pytest.mark.asyncio
+async def test_chat_rejects_buyer_side_and_unknown_shop_conversations(monkeypatch):
+    response = {"conversation_id": "c1", "to_id": 77, "shop_id": 456}
+
+    async def request(*args, **kwargs):
+        return {"response": response}
+
+    monkeypatch.setattr(erp_shopee, "signed_shop_request", request)
+    akun = SimpleNamespace(id_toko_eksternal="123")
+    with pytest.raises(HTTPException) as exc:
+        await erp_shopee_chat.conversation(None, akun, "c1")
+    assert exc.value.status_code == 403
+    response.pop("shop_id")
+    with pytest.raises(HTTPException) as exc:
+        await erp_shopee_chat.conversation(None, akun, "c1")
+    assert exc.value.status_code == 424
+    response = {"conversations": [{"to_id": 77}]}
+    with pytest.raises(HTTPException) as exc:
+        await erp_shopee_chat.inbox(None, akun)
+    assert exc.value.status_code == 424

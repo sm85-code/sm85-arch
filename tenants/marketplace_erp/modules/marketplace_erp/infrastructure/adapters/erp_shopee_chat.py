@@ -23,6 +23,10 @@ async def inbox(session, akun, cursor=None, unread=False):
     resp = data.get("response")
     if not isinstance(resp, dict) or not isinstance(resp.get("conversations"), list):
         raise HTTPException(424, "Format daftar percakapan Shopee tidak lengkap")
+    # Shopee accounts can also buy from other shops. Only this seller shop belongs in ERP.
+    if any(not c.get("shop_id") for c in resp["conversations"]):
+        raise HTTPException(424, "Shopee tidak menyertakan identitas toko percakapan")
+    resp["conversations"] = [c for c in resp["conversations"] if str(c["shop_id"]) == str(akun.id_toko_eksternal)]
     for c in resp["conversations"]:
         sender, buyer = c.get("latest_message_from_id"), c.get("to_id")
         c["needs_reply"] = str(sender) == str(buyer) if sender and buyer else None
@@ -36,7 +40,9 @@ async def conversation(session, akun, conversation_id):
     resp = data.get("response") or {}
     if str(resp.get("conversation_id")) != conversation_id or not resp.get("to_id"):
         raise HTTPException(424, "Identitas percakapan Shopee belum dapat dipastikan")
-    if resp.get("shop_id") is not None and str(resp["shop_id"]) != str(akun.id_toko_eksternal):
+    if not resp.get("shop_id"):
+        raise HTTPException(424, "Shopee tidak menyertakan identitas toko percakapan")
+    if str(resp["shop_id"]) != str(akun.id_toko_eksternal):
         raise HTTPException(403, "Percakapan berasal dari toko lain")
     return resp
 
