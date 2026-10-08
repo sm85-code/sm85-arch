@@ -22,8 +22,6 @@ from tenants.marketplace_erp.modules.marketplace_erp.infrastructure.models impor
     Pesanan,
     KatalogShopee,
     UserMarketplaceErp,
-    PercakapanBelanja,
-    AkunMarketplace,
 )
 
 router = APIRouter()
@@ -50,12 +48,6 @@ async def inbox(
 ):
     akun = await account(session, user, akun_id, "chat")
     result = await provider.inbox(session, akun, cursor, unread)
-    hidden = set(
-        (
-            await session.execute(select(PercakapanBelanja.conversation_id).where(PercakapanBelanja.akun_id == akun.id))
-        ).scalars()
-    )
-    result["conversations"] = [c for c in result["conversations"] if str(c["conversation_id"]) not in hidden]
     orders = await chat_context.buyer_orders(session, akun, result["conversations"])
     for c in result["conversations"]:
         c["kota"] = next(
@@ -291,55 +283,3 @@ async def start_order_chat(
     akun = await account(session, user, row.akun_id, "chat")
     target = await chat_context.order_target(session, akun, row)
     return await deliver(session, akun, "order:" + row.id, body, target)
-
-
-class BelanjaIn(BaseModel):
-    belanja: bool
-
-
-@router.get("/akun/{akun_id}/chat-belanja")
-async def list_buying_chats(
-    akun_id: str,
-    session: AsyncSession = Depends(get_db_marketplace_erp),
-    user: UserMarketplaceErp = Depends(staff),
-):
-    akun = await account(session, user, akun_id, "chat")
-    rows = (
-        (
-            await session.execute(
-                select(PercakapanBelanja)
-                .where(PercakapanBelanja.akun_id == akun.id)
-                .order_by(PercakapanBelanja.created_at.desc())
-            )
-        )
-        .scalars()
-        .all()
-    )
-    return [{"conversation_id": r.conversation_id, "nama": r.nama} for r in rows]
-
-
-@router.post("/akun/{akun_id}/chat/{conversation_id}/belanja")
-async def classify_buying_chat(
-    akun_id: str,
-    conversation_id: str,
-    body: BelanjaIn,
-    session: AsyncSession = Depends(get_db_marketplace_erp),
-    user: UserMarketplaceErp = Depends(staff),
-):
-    akun = await account(session, user, akun_id, "chat")
-    target = await provider.conversation(session, akun, conversation_id) if body.belanja else None
-    # Serialize classifications for this shop; different staff may update the same thread.
-    await session.execute(select(AkunMarketplace.id).where(AkunMarketplace.id == akun.id).with_for_update())
-    row = await session.get(PercakapanBelanja, (akun.id, conversation_id))
-    if body.belanja and row is None:
-        session.add(
-            PercakapanBelanja(
-                akun_id=akun.id,
-                conversation_id=conversation_id,
-                nama=str(target.get("to_name") or "Pembeli")[:255],
-            )
-        )
-    elif not body.belanja and row is not None:
-        await session.delete(row)
-    await session.commit()
-    return {"ok": True, "belanja": body.belanja}
