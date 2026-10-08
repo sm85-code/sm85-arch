@@ -18,6 +18,7 @@ from tenants.marketplace_erp.modules.marketplace_erp.infrastructure.adapters imp
 )
 
 router = APIRouter()
+admin = require_roles_marketplace_erp("admin")
 owner = require_roles_marketplace_erp("admin", "owner")
 staff = require_roles_marketplace_erp("admin", "owner", "staff")
 
@@ -152,7 +153,7 @@ async def wallet(
     sampai: date,
     offset: int = Query(0, ge=0),
     session: AsyncSession = Depends(get_db_marketplace_erp),
-    user: UserMarketplaceErp = Depends(owner),
+    user: UserMarketplaceErp = Depends(admin),
 ):
     await account(session, user, akun_id, "transaksi dana")
     return await workflows.wallet(session, akun_id, dari, sampai, offset)
