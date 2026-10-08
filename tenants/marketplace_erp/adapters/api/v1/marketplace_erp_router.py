@@ -251,13 +251,13 @@ async def change_password(
     return user
 
 
-# --- Users (owner-only account management) ----------------------------------
+# --- Users (admin-only account management) ----------------------------------
 
 
 @marketplace_erp_router.get("/users", response_model=list[UserOut])
 async def list_users(
     session: AsyncSession = Depends(get_db_marketplace_erp),
-    _: UserMarketplaceErp = Depends(require_roles_marketplace_erp(*OWNER_ONLY)),
+    _: UserMarketplaceErp = Depends(require_roles_marketplace_erp(*ADMIN_ONLY)),
 ):
     return await services.list_users(session)
 
@@ -266,10 +266,9 @@ async def list_users(
 async def create_user(
     payload: UserCreateIn,
     session: AsyncSession = Depends(get_db_marketplace_erp),
-    _: UserMarketplaceErp = Depends(require_roles_marketplace_erp(*OWNER_ONLY)),
+    _: UserMarketplaceErp = Depends(require_roles_marketplace_erp(*ADMIN_ONLY)),
 ):
-    """Create an account with a temporary password (must_change_password=true). An admin may create any role;
-    an owner only staff."""
+    """Admin creates an account with a temporary password (must_change_password=true)."""
     services.pastikan_boleh_membuat_peran(_.role, payload.role)
     return await services.create_user(session, payload)
 
@@ -315,7 +314,7 @@ async def list_akun(
 async def create_akun(
     payload: AkunMarketplaceIn,
     session: AsyncSession = Depends(get_db_marketplace_erp),
-    _: UserMarketplaceErp = Depends(require_roles_marketplace_erp(*OWNER_ONLY)),
+    _: UserMarketplaceErp = Depends(require_roles_marketplace_erp(*ADMIN_ONLY)),
 ):
     return await services.create_akun_marketplace(session, payload)
 
@@ -336,7 +335,7 @@ async def update_akun(
     akun_id: str,
     payload: AkunMarketplacePatch,
     session: AsyncSession = Depends(get_db_marketplace_erp),
-    _: UserMarketplaceErp = Depends(require_roles_marketplace_erp(*OWNER_ONLY)),
+    _: UserMarketplaceErp = Depends(require_roles_marketplace_erp(*ADMIN_ONLY)),
 ):
     return await services.update_akun_marketplace(session, akun_id, payload)
 
@@ -346,7 +345,7 @@ async def delete_akun(
     akun_id: str,
     bersama_pesanan: bool = False,
     session: AsyncSession = Depends(get_db_marketplace_erp),
-    _: UserMarketplaceErp = Depends(require_roles_marketplace_erp(*OWNER_ONLY)),
+    _: UserMarketplaceErp = Depends(require_roles_marketplace_erp(*ADMIN_ONLY)),
 ):
     """``bersama_pesanan=true`` also deletes the shop's orders (for clearing test data)."""
     return {"ok": True, **await services.delete_akun_marketplace(session, akun_id, hapus_pesanan=bersama_pesanan)}
@@ -573,7 +572,7 @@ async def transfer_stok(
 async def list_staff_akun(
     user_id: str | None = None,
     session: AsyncSession = Depends(get_db_marketplace_erp),
-    _: UserMarketplaceErp = Depends(require_roles_marketplace_erp(*OWNER_ONLY)),
+    _: UserMarketplaceErp = Depends(require_roles_marketplace_erp(*ADMIN_ONLY)),
 ):
     return await services.list_staff_akun(session, user_id=user_id)
 
@@ -582,7 +581,7 @@ async def list_staff_akun(
 async def assign_staff_akun(
     payload: StaffAkunIn,
     session: AsyncSession = Depends(get_db_marketplace_erp),
-    _: UserMarketplaceErp = Depends(require_roles_marketplace_erp(*OWNER_ONLY)),
+    _: UserMarketplaceErp = Depends(require_roles_marketplace_erp(*ADMIN_ONLY)),
 ):
     return await services.assign_staff_akun(session, payload)
 
@@ -591,7 +590,7 @@ async def assign_staff_akun(
 async def assign_staff_banyak(
     payload: StaffAkunBanyakIn,
     session: AsyncSession = Depends(get_db_marketplace_erp),
-    _: UserMarketplaceErp = Depends(require_roles_marketplace_erp(*OWNER_ONLY)),
+    _: UserMarketplaceErp = Depends(require_roles_marketplace_erp(*ADMIN_ONLY)),
 ):
     return await services.assign_staff_banyak(session, payload.user_id, payload.akun_ids)
 
@@ -600,7 +599,7 @@ async def assign_staff_banyak(
 async def remove_staff_akun(
     staff_akun_id: str,
     session: AsyncSession = Depends(get_db_marketplace_erp),
-    _: UserMarketplaceErp = Depends(require_roles_marketplace_erp(*OWNER_ONLY)),
+    _: UserMarketplaceErp = Depends(require_roles_marketplace_erp(*ADMIN_ONLY)),
 ):
     await services.remove_staff_akun(session, staff_akun_id)
     return {"ok": True}
@@ -934,7 +933,7 @@ async def oauth_shopee_start(
     akun_id: str = Query(...),
     redirect_uri: str | None = None,
     session: AsyncSession = Depends(get_db_marketplace_erp),
-    user: UserMarketplaceErp = Depends(require_roles_marketplace_erp(*OWNER_ONLY)),
+    user: UserMarketplaceErp = Depends(require_roles_marketplace_erp(*ADMIN_ONLY)),
 ):
     """Return the Shopee authorize URL. FE should redirect the browser there.
 
@@ -969,11 +968,11 @@ async def oauth_shopee_callback(
     main_account_id: str | None = Query(None),
     nonce: str | None = None,
     session: AsyncSession = Depends(get_db_marketplace_erp),
-    user: UserMarketplaceErp = Depends(require_roles_marketplace_erp(*OWNER_ONLY)),
+    user: UserMarketplaceErp = Depends(require_roles_marketplace_erp(*ADMIN_ONLY)),
 ):
     """Exchange OAuth code for tokens and persist on AkunMarketplace.
 
-    Requires the initiating owner session and its unused, unexpired nonce.
+    Requires the initiating admin session and its unused, unexpired nonce.
     The nonce is carried inside Shopee's redirect path.
     Shopee returns ``shop_id`` when a shop account authorised, or ``main_account_id``
     when a main account authorised (possibly several shops at once).
@@ -1543,7 +1542,7 @@ async def push_stok_harga_akun(
 @marketplace_erp_router.get("/oauth/tiktokshop/start")
 @marketplace_erp_router.get("/oauth/blibli/start")
 async def oauth_other_placeholder(
-    _: UserMarketplaceErp = Depends(require_roles_marketplace_erp(*OWNER_ONLY)),
+    _: UserMarketplaceErp = Depends(require_roles_marketplace_erp(*ADMIN_ONLY)),
 ):
     raise HTTPException(
         status_code=status.HTTP_501_NOT_IMPLEMENTED,

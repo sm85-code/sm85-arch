@@ -284,3 +284,27 @@ def test_every_iklan_route_is_admin_only():
         assert peran == [{"admin"}], f"{path} {sorted(route.methods)} boleh diakses {peran}"
         diperiksa.append(path)
     assert len(diperiksa) >= 20  # every ads route was found (not an empty loop)
+
+
+def test_shop_and_user_management_routes_are_admin_only():
+    import inspect
+
+    names = {
+        'list_users', 'create_user', 'update_user', 'delete_user',
+        'create_akun', 'update_akun', 'delete_akun',
+        'list_staff_akun', 'assign_staff_akun', 'assign_staff_banyak', 'remove_staff_akun',
+        'oauth_shopee_start', 'oauth_shopee_callback', 'oauth_other_placeholder',
+    }
+    checked = set()
+    for route in router.marketplace_erp_router.routes:
+        if getattr(getattr(route, 'endpoint', None), '__name__', '') not in names:
+            continue
+        roles = [
+            inspect.getclosurevars(d.call).nonlocals['allowed']
+            for d in route.dependant.dependencies
+            if getattr(d.call, '__name__', '') == '_inner'
+            and 'allowed' in inspect.getclosurevars(d.call).nonlocals
+        ]
+        assert roles == [{'admin'}], route.path
+        checked.add(route.endpoint.__name__)
+    assert checked == names
