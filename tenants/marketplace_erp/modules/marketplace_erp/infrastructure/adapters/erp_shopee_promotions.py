@@ -63,9 +63,12 @@ async def daftar(session, akun, status="all", halaman=1):
     data = await signed_shop_request(session, akun, path, params={"discount_status": status, "page_no": halaman, "page_size": 40}, timeout=15)
     try:
         r = data["response"]
-        if not isinstance(r["discount_list"], list) or type(r["more"]) is not bool:
+        # Shopee may omit the collection on an empty terminal page. A missing
+        # list cannot be treated as empty when there is another page to fetch.
+        discounts = r.get("discount_list", [] if r.get("more") is False else None)
+        if not isinstance(discounts, list) or type(r["more"]) is not bool:
             raise ValueError("invalid page")
-        rows = [project(row) for row in r["discount_list"]]
+        rows = [project(row) for row in discounts]
         if len({row["id"] for row in rows}) != len(rows) or (r["more"] and not rows):
             raise ValueError("invalid pagination")
         return {"items": rows, "halaman": halaman, "ada_lagi": r["more"]}
