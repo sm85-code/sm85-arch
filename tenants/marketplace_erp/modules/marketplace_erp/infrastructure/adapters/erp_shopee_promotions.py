@@ -1,4 +1,5 @@
 """Shopee Discount APIs. IDs are strings at the ERP boundary; integers on Shopee requests."""
+import logging
 import time
 from decimal import Decimal
 
@@ -9,6 +10,7 @@ from ...application.schemas import PromosiOut, PromosiDetailOut
 from .erp_shopee import ShopeeAPIError, signed_shop_request
 
 BASE = "/api/v2/discount/"
+logger = logging.getLogger(__name__)
 
 
 def ident(value) -> int:
@@ -34,7 +36,25 @@ def project(row):
     }).model_dump()
 
 
-def incomplete(path, data, exc=None):
+def incomplete(path, data, exc=None, *, status_filter=None, halaman=None):
+    # Record contract metadata only; validation inputs can contain buyer data.
+    fields = []
+    reason = type(exc).__name__ if exc is not None else "unconfirmed_mutation"
+    if isinstance(exc, ValidationError):
+        fields = [{"field": list(e["loc"]), "type": e["type"]} for e in exc.errors(include_input=False, include_context=False, include_url=False)[:10]]
+    elif isinstance(exc, KeyError):
+        fields = [str(exc.args[0])]
+    elif isinstance(exc, ValueError) and str(exc) in {
+        "invalid page", "invalid pagination", "invalid identity", "invalid amount", "invalid detail", "empty continuation",
+    }:
+        reason = str(exc)
+    response = data.get("response")
+    expected = ("discount_list", "more", "discount_id", "status", "discount_name", "start_time", "end_time", "item_list")
+    shape = {key: type(response[key]).__name__ if key in response else "missing" for key in expected} if isinstance(response, dict) else type(response).__name__
+    logger.warning(
+        "shopee_promotion phase=validation_failed path=%s request_id=%s status_filter=%s page=%s reason=%s fields=%s response_shape=%s",
+        path, data.get("request_id"), status_filter, halaman, reason, fields, shape,
+    )
     raise ShopeeAPIError(path, "unconfirmed_response", "Respons belum terkonfirmasi. Segarkan sebelum mengirim ulang.", data.get("request_id")) from exc
 
 
@@ -50,7 +70,7 @@ async def daftar(session, akun, status="all", halaman=1):
             raise ValueError("invalid pagination")
         return {"items": rows, "halaman": halaman, "ada_lagi": r["more"]}
     except (KeyError, TypeError, ValueError, ValidationError) as exc:
-        incomplete(path, data, exc)
+        incomplete(path, data, exc, status_filter=status, halaman=halaman)
 
 
 async def detail(session, akun, id, halaman=1):

@@ -140,3 +140,17 @@ async def test_description_patch_never_sends_price_stock_or_dimensions(monkeypat
     payload = ShopeeProdukEditIn(deskripsi='Deskripsi baru')
     await erp_shopee.ubah_info_produk(None, None, 12, {'description': payload.deskripsi})
     assert seen == [{'item_id': 12, 'description': 'Deskripsi baru'}]
+
+
+@pytest.mark.asyncio
+async def test_promotion_failure_log_identifies_field_without_payload(monkeypatch, caplog):
+    async def fake(*args, **kwargs):
+        return {'response': {'discount_list': [{**DISCOUNT, 'discount_name': None, 'private_note': 'buyer-private'}], 'more': False}, 'request_id': 'diagnostic-id'}
+
+    monkeypatch.setattr(promo, 'signed_shop_request', fake)
+    with pytest.raises(erp_shopee.ShopeeAPIError):
+        await promo.daftar(None, None, 'ongoing', 1)
+    assert 'validation_failed' in caplog.text
+    assert 'diagnostic-id' in caplog.text and 'status_filter=ongoing' in caplog.text
+    assert 'nama' in caplog.text and 'string_type' in caplog.text
+    assert 'buyer-private' not in caplog.text

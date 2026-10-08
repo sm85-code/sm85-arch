@@ -501,7 +501,19 @@ async def _call_shop_api(
         return data
     # Shopee reports failures as error/message, often with HTTP 200.
     if str(data.get("error") or "").strip():
-        _log.warning("Shopee rejection path=%s request_id=%s", api_path, data.get("request_id"))
+        # Never log signed URLs or raw provider payloads. Redact credentials even
+        # if Shopee includes an offending parameter in its error message.
+        def safe_log(value):
+            value = str(value or "")
+            for secret in (access_token, query["sign"], SHOPEE_PARTNER_KEY):
+                if secret:
+                    value = value.replace(secret, "[redacted]")
+            return " ".join(value.split())[:300]
+
+        _log.warning(
+            "shopee_request phase=business_failed path=%s request_id=%s error=%s message=%s",
+            api_path, data.get("request_id"), safe_log(data["error"]), safe_log(data.get("message")),
+        )
         raise ShopeeAPIError(api_path, str(data["error"]), str(data.get("message", "")), data.get("request_id"))
     return data
 

@@ -670,3 +670,17 @@ async def test_read_deadline_returns_json_timeout_without_replaying_request(live
     assert exc.value.status_code == 504
     assert 'secret' not in exc.value.detail
     assert calls == [1]
+
+
+@pytest.mark.asyncio
+async def test_business_error_log_redacts_credentials(live, monkeypatch, caplog):
+    monkeypatch.setattr(erp_shopee, 'SHOPEE_PARTNER_KEY', 'partner-secret')
+    monkeypatch.setattr(requests, 'get', lambda *a, **k: SimpleNamespace(
+        status_code=200,
+        json=lambda: {'error': 'error_api_permission', 'message': 'Denied access_token=token-secret partner-secret\nnext line', 'request_id': 'permission-id'},
+    ))
+    with pytest.raises(erp_shopee.ShopeeAPIError):
+        await erp_shopee._call_shop_api(access_token='token-secret', shop_id='5', api_path='/api/v2/discount/get_discount_list')
+    assert 'business_failed' in caplog.text and 'error_api_permission' in caplog.text
+    assert 'permission-id' in caplog.text
+    assert 'token-secret' not in caplog.text and 'partner-secret' not in caplog.text
