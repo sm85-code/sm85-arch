@@ -176,3 +176,45 @@ async def test_missing_or_invalid_discount_page_is_not_silently_empty(monkeypatc
     monkeypatch.setattr(promo, 'signed_shop_request', fake)
     with pytest.raises(erp_shopee.ShopeeAPIError):
         await promo.daftar(None, None, 'ongoing', 1)
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize('items,more,accepted', [('omitted', False, True), ('omitted', True, False), (None, False, False)])
+async def test_empty_promotion_detail_contract(monkeypatch, items, more, accepted):
+    async def fake(*args, **kwargs):
+        response = {**DISCOUNT, 'more': more}
+        if items != 'omitted':
+            response['item_list'] = items
+        return {'response': response, 'request_id': 'empty-detail'}
+
+    monkeypatch.setattr(promo, 'signed_shop_request', fake)
+    if accepted:
+        result = await promo.detail(None, None, str(DISCOUNT['discount_id']))
+        assert result['barang'] == [] and result['ada_lagi'] is False
+    else:
+        with pytest.raises(erp_shopee.ShopeeAPIError):
+            await promo.detail(None, None, str(DISCOUNT['discount_id']))
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize('model,field', [(None, 'item_promotion_stock'), ('20', 'model_promotion_stock')])
+async def test_promotion_add_stock_and_nested_warning(monkeypatch, model, field):
+    seen = []
+
+    async def fake(*args, **kwargs):
+        seen.append(kwargs['body'])
+        return {'response': {'discount_id': 1, 'count': 1, 'error_list': [], 'warning': 'Nested warning'}, 'warning': 'Top warning', 'request_id': 'stock'}
+
+    monkeypatch.setattr(promo, 'signed_shop_request', fake)
+    payload = PromosiProdukIn(operasi='tambah', katalog_id='local', harga=Decimal('5'), stok_promo=7)
+    result = await promo.barang(None, None, '1', '10', model, payload)
+    item = seen[0]['item_list'][0]
+    assert (item['model_list'][0] if model else item)[field] == 7
+    assert result['warnings'] == ['Top warning', 'Nested warning']
+    assert promo.warning_messages({'warning': 'Same', 'response': {'warning': 'Same'}}) == ['Same']
+
+
+@pytest.mark.parametrize('operation,stock', [('ubah', 7), ('hapus', 7), ('tambah', 0), ('tambah', -1), ('tambah', 1.5), ('tambah', True)])
+def test_invalid_promotion_stock_is_rejected(operation, stock):
+    with pytest.raises(ValueError):
+        PromosiProdukIn(operasi=operation, katalog_id='local', harga=Decimal('5'), stok_promo=stock)

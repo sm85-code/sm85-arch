@@ -28,6 +28,12 @@ def amount(value):
     return str(d)
 
 
+def warning_messages(data):
+    response = data.get("response")
+    nested = response.get("warning") if isinstance(response, dict) else None
+    return list(dict.fromkeys(w for w in (data.get("warning"), nested) if isinstance(w, str) and w.strip()))
+
+
 def project(row):
     # Validate read contracts before returning an apparently successful page.
     return PromosiOut.model_validate({
@@ -82,10 +88,11 @@ async def detail(session, akun, id, halaman=1):
     try:
         r = data["response"]
         out = project(r)
-        if out["id"] != str(id) or not isinstance(r["item_list"], list) or type(r["more"]) is not bool:
+        items = r.get("item_list", [] if r.get("more") is False else None)
+        if out["id"] != str(id) or not isinstance(items, list) or type(r["more"]) is not bool:
             raise ValueError("invalid detail")
         rows = []
-        for item in r["item_list"]:
+        for item in items:
             models = item.get("model_list") or []
             for model in models or [None]:
                 rows.append({
@@ -115,7 +122,7 @@ async def buat(session, akun, payload):
         id = str(ident(data["response"]["discount_id"]))
     except (KeyError, TypeError, ValueError) as exc:
         incomplete(path, data, exc)
-    return {"ok": True, "id": id, "request_id": data.get("request_id"), "warnings": [data["warning"]] if data.get("warning") else []}
+    return {"ok": True, "id": id, "request_id": data.get("request_id"), "warnings": warning_messages(data)}
 
 
 async def akhiri(session, akun, id, hapus=False):
@@ -125,7 +132,7 @@ async def akhiri(session, akun, id, hapus=False):
     data = await signed_shop_request(session, akun, path, method="POST", body={"discount_id": ident(id)})
     if str((data.get("response") or {}).get("discount_id")) != str(id):
         incomplete(path, data)
-    return {"ok": True, "id": str(id), "request_id": data.get("request_id"), "warnings": [data["warning"]] if data.get("warning") else []}
+    return {"ok": True, "id": str(id), "request_id": data.get("request_id"), "warnings": warning_messages(data)}
 
 
 async def barang(session, akun, id, item_id, model_id, payload):
@@ -139,8 +146,12 @@ async def barang(session, akun, id, item_id, model_id, payload):
         item = {"item_id": ident(item_id), "purchase_limit": payload.batas_pembelian}
         if model_id is not None:
             item["model_list"] = [{"model_id": int(model_id), "model_promotion_price": float(payload.harga)}]
+            if payload.stok_promo is not None:
+                item["model_list"][0]["model_promotion_stock"] = payload.stok_promo
         else:
             item["item_promotion_price"] = float(payload.harga)
+            if payload.stok_promo is not None:
+                item["item_promotion_stock"] = payload.stok_promo
         body = {"discount_id": ident(id), "item_list": [item]}
     data = await signed_shop_request(session, akun, path, method="POST", body=body)
     response = data.get("response") or {}
@@ -153,4 +164,4 @@ async def barang(session, akun, id, item_id, model_id, payload):
         incomplete(path, data)
     # Preserve per-item failures and confirmed partial outcomes; never suggest resending the whole batch.
     return {"ok": not failures, "id": str(id), "request_id": data.get("request_id"), "gagal": failures,
-            "warnings": [data["warning"]] if data.get("warning") else []}
+            "warnings": warning_messages(data)}
