@@ -234,3 +234,129 @@ async def test_chat_context_never_links_a_product_from_another_shop(session, mon
     result = await chat_router.messages(akun.id, "c1", None, session, user)
     assert result["messages"][0]["context"]["katalog_id"] == own.id
     assert result["messages"][1]["context"]["katalog_id"] is None
+
+
+@pytest.mark.asyncio
+async def test_chat_cards_are_scoped_to_shop_and_buyer(session):
+    from tenants.marketplace_erp.adapters.api.v1 import chat_context
+    from tenants.marketplace_erp.modules.marketplace_erp.infrastructure.models import KatalogShopee, ItemPesanan
+
+    akun, _ = await setup(session)
+    other = await services.create_akun_marketplace(session, AkunMarketplaceIn(platform="shopee", nama_toko="B"))
+    order = Pesanan(
+        platform="shopee",
+        akun_id=akun.id,
+        id_eksternal="OWN",
+        status="to_ship",
+        nama_pembeli="buyer",
+        total=100,
+        detail_json=json.dumps({"buyer_user_id": 77, "kota": "Kabupaten Bandung"}),
+    )
+    wrong_buyer = Pesanan(
+        platform="shopee",
+        akun_id=akun.id,
+        id_eksternal="OTHER",
+        status="to_ship",
+        nama_pembeli="buyer",
+        total=100,
+        detail_json=json.dumps({"buyer_user_id": 88, "kota": "Jakarta"}),
+    )
+    own = KatalogShopee(akun_id=akun.id, item_id="11", nama="Produk A", foto_json='["https://example.com/a.jpg"]')
+    foreign = KatalogShopee(akun_id=other.id, item_id="22", nama="Produk B")
+    session.add_all([order, wrong_buyer, own, foreign])
+    await session.flush()
+    session.add(
+        ItemPesanan(
+            pesanan_id=order.id,
+            nama_produk="Produk A",
+            model_name="Merah",
+            qty=1,
+            harga_satuan=100,
+            subtotal=100,
+            foto_url="https://example.com/a.jpg",
+        )
+    )
+    await session.flush()
+    target = {"to_id": 77, "to_name": "buyer"}
+    result = await chat_context.context(session, akun, target)
+    assert result["kota"] == "Kabupaten Bandung"
+    assert [p["id"] for p in result["produk"]] == [own.id]
+    assert [p["id"] for p in result["pesanan"]] == [order.id]
+    assert result["pesanan"][0]["items"][0]["varian"] == "Merah"
+    assert await chat_context.attachment(session, akun, target, "item", own.id) == {"item_id": 11}
+    assert await chat_context.attachment(session, akun, target, "order", order.id) == {"order_sn": "OWN"}
+    for kind, row_id in [("item", foreign.id), ("order", wrong_buyer.id)]:
+        with pytest.raises(HTTPException) as exc:
+            await chat_context.attachment(session, akun, target, kind, row_id)
+        assert exc.value.status_code == 403
+
+
+@pytest.mark.asyncio
+async def test_chat_card_send_is_durable_and_uses_native_payload(session, monkeypatch):
+    from tenants.marketplace_erp.modules.marketplace_erp.infrastructure.models import KatalogShopee
+
+    akun, user = await setup(session)
+    product = KatalogShopee(akun_id=akun.id, item_id="11", nama="Produk A")
+    session.add(product)
+    await session.flush()
+    calls = []
+
+    async def conversation(*args):
+        return {"conversation_id": "c1", "to_id": 77}
+
+    async def request(*args, **kwargs):
+        calls.append(kwargs["body"])
+        return {"response": {"message_id": "m1", "to_id": 77, "conversation_id": "c1"}}
+
+    monkeypatch.setattr(erp_shopee_chat, "conversation", conversation)
+    monkeypatch.setattr(erp_shopee, "signed_shop_request", request)
+    body = chat_router.SendIn(operation_id=uuid4(), message_type="item", attachment_id=product.id)
+    first = await chat_router.send(akun.id, "c1", body, session, user)
+    replay = await chat_router.send(akun.id, "c1", body, session, user)
+    assert first["status"] == replay["status"] == "terkirim"
+    assert calls == [{"to_id": 77, "message_type": "item", "content": {"item_id": 11}}]
+
+
+@pytest.mark.asyncio
+async def test_contact_order_recipient_comes_from_exact_shopee_order(monkeypatch):
+    from tenants.marketplace_erp.adapters.api.v1 import chat_context
+
+    row = SimpleNamespace(id="o1", id_eksternal="OWN", nama_pembeli="buyer", detail_json="{}")
+
+    async def request(*args, **kwargs):
+        assert kwargs["params"]["order_sn_list"] == "OWN"
+        return {"response": {"order_list": [{"order_sn": "FOREIGN", "buyer_user_id": 99}]}}
+
+    monkeypatch.setattr(erp_shopee, "signed_shop_request", request)
+    with pytest.raises(HTTPException) as exc:
+        await chat_context.order_target(None, None, row)
+    assert exc.value.status_code == 424
+    row.detail_json = '{"buyer_user_id":77}'
+    assert (await chat_context.order_target(None, None, row))["to_id"] == 77
+
+
+@pytest.mark.asyncio
+async def test_contact_and_context_reject_unassigned_staff_before_shopee(session, monkeypatch):
+    akun, _ = await setup(session)
+    row = Pesanan(
+        platform="shopee", akun_id=akun.id, id_eksternal="STAFF", status="to_ship", nama_pembeli="buyer", total=100
+    )
+    session.add(row)
+    await session.flush()
+    calls = []
+
+    async def forbidden(*args, **kwargs):
+        calls.append(True)
+        raise AssertionError("Provider must not be contacted")
+
+    monkeypatch.setattr(erp_shopee, "signed_shop_request", forbidden)
+    user = SimpleNamespace(id="unassigned", role="staff")
+    for call in (
+        chat_router.order_chat(row.id, "", 0, session, user),
+        chat_router.conversation_context(akun.id, "c1", "", 0, session, user),
+        chat_router.start_order_chat(row.id, chat_router.SendIn(operation_id=uuid4(), text="Halo"), session, user),
+    ):
+        with pytest.raises(HTTPException) as exc:
+            await call
+        assert exc.value.status_code == 403
+    assert not calls

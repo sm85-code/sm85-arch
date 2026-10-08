@@ -50,12 +50,16 @@ async def messages(session, akun, conversation_id, offset=None):
 
 
 async def send(session, akun, target, text):
+    return await send_content(session, akun, target, "text", {"text": text})
+
+
+async def send_content(session, akun, target, message_type, content):
     data = await api.signed_shop_request(
         session,
         akun,
         BASE + "send_message",
         method="POST",
-        body={"to_id": int(target["to_id"]), "message_type": "text", "content": {"text": text}},
+        body={"to_id": int(target["to_id"]), "message_type": message_type, "content": content},
     )
     resp = data.get("response") or {}
     if not resp.get("message_id") or str(resp.get("to_id")) != str(target["to_id"]):
