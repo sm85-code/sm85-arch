@@ -862,9 +862,12 @@ class PromosiProdukIn(BaseModel):
     model_id: str | None = Field(default=None, pattern=r"^[0-9]+$")
     harga: Decimal | None = Field(default=None, gt=0, allow_inf_nan=False)
     batas_pembelian: int = Field(default=0, ge=0)
+    stok_promo: int | None = Field(default=None, gt=0, le=2147483647, strict=True)
 
     @model_validator(mode="after")
     def harga_wajib(self):
+        if self.stok_promo is not None and self.operasi != "tambah":
+            raise ValueError("Stok promosi hanya dapat diatur saat menambahkan produk/varian, bukan diubah langsung.")
         if self.operasi != "hapus" and self.harga is None:
             raise ValueError("Harga promosi wajib diisi")
         return self
