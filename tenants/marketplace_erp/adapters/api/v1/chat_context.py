@@ -3,7 +3,7 @@
 import json
 
 from fastapi import HTTPException
-from sqlalchemy import select
+from sqlalchemy import select, or_, func, cast, JSON, String
 from sqlalchemy.orm import selectinload
 
 from tenants.marketplace_erp.modules.marketplace_erp.application import services
@@ -16,7 +16,36 @@ def buyer_matches(order, target):
     buyer_id = detail.get("buyer_user_id")
     if buyer_id:
         return str(buyer_id) == str(target["to_id"])
-    return bool(target.get("to_name")) and order.nama_pembeli == target["to_name"]
+    return (
+        bool(target.get("to_name"))
+        and (order.nama_pembeli or "").strip().casefold() == target["to_name"].strip().casefold()
+    )
+
+
+async def buyer_orders(session, akun, targets, *, items=False, limit=500):
+    """Match immutable buyer IDs even if the username in an old snapshot changed."""
+    names = {t.get("to_name", "").strip().lower() for t in targets if t.get("to_name")}
+    ids = {str(t["to_id"]) for t in targets if str(t.get("to_id", "")).isdigit()}
+    if session.get_bind().dialect.name == "postgresql":
+        buyer_id = cast(Pesanan.detail_json, JSON)["buyer_user_id"].as_string()
+    else:
+        buyer_id = cast(func.json_extract(Pesanan.detail_json, "$.buyer_user_id"), String)
+    stmt = select(Pesanan).where(
+        Pesanan.akun_id == akun.id,
+        Pesanan.platform == "shopee",
+        or_(func.lower(func.trim(Pesanan.nama_pembeli)).in_(names), buyer_id.in_(ids)),
+    )
+    if items:
+        stmt = stmt.options(selectinload(Pesanan.items))
+    return (
+        (
+            await session.execute(
+                stmt.order_by(func.coalesce(Pesanan.dipesan_at, Pesanan.created_at).desc(), Pesanan.id).limit(limit)
+            )
+        )
+        .scalars()
+        .all()
+    )
 
 
 def order_card(row):
@@ -81,23 +110,7 @@ async def order_target(session, akun, row):
 
 async def context(session, akun, target, query="", offset=0):
     # IDs take precedence. Username is only a fallback for older synchronized snapshots.
-    rows = (
-        (
-            await session.execute(
-                select(Pesanan)
-                .options(selectinload(Pesanan.items))
-                .where(
-                    Pesanan.akun_id == akun.id,
-                    Pesanan.platform == "shopee",
-                    Pesanan.nama_pembeli == target.get("to_name", ""),
-                )
-                .order_by(Pesanan.dipesan_at.desc(), Pesanan.created_at.desc())
-                .limit(100)
-            )
-        )
-        .scalars()
-        .all()
-    )
+    rows = await buyer_orders(session, akun, [target], items=True, limit=100)
     orders = [r for r in rows if buyer_matches(r, target)]
     await services.lengkapi_foto_item(session, orders)
     products = select(KatalogShopee).where(KatalogShopee.akun_id == akun.id, KatalogShopee.status == "NORMAL")

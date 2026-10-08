@@ -4,6 +4,8 @@ Official references: documents module=109, ids 671–674 and 679; FAQ 137 lists 
 SDK cross-checks: EcomPHP/shopee-php Chat.php and easycb/easycb-go model_chat.go.
 """
 
+import time
+
 from fastapi import HTTPException
 from . import erp_shopee as api
 
@@ -11,13 +13,19 @@ BASE = "/api/v2/sellerchat/"
 
 
 async def inbox(session, akun, cursor=None, unread=False):
-    params = {"direction": "latest", "type": "unread" if unread else "all", "page_size": 20}
-    if cursor:
-        params["next_timestamp_nano"] = cursor
+    params = {
+        "direction": "older",
+        "type": "unread" if unread else "all",
+        "page_size": 20,
+        "next_timestamp_nano": cursor or str(time.time_ns()),
+    }
     data = await api.signed_shop_request(session, akun, BASE + "get_conversation_list", params=params)
     resp = data.get("response")
     if not isinstance(resp, dict) or not isinstance(resp.get("conversations"), list):
         raise HTTPException(424, "Format daftar percakapan Shopee tidak lengkap")
+    for c in resp["conversations"]:
+        sender, buyer = c.get("latest_message_from_id"), c.get("to_id")
+        c["needs_reply"] = str(sender) == str(buyer) if sender and buyer else None
     return resp
 
 

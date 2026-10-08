@@ -48,29 +48,13 @@ async def inbox(
 ):
     akun = await account(session, user, akun_id, "chat")
     result = await provider.inbox(session, akun, cursor, unread)
-    names = {c.get("to_name") for c in result["conversations"] if c.get("to_name")}
-    orders = (
-        (
-            await session.execute(
-                select(Pesanan)
-                .where(Pesanan.akun_id == akun.id, Pesanan.nama_pembeli.in_(names))
-                .order_by(Pesanan.dipesan_at.desc(), Pesanan.created_at.desc())
-                .limit(500)
-            )
-        )
-        .scalars()
-        .all()
-        if names
-        else []
-    )
+    orders = await chat_context.buyer_orders(session, akun, result["conversations"])
     for c in result["conversations"]:
         c["kota"] = next(
             (
                 json.loads(o.detail_json or "{}").get("kota")
                 for o in orders
-                if o.nama_pembeli == c.get("to_name")
-                and chat_context.buyer_matches(o, c)
-                and json.loads(o.detail_json or "{}").get("kota")
+                if chat_context.buyer_matches(o, c) and json.loads(o.detail_json or "{}").get("kota")
             ),
             None,
         )

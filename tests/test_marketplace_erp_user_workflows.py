@@ -277,7 +277,7 @@ async def test_chat_cards_are_scoped_to_shop_and_buyer(session):
         )
     )
     await session.flush()
-    target = {"to_id": 77, "to_name": "buyer"}
+    target = {"to_id": 77, "to_name": "buyer_renamed"}
     result = await chat_context.context(session, akun, target)
     assert result["kota"] == "Kabupaten Bandung"
     assert [p["id"] for p in result["produk"]] == [own.id]
@@ -360,3 +360,35 @@ async def test_contact_and_context_reject_unassigned_staff_before_shopee(session
             await call
         assert exc.value.status_code == 403
     assert not calls
+
+
+@pytest.mark.asyncio
+async def test_chat_latest_page_anchors_at_now_and_tracks_sender(monkeypatch):
+    calls = []
+    monkeypatch.setattr(erp_shopee_chat.time, "time_ns", lambda: 1791446400000000000)
+
+    async def request(*args, **kwargs):
+        calls.append(kwargs["params"])
+        return {
+            "response": {
+                "conversations": [
+                    {"to_id": 77, "latest_message_from_id": 77, "unread_count": 0},
+                    {"to_id": 88, "latest_message_from_id": 123, "unread_count": 1},
+                    {"to_id": 99},
+                ],
+                "page_result": {"more": True},
+            }
+        }
+
+    monkeypatch.setattr(erp_shopee, "signed_shop_request", request)
+    result = await erp_shopee_chat.inbox(None, None)
+    assert calls[0] == {
+        "direction": "older",
+        "type": "all",
+        "page_size": 20,
+        "next_timestamp_nano": "1791446400000000000",
+    }
+    assert [c["needs_reply"] for c in result["conversations"]] == [True, False, None]
+    await erp_shopee_chat.inbox(None, None, "1730787900123456789", True)
+    assert calls[1]["next_timestamp_nano"] == "1730787900123456789"
+    assert calls[1]["direction"] == "older" and calls[1]["type"] == "unread"
