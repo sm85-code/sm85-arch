@@ -75,6 +75,11 @@ async def ensure_store_schema() -> None:
         return
     async with engine.begin() as conn:
         await conn.run_sync(StoreBase.metadata.create_all)
+        await conn.execute(text("ALTER TABLE store_pesanan ADD COLUMN IF NOT EXISTS payment_state VARCHAR(32) NOT NULL DEFAULT 'idle'"))
+        await conn.execute(text("ALTER TABLE store_pesanan ADD COLUMN IF NOT EXISTS checkout_url TEXT"))
+        await conn.execute(text("ALTER TABLE store_pengiriman ADD COLUMN IF NOT EXISTS booking_state VARCHAR(32) NOT NULL DEFAULT 'idle'"))
+        await conn.execute(text("ALTER TABLE store_pesan_chat ADD COLUMN IF NOT EXISTS pesanan_id VARCHAR(64) REFERENCES store_pesanan(id) ON DELETE SET NULL"))
+        await conn.execute(text("ALTER TABLE store_produk_varian ADD COLUMN IF NOT EXISTS opsi_json TEXT NOT NULL DEFAULT '[]'"))
         for table in ("store_admin_users", "store_buyer_users"):
             await conn.execute(text(f"ALTER TABLE {table} ADD COLUMN IF NOT EXISTS session_version INTEGER NOT NULL DEFAULT 0"))
         await conn.execute(text("ALTER TABLE store_produk ADD COLUMN IF NOT EXISTS slug VARCHAR(160)"))

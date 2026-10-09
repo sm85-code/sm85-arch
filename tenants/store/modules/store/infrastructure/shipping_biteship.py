@@ -372,3 +372,17 @@ def webhook_sah(headers: Any) -> bool:
     nama = os.getenv("BITESHIP_WEBHOOK_KEY", "").strip() or "X-Webhook-Secret"
     diterima = str(headers.get(nama) or "")
     return hmac.compare_digest(diterima.encode(), rahasia.encode())
+
+
+async def reconcile_order(order_id: str, *, pesanan_id: str, alamat: str) -> OrderBiteship:
+    """Read a known provider order; never creates a new courier booking."""
+    if not aktif():
+        raise BiteshipNotReady()
+    if not order_id or len(order_id) > 64 or not all(c.isalnum() or c in '-_' for c in order_id):
+        raise HTTPException(400, "ID pesanan Biteship tidak valid")
+    data = await asyncio.to_thread(_request_sync, "GET", f"/orders/{order_id}")
+    destination = data.get("destination") or {}
+    if data.get("id") != order_id or data.get("order_note") != f"Pesanan {pesanan_id}" or destination.get("address") != alamat:
+        raise HTTPException(409, "Identitas/alamat pesanan Biteship tidak cocok. Rekonsiliasi ditolak")
+    courier = data.get("courier") or {}
+    return OrderBiteship(order_id=order_id, tracking_id=str(courier.get("tracking_id") or ""), waybill_id=str(courier.get("waybill_id") or ""))

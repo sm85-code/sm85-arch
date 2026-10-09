@@ -116,6 +116,7 @@ class ProdukPatch(BaseModel):
     kategori_id: Optional[str] = None
     harga: Optional[Decimal] = Field(None, ge=0)
     stok: Optional[int] = Field(None, ge=0)
+    expected_stok: Optional[int] = Field(None, ge=0)
     aktif: Optional[bool] = None
     berat_gram: Optional[int] = Field(None, ge=0, le=500_000)
     panjang_cm: Optional[Decimal] = Field(None, ge=0, le=1000)
@@ -132,8 +133,10 @@ class VarianIn(BaseModel):
     id: Optional[str] = None
     nama: str = Field(..., min_length=1, max_length=120)
     sku: str = Field("", max_length=64)
+    opsi: Optional[list[dict[str, str]]] = Field(None, max_length=3)
     harga: Optional[Decimal] = Field(None, ge=0)
     stok: int = Field(0, ge=0)
+    expected_stok: Optional[int] = Field(None, ge=0)
     berat_gram: Optional[int] = Field(None, ge=0, le=500_000)
     panjang_cm: Optional[Decimal] = Field(None, ge=0, le=1000)
     lebar_cm: Optional[Decimal] = Field(None, ge=0, le=1000)
@@ -181,12 +184,14 @@ class CekOngkirIn(BaseModel):
 
     kode_pos_tujuan: str
     cod: bool = False
+    pesanan_id: Optional[str] = None
 
     _v_kodepos = field_validator("kode_pos_tujuan")(_validate_kode_pos)
 
 
 class CheckoutIn(BaseModel):
     cod: bool = False
+    pengiriman: Optional["PengirimanIn"] = None
 
 
 class PengirimanIn(BaseModel):
@@ -272,11 +277,12 @@ class PesanChatIn(BaseModel):
 
     isi: str = Field("", max_length=2000)
     produk_id: Optional[str] = None
+    pesanan_id: Optional[str] = None
 
     @model_validator(mode="after")
     def _tidak_kosong(self):
         self.isi = self.isi.strip()
-        if not self.isi and not self.produk_id:
+        if not self.isi and not self.produk_id and not self.pesanan_id:
             raise ValueError("Pesan tidak boleh kosong")
         return self
 

@@ -110,6 +110,7 @@ class Produk(MarketplaceErpBase):
     nama: Mapped[str] = mapped_column(String(255), nullable=False)
     deskripsi: Mapped[str] = mapped_column(Text, nullable=False, default="")
     harga_dasar: Mapped[Decimal] = mapped_column(Numeric(20, 2), nullable=False, default=Decimal("0"))
+    source_katalog_id: Mapped[Optional[str]] = mapped_column(String(64), nullable=True)
     stok_referensi: Mapped[Optional[int]] = mapped_column(Integer, nullable=True)
     stok: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
     foto_url: Mapped[Optional[str]] = mapped_column(String(1024), nullable=True)

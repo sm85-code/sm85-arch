@@ -72,6 +72,7 @@ class NotifTerverifikasi:
     transaction_id: str
     jumlah: Decimal
     lunas: bool
+    kedaluwarsa: bool = False
 
 
 def is_configured() -> bool:
@@ -207,4 +208,6 @@ async def verify_webhook(payload: dict[str, Any]) -> NotifTerverifikasi | None:
         lunas = int(status_code) in _STATUS_LUNAS
     except (InvalidOperation, TypeError, ValueError):
         return None
-    return NotifTerverifikasi(reference_id=str(reference), transaction_id=str(trx), jumlah=jumlah, lunas=lunas)
+    status_text = str(_pick(inner, "StatusDesc", "StatusDescription") or "").strip().casefold()
+    return NotifTerverifikasi(reference_id=str(reference), transaction_id=str(trx), jumlah=jumlah,
+                              lunas=lunas, kedaluwarsa=not lunas and status_text == "expired")

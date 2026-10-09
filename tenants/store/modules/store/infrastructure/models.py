@@ -172,6 +172,7 @@ class VarianProduk(StoreBase):
     )
     nama: Mapped[str] = mapped_column(String(120), nullable=False)
     sku: Mapped[str] = mapped_column(String(64), nullable=False, default="", server_default="")
+    opsi_json: Mapped[str] = mapped_column(Text, nullable=False, default="[]", server_default="[]")
     harga: Mapped[Optional[Decimal]] = mapped_column(Numeric(20, 2), nullable=True)
     stok: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
     berat_gram: Mapped[Optional[int]] = mapped_column(Integer, nullable=True)
@@ -268,6 +269,8 @@ class PesananStore(StoreBase):
     status: Mapped[str] = mapped_column(String(32), nullable=False, default="menunggu_pembayaran", index=True)
     total: Mapped[Decimal] = mapped_column(Numeric(20, 2), nullable=False, default=Decimal("0"))
     metode_pembayaran: Mapped[Optional[str]] = mapped_column(String(32), nullable=True)
+    payment_state: Mapped[str] = mapped_column(String(32), nullable=False, default="idle", server_default="idle")
+    checkout_url: Mapped[Optional[str]] = mapped_column(Text, nullable=True)
     gateway_ref: Mapped[Optional[str]] = mapped_column(String(255), nullable=True, index=True)
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=_utcnow)
     updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=_utcnow, onupdate=_utcnow)
@@ -330,6 +333,7 @@ class PengirimanStore(StoreBase):
     kode_wilayah_tujuan: Mapped[str] = mapped_column(String(16), nullable=False, default="", server_default="")
     tracking_id: Mapped[Optional[str]] = mapped_column(String(128), nullable=True)
     # Biteship order created from the admin: its id and the tracking id used to follow the parcel.
+    booking_state: Mapped[str] = mapped_column(String(32), nullable=False, default="idle", server_default="idle")
     biteship_order_id: Mapped[Optional[str]] = mapped_column(String(64), nullable=True)
     biteship_tracking_id: Mapped[Optional[str]] = mapped_column(String(128), nullable=True)
     status: Mapped[str] = mapped_column(String(32), nullable=False, default="menunggu_pickup", index=True)
@@ -375,7 +379,15 @@ class PesanChatStore(StoreBase):
     produk_id: Mapped[Optional[str]] = mapped_column(
         String(64), ForeignKey("store_produk.id", ondelete="SET NULL"), nullable=True
     )
+    pesanan_id: Mapped[Optional[str]] = mapped_column(String(64), ForeignKey("store_pesanan.id", ondelete="SET NULL"), nullable=True)
+    pesanan: Mapped[Optional["PesananStore"]] = relationship()
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=_utcnow)
 
     percakapan: Mapped["PercakapanStore"] = relationship(back_populates="pesan")
     produk: Mapped[Optional["ProdukStore"]] = relationship()
+
+
+class MediaCleanup(StoreBase):
+    __tablename__ = "store_media_cleanup"
+    key: Mapped[str] = mapped_column(String(512), primary_key=True)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=_utcnow)

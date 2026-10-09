@@ -38,7 +38,7 @@ from tenants.store.modules.store.infrastructure.database import get_db_store
 from tenants.store.modules.store.infrastructure.google_auth import verify_google_id_token
 from tenants.store.modules.store.infrastructure.media_storage import upload_chat_media
 from tenants.store.modules.store.infrastructure.models import PembeliStore
-from tenants.store.modules.store.infrastructure.payment_ipaymu import ItemBayar
+from tenants.store.modules.store.infrastructure.payment_ipaymu import ItemBayar, is_configured as ipaymu_is_configured
 from tenants.store.modules.store.infrastructure.payment_ipaymu import create_payment as ipaymu_create_payment
 from tenants.store.modules.store.infrastructure.payment_ipaymu import verify_webhook as ipaymu_verify_webhook
 from tenants.store.modules.store.infrastructure import shipping_biteship
@@ -88,6 +88,11 @@ async def me(user: PembeliStore = Depends(get_current_buyer)):
 
 
 # --- Katalog (public) ------------------------------------------------------
+
+
+@store_buyer_router.get("/kemampuan")
+async def kemampuan():
+    return {"cod_batas": services.batas_cod(), "pengiriman_aktif": shipping_biteship.aktif()}
 
 
 @store_buyer_router.get("/produk")
@@ -195,7 +200,10 @@ async def checkout(
     session: AsyncSession = Depends(get_db_store),
     user: PembeliStore = Depends(get_current_buyer),
 ):
-    return services.pesanan_out(await services.checkout(session, user.id, cod=bool(payload and payload.cod)))
+    pesanan = await services.checkout(session, user.id, cod=bool(payload and payload.cod))
+    if payload and payload.pengiriman:
+        await isi_alamat_pengiriman(pesanan.id, payload.pengiriman, session, user)
+    return services.pesanan_out(pesanan)
 
 
 @store_buyer_router.get("/pesanan")
@@ -229,6 +237,19 @@ async def mulai_pembayaran(
         )
     if shipping_biteship.aktif():
         await services.get_pengiriman(session, pesanan.id)  # 404 until the buyer has chosen a courier
+    from sqlalchemy import update
+    from tenants.store.modules.store.infrastructure.models import PesananStore
+    if pesanan.checkout_url and pesanan.payment_state == "ready":
+        return {"checkout_url": pesanan.checkout_url}
+    if not ipaymu_is_configured():
+        raise HTTPException(501, "Pembayaran online belum tersedia")
+    claim = await session.execute(update(PesananStore).where(
+        PesananStore.id == pesanan.id, PesananStore.status == "menunggu_pembayaran",
+        PesananStore.payment_state == "idle"
+    ).values(payment_state="sending"))
+    if claim.rowcount != 1:
+        raise HTTPException(409, "Pembayaran sedang diproses atau hasilnya belum pasti. Hubungi penjual; jangan membuat pembayaran baru")
+    await session.commit()  # Durable claim survives a timeout or a worker restart.
     api = _url_publik("API_PUBLIC_URL", "https://api.ampelkuning.com")
     situs = _url_publik("SITE_PUBLIC_URL", "https://ampelkuning.com")
     result = await ipaymu_create_payment(
@@ -249,6 +270,9 @@ async def mulai_pembayaran(
         cancel_url=f"{situs}/pesanan/{pesanan.id}",
     )
     await services.catat_metode_pembayaran(session, pesanan.id, metode="gateway", gateway_ref=result.gateway_ref)
+    pesanan.payment_state = "ready"
+    pesanan.checkout_url = result.checkout_url
+    await session.flush()
     return {"checkout_url": result.checkout_url}
 
 
@@ -258,6 +282,11 @@ async def proses_notifikasi_pembayaran(payload: dict, session: AsyncSession) -> 
     verified = await ipaymu_verify_webhook(payload)
     if verified is None:
         raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="Notifikasi pembayaran tidak dapat diverifikasi")
+    if verified.kedaluwarsa:
+        order = await services.get_pesanan(session, verified.reference_id, lock=True)
+        if order.status == "menunggu_pembayaran":
+            await services.ubah_status_pesanan(session, order.id, "dibatalkan", pembayaran_kedaluwarsa=True)
+        return {"ok": True, "status": "kedaluwarsa"}
     if not verified.lunas:
         return {"ok": True, "status": "belum_lunas"}  # pending / expired: nothing to do, and no retry needed
     pesanan = await services.tandai_dibayar_pesanan(session, verified.reference_id, verified.jumlah)
@@ -293,11 +322,19 @@ async def cek_ongkir(
     """Shipping options for what is in the buyer's cart, to the given postal code. With ``cod`` only the couriers
     that can collect the payment on delivery are offered, with their COD fee."""
     cod_nilai = 0
-    if payload.cod:
+    if payload.pesanan_id:
+        order = await _pesanan_milik(session, payload.pesanan_id, user)
+        if order.status not in ("menunggu_pembayaran", "menunggu_konfirmasi"):
+            raise HTTPException(409, "Pengiriman pesanan ini tidak dapat diubah")
+        cod_nilai = int(sum((i.subtotal for i in order.items), Decimal("0"))) if order.metode_pembayaran == "cod" else 0
+        items = await services.item_kirim_pesanan(session, order)
+    else:
+        items = await services.item_kirim_keranjang(session, user.id)
+    if payload.cod and not payload.pesanan_id:
         cod_nilai = int(services.cek_syarat_cod(await services.get_keranjang(session, user.id)))
     options = await biteship_cek_ongkir(
         kode_pos_tujuan=payload.kode_pos_tujuan,
-        items=await services.item_kirim_keranjang(session, user.id),
+        items=items,
         cod_nilai=cod_nilai,
         pengaturan=await services.pengaturan_kirim(session),
     )
@@ -368,10 +405,10 @@ async def get_pengiriman(
 
 @store_buyer_router.get("/chat")
 async def get_percakapan_saya(
-    session: AsyncSession = Depends(get_db_store), user: PembeliStore = Depends(get_current_buyer)
+    session: AsyncSession = Depends(get_db_store), user: PembeliStore = Depends(get_current_buyer), before: str | None = None
 ):
     percakapan = await services.get_or_create_percakapan(session, user.id)
-    percakapan = await services.get_percakapan(session, percakapan.id)
+    percakapan = await services.get_percakapan(session, percakapan.id, before)
     await services.tandai_dibaca(session, percakapan.id, sebagai_admin=False)
     return services.percakapan_out(percakapan, dengan_pesan=True)
 
@@ -384,7 +421,7 @@ async def kirim_pesan_saya(
 ):
     percakapan = await services.get_or_create_percakapan(session, user.id)
     await services.kirim_pesan(
-        session, percakapan.id, user.id, payload.isi, sebagai_admin=False, produk_id=payload.produk_id
+        session, percakapan.id, user.id, payload.isi, sebagai_admin=False, produk_id=payload.produk_id, pesanan_id=payload.pesanan_id
     )
     percakapan = await services.get_percakapan(session, percakapan.id)
     return services.percakapan_out(percakapan, dengan_pesan=True)

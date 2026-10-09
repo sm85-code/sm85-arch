@@ -1,15 +1,17 @@
 from __future__ import annotations
 
-from datetime import date
+from datetime import date, datetime, timezone
 import logging
+import json
 import os
 from decimal import Decimal
 from typing import TYPE_CHECKING
 
 from fastapi import HTTPException, status
-from sqlalchemy import func, or_, select, update
+from sqlalchemy import func, or_, select, update, text
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import selectinload
+from sqlalchemy.orm.attributes import set_committed_value
 
 from shared.security import hash_password, verify_password
 from tenants.store.modules.store.application.schemas import (
@@ -117,6 +119,7 @@ def varian_out(v: VarianProduk, produk: ProdukStore) -> dict:
         "id": v.id,
         "nama": v.nama,
         "sku": v.sku,
+        "opsi": json.loads(v.opsi_json or "[]"),
         "harga": str(harga_efektif(produk, v)),
         "harga_sendiri": str(v.harga) if v.harga is not None else None,
         "stok": v.stok,
@@ -318,6 +321,8 @@ async def upsert_produk_dari_erp(
     sold from. A photo is only added when a new one was copied; weight, size and
     lead time follow the ERP product when it has them (an unset ERP value leaves
     what the store already has)."""
+    if session.get_bind().dialect.name == "postgresql":
+        await session.execute(text("SELECT pg_advisory_xact_lock(hashtextextended(:key, 0))"), {"key": "store:" + erp_produk_id})
     produk = (
         await session.execute(select(ProdukStore).where(ProdukStore.erp_produk_id == erp_produk_id))
     ).scalar_one_or_none()
@@ -348,7 +353,7 @@ async def upsert_produk_dari_erp(
             produk.platform_asal = platform_asal
         if foto_key:
             await session.refresh(produk, attribute_names=["foto"])
-            await _tambah_foto_ke_galeri(session, produk, foto_key, melewati_batas=False)
+            await _tambah_foto_ke_galeri(session, produk, foto_key)
     for nama_field, nilai in (
         ("berat_gram", berat_gram), ("panjang_cm", panjang_cm), ("lebar_cm", lebar_cm), ("tinggi_cm", tinggi_cm),
     ):
@@ -365,6 +370,18 @@ async def upsert_produk_dari_erp(
 async def update_produk(session: AsyncSession, produk_id: str, payload: ProdukPatch) -> ProdukStore:
     produk = await get_produk(session, produk_id)
     fields = payload.model_dump(exclude_unset=True)
+    expected = fields.pop("expected_stok", None)
+    if "stok" in fields:
+        if produk.varian:
+            raise HTTPException(409, "Produk bervarian: ubah stok melalui varian")
+        if expected is None:
+            raise HTTPException(409, "Muat ulang produk sebelum mengubah stok")
+        result = await session.execute(update(ProdukStore).where(
+            ProdukStore.id == produk_id, ProdukStore.stok == expected
+        ).values(stok=fields.pop("stok")))
+        if result.rowcount != 1:
+            raise HTTPException(409, "Stok berubah sejak form dibuka. Muat ulang sebelum menyimpan")
+        await session.refresh(produk, attribute_names=["stok"])
     if "preorder" in fields or "hari_proses" in fields:
         preorder = fields.get("preorder", produk.preorder)
         try:
@@ -394,10 +411,10 @@ async def _tambah_foto_ke_galeri(
         session.add(FotoProduk(produk_id=produk.id, foto_key=produk.foto_key, urutan=0))
         await session.flush()
         await session.refresh(produk, attribute_names=["foto"])
-    if melewati_batas and len(produk.foto) >= MAKS_FOTO_PRODUK:
-        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=f"Maksimal {MAKS_FOTO_PRODUK} foto per produk")
     if any(f.foto_key == foto_key for f in produk.foto):
         return next(f for f in produk.foto if f.foto_key == foto_key)
+    if melewati_batas and len(produk.foto) >= MAKS_FOTO_PRODUK:
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=f"Maksimal {MAKS_FOTO_PRODUK} foto per produk")
     foto = FotoProduk(produk_id=produk.id, foto_key=foto_key, urutan=await _urut_berikut(produk))
     session.add(foto)
     await session.flush()
@@ -455,6 +472,7 @@ async def urutkan_foto(session: AsyncSession, produk_id: str, urutan_id: list[st
 
 async def ganti_varian(session: AsyncSession, produk_id: str, items: list[VarianIn]) -> ProdukStore:
     """Replace the whole variant list. Rows with a known id are updated, new ones created, missing ones removed."""
+    await session.execute(select(ProdukStore.id).where(ProdukStore.id == produk_id).with_for_update())
     produk = await get_produk(session, produk_id)
     nama = [v.nama.strip().lower() for v in items]
     if len(set(nama)) != len(nama):
@@ -479,8 +497,21 @@ async def ganti_varian(session: AsyncSession, produk_id: str, items: list[Varian
             session.add(row)
         row.nama = v.nama.strip()
         row.sku = v.sku
+        if v.opsi is not None:
+            row.opsi_json = json.dumps(v.opsi, ensure_ascii=False)
         row.harga = v.harga
-        row.stok = v.stok
+        if v.id:
+            if v.expected_stok is None and v.stok != row.stok:
+                raise HTTPException(409, "Muat ulang varian sebelum mengubah stok")
+            expected = row.stok if v.expected_stok is None else v.expected_stok
+            result = await session.execute(update(VarianProduk).where(
+                VarianProduk.id == row.id, VarianProduk.stok == expected
+            ).values(stok=v.stok))
+            if result.rowcount != 1:
+                raise HTTPException(409, "Stok varian berubah. Muat ulang sebelum menyimpan")
+            await session.refresh(row, attribute_names=["stok"])
+        else:
+            row.stok = v.stok
         row.berat_gram = v.berat_gram
         row.panjang_cm = v.panjang_cm
         row.lebar_cm = v.lebar_cm
@@ -537,6 +568,7 @@ def pesanan_out(pesanan: PesananStore) -> dict:
         "status": pesanan.status,
         "total": str(pesanan.total),
         "metode_pembayaran": pesanan.metode_pembayaran,
+        "payment_state": pesanan.payment_state,
         "created_at": pesanan.created_at.isoformat(),
         "items": [
             {
@@ -658,6 +690,7 @@ def cek_syarat_cod(items: list[ItemKeranjang]) -> Decimal:
 
 
 async def checkout(session: AsyncSession, user_id: str, cod: bool = False) -> PesananStore:
+    await session.execute(select(PembeliStore.id).where(PembeliStore.id == user_id).with_for_update())
     items = await get_keranjang(session, user_id)
     if not items:
         raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Keranjang kosong")
@@ -668,7 +701,8 @@ async def checkout(session: AsyncSession, user_id: str, cod: bool = False) -> Pe
             )
         cek_syarat_cod(items)
 
-    for item in items:
+    for item in sorted(items, key=lambda i: i.produk_id):
+        await session.execute(select(ProdukStore.id).where(ProdukStore.id == item.produk_id).with_for_update())
         stok = item.varian.stok if item.varian else item.produk.stok
         if not item.produk.aktif or (item.varian is not None and not item.varian.aktif):
             raise HTTPException(
@@ -732,12 +766,14 @@ async def checkout(session: AsyncSession, user_id: str, cod: bool = False) -> Pe
     return pesanan
 
 
-async def get_pesanan(session: AsyncSession, pesanan_id: str) -> PesananStore:
+async def get_pesanan(session: AsyncSession, pesanan_id: str, *, lock: bool = False) -> PesananStore:
     stmt = (
         select(PesananStore)
         .where(PesananStore.id == pesanan_id)
         .options(selectinload(PesananStore.items))
     )
+    if lock:
+        stmt = stmt.with_for_update().execution_options(populate_existing=True)
     pesanan = (await session.execute(stmt)).scalar_one_or_none()
     if not pesanan:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Pesanan tidak ditemukan")
@@ -759,16 +795,26 @@ async def list_semua_pesanan(session: AsyncSession) -> list[PesananStore]:
     return list((await session.execute(stmt)).scalars().all())
 
 
-async def ubah_status_pesanan(session: AsyncSession, pesanan_id: str, status_baru: str) -> PesananStore:
+async def ubah_status_pesanan(session: AsyncSession, pesanan_id: str, status_baru: str, *, pembayaran_kedaluwarsa: bool = False) -> PesananStore:
     if status_baru not in STATUS_PESANAN:
         raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Status tidak dikenal")
-    pesanan = await get_pesanan(session, pesanan_id)
+    pesanan = await get_pesanan(session, pesanan_id, lock=True)
     if status_baru not in _TRANSISI_STATUS.get(pesanan.status, set()):
         raise HTTPException(
             status_code=status.HTTP_409_CONFLICT,
             detail=f"Tidak bisa ubah status dari '{pesanan.status}' ke '{status_baru}'",
         )
-    pesanan.status = status_baru
+    if status_baru == "dibatalkan":
+        if (pesanan.payment_state in ("sending", "ready") or pesanan.gateway_ref) and pesanan.status == "menunggu_pembayaran" and not pembayaran_kedaluwarsa:
+            raise HTTPException(409, "Hasil pembayaran belum pasti. Verifikasi pembayaran sebelum membatalkan")
+        pengiriman = (await session.execute(select(PengirimanStore).where(PengirimanStore.pesanan_id == pesanan_id))).scalar_one_or_none()
+        if pengiriman and (pengiriman.booking_state == "sending" or pengiriman.biteship_order_id):
+            raise HTTPException(409, "Kurir sedang diproses atau sudah dipesan. Selesaikan pembatalan kurir terlebih dahulu")
+    result = await session.execute(update(PesananStore).where(
+        PesananStore.id == pesanan_id, PesananStore.status == pesanan.status
+    ).values(status=status_baru))
+    if result.rowcount != 1:
+        raise HTTPException(409, "Status pesanan telah berubah. Muat ulang")
     if status_baru == "dibatalkan":
         # checkout() took the stock when the order was placed; give it back.
         for item in pesanan.items:
@@ -777,7 +823,7 @@ async def ubah_status_pesanan(session: AsyncSession, pesanan_id: str, status_bar
                 await session.execute(
                     update(VarianProduk).where(VarianProduk.id == item.varian_id).values(stok=VarianProduk.stok + item.qty)
                 )
-            else:
+            elif not item.nama_varian:
                 await session.execute(
                     update(ProdukStore).where(ProdukStore.id == item.produk_id).values(stok=ProdukStore.stok + item.qty)
                 )
@@ -816,7 +862,7 @@ async def tandai_dibayar_pesanan(session: AsyncSession, pesanan_id: str, jumlah:
     Returns None for an unknown order. An amount below the order total never marks it paid (the order is
     returned unchanged); calling it again for an already paid order is harmless (the status flow allows
     the transition once)."""
-    pesanan = await session.get(PesananStore, pesanan_id)
+    pesanan = (await session.execute(select(PesananStore).where(PesananStore.id == pesanan_id).with_for_update().execution_options(populate_existing=True))).scalar_one_or_none()
     if not pesanan:
         return None
     if jumlah < pesanan.total:
@@ -847,6 +893,7 @@ def pengiriman_out(pengiriman: PengirimanStore) -> dict:
         "kode_wilayah_tujuan": pengiriman.kode_wilayah_tujuan,
         "tracking_id": pengiriman.tracking_id,
         "biteship": bool(pengiriman.biteship_order_id),
+        "booking_state": pengiriman.booking_state,
         "status": pengiriman.status,
     }
 
@@ -856,7 +903,9 @@ async def buat_pengiriman_lokal(session: AsyncSession, pesanan_id: str, payload:
     cek-ongkir) di database kita. Pemanggilan API Biteship yang sesungguhnya
     (assign kurir, dapat tracking_id) ada di infrastructure/
     shipping_biteship.py -- belum terhubung, lihat docstring di sana."""
-    await get_pesanan(session, pesanan_id)
+    order = await get_pesanan(session, pesanan_id, lock=True)
+    if order.payment_state != "idle":
+        raise HTTPException(409, "Pengiriman tidak dapat diubah setelah pembayaran dimulai")
     existing = (
         await session.execute(select(PengirimanStore).where(PengirimanStore.pesanan_id == pesanan_id))
     ).scalar_one_or_none()
@@ -932,7 +981,7 @@ _JALUR_STATUS_BITESHIP = {
 
 async def buat_order_biteship(session: AsyncSession, pesanan_id: str) -> PengirimanStore:
     """Book the courier for a paid order and keep the waybill. Safe to press twice: a second call is refused."""
-    pesanan = await get_pesanan(session, pesanan_id)
+    pesanan = await get_pesanan(session, pesanan_id, lock=True)
     if pesanan.status not in ("dibayar", "diproses"):
         raise HTTPException(
             status_code=status.HTTP_409_CONFLICT, detail="Pengiriman hanya bisa dibuat untuk pesanan yang sudah dibayar"
@@ -940,6 +989,16 @@ async def buat_order_biteship(session: AsyncSession, pesanan_id: str) -> Pengiri
     pengiriman = await get_pengiriman(session, pesanan_id)
     if pengiriman.biteship_order_id:
         raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail="Pengiriman ini sudah dibuat di Biteship")
+    if not shipping_aktif():
+        raise HTTPException(501, "Layanan pengiriman belum aktif")
+    if not pengiriman.kode_pos_tujuan.isdigit() or len(pengiriman.kode_pos_tujuan) != 5:
+        raise HTTPException(400, "Lengkapi kode pos sebelum memesan kurir")
+    claim = await session.execute(update(PengirimanStore).where(
+        PengirimanStore.id == pengiriman.id, PengirimanStore.booking_state == "idle"
+    ).values(booking_state="sending"))
+    if claim.rowcount != 1:
+        raise HTTPException(409, "Pemesanan kurir sedang diproses atau hasil belum pasti. Verifikasi di Biteship sebelum mencoba ulang")
+    await session.commit()
     order = await buat_order_kurir(
         kurir=pengiriman.kurir,
         layanan=pengiriman.layanan,
@@ -948,10 +1007,11 @@ async def buat_order_biteship(session: AsyncSession, pesanan_id: str) -> Pengiri
         alamat_tujuan=pengiriman.alamat_tujuan,
         kode_pos_tujuan=pengiriman.kode_pos_tujuan,
         items=await item_kirim_pesanan(session, pesanan),
-        catatan=f"Pesanan {pesanan.id[:8]}",
+        catatan=f"Pesanan {pesanan.id}",
         cod_nilai=int(pesanan.total) if pesanan.metode_pembayaran == "cod" else 0,
         pengaturan=await pengaturan_kirim(session),
     )
+    pengiriman.booking_state = "ready"
     pengiriman.biteship_order_id = order.order_id
     pengiriman.biteship_tracking_id = order.tracking_id or None
     pengiriman.tracking_id = order.waybill_id or pengiriman.tracking_id
@@ -962,6 +1022,8 @@ async def buat_order_biteship(session: AsyncSession, pesanan_id: str) -> Pengiri
 
 
 def _kurir_bisa_diganti(pesanan: PesananStore, pengiriman: PengirimanStore) -> None:
+    if pengiriman.booking_state == "sending":
+        raise HTTPException(409, "Hasil pemesanan kurir belum pasti. Verifikasi terlebih dahulu")
     if pesanan.status not in ("dibayar", "diproses"):
         raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail="Kurir hanya bisa diganti untuk pesanan yang sudah dibayar")
     if pengiriman.biteship_order_id and pengiriman.status != "bermasalah":
@@ -972,7 +1034,7 @@ def _kurir_bisa_diganti(pesanan: PesananStore, pengiriman: PengirimanStore) -> N
 
 async def opsi_kurir_pesanan(session: AsyncSession, pesanan_id: str) -> list:
     """Courier services the seller can still switch to for a paid order (prices are for reference)."""
-    pesanan = await get_pesanan(session, pesanan_id)
+    pesanan = await get_pesanan(session, pesanan_id, lock=True)
     pengiriman = await get_pengiriman(session, pesanan_id)
     _kurir_bisa_diganti(pesanan, pengiriman)
     return await cek_ongkir_kurir(
@@ -995,6 +1057,7 @@ async def ganti_kurir(session: AsyncSession, pesanan_id: str, kurir: str, layana
     pengiriman.layanan = pilihan.layanan
     pengiriman.layanan_nama = pilihan.layanan_nama
     if pengiriman.biteship_order_id:  # the earlier booking failed: start over with the new courier
+        pengiriman.booking_state = "idle"
         pengiriman.biteship_order_id = None
         pengiriman.biteship_tracking_id = None
         pengiriman.tracking_id = None
@@ -1156,23 +1219,29 @@ async def ubah_status_pengiriman(
     return pengiriman
 
 
+def _tanggal_wib(session):
+    if session.get_bind().dialect.name == "postgresql":
+        return func.date(func.timezone("Asia/Jakarta", PesananStore.created_at))
+    return func.date(PesananStore.created_at, "+7 hours")
+
+
 async def laporan_penjualan(session: AsyncSession, dari: date, sampai: date) -> dict:
     """Total penjualan per hari, dalam rentang [dari, sampai] inklusif.
     Hanya menghitung pesanan berstatus dibayar/diproses/dikirim/selesai --
     lihat _STATUS_TERHITUNG_PENJUALAN."""
     stmt = (
         select(
-            func.date(PesananStore.created_at).label("tanggal"),
+            _tanggal_wib(session).label("tanggal"),
             func.count(PesananStore.id).label("jumlah_pesanan"),
             func.sum(PesananStore.total).label("total_penjualan"),
         )
         .where(
             PesananStore.status.in_(_STATUS_TERHITUNG_PENJUALAN),
-            func.date(PesananStore.created_at) >= dari,
-            func.date(PesananStore.created_at) <= sampai,
+            _tanggal_wib(session) >= dari,
+            _tanggal_wib(session) <= sampai,
         )
-        .group_by(func.date(PesananStore.created_at))
-        .order_by(func.date(PesananStore.created_at))
+        .group_by(_tanggal_wib(session))
+        .order_by(_tanggal_wib(session))
     )
     rows = (await session.execute(stmt)).all()
     harian = [
@@ -1198,8 +1267,8 @@ async def laporan_produk_terlaris(session: AsyncSession, dari: date, sampai: dat
         .join(PesananStore, PesananStore.id == ItemPesanan.pesanan_id)
         .where(
             PesananStore.status.in_(_STATUS_TERHITUNG_PENJUALAN),
-            func.date(PesananStore.created_at) >= dari,
-            func.date(PesananStore.created_at) <= sampai,
+            _tanggal_wib(session) >= dari,
+            _tanggal_wib(session) <= sampai,
         )
         .group_by(ItemPesanan.produk_id, ItemPesanan.nama_produk)
         .order_by(func.sum(ItemPesanan.qty).desc())
@@ -1364,28 +1433,50 @@ async def get_or_create_percakapan(session: AsyncSession, user_id: str) -> Perca
     return percakapan
 
 
-async def get_percakapan(session: AsyncSession, percakapan_id: str) -> PercakapanStore:
+async def get_percakapan(session: AsyncSession, percakapan_id: str, before: str | None = None) -> PercakapanStore:
     stmt = (
         select(PercakapanStore)
         .where(PercakapanStore.id == percakapan_id)
         .options(
-            selectinload(PercakapanStore.pesan).selectinload(PesanChatStore.produk),
             selectinload(PercakapanStore.pembeli),
         )
     )
     percakapan = (await session.execute(stmt)).scalar_one_or_none()
     if not percakapan:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Percakapan tidak ditemukan")
+    stmt = select(PesanChatStore).where(PesanChatStore.percakapan_id == percakapan_id).options(
+        selectinload(PesanChatStore.produk), selectinload(PesanChatStore.pesanan))
+    if before:
+        cursor = await session.get(PesanChatStore, before)
+        if not cursor or cursor.percakapan_id != percakapan_id:
+            raise HTTPException(404, "Pesan acuan tidak ditemukan")
+        stmt = stmt.where(or_(PesanChatStore.created_at < cursor.created_at,
+            (PesanChatStore.created_at == cursor.created_at) & (PesanChatStore.id < cursor.id)))
+    rows = list((await session.execute(stmt.order_by(PesanChatStore.created_at.desc(), PesanChatStore.id.desc()).limit(51))).scalars())
+    percakapan.has_older = len(rows) > 50
+    set_committed_value(percakapan, "pesan", list(reversed(rows[:50])))
     return percakapan
 
 
-async def list_percakapan_admin(session: AsyncSession) -> list[PercakapanStore]:
-    stmt = (
-        select(PercakapanStore)
-        .options(selectinload(PercakapanStore.pembeli))
-        .order_by(PercakapanStore.updated_at.desc())
-    )
-    return list((await session.execute(stmt)).scalars().all())
+async def list_percakapan_admin(session: AsyncSession, *, halaman: int | None = None, cari: str = "", unread: bool = False, unanswered: bool = False):
+    latest = select(PesanChatStore.id).where(PesanChatStore.percakapan_id == PercakapanStore.id).order_by(
+        PesanChatStore.created_at.desc(), PesanChatStore.id.desc()).limit(1).correlate(PercakapanStore).scalar_subquery()
+    stmt = select(PercakapanStore, PesanChatStore).outerjoin(PesanChatStore, PesanChatStore.id == latest).options(
+        selectinload(PercakapanStore.pembeli)).join(PembeliStore, PembeliStore.id == PercakapanStore.user_id)
+    if cari:
+        stmt = stmt.where(PembeliStore.nama.ilike(f"%{cari}%"))
+    if unread:
+        stmt = stmt.where(PercakapanStore.unread_admin.is_(True))
+    if unanswered:
+        stmt = stmt.where(PesanChatStore.pengirim_admin.is_(False))
+    total = (await session.execute(select(func.count()).select_from(stmt.subquery()))).scalar_one() if halaman else None
+    stmt = stmt.order_by(PercakapanStore.updated_at.desc(), PercakapanStore.id).offset((halaman - 1) * 25 if halaman else 0).limit(25 if halaman else 200)
+    result = []
+    for c, message in (await session.execute(stmt)).all():
+        c.preview = message.isi or ("Pesanan" if message.pesanan_id else "Lampiran") if message else ""
+        c.belum_dibalas = bool(message and not message.pengirim_admin)
+        result.append(c)
+    return {"items": [percakapan_out(c) for c in result], "total": total} if halaman else result
 
 
 async def kirim_pesan(
@@ -1396,6 +1487,7 @@ async def kirim_pesan(
     *,
     sebagai_admin: bool,
     produk_id: str | None = None,
+    pesanan_id: str | None = None,
     lampiran_key: str | None = None,
     lampiran_jenis: str | None = None,
 ) -> PesanChatStore:
@@ -1404,7 +1496,12 @@ async def kirim_pesan(
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Percakapan tidak ditemukan")
     if produk_id and await session.get(ProdukStore, produk_id) is None:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Produk tidak ditemukan")
+    if pesanan_id:
+        order = await session.get(PesananStore, pesanan_id)
+        if not order or order.user_id != percakapan.user_id:
+            raise HTTPException(404, "Pesanan bukan milik pembeli dalam percakapan ini")
     pesan = PesanChatStore(
+        pesanan_id=pesanan_id,
         percakapan_id=percakapan_id,
         pengirim_id=pengirim_id,
         pengirim_admin=sebagai_admin,
@@ -1414,6 +1511,7 @@ async def kirim_pesan(
         lampiran_jenis=lampiran_jenis,
     )
     session.add(pesan)
+    percakapan.updated_at = datetime.now(timezone.utc)
     percakapan.unread_admin = not sebagai_admin
     percakapan.unread_pembeli = sebagai_admin
     await session.flush()
@@ -1441,6 +1539,7 @@ def pesan_out(pesan: PesanChatStore) -> dict:
         "id": pesan.id,
         "pengirim_admin": pesan.pengirim_admin,
         "isi": pesan.isi,
+        "pesanan": {"id": pesan.pesanan.id, "total": str(pesan.pesanan.total), "status": pesan.pesanan.status} if pesan.pesanan else None,
         "created_at": pesan.created_at.isoformat(),
         "lampiran": (
             {"jenis": pesan.lampiran_jenis, "url": media_url(pesan.lampiran_key)} if pesan.lampiran_key else None
@@ -1517,9 +1616,12 @@ def percakapan_out(percakapan: PercakapanStore, *, dengan_pesan: bool = False) -
         "unread_admin": percakapan.unread_admin,
         "unread_pembeli": percakapan.unread_pembeli,
         "updated_at": percakapan.updated_at.isoformat(),
+        "preview": getattr(percakapan, "preview", ""),
+        "belum_dibalas": getattr(percakapan, "belum_dibalas", False),
     }
     if dengan_pesan:
         out["pesan"] = [pesan_out(p) for p in percakapan.pesan]
+        out["has_older"] = getattr(percakapan, "has_older", False)
     return out
 
 
