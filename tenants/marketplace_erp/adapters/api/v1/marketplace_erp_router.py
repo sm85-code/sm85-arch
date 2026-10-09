@@ -402,6 +402,8 @@ async def publish_produk_ke_toko(
     platform_asal = next((li.platform for li in listings if li.aktif), None) or (
         listings[0].platform if listings else None
     )
+    from tenants.marketplace_erp.modules.marketplace_erp.application.stock_settings import get_settings
+    stok_awal = produk.stok if (await get_settings(session))["gudang_aktif"] else 0
     foto_key = await import_foto_dari_url(produk.foto_url) if payload.salin_foto else None
     toko_produk, dibuat = await store_services.upsert_produk_dari_erp(
         store_session,
@@ -409,7 +411,7 @@ async def publish_produk_ke_toko(
         nama=produk.nama,
         deskripsi=produk.deskripsi,
         harga=payload.harga if payload.harga is not None else produk.harga_dasar,
-        stok=payload.stok if payload.stok is not None else produk.stok,
+        stok=payload.stok if payload.stok is not None else stok_awal,
         platform_asal=platform_asal,
         foto_key=foto_key,
         aktif=payload.aktif,
