@@ -36,6 +36,7 @@ from tenants.marketplace_erp.modules.marketplace_erp.application.schemas import 
     ReturOut,
     ReturDaftarOut,
     PromosiIn,
+    PromosiUpdateIn,
     PromosiProdukIn,
     PromosiHalamanOut,
     PromosiDetailOut,
@@ -1768,6 +1769,17 @@ async def buat_promosi(
     await pastikan_akses_akun(user, session, akun_id)
     from tenants.marketplace_erp.modules.marketplace_erp.infrastructure.adapters import erp_shopee_promotions as adapter
     return await adapter.buat(session, await services.akun_shopee_pengelolaan(session, akun_id), payload)
+
+
+@marketplace_erp_router.patch("/akun/{akun_id}/promosi/{promosi_id}", response_model=MutasiMarketplaceOut)
+async def ubah_promosi(
+    akun_id: str, payload: PromosiUpdateIn, promosi_id: str = Path(pattern=r"^[1-9][0-9]*$"),
+    session: AsyncSession = Depends(get_db_marketplace_erp),
+    user: UserMarketplaceErp = Depends(require_roles_marketplace_erp(*OWNER_ONLY)),
+):
+    await pastikan_akses_akun(user, session, akun_id)
+    from tenants.marketplace_erp.modules.marketplace_erp.infrastructure.adapters import erp_shopee_promotions as adapter
+    return await adapter.ubah(session, await services.akun_shopee_pengelolaan(session, akun_id), promosi_id, payload)
 
 
 @marketplace_erp_router.post("/akun/{akun_id}/promosi/{promosi_id}/akhiri", response_model=MutasiMarketplaceOut)
