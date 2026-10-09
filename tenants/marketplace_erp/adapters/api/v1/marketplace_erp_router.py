@@ -100,7 +100,6 @@ from tenants.marketplace_erp.modules.marketplace_erp.infrastructure.auth import 
 from tenants.marketplace_erp.modules.marketplace_erp.infrastructure.database import get_db_marketplace_erp
 from tenants.marketplace_erp.modules.marketplace_erp.infrastructure.models import UserMarketplaceErp
 from tenants.marketplace_erp.modules.marketplace_erp.infrastructure.seeder import seed_marketplace_erp
-from tenants.store.modules.store.application import services as store_services
 from tenants.store.modules.store.infrastructure import database as store_database
 from tenants.store.modules.store.infrastructure.media_import import import_foto_dari_url
 
@@ -397,36 +396,8 @@ async def publish_produk_ke_toko(
     """Copy (or refresh) one ERP product in the online store. Idempotent per
     ERP product: republishing updates name/description/price but keeps the
     store's own stock, and a photo only changes when a new one was copied."""
-    produk = await services.get_produk(session, produk_id)
-    listings = await services.list_listing(session, produk_id=produk.id)
-    platform_asal = next((li.platform for li in listings if li.aktif), None) or (
-        listings[0].platform if listings else None
-    )
-    from tenants.marketplace_erp.modules.marketplace_erp.application.stock_settings import get_settings
-    stok_awal = produk.stok if (await get_settings(session))["gudang_aktif"] else 0
-    foto_key = await import_foto_dari_url(produk.foto_url) if payload.salin_foto else None
-    toko_produk, dibuat = await store_services.upsert_produk_dari_erp(
-        store_session,
-        erp_produk_id=produk.id,
-        nama=produk.nama,
-        deskripsi=produk.deskripsi,
-        harga=payload.harga if payload.harga is not None else produk.harga_dasar,
-        stok=payload.stok if payload.stok is not None else stok_awal,
-        platform_asal=platform_asal,
-        foto_key=foto_key,
-        aktif=payload.aktif,
-        berat_gram=produk.berat_gram,
-        panjang_cm=produk.panjang_cm,
-        lebar_cm=produk.lebar_cm,
-        tinggi_cm=produk.tinggi_cm,
-        preorder=produk.preorder,
-        hari_proses=produk.hari_proses,
-    )
-    return {
-        "dibuat": dibuat,
-        "foto_disalin": foto_key is not None,
-        "produk": store_services.produk_out(toko_produk),
-    }
+    from tenants.store.modules.store.application.erp_publish import publish_master
+    return await publish_master(session, store_session, produk_id, payload, importer=import_foto_dari_url)
 
 
 @marketplace_erp_router.get("/produk-keluarga")
@@ -1479,10 +1450,6 @@ async def kirim_katalog_ke_toko(
     Photos (up to 7) are copied into the store's own bucket. Variants come along with stock 0. Nothing is
     written to Shopee, and later edits in the store admin never flow back here.
     """
-    from decimal import Decimal
-
-    from tenants.store.modules.store.application.schemas import MAKS_FOTO_PRODUK, VarianIn
-
     hasil = []
     for katalog_id in dict.fromkeys(payload.ids):
         k, nama_toko = await services.get_katalog_shopee(session, katalog_id)
@@ -1490,45 +1457,17 @@ async def kirim_katalog_ke_toko(
         if k.dikirim_toko_id and not payload.timpa:
             hasil.append({**info, "hasil": "dilewati", "pesan": "Sudah dikirim ke toko web"})
             continue
-        data = services.katalog_out(k, nama_toko, lengkap=True)
-        baru = k.dikirim_toko_id is None
-        urls = data["foto"][:MAKS_FOTO_PRODUK] if baru else []
-        keys = [key for key in [await import_foto_dari_url(u) for u in urls] if key]
-        toko_produk, dibuat = await store_services.upsert_produk_dari_erp(
-            store_session,
-            erp_produk_id=f"shopee:{k.id}",
-            nama=k.nama,
-            deskripsi=k.deskripsi,
-            harga=k.harga_min if k.harga_min is not None else Decimal("0"),
-            stok=0,
-            platform_asal="shopee",
-            foto_key=keys[0] if keys else None,
-            aktif=payload.aktif,
-            berat_gram=k.berat_gram,
-            panjang_cm=k.panjang_cm,
-            lebar_cm=k.lebar_cm,
-            tinggi_cm=k.tinggi_cm,
-        )
-        for key in keys[1:]:
-            await store_services._tambah_foto_ke_galeri(store_session, toko_produk, key, melewati_batas=False)
-        if dibuat and data["varian"]:
-            dipakai: set[str] = set()
-            daftar = []
-            for i, v in enumerate(data["varian"], 1):
-                nama_v = (v["nama"] or f"Varian {i}").strip()[:110]
-                if nama_v.lower() in dipakai:
-                    nama_v = f"{nama_v} ({i})"
-                dipakai.add(nama_v.lower())
-                daftar.append(
-                    VarianIn(nama=nama_v, sku=(v["sku"] or "")[:64], harga=Decimal(v["harga"]) if v["harga"] else None, stok=0)
-                )
-            await store_services.ganti_varian(store_session, toko_produk.id, daftar)
-        k.dikirim_toko_id = toko_produk.id
+        from tenants.marketplace_erp.modules.marketplace_erp.application.catalogue_master import copy_to_master
+        from tenants.store.modules.store.application.erp_publish import publish_master
+        copied = await copy_to_master(session, k.id)
+        await session.commit()  # Stable master identity must exist before writing the separate Store database.
+        result = await publish_master(session, store_session, copied["produk"][0]["id"],
+            PublishTokoIn(aktif=payload.aktif, salin_foto=True), importer=import_foto_dari_url)
+        k.dikirim_toko_id = result["produk"]["id"]
         k.dikirim_at = datetime.now(timezone.utc)
         await session.flush()
-        hasil.append(
-            {**info, "hasil": "dibuat" if dibuat else "diperbarui", "produk_toko_id": toko_produk.id, "foto": len(keys)}
-        )
+        hasil.append({**info, "hasil": "dibuat" if result["dibuat"] else "diperbarui",
+                      "produk_toko_id": result["produk"]["id"], "foto_gagal": result["foto_gagal"]})
     return {"ok": True, "hasil": hasil}
 
 

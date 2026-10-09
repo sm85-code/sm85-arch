@@ -11,7 +11,7 @@ from dataclasses import asdict
 import secrets as pysecrets
 from datetime import date
 
-from fastapi import APIRouter, Depends, File, Form, HTTPException, Request, Response, UploadFile, status
+from fastapi import APIRouter, Depends, File, Form, HTTPException, Request, Response, UploadFile, Query, status
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from tenants.store.modules.store.application import services
@@ -122,6 +122,18 @@ async def ganti_password(
 # --- Produk & kategori -----------------------------------------------------
 
 
+@store_admin_router.get("/daftar/{jenis}")
+async def daftar_halaman(jenis: str, halaman: int = Query(1, ge=1), ukuran: int = Query(25, ge=1, le=100),
+    cari: str = Query("", max_length=200), status_filter: str | None = None, dari: date | None = None,
+    sampai: date | None = None, urutan: str = "terbaru", session: AsyncSession = Depends(get_db_store),
+    _user: AdminStore = Depends(admin_only)):
+    if jenis not in ("produk", "pesanan"):
+        raise HTTPException(404, "Daftar tidak ditemukan")
+    from tenants.store.modules.store.application.listings import page
+    return await page(session, jenis, halaman=halaman, ukuran=ukuran, cari=cari, status=status_filter,
+                      dari=dari, sampai=sampai, urutan=urutan)
+
+
 @store_admin_router.get("/produk")
 async def list_produk(session: AsyncSession = Depends(get_db_store), _user: AdminStore = Depends(admin_only)):
     return [services.produk_out(p) for p in await services.list_produk(session)]
@@ -148,7 +160,10 @@ async def patch_produk(
 async def remove_produk(
     produk_id: str, session: AsyncSession = Depends(get_db_store), _user: AdminStore = Depends(admin_only)
 ):
+    from tenants.store.modules.store.application.media_cleanup import enqueue
     kunci = await services.delete_produk(session, produk_id)
+    for key in set(kunci):
+        await enqueue(session, key)
     # Remove the objects only once the delete is committed, and only if
     # nothing else shares them.
     await session.commit()
@@ -171,6 +186,8 @@ async def upload_foto_produk(
     # Check product and gallery size first: a full gallery must not leave an orphan upload behind.
     await services.pastikan_bisa_tambah_foto(session, produk_id)
     foto_key = await upload_produk_photo(await file.read(), file.content_type or "")
+    from tenants.store.modules.store.application.media_cleanup import record_upload
+    await record_upload(foto_key)
     return services.produk_out(await services.tambah_foto(session, produk_id, foto_key))
 
 
@@ -182,6 +199,8 @@ async def hapus_foto_produk(
     _user: AdminStore = Depends(admin_only),
 ):
     produk, kunci = await services.hapus_foto(session, produk_id, foto_id)
+    from tenants.store.modules.store.application.media_cleanup import enqueue
+    await enqueue(session, kunci)
     hasil = services.produk_out(produk)
     await session.commit()
     if not await services.foto_masih_dipakai(session, kunci):
@@ -235,6 +254,40 @@ async def remove_kategori(
 @store_admin_router.get("/pesanan")
 async def list_pesanan(session: AsyncSession = Depends(get_db_store), _user: AdminStore = Depends(admin_only)):
     return [services.pesanan_out(p) for p in await services.list_semua_pesanan(session)]
+
+
+@store_admin_router.post("/pesanan/{pesanan_id}/verifikasi-pembayaran")
+async def verifikasi_pembayaran(pesanan_id: str, transaction_id: str = Query(..., min_length=1, max_length=64),
+    session: AsyncSession = Depends(get_db_store), _user: AdminStore = Depends(admin_only)):
+    from tenants.store.modules.store.infrastructure.payment_ipaymu import verify_webhook
+    verified = await verify_webhook({"trx_id": transaction_id})
+    if not verified or verified.reference_id != pesanan_id:
+        raise HTTPException(409, "Transaksi tidak dapat diverifikasi sebagai pembayaran pesanan ini")
+    order = await services.get_pesanan(session, pesanan_id, lock=True)
+    if verified.lunas:
+        await services.tandai_dibayar_pesanan(session, pesanan_id, verified.jumlah)
+    elif verified.kedaluwarsa and order.status == "menunggu_pembayaran":
+        await services.ubah_status_pesanan(session, pesanan_id, "dibatalkan", pembayaran_kedaluwarsa=True)
+    return services.pesanan_out(order)
+
+
+@store_admin_router.post("/pesanan/{pesanan_id}/rekonsiliasi-kurir")
+async def rekonsiliasi_kurir(pesanan_id: str, order_id: str = Query(..., min_length=1, max_length=64),
+    session: AsyncSession = Depends(get_db_store), _user: AdminStore = Depends(admin_only)):
+    from tenants.store.modules.store.infrastructure.shipping_biteship import reconcile_order
+    order = await services.get_pesanan(session, pesanan_id, lock=True)
+    shipment = await services.get_pengiriman(session, pesanan_id)
+    if shipment.booking_state != "sending" or order.status not in ("dibayar", "diproses"):
+        raise HTTPException(409, "Pesanan tidak membutuhkan rekonsiliasi kurir")
+    verified = await reconcile_order(order_id, pesanan_id=pesanan_id, alamat=shipment.alamat_tujuan)
+    shipment.biteship_order_id = verified.order_id
+    shipment.biteship_tracking_id = verified.tracking_id or None
+    shipment.tracking_id = verified.waybill_id or None
+    shipment.booking_state = "ready"
+    if order.status == "dibayar":
+        order.status = "diproses"
+    await session.flush()
+    return services.pengiriman_out(shipment)
 
 
 @store_admin_router.get("/pesanan/{pesanan_id}")
@@ -359,11 +412,17 @@ async def list_percakapan(session: AsyncSession = Depends(get_db_store), _user: 
     return [services.percakapan_out(p) for p in await services.list_percakapan_admin(session)]
 
 
+@store_admin_router.get("/chat/{percakapan_id}/pesanan")
+async def pesanan_chat(percakapan_id: str, session: AsyncSession = Depends(get_db_store), _user: AdminStore = Depends(admin_only)):
+    chat = await services.get_percakapan(session, percakapan_id)
+    return [services.pesanan_out(p) for p in await services.list_pesanan_milik(session, chat.user_id)]
+
+
 @store_admin_router.get("/chat/{percakapan_id}")
 async def get_percakapan(
-    percakapan_id: str, session: AsyncSession = Depends(get_db_store), _user: AdminStore = Depends(admin_only)
+    percakapan_id: str, session: AsyncSession = Depends(get_db_store), _user: AdminStore = Depends(admin_only), before: str | None = None
 ):
-    percakapan = await services.get_percakapan(session, percakapan_id)
+    percakapan = await services.get_percakapan(session, percakapan_id, before)
     await services.tandai_dibaca(session, percakapan_id, sebagai_admin=True)
     return services.percakapan_out(percakapan, dengan_pesan=True)
 
@@ -376,7 +435,7 @@ async def kirim_pesan(
     user: AdminStore = Depends(admin_only),
 ):
     await services.kirim_pesan(
-        session, percakapan_id, user.id, payload.isi, sebagai_admin=True, produk_id=payload.produk_id
+        session, percakapan_id, user.id, payload.isi, sebagai_admin=True, produk_id=payload.produk_id, pesanan_id=payload.pesanan_id
     )
     percakapan = await services.get_percakapan(session, percakapan_id)
     return services.percakapan_out(percakapan, dengan_pesan=True)

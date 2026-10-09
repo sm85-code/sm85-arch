@@ -66,7 +66,10 @@ async def import_foto_dari_url(url: str | None) -> str | None:
         if downloaded is None:
             return None
         data, content_type = downloaded
-        return await upload_produk_photo(data, content_type)
+        key = await upload_produk_photo(data, content_type, deduplicate=True)
+        from tenants.store.modules.store.application.media_cleanup import record_upload
+        await record_upload(key)
+        return key
     except Exception:  # noqa: BLE001 -- best effort by design, details go to the log
         logger.warning("photo import skipped for url host=%s", urlsplit(url).hostname, exc_info=True)
         return None

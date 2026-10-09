@@ -47,6 +47,8 @@ async def copy_to_master(session, catalogue_id):
     result = []
     for variant, sku, existing in entries:
         if existing:
+            if not existing.source_katalog_id:
+                existing.source_katalog_id = source.id
             result.append({"id": existing.id, "sku": sku, "baru": False})
             continue
 
@@ -82,6 +84,8 @@ async def copy_to_master(session, catalogue_id):
             opsi_varian=options,
         )
         product = await services.create_produk(session, payload)
+        product.source_katalog_id = source.id
+        await session.flush()
         result.append({"id": product.id, "sku": sku, "baru": True})
     return {"katalog_id": catalogue_id, "nama": source.nama, "produk": result, "sku_dibuat": generated}
 

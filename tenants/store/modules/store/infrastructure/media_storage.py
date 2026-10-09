@@ -12,6 +12,7 @@ failing obscurely.
 from __future__ import annotations
 
 import asyncio
+import hashlib
 import logging
 import os
 import secrets
@@ -120,7 +121,7 @@ def _put_sync(cfg: R2Config, key: str, body: bytes, content_type: str) -> None:
     )
 
 
-async def upload_produk_photo(file_bytes: bytes, content_type: str) -> str:
+async def upload_produk_photo(file_bytes: bytes, content_type: str, *, deduplicate: bool = False) -> str:
     """Validate and store a product photo; returns the object key."""
     if content_type not in _ALLOWED_CONTENT_TYPES:
         raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Format foto harus JPEG, PNG, atau WebP")
@@ -132,7 +133,10 @@ async def upload_produk_photo(file_bytes: bytes, content_type: str) -> str:
     if cfg is None:
         raise MediaNotReady()
 
-    key = f"{_KEY_PREFIX}{build_nama_file_foto(content_type)}"
+    filename = f"ampelkuning_{hashlib.sha256(file_bytes).hexdigest()}.{_ALLOWED_CONTENT_TYPES[content_type]}" if deduplicate else build_nama_file_foto(content_type)
+    key = f"{_KEY_PREFIX}{filename}"
+    from tenants.store.modules.store.application.media_cleanup import record_upload
+    await record_upload(key)
     try:
         await asyncio.to_thread(_put_sync, cfg, key, file_bytes, content_type)
     except Exception:
@@ -179,17 +183,21 @@ def _delete_sync(cfg: R2Config, key: str) -> None:
     _client(cfg).delete_object(Bucket=cfg.bucket, Key=key)
 
 
-async def delete_foto(key: Optional[str]) -> None:
+async def delete_foto(key: Optional[str]) -> bool:
     """Best-effort removal of a product photo that nothing points at any more.
 
-    Never raises: a leftover file only costs a few KB, while failing here would
-    turn a successful photo replacement into an error for the admin. Only keys
+    Returns False on failure so the durable cleanup queue can retry.
+    Never raises after a committed business operation. Only keys
     under our own prefix are ever deleted.
     """
     cfg = r2_config()
-    if not key or cfg is None or not key.startswith(_KEY_PREFIX):
-        return
+    if not key or not key.startswith(_KEY_PREFIX):
+        return True
+    if cfg is None:
+        return False
     try:
         await asyncio.to_thread(_delete_sync, cfg, key)
+        return True
     except Exception:  # noqa: BLE001 -- details go to the log, not to the client
         logger.warning("R2 delete failed key=%s", key, exc_info=True)
+        return False

@@ -217,6 +217,7 @@ def test_buyer_routes_are_public_only_for_catalog_and_auth():
         "/produk",
         "/produk/{ref}",
         "/kategori",
+        "/kemampuan",
         "/payment/callback",
         "/pengiriman/webhook",  # Biteship webhook: secret header + re-queried at Biteship, never trusted
     }

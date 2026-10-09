@@ -90,7 +90,7 @@ async def test_duplicate_variant_names_rejected(session):
 async def test_replace_keeps_ids_and_deletes_missing(session):
     p = await _kaos(session)
     s, xl = p.varian
-    p = await services.ganti_varian(session, p.id, [VarianIn(id=xl.id, nama="XXL", stok=1)])
+    p = await services.ganti_varian(session, p.id, [VarianIn(id=xl.id, nama="XXL", stok=1, expected_stok=xl.stok)])
     assert [(v.id, v.nama) for v in p.varian] == [(xl.id, "XXL")]
 
 
