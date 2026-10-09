@@ -379,3 +379,26 @@ async def test_create_produk_result_can_be_serialized_with_its_category(session)
 
     tanpa = services.produk_out(await services.create_produk(session, ProdukIn(nama="Gula", harga="14000")))
     assert tanpa["kategori_nama"] is None
+
+
+@pytest.mark.asyncio
+async def test_shop_profile_defaults_update_and_preserves_shipping(session):
+    from tenants.store.modules.store.application.shop_profile import DEFAULT_PROFILE, ProfilTokoIn, get_profile, save_profile
+    settings = await services.get_or_create_pengaturan(session)
+    settings.asal_nama = "Gudang pengiriman"
+    assert await get_profile(session) == DEFAULT_PROFILE
+    payload = ProfilTokoIn(**{**DEFAULT_PROFILE, "nama": "Toko Baru", "email": "baru@gmail.com", "jalan": "Jl. Baru 12"})
+    await save_profile(session, payload)
+    await session.commit()
+    assert (await get_profile(session))["nama"] == "Toko Baru"
+    await save_profile(session, ProfilTokoIn(**{**payload.model_dump(), "nama": "Nama berikutnya"}))
+    assert (await get_profile(session))["nama"] == "Nama berikutnya"
+    assert settings.asal_nama == "Gudang pengiriman"
+
+
+@pytest.mark.parametrize("field,value", [("email", "bukan-email"), ("whatsapp", "+62812"), ("instagram", "javascript:alert(1)"), ("tiktok", "https://evil.test"), ("kodePos", "123"), ("nama", " ")])
+def test_shop_profile_rejects_invalid_public_details(field, value):
+    from pydantic import ValidationError
+    from tenants.store.modules.store.application.shop_profile import DEFAULT_PROFILE, ProfilTokoIn
+    with pytest.raises(ValidationError):
+        ProfilTokoIn(**{**DEFAULT_PROFILE, field: value})

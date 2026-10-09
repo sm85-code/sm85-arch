@@ -6,6 +6,8 @@ Mounted in main.py at /api/store/admin. Every route except /auth/login,
 """
 from __future__ import annotations
 
+from tenants.store.modules.store.application.shop_profile import ProfilTokoIn, get_profile, save_profile
+
 import os
 from dataclasses import asdict
 import secrets as pysecrets
@@ -532,3 +534,13 @@ async def patch_pengaturan_pengiriman(
     _user: AdminStore = Depends(admin_only),
 ):
     return services.pengaturan_out(await services.update_pengaturan_pengiriman(session, payload))
+
+
+@store_admin_router.get("/profil-toko")
+async def profil_toko(session: AsyncSession = Depends(get_db_store), _user: AdminStore = Depends(admin_only)):
+    return await get_profile(session)
+
+
+@store_admin_router.put("/profil-toko")
+async def simpan_profil_toko(payload: ProfilTokoIn, session: AsyncSession = Depends(get_db_store), _user: AdminStore = Depends(admin_only)):
+    return await save_profile(session, payload)
