@@ -13,7 +13,7 @@ from typing import Any
 
 from tenants.marketplace_erp.modules.marketplace_erp.infrastructure.adapters import erp_shopee
 
-MODEL = os.getenv("ADS_AI_MODEL", "claude-opus-5-5")
+MODEL = os.getenv("ADS_AI_MODEL", "claude-sonnet-5-5")
 # USD per million tokens (input, output) of the models this advisor may run on.
 HARGA = {"claude-opus-5-5": (4.0, 20.0), "claude-sonnet-5-5": (2.0, 10.0)}
 KAMPANYE_MAKS = 40  # most campaigns sent per request (the biggest spenders): keeps cost and latency bounded

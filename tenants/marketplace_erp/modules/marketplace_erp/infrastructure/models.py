@@ -670,3 +670,68 @@ class PengaturanStok(MarketplaceErpBase):
     __tablename__ = "mpe_pengaturan_stok"
     id: Mapped[str] = mapped_column(String(32), primary_key=True, default="global")
     gudang_aktif: Mapped[bool] = mapped_column(Boolean, nullable=False, default=False)
+
+
+class AiConversation(MarketplaceErpBase):
+    __tablename__ = "mpe_ai_conversations"
+    id: Mapped[str] = mapped_column(String(64), primary_key=True, default=_uuid)
+    user_id: Mapped[str] = mapped_column(String(64), index=True)
+    title: Mapped[str] = mapped_column(String(100))
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=_utcnow)
+
+
+class AiTurn(MarketplaceErpBase):
+    __tablename__ = "mpe_ai_turns"
+    __table_args__ = (UniqueConstraint("user_id", "operation_id", name="uq_mpe_ai_operation"),
+                      UniqueConstraint("active_key", name="uq_mpe_ai_active_conversation"))
+    id: Mapped[str] = mapped_column(String(64), primary_key=True, default=_uuid)
+    conversation_id: Mapped[str] = mapped_column(String(64), ForeignKey("mpe_ai_conversations.id"), index=True)
+    user_id: Mapped[str] = mapped_column(String(64), index=True)
+    session_version: Mapped[int] = mapped_column(Integer)
+    operation_id: Mapped[str] = mapped_column(String(64))
+    payload_hash: Mapped[str] = mapped_column(String(64))
+    active_key: Mapped[Optional[str]] = mapped_column(String(64), nullable=True)
+    akun_id: Mapped[Optional[str]] = mapped_column(String(64), nullable=True)
+    mode: Mapped[str] = mapped_column(String(16))
+    prompt: Mapped[str] = mapped_column(Text)
+    status: Mapped[str] = mapped_column(String(24), default="queued", index=True)
+    answer: Mapped[str] = mapped_column(Text, default="")
+    model: Mapped[str] = mapped_column(String(100))
+    input_tokens: Mapped[int] = mapped_column(Integer, default=0)
+    output_tokens: Mapped[int] = mapped_column(Integer, default=0)
+    cost_usd: Mapped[Decimal] = mapped_column(Numeric(14, 6), default=Decimal("0"))
+    reserved_usd: Mapped[Decimal] = mapped_column(Numeric(14, 6))
+    input_rate: Mapped[Decimal] = mapped_column(Numeric(12, 4))
+    output_rate: Mapped[Decimal] = mapped_column(Numeric(12, 4))
+    budget_day: Mapped[date] = mapped_column(Date)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=_utcnow)
+    finished_at: Mapped[Optional[datetime]] = mapped_column(DateTime(timezone=True), nullable=True)
+
+
+class AiToolReceipt(MarketplaceErpBase):
+    __tablename__ = "mpe_ai_tool_receipts"
+    __table_args__ = (UniqueConstraint("turn_id", "fingerprint", name="uq_mpe_ai_tool_receipt"),)
+    id: Mapped[str] = mapped_column(String(64), primary_key=True, default=_uuid)
+    turn_id: Mapped[str] = mapped_column(String(64), ForeignKey("mpe_ai_turns.id"), index=True)
+    fingerprint: Mapped[str] = mapped_column(String(64))
+    tool: Mapped[str] = mapped_column(String(64))
+    is_write: Mapped[bool] = mapped_column(Boolean)
+    status: Mapped[str] = mapped_column(String(24), default="running")
+    arguments_json: Mapped[str] = mapped_column(Text)
+    result_json: Mapped[str] = mapped_column(Text, default="{}")
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=_utcnow)
+
+
+class AiDailyBudget(MarketplaceErpBase):
+    __tablename__ = "mpe_ai_daily_budget"
+    day: Mapped[date] = mapped_column(Date, primary_key=True)
+    reserved_usd: Mapped[Decimal] = mapped_column(Numeric(14, 6), default=Decimal("0"))
+    spent_usd: Mapped[Decimal] = mapped_column(Numeric(14, 6), default=Decimal("0"))
+    turns: Mapped[int] = mapped_column(Integer, default=0)
+
+
+class AiWorkerLease(MarketplaceErpBase):
+    __tablename__ = "mpe_ai_worker_lease"
+    id: Mapped[str] = mapped_column(String(16), primary_key=True, default="global")
+    turn_id: Mapped[Optional[str]] = mapped_column(String(64), nullable=True)
+    expires_at: Mapped[Optional[datetime]] = mapped_column(DateTime(timezone=True), nullable=True)
