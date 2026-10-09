@@ -1229,19 +1229,22 @@ async def laporan_penjualan(session: AsyncSession, dari: date, sampai: date) -> 
     """Total penjualan per hari, dalam rentang [dari, sampai] inklusif.
     Hanya menghitung pesanan berstatus dibayar/diproses/dikirim/selesai --
     lihat _STATUS_TERHITUNG_PENJUALAN."""
+    # Reuse the expression so PostgreSQL sees the same timezone bind parameter
+    # in SELECT and GROUP BY, rather than treating them as different expressions.
+    tanggal = _tanggal_wib(session)
     stmt = (
         select(
-            _tanggal_wib(session).label("tanggal"),
+            tanggal.label("tanggal"),
             func.count(PesananStore.id).label("jumlah_pesanan"),
             func.sum(PesananStore.total).label("total_penjualan"),
         )
         .where(
             PesananStore.status.in_(_STATUS_TERHITUNG_PENJUALAN),
-            _tanggal_wib(session) >= dari,
-            _tanggal_wib(session) <= sampai,
+            tanggal >= dari,
+            tanggal <= sampai,
         )
-        .group_by(_tanggal_wib(session))
-        .order_by(_tanggal_wib(session))
+        .group_by(tanggal)
+        .order_by(tanggal)
     )
     rows = (await session.execute(stmt)).all()
     harian = [

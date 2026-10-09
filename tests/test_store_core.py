@@ -318,6 +318,38 @@ async def test_chat_sender_side_comes_from_the_caller_not_a_role_string(session)
 
 
 @pytest.mark.asyncio
+async def test_sales_report_postgres_reuses_grouping_timezone_parameter():
+    from datetime import date
+    from types import SimpleNamespace
+    from sqlalchemy.dialects.postgresql import asyncpg
+
+    class CaptureSession:
+        def get_bind(self):
+            return SimpleNamespace(dialect=asyncpg.dialect())
+
+        async def execute(self, statement):
+            compiled = statement.compile(dialect=asyncpg.dialect())
+            timezone_parameters = [key for key, value in compiled.params.items() if value == "Asia/Jakarta"]
+            assert len(timezone_parameters) == 1
+            return SimpleNamespace(all=lambda: [])
+
+    report = await services.laporan_penjualan(CaptureSession(), date(2026, 10, 1), date(2026, 10, 9))
+    assert report["harian"] == []
+    assert report["grand_total"] == "0"
+
+
+@pytest.mark.asyncio
+async def test_dashboard_reports_accept_empty_orders(session):
+    from datetime import date
+
+    assert await services.laporan_ringkasan_status(session) == {}
+    assert await services.laporan_produk_terlaris(session, date(2026, 10, 1), date(2026, 10, 9)) == []
+    report = await services.laporan_penjualan(session, date(2026, 10, 1), date(2026, 10, 9))
+    assert report["harian"] == []
+    assert report["grand_total"] == "0"
+
+
+@pytest.mark.asyncio
 async def test_ringkasan_status_counts_orders(session):
     user = await _pembeli(session)
     produk = await _produk(session, stok=10)

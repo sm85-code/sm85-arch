@@ -139,6 +139,11 @@ async def list_produk(session: AsyncSession = Depends(get_db_store), _user: Admi
     return [services.produk_out(p) for p in await services.list_produk(session)]
 
 
+@store_admin_router.get("/kemampuan")
+async def kemampuan(_user: AdminStore = Depends(admin_only)):
+    return {"cod_batas": services.batas_cod()}
+
+
 @store_admin_router.post("/produk")
 async def create_produk(
     payload: ProdukIn, session: AsyncSession = Depends(get_db_store), _user: AdminStore = Depends(admin_only)
