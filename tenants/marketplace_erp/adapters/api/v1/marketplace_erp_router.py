@@ -105,6 +105,7 @@ from tenants.store.modules.store.infrastructure import database as store_databas
 from tenants.store.modules.store.infrastructure.media_import import import_foto_dari_url
 
 from .workflow_router import router as workflow_router
+from .management_router import router as management_router
 
 logger = logging.getLogger(__name__)
 
@@ -1804,6 +1805,7 @@ async def kelola_barang_promosi(
 
 
 marketplace_erp_router.include_router(workflow_router)
+marketplace_erp_router.include_router(management_router)
 
 marketplace_erp_router.include_router(sync_router)
 

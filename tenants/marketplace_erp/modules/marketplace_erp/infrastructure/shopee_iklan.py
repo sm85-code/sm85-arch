@@ -30,8 +30,8 @@ IKLAN_API: dict[str, tuple[str, str]] = {
     "buat_gmv": ("POST", "/api/v2/ads/create_gms_product_campaign"),
     "ubah_gmv": ("POST", "/api/v2/ads/edit_gms_product_campaign"),
     "ubah_gmv_item": ("POST", "/api/v2/ads/edit_gms_item_product_campaign"),
-    "kinerja_gmv": ("GET", "/api/v2/ads/get_gms_campaign_performance"),
-    "kinerja_gmv_item": ("GET", "/api/v2/ads/get_gms_item_performance"),
+    "kinerja_gmv": ("POST", "/api/v2/ads/get_gms_campaign_performance"),
+    "kinerja_gmv_item": ("POST", "/api/v2/ads/get_gms_item_performance"),
     "item_dihapus_gmv": ("GET", "/api/v2/ads/list_gms_user_deleted_item"),
 }
 

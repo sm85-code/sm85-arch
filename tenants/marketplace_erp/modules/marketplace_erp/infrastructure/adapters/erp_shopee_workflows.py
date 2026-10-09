@@ -73,43 +73,7 @@ def validate_publication(payload, meta):
         for c in meta["channels"]
     ):
         reject("Jasa kirim wajib dari Shopee harus diaktifkan.")
-    selected = {a.attribute_id: a for a in payload.attribute_list}
-    allowed = set()
-
-    def walk(nodes):
-        for node in nodes:
-            ident = node["attribute_id"]
-            allowed.add(ident)
-            chosen = selected.get(ident)
-            if node.get("mandatory") and not chosen:
-                reject(f"Atribut {node.get('name', ident)} wajib diisi.")
-            if not chosen:
-                continue
-            info = node.get("attribute_info") or {}
-            values = {v["value_id"]: v for v in node.get("attribute_value_list", [])}
-            max_count = info.get("max_value_count") or (50 if info.get("input_type") in (4, 5) else 1)
-            if len(chosen.attribute_value_list) > max_count:
-                reject(f"Terlalu banyak pilihan atribut {node.get('name', ident)}.")
-            if len({(v.value_id, v.original_value_name) for v in chosen.attribute_value_list}) != len(
-                chosen.attribute_value_list
-            ):
-                reject("Pilihan atribut tidak boleh duplikat.")
-            for val in chosen.attribute_value_list:
-                custom = val.value_id == 0 and info.get("input_type") in (2, 3, 5)
-                ref = None if custom else values.get(val.value_id)
-                if ref is None and (val.value_id != 0 or info.get("input_type") not in (2, 3, 5)):
-                    reject("Pilihan atribut tidak tersedia pada kategori tujuan.")
-                if ref and val.original_value_name != ref.get("name"):
-                    reject("Nama pilihan atribut tidak sesuai metadata tujuan.")
-                units = info.get("attribute_unit_list") or []
-                if units and val.value_unit not in units:
-                    reject("Satuan atribut wajib sesuai pilihan yang tersedia.")
-                if ref:
-                    walk(ref.get("child_attribute_list") or [])
-
-    walk(meta["attributes"])
-    if set(selected) - allowed:
-        reject("Atribut tidak sesuai kategori atau pilihan induknya.")
+    validate_attributes(payload.attribute_list, meta["attributes"])
     limits = meta["limits"]
     chart = limits.get("size_chart_limit") or {}
     if chart.get("size_chart_mandatory") and not payload.size_chart and not payload.size_chart_id:
@@ -445,3 +409,43 @@ async def wallet(session, akun, dari, sampai, offset=0):
         "ada_lagi": data["more"],
         "nama_toko": akun.nama_toko,
     }
+
+
+def validate_attributes(attributes, nodes):
+    selected = {a.attribute_id: a for a in attributes}
+    allowed = set()
+
+    def walk(nodes):
+        for node in nodes:
+            ident = node["attribute_id"]
+            allowed.add(ident)
+            chosen = selected.get(ident)
+            if node.get("mandatory") and not chosen:
+                reject(f"Atribut {node.get('name', ident)} wajib diisi.")
+            if not chosen:
+                continue
+            info = node.get("attribute_info") or {}
+            values = {v["value_id"]: v for v in node.get("attribute_value_list", [])}
+            max_count = info.get("max_value_count") or (50 if info.get("input_type") in (4, 5) else 1)
+            if len(chosen.attribute_value_list) > max_count:
+                reject(f"Terlalu banyak pilihan atribut {node.get('name', ident)}.")
+            if len({(v.value_id, v.original_value_name) for v in chosen.attribute_value_list}) != len(
+                chosen.attribute_value_list
+            ):
+                reject("Pilihan atribut tidak boleh duplikat.")
+            for val in chosen.attribute_value_list:
+                custom = val.value_id == 0 and info.get("input_type") in (2, 3, 5)
+                ref = None if custom else values.get(val.value_id)
+                if ref is None and (val.value_id != 0 or info.get("input_type") not in (2, 3, 5)):
+                    reject("Pilihan atribut tidak tersedia pada kategori tujuan.")
+                if ref and val.original_value_name != ref.get("name"):
+                    reject("Nama pilihan atribut tidak sesuai metadata tujuan.")
+                units = info.get("attribute_unit_list") or []
+                if units and val.value_unit not in units:
+                    reject("Satuan atribut wajib sesuai pilihan yang tersedia.")
+                if ref:
+                    walk(ref.get("child_attribute_list") or [])
+
+    walk(nodes)
+    if set(selected) - allowed:
+        reject("Atribut tidak sesuai kategori atau pilihan induknya.")

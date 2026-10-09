@@ -72,3 +72,35 @@ async def product_stats(session, akun, item_id):
         "request_id": data.get("request_id"),
         "diambil_at": datetime.now(timezone.utc).isoformat(),
     }
+
+
+async def diagnosis(session, akun, item_ids):
+    path = "/api/v2/product/get_item_content_diagnosis_result"
+    data = await provider.signed_shop_request(session, akun, path, method="POST", body={"item_id_list": item_ids})
+    response = data.get("response")
+    if not isinstance(response, dict) or not isinstance(response.get("success_item_list", []), list) or not isinstance(response.get("failure_item_list", []), list):
+        raise provider.ShopeeAPIError(path, "incomplete_response", "Diagnosis Shopee belum lengkap.", data.get("request_id"))
+    successes, failures = response.get("success_item_list", []), response.get("failure_item_list", [])
+    seen = set()
+    for r in successes + failures:
+        if not isinstance(r, dict) or type(r.get("item_id")) is not int or r["item_id"] not in item_ids or r["item_id"] in seen:
+            raise provider.ShopeeAPIError(path, "incomplete_response", "Identitas diagnosis tidak sesuai.", data.get("request_id"))
+        seen.add(r["item_id"])
+    for r in successes:
+        r.setdefault("unfinished_task", [])
+        if type(r.get("quality_level")) is not int or r.get("quality_level") not in (0, 1, 2, 3) or not isinstance(r.get("unfinished_task"), list) or any(not isinstance(t, dict) or type(t.get("issue_type")) is not int or not isinstance(t.get("suggestion"), str) for t in r["unfinished_task"]):
+            raise provider.ShopeeAPIError(path, "incomplete_response", "Tingkat kualitas produk belum lengkap.", data.get("request_id"))
+    if seen != set(item_ids):
+        raise provider.ShopeeAPIError(path, "incomplete_response", "Sebagian produk tidak mempunyai hasil diagnosis.", data.get("request_id"))
+    return {"success_item_list": [{**r, "item_id": str(r["item_id"])} for r in successes], "failure_item_list": [{**r, "item_id": str(r["item_id"])} for r in failures], "request_id": data.get("request_id"), "diambil_at": datetime.now(timezone.utc).isoformat()}
+
+
+async def penalties(session, akun, page=1, size=25):
+    data, response = await fetch(session, akun, "/api/v2/account_health/get_penalty_point_history", "penalty_point_list", {"page_no": page, "page_size": size})
+    total = response.get("total_count")
+    if type(total) is not int or total < 0:
+        raise provider.ShopeeAPIError("get_penalty_point_history", "incomplete_response", "Jumlah riwayat penalti belum tersedia.", data.get("request_id"))
+    rows = response["penalty_point_list"]
+    if any(not isinstance(r, dict) or type(r.get("issue_time")) is not int or not number(r.get("latest_point_num")) or not number(r.get("original_point_num")) for r in rows):
+        raise provider.ShopeeAPIError("get_penalty_point_history", "incomplete_response", "Riwayat penalti tidak lengkap.", data.get("request_id"))
+    return {"items": [{**r, "reference_id": str(r["reference_id"]) if r.get("reference_id") is not None else None} for r in rows], "total": total, "halaman": page, "ada_lagi": page * size < total, "request_id": data.get("request_id")}

@@ -1,22 +1,20 @@
 # Persiapan Asisten AI ERP — tahap 2
 
-## Implementasi tersedia
+## Pembaruan T2 — dokumentasi dc31614
 
-- GET `/akun/{akun_id}/performa-toko`: admin-only, account-scoped, read-only. Mengambil metric_list dari Account Health dan mempertahankan current_period/last_period/unit/target; tidak membuat skor sendiri. overall_performance diteruskan tanpa menebak arti rating enum. Bukan integrasi riwayat poin penalti.
-- GET `/katalog-shopee/{katalog_id}/statistik`: admin-only. Identitas akun/item berasal dari katalog server, bukan body browser. Mengambil sale, views, likes, rating_star, comment_count. Views 30 hari; sale kumulatif. Null/missing tidak diubah menjadi nol.
-- PATCH `/akun/{akun_id}/promosi/{promosi_id}`: akses pengelolaan promosi existing tetap. Update nama/mulai/selesai, hanya field yang diberikan. Memeriksa detail/status terbaru, melarang perubahan start pada ongoing dan start yang lebih awal, minimal durasi satu jam; Shopee tetap memvalidasi aturan provider. Konfirmasi discount_id sebelum menyatakan sukses.
-- FE: menu Performa Toko khusus admin, statistik dalam detail katalog khusus admin, dialog Ubah Nama/Jadwal pada detail promosi dengan tanggal WIB dan konfirmasi. Jadwal dengan detik tidak ikut terpotong saat hanya nama berubah. Label iklan otomatis tidak lagi menganggap semua auto bidding adalah Shop GMV Max.
+Implementasi mengacu pada dokumentasi API Shopee dalam repo api-docs commit dc31614.
 
-Tidak ada perubahan skema DB, kepemilikan stok, permission halaman existing, atau tindakan marketplace produksi. Belum ada alat/percakapan AI yang diaktifkan.
+- Diagnosis kualitas listing resmi melalui POST get_item_content_diagnosis_result tersedia dalam detail katalog (admin). Level kualitas mengikuti enum Shopee, tidak diubah menjadi skor buatan. Respons level Excellent yang tidak memiliki unfinished_task diterima.
+- Riwayat poin penalti kuartal berjalan tersedia di Performa Toko, dengan pagination dan nilai poin sebelum/sesudah.
+- Dialog edit produk existing: judul, deskripsi, kategori/atribut, merek, foto, berat/dimensi induk dan preorder; SKU, berat dan preorder per varian; nama pilihan varian dengan identitas/index/foto pilihan dipertahankan. Kontrak backend juga mendukung dimensi dan GTIN per varian. Perubahan fisik induk membutuhkan konfirmasi menimpa seluruh model.
+- Mutasi produk membaca identitas provider terbaru sebelum menulis, hanya mengirim field perubahan, dan memperbarui snapshot katalog setelah konfirmasi. Jika refresh snapshot gagal setelah write berhasil, hasil tetap menyatakan write berhasil dengan peringatan sinkronisasi; tidak menyuruh pengguna mengulang write.
+- Shop GMV Max memiliki kontrak terpisah: cek eligibility, create, edit budget/jadwal/ROAS, pause/resume/start, tambah/hapus produk, laporan kampanye dan per produk. Tanggal provider DD-MM-YYYY; laporan memakai POST sesuai dokumentasi, batas periode menggunakan bulan kalender. Create ditolak jika eligibility false. Error tidak dicoba ulang otomatis.
+- Seluruh endpoint manajemen baru admin-only dan scoped ke akun katalog/toko. Tidak ada proxy endpoint/body bebas, perubahan kepemilikan stok, atau pemanggilan provider nyata saat validasi.
 
-## Acuan dan keterbatasan
+Pendaftaran kampanye resmi Shopee dikeluarkan dari T2 sesuai instruksi pengguna. Screenshot ShopFlashSale/BundleDeal belum merupakan spesifikasi request/response, sehingga integrasi baru untuk keduanya tidak dibuat. Pengunggahan video dan pemilihan template size chart memerlukan dokumentasi pendukung; belum diekspos sebagai kemampuan AI. T3 (eksekusi durable, budget/token/quota) dan percakapan/tool AI belum diaktifkan. Kelayakan/permission akun produksi harus diperiksa melalui provider; ketersediaan dokumentasi bukan bukti izin akun.
 
-api-docs commit 087884e: guide-16 AccountHealth; guide-221 product.get_item_extra_info; update_discount.md kontrak dan permission Seller In House. Contoh respons/field insights diverifikasi terhadap SDK generated yang telah tersimpan di `/workspace/scratch/shopee-generated`, yang menyatakan dihasilkan dari dokumentasi Shopee. SDK adalah sumber pendukung, bukan verifikasi akun produksi. Endpoint resmi tambahan gagal diakses (403 pada Jina dan browser). Kesalahan izin provider diteruskan melalui penanganan error Shopee existing; tidak diterjemahkan sebagai data nol.
+Validasi tambahan: 24 tes backend terarah management/insights/workflows lulus, TypeScript dan build FE lulus. Pengujian menggunakan mock, tidak mengubah toko marketplace produksi. Release/PR belum dibuat pada tahap ini.
 
-Belum lengkap: edit kategori/atribut/foto/tier/model/berat/dimensi/preorder produk existing; typed-contract GMV Max; riwayat poin penalti; skor kualitas listing resmi; pendaftaran kampanye resmi. Publikasi produk baru tetap tersedia dan bukan pengganti edit existing. Jangan mengaktifkan alat eksekusi AI untuk kemampuan belum lengkap. Tidak ada bukti fitur-fitur itu dilarang hanya karena tipe akun; chat/ads memiliki whitelist/eligibility tersendiri.
+Fungsi tranche awal tetap tersedia: statistik produk (views 30 hari dan sale kumulatif), performa toko, serta edit nama/jadwal promosi dengan pembatasan status. Null statistik dipertahankan dan tidak dianggap nol.
 
-Dokumen yang perlu ditambahkan ke api-docs: detail account_health.get_shop_performance, product.get_item_extra_info, product.update_item dan update tier/model, account_health.get_penalty_point_history, GMS eligibility/create/edit/performance; FAQ Chat whitelist243. Spesifikasi skor kualitas listing/nomination belum ditemukan, jangan mengarang endpoint. Setelah tersedia, lengkapi fungsi tersebut sebelum tahap akses AI.
-
-## Validasi
-
-18 tes backend terarah (insights/promotion + existing workflow), 22 tes FE nav/roles/catalogue; Ruff dan TypeScript/build lolos. Browser fixture 390/1440 memverifikasi nilai null/zero, tidak ada horizontal overflow, dialog ongoing menonaktifkan mulai, update nama tidak mengirim jadwal, tidak ada pageerror. Tidak memanggil Shopee atau Claude nyata.
+Browser fixture tambahan 390/1440 px: eligibility false menonaktifkan tombol create, tidak ada horizontal overflow/pageerror, dan tidak ada request write. Ruff/Oxlint lulus.
