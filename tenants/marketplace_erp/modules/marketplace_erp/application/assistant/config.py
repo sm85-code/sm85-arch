@@ -29,7 +29,10 @@ MAX_CALLS = 6
 MAX_WRITES = 5
 MAX_TOOLS = 16
 MAX_INPUT_BYTES = 60000
-MAX_OUTPUT = 2000
+MAX_OUTPUT = min(8000, max(1000, integer_setting("ERP_AI_MAX_OUTPUT_TOKENS", "4000")))
+USD_IDR = decimal_setting("KURS_USD_IDR", "16000")
+if not USD_IDR.is_finite() or USD_IDR <= 0:
+    USD_IDR = Decimal("16000")
 
 
 def day():

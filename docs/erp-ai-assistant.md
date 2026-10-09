@@ -47,3 +47,7 @@ Startup create_all menambahkan tabel baru mpe_ai_conversations, mpe_ai_turns, mp
 ## Validasi
 
 Tests terarah menggunakan Anthropic/Shopee mock; tidak memanggil layanan berbayar atau mengubah toko produksi. PostgreSQL nyata menguji reservasi bersamaan, dedup operasi dan hanya satu worker mengklaim antrean. Browser 390/1440px memeriksa mode, kebutuhan toko, antrean→jawaban, payload satu kali, catatan tindakan, overflow dan akses owner/staf. CI menjalankan lint/test/build dan integrasi PostgreSQL sebelum merge. Kelayakan akun/API live dan deploy DO perlu diperiksa dari deployment; environment pengerjaan tidak memiliki secret/platform access itu.
+
+### Penyajian hasil
+
+Biaya UI asisten dikonversi memakai `KURS_USD_IDR` (default 16000; konfigurasi tidak valid kembali ke default). Batas/reservasi dan pembukuan biaya tetap USD. Jawaban yang mencapai batas diberi status `partial`, mempertahankan teks tersedia, dan tidak menjalankan tool dari respons terpotong. Tidak ada panggilan lanjutan otomatis yang menambah biaya. `ERP_AI_MAX_OUTPUT_TOKENS` default 4000, dibatasi 1000–8000; seluruh panggilan tetap tunduk pada batas biaya pesan. Ringkasan omzet menjelaskan tahap yang dihitung dan memisahkan batal/belum bayar. UI merender paragraf, daftar, dan penekanan Markdown sebagai teks React tanpa HTML mentah.

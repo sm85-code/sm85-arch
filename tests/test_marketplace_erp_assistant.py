@@ -249,3 +249,45 @@ async def test_real_tool_refuses_product_from_other_shop(setup, monkeypatch):
         receipt = (await s.execute(select(AiToolReceipt))).scalar_one()
         assert receipt.status == 'rejected' and 'toko' in receipt.result_json
     write.assert_not_awaited()
+
+
+@pytest.mark.asyncio
+async def test_truncated_answer_keeps_text_but_never_executes_tool(setup, monkeypatch):
+    factory, user = setup
+    monkeypatch.setattr(tools.services, 'akun_shopee_pengelolaan', AsyncMock(return_value=SimpleNamespace(id='shop')))
+    monkeypatch.setattr(service, 'model_call', AsyncMock(return_value=response(
+        {'type': 'text', 'text': '**Temuan awal**\nProduk A perlu diperiksa.'},
+        {'type': 'tool_use', 'id': 'cut', 'name': 'ubah_iklan', 'input': {'campaign_id': 7, 'aksi': 'pause'}}, stop='max_tokens')))
+    execute = AsyncMock()
+    monkeypatch.setattr(tools, 'execute', execute)
+    async with factory() as s:
+        turn = await service.enqueue(s, user, message(mode='perintah', akun_id='shop'))
+        ident = turn.id
+    await service.claim(factory)
+    await service.process(factory, ident)
+    await service.release(factory, ident)
+    async with factory() as s:
+        turn = await s.get(AiTurn, ident)
+        assert turn.status == 'partial'
+        assert '**Temuan awal**' in turn.answer and 'belum lengkap' in turn.answer
+        assert turn.active_key is None and turn.output_tokens == 50
+        assert not (await s.execute(select(AiToolReceipt))).scalars().all()
+        assert (await s.get(AiDailyBudget, config.day())).reserved_usd == 0
+    execute.assert_not_awaited()
+
+
+@pytest.mark.asyncio
+async def test_sales_summary_explains_cancelled_orders_outside_revenue_total(setup, monkeypatch):
+    factory, user = setup
+    monkeypatch.setattr(tools.services, 'laporan_dashboard', AsyncMock(return_value={
+        'total_pesanan': 26, 'total_omzet': Decimal('14160386'),
+        'per_tahap': [{'tahap': 'selesai', 'jumlah': 14}, {'tahap': 'dikirim', 'jumlah': 12}, {'tahap': 'dibatalkan', 'jumlah': 7}],
+        'per_hari': [],
+    }))
+    from datetime import date
+    async with factory() as s:
+        turn = await service.enqueue(s, user, message())
+        result = await tools.execute(s, user, turn, 'ringkasan_usaha', tools.SummaryPeriod(mulai=date(2026,10,1), selesai=date(2026,10,9)), 'f')
+        assert result['total_pesanan'] == 26
+        assert 'dibatalkan' not in result['definisi']['tahap_dihitung_omzet']
+        assert 'per_hari' not in result
