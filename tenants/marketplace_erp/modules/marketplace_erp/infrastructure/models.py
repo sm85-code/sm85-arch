@@ -735,3 +735,11 @@ class AiWorkerLease(MarketplaceErpBase):
     id: Mapped[str] = mapped_column(String(16), primary_key=True, default="global")
     turn_id: Mapped[Optional[str]] = mapped_column(String(64), nullable=True)
     expires_at: Mapped[Optional[datetime]] = mapped_column(DateTime(timezone=True), nullable=True)
+
+
+class ChatPhoto(MarketplaceErpBase):
+    __tablename__ = "mpe_chat_photos"
+    id: Mapped[str] = mapped_column(String(64), primary_key=True, default=_uuid)
+    akun_id: Mapped[str] = mapped_column(String(64), index=True)
+    image_url: Mapped[str] = mapped_column(Text)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=_utcnow)

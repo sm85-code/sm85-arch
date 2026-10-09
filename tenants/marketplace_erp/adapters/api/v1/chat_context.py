@@ -153,3 +153,49 @@ async def attachment(session, akun, target, kind, row_id):
     if row.status != "NORMAL":
         raise HTTPException(409, "Produk tidak aktif di Shopee; segarkan katalog")
     return {"item_id": int(row.item_id)}
+
+
+def message_reference(message):
+    """Bounded native/rich-text reference extraction; quoted messages are excluded."""
+    records = []
+    def read(value, depth=0):
+        if depth > 6 or len(records) >= 100:
+            return
+        if isinstance(value, str) and len(value) <= 16000 and value.lstrip().startswith(('{', '[')):
+            try:
+                read(json.loads(value), depth + 1)
+            except (ValueError, RecursionError):
+                pass
+        elif isinstance(value, dict):
+            records.append(value)
+            for key, child in list(value.items())[:100]:
+                if key not in ('quoted_msg', 'quoted_message'):
+                    read(child, depth + 1)
+        elif isinstance(value, list):
+            for child in value[:30]:
+                read(child, depth + 1)
+    read(message.get('content'))
+    read(message.get('source_content'))
+    result = {}
+    for key in ('item_id', 'model_id', 'order_sn', 'model_name', 'variation_name'):
+        aliases = ('item_id', 'product_id') if key == 'item_id' else (key,)
+        values = {str(r[k]) for r in records for k in aliases if r.get(k) is not None and str(r[k]).strip()}
+        if len(values) == 1:
+            result[key] = next(iter(values))
+    return result
+
+
+def message_product_card(row, reference):
+    card = product_card(row)
+    model_id = reference.get('model_id')
+    model_name = reference.get('model_name') or reference.get('variation_name')
+    if not model_id and not model_name:
+        return card
+    variants = json.loads(row.varian_json or '[]')
+    matches = [v for v in variants if str(v.get('model_id')) == model_id] if model_id else [v for v in variants if v.get('nama') == model_name]
+    variant = matches[0] if len(matches) == 1 else None
+    card['varian'] = variant.get('nama') if variant else model_name or 'Varian belum tersinkron'
+    card['model_id'] = model_id
+    card['harga'] = str(variant['harga']) if variant and variant.get('harga') not in (None, '') else None
+    card['foto'] = (variant.get('foto') if variant else None) or card['foto']
+    return card
