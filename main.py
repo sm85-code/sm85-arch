@@ -78,9 +78,15 @@ async def lifespan(_: FastAPI):
     if store_database.SessionLocal is not None:
         from tenants.store.modules.store.application.media_cleanup import run_forever
         media_task = asyncio.create_task(run_forever(store_database.SessionLocal))
+    assistant_task = None
+    if marketplace_erp_database.SessionLocal is not None:
+        from tenants.marketplace_erp.modules.marketplace_erp.application.assistant.service import run_forever as run_assistant
+        assistant_task = asyncio.create_task(run_assistant(marketplace_erp_database.SessionLocal))
     try:
         yield
     finally:
+        if assistant_task is not None:
+            assistant_task.cancel()
         if media_task is not None:
             media_task.cancel()
         if tugas_sinkron is not None:

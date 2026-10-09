@@ -858,6 +858,26 @@ class PromosiIn(BaseModel):
         return value.strip()
 
 
+class PromosiUpdateIn(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+    nama: str | None = Field(default=None, min_length=1, max_length=255)
+    mulai_at: int | None = Field(default=None, gt=0)
+    selesai_at: int | None = Field(default=None, gt=0)
+
+    @field_validator("nama")
+    @classmethod
+    def clean_name(cls, value):
+        if value is not None and not value.strip():
+            raise ValueError("Nama promosi tidak boleh kosong")
+        return value.strip() if value is not None else None
+
+    @model_validator(mode="after")
+    def nonempty(self):
+        if not self.model_dump(exclude_none=True):
+            raise ValueError("Isi perubahan promosi")
+        return self
+
+
 class PromosiProdukIn(BaseModel):
     model_config = ConfigDict(extra="forbid")
     operasi: Literal["tambah", "ubah", "hapus"]

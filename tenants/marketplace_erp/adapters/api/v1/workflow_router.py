@@ -167,3 +167,17 @@ async def shop_balance(
 ):
     await account(session, user, akun_id, "saldo toko")
     return await workflows.shop_balance_snapshot(session, akun_id)
+
+
+@router.get("/akun/{akun_id}/performa-toko")
+async def shop_performance(akun_id: str, session: AsyncSession = Depends(get_db_marketplace_erp), user: UserMarketplaceErp = Depends(admin)):
+    from tenants.marketplace_erp.modules.marketplace_erp.infrastructure.adapters import erp_shopee_insights
+    return await erp_shopee_insights.shop_performance(session, await account(session, user, akun_id, "performa toko"))
+
+
+@router.get("/katalog-shopee/{katalog_id}/statistik")
+async def product_statistics(katalog_id: str, session: AsyncSession = Depends(get_db_marketplace_erp), user: UserMarketplaceErp = Depends(admin)):
+    from tenants.marketplace_erp.modules.marketplace_erp.infrastructure.adapters import erp_shopee_insights
+    katalog, _ = await services.get_katalog_shopee(session, katalog_id)
+    akun = await account(session, user, katalog.akun_id, "statistik produk")
+    return await erp_shopee_insights.product_stats(session, akun, katalog.item_id)

@@ -83,7 +83,7 @@ async def test_the_model_call_asks_for_schema_json_and_reads_usage(monkeypatch):
     monkeypatch.setattr(anthropic, "AsyncAnthropic", lambda **kw: SimpleNamespace(messages=Pesan()))
     h = await ads_ai.minta_saran("data")
     assert h["mentah"]["ringkasan"] == "ok" and (h["token_masuk"], h["token_keluar"]) == (5000, 900)
-    assert dikirim["model"] == "claude-opus-5-5" and dikirim["output_config"]["format"]["type"] == "json_schema" and "thinking" not in dikirim
+    assert dikirim["model"] == "claude-sonnet-5-5" and dikirim["output_config"]["format"]["type"] == "json_schema" and "thinking" not in dikirim
 
 
 @pytest.mark.asyncio

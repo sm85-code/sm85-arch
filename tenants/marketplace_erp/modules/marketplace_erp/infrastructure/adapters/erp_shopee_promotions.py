@@ -165,3 +165,22 @@ async def barang(session, akun, id, item_id, model_id, payload):
     # Preserve per-item failures and confirmed partial outcomes; never suggest resending the whole batch.
     return {"ok": not failures, "id": str(id), "request_id": data.get("request_id"), "gagal": failures,
             "warnings": warning_messages(data)}
+
+
+async def ubah(session, akun, id, payload):
+    current = await detail(session, akun, id)
+    if current["status"] not in {"upcoming", "ongoing"}:
+        raise HTTPException(409, "Promosi berakhir tidak dapat diubah.")
+    fields = payload.model_dump(exclude_none=True)
+    start = fields.get("mulai_at", current["mulai_at"])
+    stop = fields.get("selesai_at", current["selesai_at"])
+    if "mulai_at" in fields and (current["status"] == "ongoing" or start <= current["mulai_at"] or start <= int(time.time())):
+        raise HTTPException(422, "Waktu mulai hanya bisa dimundurkan untuk promosi yang belum berjalan.")
+    if stop - start < 3600 or stop <= int(time.time()):
+        raise HTTPException(422, "Waktu selesai harus di masa depan, minimal satu jam setelah mulai.")
+    names = {"nama": "discount_name", "mulai_at": "start_time", "selesai_at": "end_time"}
+    path = BASE + "update_discount"
+    data = await signed_shop_request(session, akun, path, method="POST", body={"discount_id": ident(id), **{names[k]: v for k, v in fields.items()}})
+    if str((data.get("response") or {}).get("discount_id")) != str(id):
+        incomplete(path, data)
+    return {"ok": True, "id": str(id), "request_id": data.get("request_id"), "warnings": warning_messages(data)}
