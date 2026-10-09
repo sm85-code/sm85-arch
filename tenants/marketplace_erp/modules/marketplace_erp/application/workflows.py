@@ -175,3 +175,50 @@ async def wallet(session, akun_id, dari, sampai, offset):
     for row in result["items"]:
         row["pesanan_id"] = linked.get(row.get("order_sn"))
     return result
+
+
+async def shop_balance_snapshot(session, akun_id):
+    """Last recorded wallet balance, never an assertion of withdrawable/held funds.
+
+    Read the complete bounded 15-day window so provider ordering cannot fabricate
+    a latest balance. If the window exceeds the bound, report unavailable instead.
+    """
+    from datetime import datetime, timedelta, timezone
+    from zoneinfo import ZoneInfo
+
+    akun = await services.akun_shopee_pengelolaan(session, akun_id, "saldo toko")
+    today = datetime.now(ZoneInfo("Asia/Jakarta")).date()
+    latest = None
+    ambiguous = False
+    offset = 0
+    for _ in range(10):
+        page = await adapter.wallet(session, akun, today - timedelta(days=14), today, offset)
+        for row in page["items"]:
+            if row.get("current_balance") is not None and (
+                latest is None or row["create_time"] > latest["create_time"]
+            ):
+                latest = row
+                ambiguous = False
+            elif latest and row["create_time"] == latest["create_time"] and row.get("current_balance") != latest["current_balance"]:
+                ambiguous = True
+        if not page["ada_lagi"]:
+            break
+        if page["next_offset"] <= offset:
+            raise HTTPException(status_code=502, detail="Halaman mutasi saldo tidak maju. Coba lagi.")
+        offset = page["next_offset"]
+    else:
+        raise HTTPException(status_code=502, detail="Mutasi terlalu banyak. Saldo terbaru belum dapat dipastikan.")
+    info = await shopee.signed_shop_request(session, akun, "/api/v2/shop/get_shop_info")
+    region = (info.get("response") or info).get("region")
+    currency = {"ID": "IDR", "MY": "MYR", "SG": "SGD", "TH": "THB", "VN": "VND", "PH": "PHP", "TW": "TWD", "BR": "BRL", "MX": "MXN"}.get(region)
+    return {
+        "akun_id": akun.id,
+        "nama_toko": akun.nama_toko,
+        "saldo_terakhir": latest["current_balance"] if latest and not ambiguous else None,
+        "transaksi_at": latest["create_time"] if latest else None,
+        "diperiksa_at": datetime.now(timezone.utc).isoformat(),
+        "currency": currency,
+        "saldo_tersedia": None,
+        "saldo_tertahan": None,
+        "sumber": "mutasi_saldo_15_hari",
+    }

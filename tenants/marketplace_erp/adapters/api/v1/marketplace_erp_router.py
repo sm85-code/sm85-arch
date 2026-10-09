@@ -541,10 +541,13 @@ async def create_gudang(
 async def list_stok_ledger(
     produk_id: str | None = None,
     limit: int = Query(100, ge=1, le=500),
+    offset: int = Query(0, ge=0),
+    dari: date | None = None,
+    sampai: date | None = None,
     session: AsyncSession = Depends(get_db_marketplace_erp),
     _: UserMarketplaceErp = Depends(require_roles_marketplace_erp(*OWNER_ONLY)),
 ):
-    return await services.list_stok_ledger(session, produk_id=produk_id, limit=limit)
+    return await services.list_stok_ledger(session, produk_id=produk_id, limit=limit, offset=offset, dari=dari, sampai=sampai)
 
 
 @marketplace_erp_router.post("/stok/adjust", response_model=ProdukOut)
@@ -1639,6 +1642,7 @@ async def laporan_ringkas(
 
 @marketplace_erp_router.get("/laporan/dashboard")
 async def laporan_dashboard(
+    akun_id: str | None = None,
     dari: datetime = Query(...),
     sampai: datetime = Query(...),
     batas_stok_kritis: int = Query(5, ge=0, le=100000),
@@ -1648,7 +1652,11 @@ async def laporan_dashboard(
     """The tables of the dashboard (per shop, per stage, best sellers, per day, low stock) for one period."""
     if sampai < dari:
         raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="sampai sebelum dari")
-    return await services.laporan_dashboard(session, dari=dari, sampai=sampai, batas_stok_kritis=batas_stok_kritis, akun_diizinkan=await akun_ids_diizinkan(user, session))
+    allowed = await akun_ids_diizinkan(user, session)
+    if akun_id:
+        await pastikan_akses_akun(user, session, akun_id)
+        allowed = [akun_id]
+    return await services.laporan_dashboard(session, dari=dari, sampai=sampai, batas_stok_kritis=batas_stok_kritis, akun_diizinkan=allowed)
 
 
 # --- Tahap 4: Iklan (ads) -------------------------------------------------------
