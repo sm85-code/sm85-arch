@@ -157,3 +157,13 @@ async def wallet(
 ):
     await account(session, user, akun_id, "transaksi dana")
     return await workflows.wallet(session, akun_id, dari, sampai, offset)
+
+
+@router.get("/akun/{akun_id}/saldo-toko")
+async def shop_balance(
+    akun_id: str,
+    session: AsyncSession = Depends(get_db_marketplace_erp),
+    user: UserMarketplaceErp = Depends(admin),
+):
+    await account(session, user, akun_id, "saldo toko")
+    return await workflows.shop_balance_snapshot(session, akun_id)

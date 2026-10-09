@@ -1116,11 +1116,21 @@ async def transfer_stok(session: AsyncSession, payload: StokTransferIn) -> Produ
 
 
 async def list_stok_ledger(
-    session: AsyncSession, *, produk_id: str | None = None, limit: int = 100
+    session: AsyncSession, *, produk_id: str | None = None, limit: int = 100,
+    offset: int = 0, dari: date | None = None, sampai: date | None = None,
 ) -> list[StokLedger]:
-    stmt = select(StokLedger).order_by(StokLedger.created_at.desc()).limit(max(1, min(limit, 500)))
+    from zoneinfo import ZoneInfo
+
+    if dari and sampai and sampai < dari:
+        raise HTTPException(status_code=400, detail="Tanggal akhir sebelum tanggal awal")
+    stmt = select(StokLedger).order_by(StokLedger.created_at.desc(), StokLedger.id.desc()).offset(max(0, offset)).limit(max(1, min(limit, 500)))
     if produk_id:
         stmt = stmt.where(StokLedger.produk_id == produk_id)
+    zona = ZoneInfo(_ZONA_LAPORAN)
+    if dari:
+        stmt = stmt.where(StokLedger.created_at >= datetime.combine(dari, datetime.min.time(), zona).astimezone(timezone.utc))
+    if sampai:
+        stmt = stmt.where(StokLedger.created_at < datetime.combine(sampai + timedelta(days=1), datetime.min.time(), zona).astimezone(timezone.utc))
     return list((await session.execute(stmt)).scalars().all())
 
 
