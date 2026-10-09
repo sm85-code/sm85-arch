@@ -916,3 +916,8 @@ class MutasiMarketplaceOut(BaseModel):
 class StaffAkunBanyakIn(BaseModel):
     user_id: str = Field(min_length=1, max_length=64)
     akun_ids: list[str] = Field(min_length=1, max_length=200)
+
+
+class KatalogMasterIn(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+    ids: list[str] = Field(min_length=1, max_length=20)

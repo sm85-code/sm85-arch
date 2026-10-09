@@ -28,6 +28,7 @@ from .chat_router import router as chat_router
 from tenants.marketplace_erp.modules.marketplace_erp.application import services
 from tenants.marketplace_erp.modules.marketplace_erp.application.schemas import (
     KatalogKirimIn,
+    KatalogMasterIn,
     ShopeeProdukEditIn,
     ShopeeProdukStatusIn,
     BatalkanPesananIn,
@@ -1426,6 +1427,19 @@ async def get_katalog_shopee(
     k, nama_toko = await services.get_katalog_shopee(session, katalog_id)
     await pastikan_akses_akun(user, session, k.akun_id)
     return services.katalog_out(k, nama_toko, lengkap=True)
+
+
+@marketplace_erp_router.post("/katalog-shopee/salin-master")
+async def salin_katalog_master(
+    payload: KatalogMasterIn,
+    session: AsyncSession = Depends(get_db_marketplace_erp),
+    user: UserMarketplaceErp = Depends(require_roles_marketplace_erp(*OWNER_ONLY)),
+):
+    from tenants.marketplace_erp.modules.marketplace_erp.application.catalogue_master import copy_batch
+    for katalog_id in dict.fromkeys(payload.ids):
+        source, _ = await services.get_katalog_shopee(session, katalog_id)
+        await pastikan_akses_akun(user, session, source.akun_id)
+    return await copy_batch(session, payload.ids)
 
 
 @marketplace_erp_router.patch("/katalog-shopee/{katalog_id}/produk")
