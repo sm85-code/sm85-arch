@@ -29,7 +29,7 @@ async def status(session: AsyncSession = DB, user: UserMarketplaceErp = ADMIN):
     budget = await session.get(AiDailyBudget, config.day())
     unresolved = (await session.execute(select(AiToolReceipt, AiTurn.akun_id).join(AiTurn, AiTurn.id == AiToolReceipt.turn_id).where(AiToolReceipt.status == "unknown", AiToolReceipt.is_write.is_(True)).order_by(AiToolReceipt.created_at).limit(20))).all()
     return {"unresolved": [{"id": r.id, "tool": r.tool, "akun_id": akun_id} for r, akun_id in unresolved], "available": config.ready() and config.valid_limits(), "model": config.MODEL,
-            "daily_usd": str(config.DAILY_USD), "turn_usd": str(config.TURN_USD), "daily_turns": config.DAILY_TURNS,
+            "usd_idr": str(config.USD_IDR), "daily_usd": str(config.DAILY_USD), "turn_usd": str(config.TURN_USD), "daily_turns": config.DAILY_TURNS,
             "spent_usd": str(budget.spent_usd if budget else 0), "reserved_usd": str(budget.reserved_usd if budget else 0),
             "used_turns": budget.turns if budget else 0, "max_writes": config.MAX_WRITES,
             "capabilities": [{"name": n, "write": w, "description": d} for n, (_s, w, d) in tools.TOOLS.items()]}

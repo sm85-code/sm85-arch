@@ -205,7 +205,14 @@ async def execute(session, user, turn, name, payload, fingerprint):
             raise HTTPException(422, "Pilih periode maksimal 93 hari")
         zona = ZoneInfo("Asia/Jakarta")
         r = await services.laporan_dashboard(session, dari=datetime.combine(payload.mulai, time.min, zona), sampai=datetime.combine(payload.selesai, time.max, zona), akun_diizinkan=[turn.akun_id] if turn.akun_id else None)
-        return {k: v for k, v in r.items() if k not in ("per_hari", "stok_kritis", "produk_terlaris")}
+        result = {k: v for k, v in r.items() if k not in ("per_hari", "stok_kritis", "produk_terlaris")}
+        result["definisi"] = {
+            "total_pesanan": "Hanya pesanan pada tahap yang dihitung dalam omzet, bukan semua tahap.",
+            "tahap_dihitung_omzet": list(services._TAHAP_TERHITUNG_OMZET),
+            "per_tahap": "Semua tahap termasuk belum bayar dan dibatalkan; keduanya di luar total_pesanan/total_omzet.",
+            "omzet": "Nilai pesanan snapshot ERP, bukan laba atau saldo cair.",
+        }
+        return result
     if not turn.akun_id:
         raise HTTPException(422, "Pilih toko sebelum membaca data live atau menjalankan tindakan")
     akun = await services.akun_shopee_pengelolaan(session, turn.akun_id)
@@ -241,7 +248,13 @@ async def execute(session, user, turn, name, payload, fingerprint):
         result["warnings"].append("Sinkronkan produk untuk memperbarui snapshot katalog ERP.")
         return result
     if name == "performa_toko":
-        return await insights.shop_performance(session, akun)
+        result = await insights.shop_performance(session, akun)
+        result["definisi"] = {
+            "overall_performance.rating": {"1": "Buruk (Poor)", "2": "Perlu perbaikan (ImprovementNeeded)", "3": "Baik (Good)", "4": "Sangat baik (Excellent)"},
+            "rating": "Kode kategori kesehatan toko, bukan bintang pembeli; shop_rating adalah indikator terpisah.",
+            "null": "Tidak tersedia; bukan nol atau otomatis memenuhi target.",
+        }
+        return result
     if name == "riwayat_penalti":
         return await insights.penalties(session, akun, payload.halaman)
     if name == "daftar_iklan":
