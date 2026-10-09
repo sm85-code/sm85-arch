@@ -402,6 +402,8 @@ async def publish_produk_ke_toko(
     platform_asal = next((li.platform for li in listings if li.aktif), None) or (
         listings[0].platform if listings else None
     )
+    from tenants.marketplace_erp.modules.marketplace_erp.application.stock_settings import get_settings
+    stok_awal = produk.stok if (await get_settings(session))["gudang_aktif"] else 0
     foto_key = await import_foto_dari_url(produk.foto_url) if payload.salin_foto else None
     toko_produk, dibuat = await store_services.upsert_produk_dari_erp(
         store_session,
@@ -409,7 +411,7 @@ async def publish_produk_ke_toko(
         nama=produk.nama,
         deskripsi=produk.deskripsi,
         harga=payload.harga if payload.harga is not None else produk.harga_dasar,
-        stok=payload.stok if payload.stok is not None else produk.stok,
+        stok=payload.stok if payload.stok is not None else stok_awal,
         platform_asal=platform_asal,
         foto_key=foto_key,
         aktif=payload.aktif,
@@ -535,6 +537,8 @@ async def create_gudang(
     session: AsyncSession = Depends(get_db_marketplace_erp),
     _: UserMarketplaceErp = Depends(require_roles_marketplace_erp(*OWNER_ONLY)),
 ):
+    from tenants.marketplace_erp.modules.marketplace_erp.application.stock_settings import require_warehouse
+    await require_warehouse(session)
     return await services.create_gudang(session, payload)
 
 
@@ -1548,6 +1552,8 @@ async def push_stok_harga_akun(
             status_code=status.HTTP_501_NOT_IMPLEMENTED,
             detail=f"Push stok/harga untuk platform '{akun.platform}' belum tersedia (Shopee first)",
         )
+    from tenants.marketplace_erp.modules.marketplace_erp.application.stock_settings import require_warehouse
+    await require_warehouse(session)
     rows = await services.baris_push_listing(session, akun)
     if dry_run:
         return {"ok": True, "dry_run": True, "jumlah": len(rows), "rows": rows}
@@ -1851,3 +1857,12 @@ marketplace_erp_router.include_router(workflow_router)
 marketplace_erp_router.include_router(sync_router)
 
 marketplace_erp_router.include_router(chat_router)
+
+
+@marketplace_erp_router.get("/pengaturan-stok")
+async def pengaturan_stok(
+    session: AsyncSession = Depends(get_db_marketplace_erp),
+    _: UserMarketplaceErp = Depends(require_roles_marketplace_erp(*OWNER_ONLY)),
+):
+    from tenants.marketplace_erp.modules.marketplace_erp.application.stock_settings import get_settings
+    return await get_settings(session)

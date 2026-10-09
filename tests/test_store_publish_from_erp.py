@@ -6,6 +6,7 @@ from types import SimpleNamespace
 import pytest
 import pytest_asyncio
 from fastapi import HTTPException
+from tenants.marketplace_erp.modules.marketplace_erp.infrastructure.models import PengaturanStok
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker, create_async_engine
 
 from tenants.marketplace_erp.adapters.api.v1 import marketplace_erp_router as erp_router
@@ -33,6 +34,8 @@ async def _session(base):
 @pytest_asyncio.fixture
 async def erp():
     engine, s = await _session(MarketplaceErpBase)
+    s.add(PengaturanStok(id="global", gudang_aktif=True))
+    await s.flush()
     yield s
     await s.close()
     await engine.dispose()
@@ -213,3 +216,14 @@ async def test_erp_patch_preorder_validates(erp):
     assert exc.value.status_code == 400
     await erp_services.update_produk(erp, produk.id, ProdukPatch(preorder=False))
     assert produk.hari_proses == 2
+
+
+@pytest.mark.asyncio
+async def test_per_shop_mode_does_not_seed_store_from_warehouse_or_reference(erp, store):
+    master = await _erp_produk(erp, stok=7)
+    master.stok_referensi = 80
+    await erp.delete(await erp.get(PengaturanStok, "global"))
+    await erp.flush()
+    result = await _publish(erp, store, master)
+    assert result["produk"]["stok"] == 0
+    assert master.stok == 7 and master.stok_referensi == 80

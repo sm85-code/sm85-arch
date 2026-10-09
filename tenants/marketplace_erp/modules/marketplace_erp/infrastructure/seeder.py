@@ -36,6 +36,7 @@ DEFAULT_PASSWORD = "password123"
 # are self-healed here. Postgres-only syntax -- skipped on SQLite (tests
 # build the schema fresh from metadata anyway).
 _SELF_HEAL_COLUMNS = (
+    "ALTER TABLE IF EXISTS mpe_produk ADD COLUMN IF NOT EXISTS stok_referensi INTEGER",
     "ALTER TABLE IF EXISTS mpe_users ADD COLUMN IF NOT EXISTS session_version INTEGER NOT NULL DEFAULT 0",
     "ALTER TABLE IF EXISTS mpe_users "
     "ADD COLUMN IF NOT EXISTS must_change_password BOOLEAN NOT NULL DEFAULT FALSE",

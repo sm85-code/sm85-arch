@@ -110,6 +110,7 @@ class Produk(MarketplaceErpBase):
     nama: Mapped[str] = mapped_column(String(255), nullable=False)
     deskripsi: Mapped[str] = mapped_column(Text, nullable=False, default="")
     harga_dasar: Mapped[Decimal] = mapped_column(Numeric(20, 2), nullable=False, default=Decimal("0"))
+    stok_referensi: Mapped[Optional[int]] = mapped_column(Integer, nullable=True)
     stok: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
     foto_url: Mapped[Optional[str]] = mapped_column(String(1024), nullable=True)
     aktif: Mapped[bool] = mapped_column(Boolean, nullable=False, default=True)
@@ -661,3 +662,10 @@ class PesanMarketplaceReceipt(MarketplaceErpBase):
     status: Mapped[str] = mapped_column(String(32), default="belum_pasti")
     result_json: Mapped[str] = mapped_column(Text, default="{}")
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=_utcnow)
+
+
+class PengaturanStok(MarketplaceErpBase):
+    """ERP stock authority; missing row defaults to independent shop inventories."""
+    __tablename__ = "mpe_pengaturan_stok"
+    id: Mapped[str] = mapped_column(String(32), primary_key=True, default="global")
+    gudang_aktif: Mapped[bool] = mapped_column(Boolean, nullable=False, default=False)

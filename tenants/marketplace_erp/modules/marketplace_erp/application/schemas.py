@@ -253,6 +253,7 @@ class ProdukIn(BaseModel):
     nama: str
     deskripsi: str = ""
     harga_dasar: Decimal
+    stok_referensi: Optional[int] = Field(None, ge=0)
     stok: int = 0
     foto_url: Optional[str] = None
     berat_gram: int = Field(0, ge=0, le=500_000)
@@ -274,6 +275,7 @@ class ProdukPatch(BaseModel):
     nama: Optional[str] = None
     deskripsi: Optional[str] = None
     harga_dasar: Optional[Decimal] = None
+    stok_referensi: Optional[int] = Field(None, ge=0)
     stok: Optional[int] = None
     foto_url: Optional[str] = None
     aktif: Optional[bool] = None
@@ -295,6 +297,7 @@ class ProdukOut(BaseModel):
     deskripsi: str
     harga_dasar: Decimal
     stok: int
+    stok_referensi: Optional[int] = None
     foto_url: Optional[str]
     aktif: bool
     berat_gram: int = 0
