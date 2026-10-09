@@ -476,3 +476,69 @@ async def test_chat_read_rejects_unknown_message_without_marking(session, monkey
     with pytest.raises(HTTPException) as exc:
         await chat_router.read(akun.id, "c1", chat_router.ReadIn(message_id="foreign"), session, user)
     assert exc.value.status_code == 409
+
+
+@pytest.mark.asyncio
+async def test_chat_image_upload_scoped_preview_and_durable_send(session, monkeypatch):
+    from io import BytesIO
+    from fastapi import UploadFile
+    from unittest.mock import AsyncMock
+    from tenants.marketplace_erp.modules.marketplace_erp.infrastructure.models import ChatPhoto
+    akun, user = await setup(session)
+    upload = AsyncMock(return_value='https://cf.shopee.co.id/file/photo')
+    monkeypatch.setattr(erp_shopee_chat, 'upload_photo', upload)
+    preview = await chat_router.upload_chat_photo(akun.id, UploadFile(file=BytesIO(b'photo')), session, user)
+    assert await session.get(ChatPhoto, preview['id'])
+    sent = []
+    async def conversation(*args):
+        return {'conversation_id': 'c1', 'to_id': 77}
+    async def request(*args, **kwargs):
+        sent.append(kwargs['body'])
+        return {'response': {'message_id': 'm1', 'to_id': 77}}
+    monkeypatch.setattr(erp_shopee_chat, 'conversation', conversation)
+    monkeypatch.setattr(erp_shopee, 'signed_shop_request', request)
+    assert not sent  # Upload is not a message send.
+    body = chat_router.SendIn(operation_id=uuid4(), message_type='image', attachment_id=preview['id'])
+    first = await chat_router.send(akun.id, 'c1', body, session, user)
+    replay = await chat_router.send(akun.id, 'c1', body, session, user)
+    assert first['status'] == replay['status'] == 'terkirim'
+    assert sent == [{'to_id': 77, 'message_type': 'image', 'content': {'image_url': preview['url']}}]
+    foreign = ChatPhoto(akun_id='other', image_url=preview['url'])
+    session.add(foreign)
+    await session.commit()
+    with pytest.raises(HTTPException) as exc:
+        await chat_router.send(akun.id, 'c1', chat_router.SendIn(operation_id=uuid4(), message_type='image', attachment_id=foreign.id), session, user)
+    assert exc.value.status_code == 403
+    with pytest.raises(HTTPException):
+        await chat_router.send(akun.id, 'c1', chat_router.SendIn(operation_id=uuid4(), message_type='image', attachment_id='https://example.com/arbitrary'), session, user)
+    assert len(sent) == 1
+
+
+@pytest.mark.asyncio
+async def test_chat_photo_upload_multipart_no_redirects_and_provider_url(monkeypatch):
+    from unittest.mock import AsyncMock
+    import requests
+    monkeypatch.setattr(erp_shopee, 'live_sync_enabled', lambda: True)
+    monkeypatch.setattr(erp_shopee, 'partner_configured', lambda: True)
+    monkeypatch.setattr(erp_shopee, 'pastikan_token_segar', AsyncMock())
+    monkeypatch.setattr(erp_shopee, '_partner_id_int', lambda: 1)
+    monkeypatch.setattr(erp_shopee, 'sign_request', lambda *a, **kw: 'signed')
+    monkeypatch.setattr(erp_shopee, '_host', lambda: 'https://partner.example')
+    calls = []
+    def post(url, **kwargs):
+        calls.append((url, kwargs))
+        return SimpleNamespace(ok=True, json=lambda: {'response': {'url': 'https://cf.shopee.co.id/file/photo'}})
+    monkeypatch.setattr(requests, 'post', post)
+    akun = SimpleNamespace(id_toko_eksternal='123', access_token='test-only')
+    assert await erp_shopee_chat.upload_photo(None, akun, b'\xff\xd8\xffphoto') == 'https://cf.shopee.co.id/file/photo'
+    assert '/api/v2/sellerchat/upload_image?' in calls[0][0]
+    assert calls[0][1]['files']['file'][2] == 'image/jpeg'
+    assert calls[0][1]['allow_redirects'] is False
+    for invalid in (b'', b'html', b'\xff\xd8\xff' + bytes(10*1024*1024)):
+        with pytest.raises(HTTPException):
+            await erp_shopee_chat.upload_photo(None, akun, invalid)
+    assert len(calls) == 1
+    monkeypatch.setattr(requests, 'post', lambda *a, **kw: SimpleNamespace(ok=True, json=lambda: {'response': {'url': 'javascript:alert(1)'}}))
+    with pytest.raises(HTTPException) as error:
+        await erp_shopee_chat.upload_photo(None, akun, b'\xff\xd8\xffphoto')
+    assert error.value.status_code == 424

@@ -2,10 +2,11 @@
 
 import hashlib
 import json
+from datetime import datetime, timezone, timedelta
 from uuid import UUID
 from typing import Literal
 
-from fastapi import APIRouter, Depends, HTTPException, Query
+from fastapi import APIRouter, Depends, HTTPException, Query, File, UploadFile
 from pydantic import BaseModel, Field
 from sqlalchemy import select
 from sqlalchemy.orm import selectinload
@@ -18,6 +19,7 @@ from tenants.marketplace_erp.modules.marketplace_erp.infrastructure.adapters imp
 from tenants.marketplace_erp.modules.marketplace_erp.infrastructure.adapters.erp_shopee import ShopeeAPIError
 from tenants.marketplace_erp.modules.marketplace_erp.infrastructure.database import get_db_marketplace_erp
 from tenants.marketplace_erp.modules.marketplace_erp.infrastructure.models import (
+    ChatPhoto,
     PesanMarketplaceReceipt,
     Pesanan,
     KatalogShopee,
@@ -30,12 +32,29 @@ router = APIRouter()
 class SendIn(BaseModel):
     operation_id: UUID
     text: str = Field(default="", max_length=1000)
-    message_type: Literal["text", "item", "order"] = "text"
+    message_type: Literal["text", "item", "order", "image"] = "text"
     attachment_id: str | None = Field(default=None, max_length=64)
 
 
 def receipt_out(row):
     return {"operation_id": row.operation_id, "status": row.status, **json.loads(row.result_json)}
+
+
+@router.post("/akun/{akun_id}/chat/foto")
+async def upload_chat_photo(
+    akun_id: str, file: UploadFile = File(...),
+    session: AsyncSession = Depends(get_db_marketplace_erp),
+    user: UserMarketplaceErp = Depends(staff),
+):
+    try:
+        akun = await account(session, user, akun_id, "chat")
+        url = await provider.upload_photo(session, akun, await file.read(10 * 1024 * 1024 + 1))
+        photo = ChatPhoto(akun_id=akun.id, image_url=url)
+        session.add(photo)
+        await session.commit()
+        return {"id": photo.id, "url": photo.image_url}
+    finally:
+        await file.close()
 
 
 @router.get("/akun/{akun_id}/chat")
@@ -157,11 +176,19 @@ async def deliver(session, akun, conversation_id, body, target=None):
         return receipt_out(existing)
     # Read-only validation and token refresh finish before claiming a durable send.
     target = target or await provider.conversation(session, akun, conversation_id)
-    content = (
-        await chat_context.attachment(session, akun, target, body.message_type, body.attachment_id)
-        if body.message_type != "text"
-        else None
-    )
+    if body.message_type == "image":
+        photo = await session.get(ChatPhoto, body.attachment_id)
+        if not photo or photo.akun_id != akun.id:
+            raise HTTPException(403, "Foto tidak berasal dari toko percakapan ini")
+        created = photo.created_at.replace(tzinfo=timezone.utc) if photo.created_at.tzinfo is None else photo.created_at
+        if datetime.now(timezone.utc) - created > timedelta(days=1):
+            raise HTTPException(422, "Foto kedaluwarsa. Unggah kembali sebelum mengirim.")
+        content = {"image_url": photo.image_url}
+    else:
+        content = (
+            await chat_context.attachment(session, akun, target, body.message_type, body.attachment_id)
+            if body.message_type != "text" else None
+        )
     row = PesanMarketplaceReceipt(
         akun_id=akun_id,
         operation_id=operation,

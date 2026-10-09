@@ -79,3 +79,47 @@ async def send_content(session, akun, target, message_type, content):
     if not resp.get("message_id") or str(resp.get("to_id")) != str(target["to_id"]):
         raise HTTPException(502, "Hasil kirim belum pasti; periksa riwayat sebelum mengirim lagi")
     return resp
+
+
+async def upload_photo(session, akun, content):
+    """Chat image upload (doc 683); upload alone never sends a message."""
+    import asyncio
+    from urllib.parse import urlencode, urlsplit
+    import requests
+    from shared.egress import proxies_for
+    if not api.live_sync_enabled() or not api.partner_configured():
+        raise api.ShopeeNotConfigured()
+    if not content or len(content) > 10 * 1024 * 1024:
+        raise HTTPException(422, "Foto maksimal 10 MB.")
+    if content.startswith(b"\xff\xd8\xff"):
+        mime, ext = "image/jpeg", "jpg"
+    elif content.startswith(b"\x89PNG\r\n\x1a\n"):
+        mime, ext = "image/png", "png"
+    else:
+        raise HTTPException(422, "Gunakan foto JPG/JPEG/PNG.")
+    await api.pastikan_token_segar(session, akun)
+    if not akun.access_token or not akun.id_toko_eksternal:
+        raise api.ShopeeNotConfigured()
+    path = BASE + "upload_image"
+    timestamp = int(time.time())
+    query = {"partner_id": api._partner_id_int(), "timestamp": timestamp,
+             "access_token": akun.access_token, "shop_id": int(akun.id_toko_eksternal),
+             "sign": api.sign_request(path, timestamp, access_token=akun.access_token, shop_id=str(akun.id_toko_eksternal))}
+    def upload():
+        try:
+            response = requests.post(api._host() + path + "?" + urlencode(query),
+                                     files={"file": ("foto." + ext, content, mime)}, timeout=30,
+                                     allow_redirects=False, proxies=proxies_for("SHOPEE_PROXY_URL"))
+            data = response.json()
+        except (requests.RequestException, ValueError) as exc:
+            raise HTTPException(502, "Unggah foto belum berhasil. Pesan belum dikirim.") from exc
+        if not response.ok or not isinstance(data, dict):
+            raise HTTPException(502, "Unggah foto ditolak Shopee. Pesan belum dikirim.")
+        if data.get("error"):
+            raise api.ShopeeAPIError(path, str(data["error"]), str(data.get("message") or ""), data.get("request_id"))
+        url = (data.get("response") or {}).get("url")
+        parsed = urlsplit(url) if isinstance(url, str) else None
+        if not parsed or parsed.scheme != "https" or not parsed.hostname or parsed.username or parsed.password:
+            raise HTTPException(424, "Shopee belum menyediakan URL foto. Pesan belum dikirim.")
+        return url
+    return await asyncio.to_thread(upload)
