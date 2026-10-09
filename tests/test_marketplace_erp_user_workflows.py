@@ -569,3 +569,9 @@ async def test_chat_nested_variant_card_uses_exact_model_photo_and_price(session
     unknown = chat_context.message_product_card(product, {'model_id': '999'})
     assert unknown['harga'] is None and unknown['varian'] == 'Varian belum tersinkron'
     assert chat_context.message_reference({'content': {'quoted_msg': {'item_id': 11}, 'text': 'Halo'}}) == {}
+
+
+def test_chat_native_product_id_alias_matches_item_reference():
+    from tenants.marketplace_erp.adapters.api.v1 import chat_context
+    native = {'content': {'product_id': 11, 'model_id': 22, 'item_card_v2': {'item_id': 11, 'item_model_v2': [{'model_id': 22}]}}, 'source_content': {'product_id': 11}}
+    assert chat_context.message_reference(native) == {'item_id': '11', 'model_id': '22'}

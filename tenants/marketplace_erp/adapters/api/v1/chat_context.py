@@ -178,7 +178,8 @@ def message_reference(message):
     read(message.get('source_content'))
     result = {}
     for key in ('item_id', 'model_id', 'order_sn', 'model_name', 'variation_name'):
-        values = {str(r[key]) for r in records if r.get(key) is not None and str(r[key]).strip()}
+        aliases = ('item_id', 'product_id') if key == 'item_id' else (key,)
+        values = {str(r[k]) for r in records for k in aliases if r.get(k) is not None and str(r[k]).strip()}
         if len(values) == 1:
             result[key] = next(iter(values))
     return result
