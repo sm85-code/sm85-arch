@@ -233,3 +233,19 @@ async def test_semantic_receipt_ignores_key_order_and_decimal_format(setup, monk
         await service.tool_call(s, user, turn, a)
         await service.tool_call(s, user, turn, b)
         assert execute.await_count == 1
+
+
+@pytest.mark.asyncio
+async def test_real_tool_refuses_product_from_other_shop(setup, monkeypatch):
+    factory, user = setup
+    monkeypatch.setattr(tools.services, 'akun_shopee_pengelolaan', AsyncMock(return_value=SimpleNamespace(id='selected')))
+    monkeypatch.setattr(tools.services, 'get_katalog_shopee', AsyncMock(return_value=(SimpleNamespace(akun_id='other', item_id='7'), 'Other shop')))
+    write = AsyncMock()
+    monkeypatch.setattr(tools.management, 'update_item', write)
+    async with factory() as s:
+        turn = await service.enqueue(s, user, message(mode='perintah', akun_id='selected'))
+        _, stop = await service.tool_call(s, user, turn, {'name': 'ubah_produk', 'input': {'katalog_id': 'foreign-product', 'perubahan': {'item_name': 'new'}}})
+        assert not stop
+        receipt = (await s.execute(select(AiToolReceipt))).scalar_one()
+        assert receipt.status == 'rejected' and 'toko' in receipt.result_json
+    write.assert_not_awaited()

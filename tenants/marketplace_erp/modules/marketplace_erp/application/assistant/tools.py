@@ -59,6 +59,17 @@ class AdsChange(Input):
     roas_target: Decimal | None = Field(default=None, gt=0, le=100, allow_inf_nan=False)
 
 
+    @model_validator(mode="after")
+    def fields_match_action(self):
+        if self.aksi == "change_budget" and (self.budget is None or self.roas_target is not None):
+            raise ValueError("Isi anggaran saja untuk change_budget")
+        if self.aksi == "change_roas_target" and (self.roas_target is None or self.budget is not None):
+            raise ValueError("Isi ROAS saja untuk change_roas_target")
+        if self.aksi in ("pause", "resume") and (self.budget is not None or self.roas_target is not None):
+            raise ValueError("Jeda/lanjut tidak mengubah budget/ROAS")
+        return self
+
+
 class Keyword(Input):
     aksi: Literal["add", "delete", "change_bid_price", "change_match_type"]
     kata: str = Field(min_length=1, max_length=100)
@@ -76,7 +87,7 @@ class AdsCreate(CatalogRef):
     @model_validator(mode="after")
     def explicit_values(self):
         from .config import day
-        if self.mulai < day() or (self.bidding == "manual" and not self.kata_kunci):
+        if self.mulai < day() or (self.bidding == "manual" and (not self.kata_kunci or any(k.aksi != "add" or k.bid is None or k.tipe is None for k in self.kata_kunci))) or (self.bidding == "auto" and self.kata_kunci):
             raise ValueError("Jadwal/keyword iklan tidak lengkap")
         return self
 
