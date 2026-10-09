@@ -291,3 +291,19 @@ async def test_sales_summary_explains_cancelled_orders_outside_revenue_total(set
         assert result['total_pesanan'] == 26
         assert 'dibatalkan' not in result['definisi']['tahap_dihitung_omzet']
         assert 'per_hari' not in result
+
+@pytest.mark.asyncio
+async def test_product_search_exposes_catalogue_photo_and_real_shop_link(setup, monkeypatch):
+    from tenants.marketplace_erp.modules.marketplace_erp.infrastructure.models import AkunMarketplace
+    factory, user = setup
+    monkeypatch.setattr(tools.services, 'list_katalog_shopee', AsyncMock(return_value={
+        'items': [{'id': 'p1', 'akun_id': 's1', 'item_id': '1234', 'nama': 'Partisi',
+                   'foto_utama': 'https://cf.shopee.co.id/file/photo', 'deskripsi': 'not exposed'}], 'total': 1}))
+    async with factory() as session:
+        session.add(AkunMarketplace(id='s1', platform='shopee', nama_toko='Toko', id_toko_eksternal='5678'))
+        await session.flush()
+        turn = SimpleNamespace(mode='tanya', akun_id='s1', session_version=user.session_version)
+        result = await tools.execute(session, user, turn, 'cari_produk', tools.validate('cari_produk', {'q': 'Partisi'}, 'f'), 'f')
+        assert result['items'][0]['url_produk'] == 'https://shopee.co.id/product/5678/1234'
+        assert result['items'][0]['foto_utama'] == 'https://cf.shopee.co.id/file/photo'
+        assert 'deskripsi' not in result['items'][0]

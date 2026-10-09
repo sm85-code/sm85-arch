@@ -198,7 +198,18 @@ async def execute(session, user, turn, name, payload, fingerprint):
         return [{"id": a.id, "nama": a.nama_toko, "platform": a.platform} for a in await services.list_akun_marketplace(session)]
     if name == "cari_produk":
         result = await services.list_katalog_shopee(session, akun_id=turn.akun_id, q=payload.q, halaman=payload.halaman, per_halaman=20)
-        result["items"] = [{k: r.get(k) for k in ("id", "akun_id", "nama_toko", "item_id", "nama", "sku", "harga_min", "harga_max", "stok_shopee", "status", "diambil_at")} for r in result["items"]]
+        from sqlalchemy import select
+        from ...infrastructure.models import AkunMarketplace
+        account_ids = {r.get("akun_id") for r in result["items"] if r.get("akun_id")}
+        accounts = (await session.execute(select(AkunMarketplace).where(AkunMarketplace.id.in_(account_ids)))).scalars().all() if account_ids else []
+        shop_ids = {a.id: str(a.id_toko_eksternal or "") for a in accounts}
+        items = []
+        for row in result["items"]:
+            card = {k: row.get(k) for k in ("id", "akun_id", "nama_toko", "item_id", "nama", "sku", "harga_min", "harga_max", "stok_shopee", "status", "diambil_at", "foto_utama")}
+            shop, item = shop_ids.get(row.get("akun_id"), ""), str(row.get("item_id") or "")
+            card["url_produk"] = f"https://shopee.co.id/product/{shop}/{item}" if shop.isdecimal() and item.isdecimal() and int(shop) > 0 and int(item) > 0 else None
+            items.append(card)
+        result["items"] = items
         return result
     if name == "ringkasan_usaha":
         if payload.mulai > payload.selesai or (payload.selesai - payload.mulai).days > 92:
