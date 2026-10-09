@@ -62,6 +62,13 @@ class PembeliStore(StoreBase):
 METODE_PROSES_PESANAN = ("pickup", "drop_off")
 
 
+class ProfilTokoStore(StoreBase):
+    __tablename__ = "store_profil_toko"
+
+    id: Mapped[str] = mapped_column(String(64), primary_key=True)
+    data: Mapped[str] = mapped_column(Text, nullable=False)
+
+
 class PengaturanStore(StoreBase):
     """Single-row global settings (fixed id => at most one row)."""
 

@@ -7,6 +7,8 @@ read or change their own cart, addresses, orders and chat.
 """
 from __future__ import annotations
 
+from tenants.store.modules.store.application.shop_profile import get_profile
+
 import os
 from dataclasses import asdict
 from decimal import Decimal
@@ -442,3 +444,8 @@ async def kirim_lampiran_saya(
     )
     percakapan = await services.get_percakapan(session, percakapan.id)
     return services.percakapan_out(percakapan, dengan_pesan=True)
+
+
+@store_buyer_router.get("/profil-toko")
+async def profil_toko(session: AsyncSession = Depends(get_db_store)):
+    return await get_profile(session)
