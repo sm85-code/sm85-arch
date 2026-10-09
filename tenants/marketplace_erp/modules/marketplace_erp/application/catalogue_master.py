@@ -70,6 +70,7 @@ async def copy_to_master(session, catalogue_id):
             deskripsi=data["deskripsi"],
             harga_dasar=price,
             stok=0,
+            stok_referensi=variant.get("stok") if data["varian"] else data.get("stok_shopee"),
             foto_url=variant.get("foto") or data.get("foto_utama"),
             berat_gram=inherited("berat_gram"),
             panjang_cm=inherited("panjang_cm"),

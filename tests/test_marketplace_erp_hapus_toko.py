@@ -7,6 +7,7 @@ from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker, create_asyn
 
 from tenants.marketplace_erp.modules.marketplace_erp.application import services
 from tenants.marketplace_erp.modules.marketplace_erp.application.schemas import AkunMarketplaceIn
+from tenants.marketplace_erp.modules.marketplace_erp.infrastructure.models import PengaturanStok
 from tenants.marketplace_erp.modules.marketplace_erp.infrastructure.database import MarketplaceErpBase
 
 
@@ -16,6 +17,9 @@ async def session():
     async with engine.begin() as conn:
         await conn.run_sync(MarketplaceErpBase.metadata.create_all)
     async with async_sessionmaker(engine, class_=AsyncSession, expire_on_commit=False)() as s:
+        # This suite exercises the explicitly enabled warehouse workflow.
+        s.add(PengaturanStok(id="global", gudang_aktif=True))
+        await s.flush()
         yield s
     await engine.dispose()
 

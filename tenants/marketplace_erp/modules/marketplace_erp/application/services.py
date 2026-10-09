@@ -12,6 +12,8 @@ from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import selectinload
 
+from .stock_settings import get_settings, require_warehouse
+
 from shared.security import hash_password, verify_password
 from tenants.marketplace_erp.modules.marketplace_erp.application.schemas import (
     AkunMarketplaceIn,
@@ -546,6 +548,8 @@ async def create_produk(session: AsyncSession, payload: ProdukIn) -> Produk:
     ).scalar_one_or_none()
     if existing:
         raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail="SKU induk sudah dipakai produk lain")
+    if payload.stok:
+        await require_warehouse(session)
     if payload.stok < 0:
         raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Stok tidak boleh negatif")
     produk = Produk(
@@ -554,6 +558,7 @@ async def create_produk(session: AsyncSession, payload: ProdukIn) -> Produk:
         deskripsi=payload.deskripsi,
         harga_dasar=payload.harga_dasar,
         stok=payload.stok,
+        stok_referensi=payload.stok_referensi,
         foto_url=payload.foto_url,
         berat_gram=payload.berat_gram,
         panjang_cm=payload.panjang_cm,
@@ -1058,6 +1063,7 @@ async def transfer_stok(session: AsyncSession, payload: StokTransferIn) -> Produ
     Produk.stok (the available-everywhere cache) is unchanged -- a transfer
     doesn't add or remove available stock, it only moves which warehouse
     holds it."""
+    await require_warehouse(session)
     if payload.dari_gudang_id == payload.ke_gudang_id:
         raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Gudang asal dan tujuan tidak boleh sama")
 
@@ -1136,6 +1142,7 @@ async def list_stok_ledger(
 
 async def adjust_stok(session: AsyncSession, payload: StokAdjustIn) -> Produk:
     """Manual stock adjustment. Updates Produk.stok atomically and appends ledger."""
+    await require_warehouse(session)
     if payload.qty_delta == 0:
         raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="qty_delta tidak boleh 0")
 
@@ -1181,6 +1188,8 @@ async def adjust_stok(session: AsyncSession, payload: StokAdjustIn) -> Produk:
 async def _reserve_for_pesanan(session: AsyncSession, pesanan: Pesanan) -> None:
     """Hold available stock for each line that has produk_id. Fails the whole
     transition if any line would oversell."""
+    if not (await get_settings(session))["gudang_aktif"]:
+        return
     gudang = await ensure_default_gudang(session)
     for item in pesanan.items:
         if not item.produk_id:
@@ -1226,11 +1235,13 @@ async def _reserve_for_pesanan(session: AsyncSession, pesanan: Pesanan) -> None:
 
 async def _release_reservasi_pesanan(session: AsyncSession, pesanan: Pesanan) -> None:
     """Undo aktif reservations on cancel -- restore Produk.stok."""
-    gudang = await ensure_default_gudang(session)
     stmt = select(StokReservasi).where(
         StokReservasi.pesanan_id == pesanan.id, StokReservasi.status == "aktif"
     )
     rows = list((await session.execute(stmt)).scalars().all())
+    if not rows:
+        return
+    gudang = await ensure_default_gudang(session)
     for row in rows:
         produk_stmt = select(Produk).where(Produk.id == row.produk_id).with_for_update()
         produk = (await session.execute(produk_stmt)).scalar_one_or_none()
@@ -1255,11 +1266,13 @@ async def _consume_reservasi_pesanan(session: AsyncSession, pesanan: Pesanan) ->
     """Mark reservations consumed on ship. Available cache already reduced
     at reserve time; ledger records the outbound ship event (qty_delta=0
     relative to available, documented as reason=ship)."""
-    gudang = await ensure_default_gudang(session)
     stmt = select(StokReservasi).where(
         StokReservasi.pesanan_id == pesanan.id, StokReservasi.status == "aktif"
     )
     rows = list((await session.execute(stmt)).scalars().all())
+    if not rows:
+        return
+    gudang = await ensure_default_gudang(session)
     for row in rows:
         row.status = "consumed"
         session.add(
@@ -2426,6 +2439,8 @@ async def laporan_ringkas(
     stok_kritis = [
         {"produk_id": p.id, "sku_induk": p.sku_induk, "nama": p.nama, "stok": p.stok} for p in stok_kritis_rows
     ]
+    if not (await get_settings(session))["gudang_aktif"]:
+        stok_kritis = []
 
     return {
         "dari": dari,
@@ -2545,6 +2560,8 @@ async def laporan_dashboard(
             )
         ).scalars()
     ]
+    if not (await get_settings(session))["gudang_aktif"]:
+        stok_kritis = []
     return {
         "dari": dari,
         "sampai": sampai,

@@ -80,6 +80,7 @@ async def test_copy_preserves_variants_without_importing_marketplace_stock_and_r
     assert len(rows) == 2 and all(r.stok == 0 and r.nama == "Produk Induk" for r in rows)
     red = next(r for r in rows if r.sku_induk == "RED")
     blue = next(r for r in rows if r.sku_induk != "RED")
+    assert red.stok_referensi == 80 and blue.stok_referensi == 90
     assert red.harga_dasar == 100 and red.berat_gram == 500
     assert blue.berat_gram == 750 and blue.preorder and blue.hari_proses == 7
     retry = await copy_batch(session, ["catalogue"])

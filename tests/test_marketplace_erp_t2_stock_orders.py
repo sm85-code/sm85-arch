@@ -14,6 +14,7 @@ from tenants.marketplace_erp.modules.marketplace_erp.application.schemas import 
     ProdukIn,
     StokAdjustIn,
 )
+from tenants.marketplace_erp.modules.marketplace_erp.infrastructure.models import PengaturanStok
 from tenants.marketplace_erp.modules.marketplace_erp.infrastructure.database import MarketplaceErpBase
 from tenants.marketplace_erp.modules.marketplace_erp.infrastructure.models import StokReservasi
 from sqlalchemy import select
@@ -26,6 +27,9 @@ async def session():
         await conn.run_sync(MarketplaceErpBase.metadata.create_all)
     session_local = async_sessionmaker(engine, class_=AsyncSession, expire_on_commit=False)
     async with session_local() as s:
+        # This suite exercises the explicitly enabled warehouse workflow.
+        s.add(PengaturanStok(id="global", gudang_aktif=True))
+        await s.flush()
         yield s
     await engine.dispose()
 

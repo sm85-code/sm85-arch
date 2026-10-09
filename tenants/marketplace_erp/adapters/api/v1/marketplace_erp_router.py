@@ -535,6 +535,8 @@ async def create_gudang(
     session: AsyncSession = Depends(get_db_marketplace_erp),
     _: UserMarketplaceErp = Depends(require_roles_marketplace_erp(*OWNER_ONLY)),
 ):
+    from tenants.marketplace_erp.modules.marketplace_erp.application.stock_settings import require_warehouse
+    await require_warehouse(session)
     return await services.create_gudang(session, payload)
 
 
@@ -1548,6 +1550,8 @@ async def push_stok_harga_akun(
             status_code=status.HTTP_501_NOT_IMPLEMENTED,
             detail=f"Push stok/harga untuk platform '{akun.platform}' belum tersedia (Shopee first)",
         )
+    from tenants.marketplace_erp.modules.marketplace_erp.application.stock_settings import require_warehouse
+    await require_warehouse(session)
     rows = await services.baris_push_listing(session, akun)
     if dry_run:
         return {"ok": True, "dry_run": True, "jumlah": len(rows), "rows": rows}
@@ -1851,3 +1855,12 @@ marketplace_erp_router.include_router(workflow_router)
 marketplace_erp_router.include_router(sync_router)
 
 marketplace_erp_router.include_router(chat_router)
+
+
+@marketplace_erp_router.get("/pengaturan-stok")
+async def pengaturan_stok(
+    session: AsyncSession = Depends(get_db_marketplace_erp),
+    _: UserMarketplaceErp = Depends(require_roles_marketplace_erp(*OWNER_ONLY)),
+):
+    from tenants.marketplace_erp.modules.marketplace_erp.application.stock_settings import get_settings
+    return await get_settings(session)
