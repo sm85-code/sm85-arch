@@ -174,3 +174,5 @@ async def test_chat_order_attachment_is_scoped_to_buyer_and_history_bounded(db):
     cursor = latest.pesan[0].id
     older = await services.get_percakapan(db, chat.id, cursor)
     assert len(older.pesan) == 1 and older.pesan[0].isi == "0"
+    listing = await services.list_percakapan_admin(db, halaman=1, cari="Other", unanswered=True)
+    assert listing["total"] == 1 and listing["items"][0]["preview"] == "50"

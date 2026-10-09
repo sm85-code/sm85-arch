@@ -39,7 +39,7 @@ async def copy_to_master(session, catalogue_id):
     if len({sku for _, sku, _ in entries}) != len(entries):
         raise HTTPException(422, "Identitas varian katalog berulang. Sinkronkan produk ini terlebih dahulu.")
     family = None
-    tiers = [o["tier"] for o in variants[0].get("opsi", [])]
+    tiers = [str(o.get("tier") or "").strip() or f"Varian {i + 1}" for i, o in enumerate(variants[0].get("opsi", []))]
     if data["varian"] and any(existing is None for _, _, existing in entries):
         if not tiers:
             tiers = ["Varian"]
@@ -63,6 +63,10 @@ async def copy_to_master(session, catalogue_id):
         options = variant.get("opsi") or (
             [{"tier": "Varian", "opsi": variant.get("nama") or str(variant.get("model_id"))}] if family else []
         )
+        if options and family:
+            if len(options) != len(tiers):
+                raise HTTPException(422, "Pilihan varian tidak lengkap. Sinkronkan produk terlebih dahulu")
+            options = [{"tier": tiers[i], "opsi": o["opsi"]} for i, o in enumerate(options)]
         price = (variant.get("harga_asli") or variant.get("harga")) if data["varian"] else data.get("harga_min")
         if price is None or price == "":
             raise HTTPException(422, "Harga katalog belum tersedia. Sinkronkan produk ini terlebih dahulu.")

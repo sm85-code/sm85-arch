@@ -1467,7 +1467,7 @@ async def kirim_katalog_ke_toko(
         k.dikirim_at = datetime.now(timezone.utc)
         await session.flush()
         hasil.append({**info, "hasil": "dibuat" if result["dibuat"] else "diperbarui",
-                      "produk_toko_id": result["produk"]["id"], "foto_gagal": result["foto_gagal"]})
+                      "produk_toko_id": result["produk"]["id"], "foto": result["foto"], "foto_gagal": result["foto_gagal"]})
     return {"ok": True, "hasil": hasil}
 
 

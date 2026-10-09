@@ -84,6 +84,6 @@ async def publish_master(session, store_session, produk_id, payload, importer=im
     for k in sources:
         k.dikirim_toko_id = copy.id
     await session.flush()
-    return {"dibuat": created, "foto_disalin": bool(keys), "foto_gagal": photo_failed,
+    return {"dibuat": created, "foto": len(keys), "foto_disalin": bool(keys), "foto_gagal": photo_failed,
             "pesan": "Foto belum lengkap; produk disimpan sebagai draft" if photo_failed else None,
             "produk": services.produk_out(copy)}

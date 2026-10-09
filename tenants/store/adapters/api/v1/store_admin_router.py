@@ -407,6 +407,12 @@ async def laporan_ringkasan_status(
 # --- Chat ------------------------------------------------------------------
 
 
+@store_admin_router.get("/chat-halaman")
+async def daftar_chat_halaman(halaman: int = Query(1, ge=1), cari: str = Query("", max_length=200),
+    unread: bool = False, unanswered: bool = False, session: AsyncSession = Depends(get_db_store), _user: AdminStore = Depends(admin_only)):
+    return await services.list_percakapan_admin(session, halaman=halaman, cari=cari, unread=unread, unanswered=unanswered)
+
+
 @store_admin_router.get("/chat")
 async def list_percakapan(session: AsyncSession = Depends(get_db_store), _user: AdminStore = Depends(admin_only)):
     return [services.percakapan_out(p) for p in await services.list_percakapan_admin(session)]

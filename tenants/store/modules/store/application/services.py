@@ -1458,17 +1458,25 @@ async def get_percakapan(session: AsyncSession, percakapan_id: str, before: str 
     return percakapan
 
 
-async def list_percakapan_admin(session: AsyncSession) -> list[PercakapanStore]:
+async def list_percakapan_admin(session: AsyncSession, *, halaman: int | None = None, cari: str = "", unread: bool = False, unanswered: bool = False):
     latest = select(PesanChatStore.id).where(PesanChatStore.percakapan_id == PercakapanStore.id).order_by(
         PesanChatStore.created_at.desc(), PesanChatStore.id.desc()).limit(1).correlate(PercakapanStore).scalar_subquery()
     stmt = select(PercakapanStore, PesanChatStore).outerjoin(PesanChatStore, PesanChatStore.id == latest).options(
-        selectinload(PercakapanStore.pembeli)).order_by(PercakapanStore.updated_at.desc()).limit(200)
+        selectinload(PercakapanStore.pembeli)).join(PembeliStore, PembeliStore.id == PercakapanStore.user_id)
+    if cari:
+        stmt = stmt.where(PembeliStore.nama.ilike(f"%{cari}%"))
+    if unread:
+        stmt = stmt.where(PercakapanStore.unread_admin.is_(True))
+    if unanswered:
+        stmt = stmt.where(PesanChatStore.pengirim_admin.is_(False))
+    total = (await session.execute(select(func.count()).select_from(stmt.subquery()))).scalar_one() if halaman else None
+    stmt = stmt.order_by(PercakapanStore.updated_at.desc(), PercakapanStore.id).offset((halaman - 1) * 25 if halaman else 0).limit(25 if halaman else 200)
     result = []
     for c, message in (await session.execute(stmt)).all():
         c.preview = message.isi or ("Pesanan" if message.pesanan_id else "Lampiran") if message else ""
         c.belum_dibalas = bool(message and not message.pengirim_admin)
         result.append(c)
-    return result
+    return {"items": [percakapan_out(c) for c in result], "total": total} if halaman else result
 
 
 async def kirim_pesan(
