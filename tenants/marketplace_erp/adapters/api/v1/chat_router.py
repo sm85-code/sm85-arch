@@ -91,14 +91,9 @@ async def messages(
     akun = await account(session, user, akun_id, "chat")
     target = await provider.conversation(session, akun, conversation_id)
     history = await provider.messages(session, akun, conversation_id, offset)
-    order_numbers, item_ids = set(), set()
-    for message in history["messages"]:
-        content = message.get("content")
-        if isinstance(content, dict):
-            if content.get("order_sn"):
-                order_numbers.add(str(content["order_sn"]))
-            if content.get("item_id"):
-                item_ids.add(str(content["item_id"]))
+    references = [chat_context.message_reference(m) for m in history["messages"]]
+    order_numbers = {r["order_sn"] for r in references if r.get("order_sn")}
+    item_ids = {r["item_id"] for r in references if r.get("item_id")}
     orders = (
         (
             await session.execute(
@@ -125,18 +120,17 @@ async def messages(
     )
     await chat_context.services.lengkapi_foto_item(session, orders)
     order_cards = {row.id_eksternal: chat_context.order_card(row) for row in orders}
-    product_cards = {row.item_id: chat_context.product_card(row) for row in products}
+    product_rows = {row.item_id: row for row in products}
     order_map = {row.id_eksternal: row.id for row in orders}
     product_map = {row.item_id: row.id for row in products}
-    for message in history["messages"]:
-        content = message.get("content")
-        if isinstance(content, dict):
-            message["context"] = {
-                "order_id": order_map.get(str(content.get("order_sn"))),
-                "katalog_id": product_map.get(str(content.get("item_id"))),
-                "order": order_cards.get(str(content.get("order_sn"))),
-                "product": product_cards.get(str(content.get("item_id"))),
-            }
+    for message, reference in zip(history["messages"], references):
+        product = product_rows.get(reference.get("item_id"))
+        message["context"] = {
+            "order_id": order_map.get(reference.get("order_sn")),
+            "katalog_id": product_map.get(reference.get("item_id")),
+            "order": order_cards.get(reference.get("order_sn")),
+            "product": chat_context.message_product_card(product, reference) if product else None,
+        }
     return {"conversation": target, **history}
 
 

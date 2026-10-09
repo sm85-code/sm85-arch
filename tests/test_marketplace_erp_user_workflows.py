@@ -542,3 +542,30 @@ async def test_chat_photo_upload_multipart_no_redirects_and_provider_url(monkeyp
     with pytest.raises(HTTPException) as error:
         await erp_shopee_chat.upload_photo(None, akun, b'\xff\xd8\xffphoto')
     assert error.value.status_code == 424
+
+
+@pytest.mark.asyncio
+async def test_chat_nested_variant_card_uses_exact_model_photo_and_price(session, monkeypatch):
+    from tenants.marketplace_erp.modules.marketplace_erp.infrastructure.models import KatalogShopee
+    from tenants.marketplace_erp.adapters.api.v1 import chat_context
+    from unittest.mock import AsyncMock
+    akun, user = await setup(session)
+    product = KatalogShopee(akun_id=akun.id, item_id='11', nama='Rak Partisi', harga_min=100,
+        foto_json='["https://example.com/parent.jpg"]',
+        varian_json=json.dumps([{'model_id': '22', 'nama': 'Polos', 'harga': '445263', 'foto': 'https://example.com/polos.jpg'}]))
+    session.add(product)
+    await session.commit()
+    nested = {'components': [{'data': json.dumps({'item_id': 11, 'model_id': 22, 'model_name': 'Polos'})}]}
+    monkeypatch.setattr(erp_shopee_chat, 'conversation', AsyncMock(return_value={'conversation_id': 'c1', 'to_id': 77}))
+    monkeypatch.setattr(erp_shopee_chat, 'messages', AsyncMock(return_value={'messages': [
+        {'message_id': 'm1', 'message_type': 'rich_text', 'content': nested},
+        {'message_id': 'm2', 'message_type': 'text', 'content': {'text': 'Bisa pilih warna?'}, 'source_content': {'item_id': 11, 'model_id': 22}},
+    ], 'page_result': {}}))
+    result = await chat_router.messages(akun.id, 'c1', None, session, user)
+    for message in result['messages']:
+        card = message['context']['product']
+        assert card['varian'] == 'Polos' and card['harga'] == '445263'
+        assert card['foto'] == 'https://example.com/polos.jpg'
+    unknown = chat_context.message_product_card(product, {'model_id': '999'})
+    assert unknown['harga'] is None and unknown['varian'] == 'Varian belum tersinkron'
+    assert chat_context.message_reference({'content': {'quoted_msg': {'item_id': 11}, 'text': 'Halo'}}) == {}
