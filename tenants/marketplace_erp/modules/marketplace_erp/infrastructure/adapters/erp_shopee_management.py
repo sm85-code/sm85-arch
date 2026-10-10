@@ -115,12 +115,14 @@ async def gmv_performance(session, akun, campaign_id, start, end, offset=0, limi
     now = today()
     if start > end or end > now or start < shift_months(now, -6) or end > shift_months(start, 3):
         raise HTTPException(422, "Periode maksimal tiga bulan, dalam enam bulan terakhir")
-    body = {"campaign_id": campaign_id, "start_date": start.strftime("%d-%m-%Y"), "end_date": end.strftime("%d-%m-%Y")}
+    body = {"start_date": start.strftime("%d-%m-%Y"), "end_date": end.strftime("%d-%m-%Y")}
+    if campaign_id is not None:
+        body["campaign_id"] = campaign_id
     if per_item:
         body.update(offset=offset, limit=limit)
     path = "/api/v2/ads/" + ("get_gms_item_performance" if per_item else "get_gms_campaign_performance")
     data = await provider.signed_shop_request(session, akun, path, method="POST", body=body)
     response = data.get("response")
-    if not isinstance(response, dict) or str(response.get("campaign_id")) != str(campaign_id) or (per_item and (not isinstance(response.get("result_list"), list) or type(response.get("has_next_page")) is not bool or type(response.get("total")) is not int)) or (not per_item and not isinstance(response.get("report"), dict)):
+    if not isinstance(response, dict) or type(response.get("campaign_id")) is not int or response["campaign_id"] <= 0 or (campaign_id is not None and str(response["campaign_id"]) != str(campaign_id)) or (per_item and (not isinstance(response.get("result_list"), list) or type(response.get("has_next_page")) is not bool or type(response.get("total")) is not int)) or (not per_item and not isinstance(response.get("report"), dict)):
         incomplete(path, data)
-    return {**response, "campaign_id": str(campaign_id), "request_id": data.get("request_id")}
+    return {**response, "campaign_id": str(response["campaign_id"]), "request_id": data.get("request_id")}

@@ -102,5 +102,5 @@ async def gmv_items(id: str, body: GmvItems, session: AsyncSession = DB, user: U
 
 
 @router.get("/akun/{id}/gmv-max/performa")
-async def performance(id: str, mulai: date, selesai: date, campaign_id: int = Query(gt=0), per_produk: bool = False, offset: int = Query(0, ge=0), limit: int = Query(50, ge=1, le=100), session: AsyncSession = DB, user: UserMarketplaceErp = ADMIN):
+async def performance(id: str, mulai: date, selesai: date, campaign_id: int | None = Query(None, gt=0), per_produk: bool = False, offset: int = Query(0, ge=0), limit: int = Query(50, ge=1, le=100), session: AsyncSession = DB, user: UserMarketplaceErp = ADMIN):
     return await adapter.gmv_performance(session, await account(session, user, id), campaign_id, mulai, selesai, offset, limit, per_produk)
