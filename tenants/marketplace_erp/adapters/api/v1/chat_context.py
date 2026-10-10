@@ -22,7 +22,7 @@ def buyer_matches(order, target):
     )
 
 
-async def buyer_orders(session, akun, targets, *, items=False, limit=500):
+async def buyer_orders(session, akun, targets, *, items=False, limit=500, latest_per_buyer=False):
     """Match immutable buyer IDs even if the username in an old snapshot changed."""
     names = {t.get("to_name", "").strip().lower() for t in targets if t.get("to_name")}
     ids = {str(t["to_id"]) for t in targets if str(t.get("to_id", "")).isdigit()}
@@ -35,6 +35,13 @@ async def buyer_orders(session, akun, targets, *, items=False, limit=500):
         Pesanan.platform == "shopee",
         or_(func.lower(func.trim(Pesanan.nama_pembeli)).in_(names), buyer_id.in_(ids)),
     )
+    if latest_per_buyer:
+        identity = func.coalesce(func.nullif(buyer_id, "0"), func.lower(func.trim(Pesanan.nama_pembeli)))
+        ranked = stmt.with_only_columns(Pesanan.id, func.row_number().over(
+            partition_by=identity,
+            order_by=(func.coalesce(Pesanan.dipesan_at, Pesanan.created_at).desc(), Pesanan.id),
+        ).label("rank")).subquery()
+        stmt = select(Pesanan).where(Pesanan.id.in_(select(ranked.c.id).where(ranked.c.rank == 1)))
     if items:
         stmt = stmt.options(selectinload(Pesanan.items))
     return (
@@ -46,6 +53,52 @@ async def buyer_orders(session, akun, targets, *, items=False, limit=500):
         .scalars()
         .all()
     )
+
+
+def destination_city(order):
+    detail = json.loads(order.detail_json or "{}")
+    city = detail.get("kota") or (detail.get("recipient_address") or {}).get("city")
+    return str(city).strip() if city else None
+
+
+async def destination_cities(session, akun, targets, orders):
+    """Recover missing destinations from authorized, matched orders, without changing order status."""
+    cities = {}
+    missing_orders = {}
+    for target in targets:
+        key = str(target.get("to_id"))
+        matched = [o for o in orders if buyer_matches(o, target)]
+        cities[key] = next((destination_city(o) for o in matched if destination_city(o)), None)
+        if not cities[key] and matched:
+            missing_orders[matched[0].id_eksternal] = matched[0]
+    if not missing_orders:
+        return cities
+    # One batch for an inbox page; never fetch addresses for unmatched buyers or another shop.
+    selected = dict(list(missing_orders.items())[:50])
+    try:
+        response = await api.signed_shop_request(
+            session, akun, api._PATH_ORDER_DETAIL,
+            params={"order_sn_list": ",".join(selected), "response_optional_fields": "recipient_address"},
+        )
+    except HTTPException:
+        return cities  # Address lookup must not prevent reading or replying to chat.
+    changed = False
+    for remote in (response.get("response") or {}).get("order_list") or []:
+        row = selected.get(remote.get("order_sn"))
+        recipient = remote.get("recipient_address") or {}
+        city = str(recipient.get("city") or "").strip()
+        if row is not None and city:
+            detail = json.loads(row.detail_json or "{}")
+            detail["kota"] = city
+            row.detail_json = json.dumps(detail, ensure_ascii=False)
+            changed = True
+    if changed:
+        await session.commit()
+        for target in targets:
+            key = str(target.get("to_id"))
+            if not cities[key]:
+                cities[key] = next((destination_city(o) for o in selected.values() if buyer_matches(o, target) and destination_city(o)), None)
+    return cities
 
 
 def order_card(row):
@@ -121,16 +174,11 @@ async def context(session, akun, target, query="", offset=0):
         .scalars()
         .all()
     )
-    city = next(
-        (
-            json.loads(r.detail_json or "{}").get("kota")
-            for r in orders
-            if json.loads(r.detail_json or "{}").get("kota")
-        ),
-        None,
-    )
+    cities = await destination_cities(session, akun, [target], orders)
+    city = cities.get(str(target.get("to_id")))
     return {
         "kota": city,
+        "punya_pesanan": bool(orders),
         "kota_sumber": "Alamat tujuan pesanan terbaru" if city else None,
         "pesanan": [order_card(r) for r in orders],
         "produk": [product_card(r) for r in products[:20]],

@@ -67,16 +67,11 @@ async def inbox(
 ):
     akun = await account(session, user, akun_id, "chat")
     result = await provider.inbox(session, akun, cursor, unread)
-    orders = await chat_context.buyer_orders(session, akun, result["conversations"])
+    orders = await chat_context.buyer_orders(session, akun, result["conversations"], latest_per_buyer=True)
+    cities = await chat_context.destination_cities(session, akun, result["conversations"], orders)
     for c in result["conversations"]:
-        c["kota"] = next(
-            (
-                json.loads(o.detail_json or "{}").get("kota")
-                for o in orders
-                if chat_context.buyer_matches(o, c) and json.loads(o.detail_json or "{}").get("kota")
-            ),
-            None,
-        )
+        c["kota"] = cities.get(str(c.get("to_id")))
+        c["punya_pesanan"] = any(chat_context.buyer_matches(o, c) for o in orders)
     return result
 
 
