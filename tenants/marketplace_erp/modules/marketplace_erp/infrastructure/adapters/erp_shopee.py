@@ -936,6 +936,12 @@ def normalisasi_pesanan(order: dict) -> dict:
     ``status`` is None for a Shopee status we do not map, so the importer skips it instead of
     guessing (map_shopee_status would silently turn an unknown state into 'unpaid').
     """
+    recipient = order.get("recipient_address") or {}
+    address_parts = []
+    for key in ("full_address", "district", "city", "state", "zipcode"):
+        part = str(recipient.get(key) or "").strip()
+        if part and not any(part.casefold() in existing.casefold() for existing in address_parts):
+            address_parts.append(part)
     raw = str(order.get("order_status") or "").upper()
     items = []
     for it in order.get("item_list") or []:
@@ -996,6 +1002,8 @@ def normalisasi_pesanan(order: dict) -> dict:
             "cancel_reason": order.get("cancel_reason") or order.get("buyer_cancel_reason") or "",
             "penerima": ((order.get("recipient_address") or {}).get("name") or ""),
             "kota": ((order.get("recipient_address") or {}).get("city") or ""),
+            "alamat_penerima": ", ".join(address_parts),
+            "telepon_penerima": ((order.get("recipient_address") or {}).get("phone") or ""),
             "order_chargeable_weight_gram": order.get("order_chargeable_weight_gram"),
         },
     }

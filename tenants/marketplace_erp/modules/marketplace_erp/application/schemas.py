@@ -530,7 +530,7 @@ class PesananOut(BaseModel):
         fields = {
             "payment_method", "currency", "cod", "days_to_ship", "ship_by_date", "pay_time",
             "estimated_shipping_fee", "actual_shipping_fee", "actual_shipping_fee_confirmed",
-            "message_to_seller", "note", "cancel_by", "cancel_reason", "penerima", "kota",
+            "message_to_seller", "note", "cancel_by", "cancel_reason", "penerima", "kota", "alamat_penerima", "telepon_penerima",
         }
         if isinstance(snapshot, dict):
             data.update({k: v for k, v in snapshot.items() if k in fields and v is not None})
@@ -568,6 +568,8 @@ class PesananOut(BaseModel):
     cancel_by: str = ""
     cancel_reason: str = ""
     penerima: str = ""
+    alamat_penerima: str = ""
+    telepon_penerima: str = ""
     kota: str = ""
     created_at: datetime
     updated_at: datetime

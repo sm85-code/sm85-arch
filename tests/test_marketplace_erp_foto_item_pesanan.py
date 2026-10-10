@@ -88,3 +88,21 @@ async def test_a_stored_photo_wins_and_the_api_shape_carries_it(session):
     await services.lengkapi_foto_item(session, daftar)
     out = PesananOut.model_validate(daftar[0]).model_dump()
     assert out["items"][0]["foto"] == "https://img/a.jpg" and out["items"][0]["item_id_eksternal"] == "111"
+
+
+@pytest.mark.asyncio
+async def test_recipient_contact_is_carried_from_shopee_to_order_response(session):
+    akun = await _toko(session)
+    order = _order("RECIPIENT1", [_item()])
+    order["recipient_address"] = {
+        "name": "Penerima Uji", "phone": "081234567890",
+        "full_address": "Jl. Uji 10, Bandung", "district": "Coblong",
+        "city": "Bandung", "state": "Jawa Barat", "zipcode": "40132",
+    }
+    await services.impor_pesanan_marketplace(session, akun, [erp_shopee.normalisasi_pesanan(order)])
+    rows = await services.list_pesanan(session, platform="shopee")
+    out = PesananOut.model_validate(rows[0]).model_dump()
+    assert out["penerima"] == "Penerima Uji"
+    assert out["telepon_penerima"] == "081234567890"
+    assert out["alamat_penerima"] == "Jl. Uji 10, Bandung, Coblong, Jawa Barat, 40132"
+    assert erp_shopee.normalisasi_pesanan(_order("EMPTY", [_item()]))["detail"]["telepon_penerima"] == ""
