@@ -253,3 +253,26 @@ async def test_confirmed_write_retains_success_when_local_commit_fails():
     result = await router.save_confirmed(session, {"ok": True, "request_id": "confirmed", "warnings": []})
     assert result["ok"] and result["request_id"] == "confirmed" and result["warnings"]
     session.rollback.assert_awaited_once()
+
+
+@pytest.mark.asyncio
+async def test_income_http_query_coerces_status_and_rejects_out_of_range(monkeypatch):
+    from fastapi import FastAPI
+    from httpx import ASGITransport, AsyncClient
+    app = FastAPI()
+    app.include_router(router.router)
+    app.dependency_overrides[router.DB.dependency] = lambda: None
+    app.dependency_overrides[router.ADMIN.dependency] = lambda: SimpleNamespace(role="admin")
+    monkeypatch.setattr(router, "account", AsyncMock(return_value="account"))
+    read = AsyncMock(return_value={"items": [], "ada_lagi": False, "next_cursor": ""})
+    monkeypatch.setattr(adapter, "income", read)
+    async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as client:
+        params = {"dari": "2026-09-28", "sampai": "2026-10-11", "cursor": ""}
+        for status in ("1", "2"):
+            response = await client.get("/akun/shop/pendapatan-shopee", params={**params, "income_status": status})
+            assert response.status_code == 200, response.text
+            assert read.call_args.args[4] == int(status)
+        for status in ("0", "3", "invalid", "1.5"):
+            response = await client.get("/akun/shop/pendapatan-shopee", params={**params, "income_status": status})
+            assert response.status_code == 422
+        assert read.await_count == 2
