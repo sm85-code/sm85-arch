@@ -276,3 +276,24 @@ async def test_income_http_query_coerces_status_and_rejects_out_of_range(monkeyp
             response = await client.get("/akun/shop/pendapatan-shopee", params={**params, "income_status": status})
             assert response.status_code == 422
         assert read.await_count == 2
+
+
+@pytest.mark.asyncio
+async def test_income_accepts_wrapped_contract_without_changing_records(monkeypatch):
+    fixture = json.loads((Path(__file__).parent / "fixtures/shopee_income_detail.json").read_text())
+    wrapped = {"request_id": "wrapped", "response": {"income_detail_list": fixture["income_detail_list"]}}
+    monkeypatch.setattr(adapter.provider, "signed_shop_request", AsyncMock(return_value=wrapped))
+    result = await adapter.income(None, None, date(2026, 9, 28), date(2026, 10, 10), 2, "", 30)
+    assert result["items"] == fixture["income_detail_list"]["list"]
+    assert result["next_cursor"] == fixture["income_detail_list"]["next_page"]["cursor"]
+
+
+@pytest.mark.asyncio
+async def test_income_diagnostics_log_shape_without_private_values(monkeypatch, caplog):
+    response = {"request_id": "trace-id", "access_token": "SECRET-TOKEN", "income_detail_list": {"list": [{"order_sn": "PRIVATE-ORDER", "released_amount": 12345}], "next_page": "PRIVATE-CURSOR"}}
+    monkeypatch.setattr(adapter.provider, "signed_shop_request", AsyncMock(return_value=response))
+    with pytest.raises(adapter.provider.ShopeeAPIError):
+        await adapter.income(None, None, date(2026, 9, 28), date(2026, 10, 10), 2, "", 30)
+    assert "reason=pagination_envelope" in caplog.text and "trace-id" in caplog.text
+    for value in ("SECRET-TOKEN", "PRIVATE-ORDER", "PRIVATE-CURSOR", "12345"):
+        assert value not in caplog.text
