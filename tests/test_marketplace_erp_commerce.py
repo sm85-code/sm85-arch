@@ -308,5 +308,18 @@ async def test_income_direct_response_preserves_rows_and_pagination(monkeypatch,
     assert result["items"] == response["response"][list_field]
     assert result["next_cursor"] == "next" and result["ada_lagi"]
     response["response"].pop("next_page")
+    result = await adapter.income(None, None, date(2026, 9, 28), date(2026, 10, 10), 2, "", 30)
+    assert result["items"] == response["response"][list_field]
+    assert result["pagination_known"] is False and result["ada_lagi"] is None and result["warnings"]
+    response["response"]["next_page"] = "malformed"
     with pytest.raises(adapter.provider.ShopeeAPIError):
         await adapter.income(None, None, date(2026, 9, 28), date(2026, 10, 10), 2, "", 30)
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("rows", [[], [{"order_sn": "ORDER", "released_amount": None}]])
+async def test_income_live_layout_without_pagination_does_not_claim_complete(monkeypatch, rows):
+    monkeypatch.setattr(adapter.provider, "signed_shop_request", AsyncMock(return_value={"error": "", "request_id": "live-shape", "response": {"list": rows}}))
+    result = await adapter.income(None, None, date(2026, 9, 28), date(2026, 10, 10), 2, "", 30)
+    assert result["items"] == rows and result["warnings"]
+    assert result["ada_lagi"] is None and not result["pagination_known"]
