@@ -128,7 +128,8 @@ async def income(session, akun, start, end, status, cursor, size):
 
     if not isinstance(envelope, dict):
         reject("income_envelope")
-    if not isinstance(envelope.get("next_page"), dict):
+    page = envelope.get("next_page")
+    if page is not None and not isinstance(page, dict):
         reject("pagination_envelope")
     # The endpoint's real IDR sample uses `list`; its field table calls this
     # `income_detail_list_item`. Accept both documented forms without guessing values.
@@ -146,10 +147,15 @@ async def income(session, akun, start, end, status, cursor, size):
                         raise InvalidOperation
                 except (InvalidOperation, ValueError):
                     reject("monetary_value")
-    following = envelope["next_page"].get("cursor") or ""
+    known = isinstance(page, dict) and page.get("cursor") is not None
+    following = page["cursor"] if known else ""
     if not isinstance(following, str) or (following and following == cursor):
         reject("pagination_cursor")
-    return {"items": rows, "next_cursor": following, "ada_lagi": bool(following), "request_id": data.get("request_id")}
+    warnings = []
+    if not known:
+        warnings.append("Shopee tidak menyertakan informasi halaman berikutnya. Kelengkapan daftar belum dapat dipastikan.")
+        _log.warning("shopee_income phase=pagination_unavailable request_id=%s row_count=%d", data.get("request_id"), len(rows))
+    return {"items": rows, "next_cursor": following, "ada_lagi": bool(following) if known else None, "pagination_known": known, "warnings": warnings, "request_id": data.get("request_id")}
 
 
 async def order_income(session, akun, order_sn):
