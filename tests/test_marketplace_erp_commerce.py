@@ -297,3 +297,16 @@ async def test_income_diagnostics_log_shape_without_private_values(monkeypatch, 
     assert "reason=pagination_envelope" in caplog.text and "trace-id" in caplog.text
     for value in ("SECRET-TOKEN", "PRIVATE-ORDER", "PRIVATE-CURSOR", "12345"):
         assert value not in caplog.text
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("list_field", ["list", "income_detail_list_item"])
+async def test_income_direct_response_preserves_rows_and_pagination(monkeypatch, list_field):
+    response = {"error": "", "request_id": "direct", "response": {list_field: [{"order_sn": "ORDER", "released_amount": None}], "next_page": {"cursor": "next"}}}
+    monkeypatch.setattr(adapter.provider, "signed_shop_request", AsyncMock(return_value=response))
+    result = await adapter.income(None, None, date(2026, 9, 28), date(2026, 10, 10), 2, "", 30)
+    assert result["items"] == response["response"][list_field]
+    assert result["next_cursor"] == "next" and result["ada_lagi"]
+    response["response"].pop("next_page")
+    with pytest.raises(adapter.provider.ShopeeAPIError):
+        await adapter.income(None, None, date(2026, 9, 28), date(2026, 10, 10), 2, "", 30)

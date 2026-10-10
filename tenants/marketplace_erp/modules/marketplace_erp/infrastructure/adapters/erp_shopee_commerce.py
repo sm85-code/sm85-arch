@@ -113,6 +113,8 @@ async def income(session, akun, start, end, status, cursor, size):
     envelope = data.get("income_detail_list")
     if envelope is None and isinstance(wrapped, dict):
         envelope = wrapped.get("income_detail_list")
+        if envelope is None and ("list" in wrapped or "income_detail_list_item" in wrapped):
+            envelope = wrapped
 
     def reject(reason):
         # Log only types at fixed contract paths, never values/records, amounts,
@@ -120,7 +122,7 @@ async def income(session, akun, start, end, status, cursor, size):
         fields = ("income_detail_list", "response", "error")
         top_types = {key: type(data.get(key)).__name__ for key in fields}
         envelope_types = {key: type(envelope.get(key)).__name__ for key in ("list", "income_detail_list_item", "next_page")} if isinstance(envelope, dict) else {}
-        wrapped_type = type(wrapped.get("income_detail_list")).__name__ if isinstance(wrapped, dict) else "missing"
+        wrapped_type = {key: type(wrapped.get(key)).__name__ for key in ("income_detail_list", "list", "income_detail_list_item", "next_page")} if isinstance(wrapped, dict) else "missing"
         _log.warning("shopee_income phase=contract_failed request_id=%s reason=%s top_types=%s envelope_types=%s wrapped_income_type=%s", data.get("request_id"), reason, top_types, envelope_types, wrapped_type)
         management.incomplete(path, data)
 
