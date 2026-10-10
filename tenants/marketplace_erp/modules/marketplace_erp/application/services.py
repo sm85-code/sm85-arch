@@ -2473,6 +2473,12 @@ async def laporan_dashboard(
     tahap_expr = _ekspresi_tahap()
     scope = [Pesanan.akun_id.in_(akun_diizinkan)] if akun_diizinkan is not None else []
     jendela = [tgl >= dari, tgl <= sampai, *scope]
+    permintaan_pembatalan = (await session.execute(
+        select(func.count(Pesanan.id)).where(
+            *jendela, Pesanan.platform == "shopee", Pesanan.status_marketplace == "IN_CANCEL",
+            Pesanan.status.in_(["unpaid", "to_ship"]),
+        )
+    )).scalar_one()
     rows = (
         await session.execute(
             select(Pesanan.akun_id, tahap_expr.label("t"), Pesanan.total, tgl.label("tgl")).where(*jendela)
@@ -2568,6 +2574,7 @@ async def laporan_dashboard(
         "data_sejak": _aware(data_sejak) if data_sejak else None,
         "total_omzet": total_omzet,
         "total_pesanan": total_pesanan,
+        "permintaan_pembatalan": permintaan_pembatalan,
         "rata_rata_pesanan": (total_omzet / total_pesanan) if total_pesanan else Decimal("0"),
         "jumlah_toko": len(toko_rows),
         "per_toko": sorted(per_toko.values(), key=lambda e: (-e["omzet"], e["nama_toko"].lower())),
