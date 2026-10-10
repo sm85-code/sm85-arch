@@ -694,6 +694,7 @@ class AiTurn(MarketplaceErpBase):
     akun_id: Mapped[Optional[str]] = mapped_column(String(64), nullable=True)
     mode: Mapped[str] = mapped_column(String(16))
     prompt: Mapped[str] = mapped_column(Text)
+    context_json: Mapped[str] = mapped_column(Text, default="{}", server_default="{}")
     status: Mapped[str] = mapped_column(String(24), default="queued", index=True)
     answer: Mapped[str] = mapped_column(Text, default="")
     model: Mapped[str] = mapped_column(String(100))
@@ -743,3 +744,11 @@ class ChatPhoto(MarketplaceErpBase):
     akun_id: Mapped[str] = mapped_column(String(64), index=True)
     image_url: Mapped[str] = mapped_column(Text)
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=_utcnow)
+
+
+class NotificationRead(MarketplaceErpBase):
+    """A notification acknowledgement does not mutate its source order/chat."""
+    __tablename__ = "mpe_notification_reads"
+    user_id: Mapped[str] = mapped_column(String(64), ForeignKey("mpe_users.id", ondelete="CASCADE"), primary_key=True)
+    key: Mapped[str] = mapped_column(String(255), primary_key=True)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=_utcnow, index=True)

@@ -1,0 +1,12 @@
+# Store workspace
+
+- Admin navigation groups Performa Toko and Pengaturan Toko under Info Toko. Shop settings reuse the existing scoped profile, logistics, address-role and holiday endpoints. Writes still require explicit UI confirmation.
+- Kelola Toko shows stored connection/authorization state and the successful order-sync watermark, not the last attempted sync. `/koneksi-toko` is admin-only and never returns tokens. OAuth can also reauthorize an already-linked shop.
+- `/notifikasi` provides active cancellation requests and unprocessed orders from the ERP snapshot, with staff account scope, 50-row pagination and a count across all pages. Order status comes from the same conditions as the order inbox; cancellation takes priority. Changes in Shopee appear after order synchronization.
+- The bell also reads the latest chat page for accessible Shopee shops. It distinguishes unread messages from unanswered conversations and indicates when older conversations are available. Its chat count covers loaded conversations, not every historical page. Queries poll every 60 seconds while the application is active, without browser push or background delivery.
+- `mpe_notification_reads` stores acknowledgements by user and source key. Reading a notification never marks buyer chat read, processes an order, or sends a Shopee write. New chat message IDs create new keys. Mark-all covers all accessible active orders and currently loaded chat notices. Database startup creates this additive table.
+- Admin floating AI stays mounted outside Routes; drafts and the selected conversation survive navigation/minimization. A button in the full assistant page restores a hidden floating trigger. Full conversation history remains on `/asisten`.
+- Floating requests include a bounded route/resource context separate from the user's prompt. `mpe_ai_turns.context_json` is added by the existing additive schema initialization. Context enters the model as a reference, never as permission; mode, selected-shop checks, receipts, cost limits and write protections remain authoritative. Existing requests without context retain their original idempotency digest.
+- Read-only AI tools now expose shop settings, current income overview and account-checked ERP order summaries. No new AI write permissions are added.
+
+Validation uses mocked Shopee/model responses: no live shop settings, messages or orders are changed by the tests.
