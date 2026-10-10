@@ -262,3 +262,20 @@ async def test_batch_assignments_allow_several_staff_for_same_shop_and_validate_
     with pytest.raises(HTTPException):
         await services.assign_staff_banyak(session, users[1].id, [b.id, 'missing-shop'])
     assert {r.akun_id for r in await services.list_staff_akun(session, user_id=users[1].id)} == {a.id}
+
+
+@pytest.mark.asyncio
+async def test_dashboard_buyer_cancellation_count_respects_period_and_shop(session, data):
+    a, b = data
+    await services.impor_pesanan_marketplace(session, a, [
+        _order("C1", "to_ship", "IN_CANCEL", hari=1),
+        _order("C2", "to_ship", "IN_CANCEL", hari=40),
+        _order("C3", "cancelled", "CANCELLED", hari=1),
+    ])
+    await services.impor_pesanan_marketplace(session, b, [
+        _order("C4", "to_ship", "IN_CANCEL", hari=1),
+    ])
+    period = dict(dari=SEKARANG - timedelta(days=15), sampai=SEKARANG)
+    assert (await services.laporan_dashboard(session, **period))["permintaan_pembatalan"] == 2
+    assert (await services.laporan_dashboard(session, **period, akun_diizinkan=[a.id]))["permintaan_pembatalan"] == 1
+    assert (await services.laporan_dashboard(session, **period, akun_diizinkan=[]))["permintaan_pembatalan"] == 0
