@@ -575,3 +575,44 @@ def test_chat_native_product_id_alias_matches_item_reference():
     from tenants.marketplace_erp.adapters.api.v1 import chat_context
     native = {'content': {'product_id': 11, 'model_id': 22, 'item_card_v2': {'item_id': 11, 'item_model_v2': [{'model_id': 22}]}}, 'source_content': {'product_id': 11}}
     assert chat_context.message_reference(native) == {'item_id': '11', 'model_id': '22'}
+
+
+@pytest.mark.asyncio
+async def test_chat_recovers_missing_city_and_keeps_prospects_separate(session, monkeypatch):
+    from tenants.marketplace_erp.adapters.api.v1 import chat_context
+    akun, _ = await setup(session)
+    order = Pesanan(platform="shopee", akun_id=akun.id, id_eksternal="CITY1", status="to_ship", nama_pembeli="buyer", total=100, detail_json=json.dumps({"buyer_user_id": 77}))
+    session.add(order)
+    await session.flush()
+    targets = [{"to_id": 77, "to_name": "buyer"}, {"to_id": 88, "to_name": "prospect"}]
+    calls = []
+    async def fetch(*args, **kwargs):
+        calls.append(kwargs["params"])
+        return {"response": {"order_list": [
+            {"order_sn": "CITY1", "recipient_address": {"city": "Bandung"}},
+            {"order_sn": "UNMATCHED", "recipient_address": {"city": "Jakarta"}},
+        ]}}
+    monkeypatch.setattr(chat_context.api, "signed_shop_request", fetch)
+    rows = await chat_context.buyer_orders(session, akun, targets, latest_per_buyer=True)
+    cities = await chat_context.destination_cities(session, akun, targets, rows)
+    assert cities == {"77": "Bandung", "88": None}
+    assert calls[0]["order_sn_list"] == "CITY1"
+    assert order.status == "to_ship"
+    assert json.loads(order.detail_json)["kota"] == "Bandung"
+    await chat_context.destination_cities(session, akun, targets, rows)
+    assert len(calls) == 1  # Stored destination avoids repeated external requests.
+    result = await chat_context.context(session, akun, targets[1])
+    assert result["punya_pesanan"] is False and result["kota"] is None
+
+
+@pytest.mark.asyncio
+async def test_chat_latest_per_buyer_does_not_drop_other_buyers(session):
+    from tenants.marketplace_erp.adapters.api.v1 import chat_context
+    akun, _ = await setup(session)
+    for i in range(6):
+        session.add(Pesanan(platform="shopee", akun_id=akun.id, id_eksternal=f"MANY{i}", status="to_ship", nama_pembeli="frequent", total=1, detail_json=json.dumps({"buyer_user_id": 77, "kota": "Bandung"})))
+    session.add(Pesanan(platform="shopee", akun_id=akun.id, id_eksternal="OTHERBUYER", status="to_ship", nama_pembeli="other", total=1, detail_json=json.dumps({"buyer_user_id": 88, "kota": "Bogor"})))
+    await session.flush()
+    rows = await chat_context.buyer_orders(session, akun, [{"to_id": 77, "to_name": "frequent"}, {"to_id": 88, "to_name": "other"}], limit=2, latest_per_buyer=True)
+    assert len(rows) == 2
+    assert {json.loads(o.detail_json)["buyer_user_id"] for o in rows} == {77, 88}
