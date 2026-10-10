@@ -323,3 +323,27 @@ async def test_income_live_layout_without_pagination_does_not_claim_complete(mon
     result = await adapter.income(None, None, date(2026, 9, 28), date(2026, 10, 10), 2, "", 30)
     assert result["items"] == rows and result["warnings"]
     assert result["ada_lagi"] is None and not result["pagination_known"]
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("wrapped", [False, True])
+async def test_income_overview_uses_provider_totals_not_page_sum(monkeypatch, wrapped):
+    totals = {"total_income": {"pending_amount": 4010, "released_amount": 1545}}
+    request = AsyncMock(return_value={"request_id": "overview", **({"response": totals} if wrapped else totals)})
+    monkeypatch.setattr(adapter.provider, "signed_shop_request", request)
+    result = await adapter.income_overview(None, None)
+    assert result["pending_amount"] == 4010 and result["released_amount"] == 1545
+    assert request.call_args.args[2] == "/api/v2/payment/get_income_overview"
+    assert not request.call_args.kwargs  # no date, status or cursor/page restriction
+
+
+@pytest.mark.asyncio
+async def test_income_overview_preserves_missing_and_zero_rejects_invalid(monkeypatch):
+    request = AsyncMock(return_value={"total_income": {"pending_amount": 0}})
+    monkeypatch.setattr(adapter.provider, "signed_shop_request", request)
+    result = await adapter.income_overview(None, None)
+    assert result["pending_amount"] == 0 and result["released_amount"] is None
+    for payload in ({}, {"total_income": {}}, {"total_income": {"pending_amount": "NaN"}}, {"total_income": {"released_amount": True}}):
+        request.return_value = payload
+        with pytest.raises(adapter.provider.ShopeeAPIError):
+            await adapter.income_overview(None, None)

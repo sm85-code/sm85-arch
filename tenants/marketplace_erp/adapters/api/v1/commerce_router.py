@@ -106,6 +106,11 @@ async def income(id: str, dari: date, sampai: date, income_status: int = Query(2
     return await adapter.income(session, await account(session, user, id), dari, sampai, income_status, cursor, page_size)
 
 
+@router.get("/akun/{id}/ringkasan-pendapatan-shopee")
+async def income_overview(id: str, session: AsyncSession = DB, user: UserMarketplaceErp = ADMIN):
+    return await adapter.income_overview(session, await account(session, user, id))
+
+
 @router.get("/akun/{id}/iklan/performa-jam")
 async def hourly_ads(id: str, tanggal: date, campaign_id: int | None = Query(None, gt=0), session: AsyncSession = DB, user: UserMarketplaceErp = ADMIN):
     return await adapter.hourly_ads(session, await account(session, user, id), tanggal, campaign_id)

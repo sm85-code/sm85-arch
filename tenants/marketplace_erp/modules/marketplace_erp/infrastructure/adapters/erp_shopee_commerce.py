@@ -158,6 +158,27 @@ async def income(session, akun, start, end, status, cursor, size):
     return {"items": rows, "next_cursor": following, "ada_lagi": bool(following) if known else None, "pagination_known": known, "warnings": warnings, "request_id": data.get("request_id")}
 
 
+async def income_overview(session, akun):
+    path = "/api/v2/payment/get_income_overview"
+    # Omitting income_status requests all current local-shop income components.
+    data = await provider.signed_shop_request(session, akun, path)
+    response = data.get("response")
+    totals = data.get("total_income")
+    if totals is None and isinstance(response, dict):
+        totals = response.get("total_income")
+    if not isinstance(totals, dict) or not any(k in totals for k in ("pending_amount", "released_amount")):
+        management.incomplete(path, data)
+    for key in ("pending_amount", "released_amount"):
+        value = totals.get(key)
+        if value is not None:
+            try:
+                if isinstance(value, bool) or not Decimal(str(value)).is_finite():
+                    raise InvalidOperation
+            except (InvalidOperation, ValueError):
+                management.incomplete(path, data)
+    return {"pending_amount": totals.get("pending_amount"), "released_amount": totals.get("released_amount"), "request_id": data.get("request_id")}
+
+
 async def order_income(session, akun, order_sn):
     response = await workflows.read(session, akun, "/api/v2/payment/get_escrow_detail", {"order_sn": order_sn})
     if str(response.get("order_sn")) != order_sn or not isinstance(response.get("order_income"), dict):
