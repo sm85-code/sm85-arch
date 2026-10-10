@@ -307,3 +307,50 @@ async def test_product_search_exposes_catalogue_photo_and_real_shop_link(setup, 
         assert result['items'][0]['url_produk'] == 'https://shopee.co.id/product/5678/1234'
         assert result['items'][0]['foto_utama'] == 'https://cf.shopee.co.id/file/photo'
         assert 'deskripsi' not in result['items'][0]
+
+
+@pytest.mark.asyncio
+async def test_floating_context_survives_enqueue_and_is_reference_not_authorization(setup, monkeypatch):
+    factory, user = setup
+    payload = message(context={'path': '/pesanan/order-1', 'resource_id': 'order-1'})
+    model = AsyncMock(return_value=response({'type': 'text', 'text': 'Siap.'}))
+    monkeypatch.setattr(service, 'model_call', model)
+    async with factory() as s:
+        turn = await service.enqueue(s, user, payload)
+        assert json.loads(turn.context_json) == {'path': '/pesanan/order-1', 'resource_id': 'order-1'}
+        assert turn.mode == 'tanya'
+        assert (await service.enqueue(s, user, payload)).id == turn.id
+        with pytest.raises(HTTPException) as error:
+            await service.enqueue(s, user, payload.model_copy(update={'context': payload.context.model_copy(update={'path': '/katalog/item-1'})}))
+        assert error.value.status_code == 409
+        ident = turn.id
+    assert await service.claim(factory) == ident
+    await service.process(factory, ident)
+    messages = model.call_args.args[1]
+    assert any('referensi saja' in m['content'] and 'order-1' in m['content'] for m in messages if isinstance(m['content'], str))
+    assert not any(t['name'].startswith('ubah_') for t in model.call_args.args[2])
+
+
+def test_floating_context_cannot_carry_external_url_or_arbitrary_data():
+    from pydantic import ValidationError
+    for context in [{'path': 'https://example.com'}, {'path': '//example.com'}, {'path': '/pesanan', 'tokens': 'secret'}, {'path': '/pesanan', 'resource_id': '../other'}]:
+        with pytest.raises(ValidationError):
+            message(context=context)
+
+
+@pytest.mark.asyncio
+async def test_context_read_tools_pin_shop_and_reject_foreign_order(monkeypatch):
+    user = SimpleNamespace(role='admin', session_version=1)
+    turn = SimpleNamespace(session_version=1, mode='tanya', akun_id='shop')
+    monkeypatch.setattr(tools.services, 'akun_shopee_pengelolaan', AsyncMock(return_value=SimpleNamespace(id='shop')))
+    read = AsyncMock(return_value={'shop_name': 'Shop'})
+    monkeypatch.setattr(tools.commerce, 'settings_read', read)
+    assert await tools.execute(None, user, turn, 'pengaturan_toko', tools.ShopSettingsRead(bagian='profil'), 'f') == {'shop_name': 'Shop'}
+    assert read.call_args.args[1].id == 'shop'
+    monkeypatch.setattr(tools.services, 'get_pesanan', AsyncMock(return_value=SimpleNamespace(akun_id='other')))
+    with pytest.raises(HTTPException) as error:
+        await tools.execute(None, user, turn, 'detail_pesanan', tools.OrderRef(pesanan_id='foreign'), 'f')
+    assert error.value.status_code == 403
+    definitions = tools.definitions(False)
+    assert {'pengaturan_toko', 'detail_pesanan', 'ringkasan_pendapatan'} <= {d['name'] for d in definitions}
+    assert all(not tools.TOOLS[d['name']][1] for d in definitions)

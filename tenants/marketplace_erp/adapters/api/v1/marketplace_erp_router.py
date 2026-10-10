@@ -22,6 +22,7 @@ from datetime import date, datetime, timezone
 from fastapi import APIRouter, BackgroundTasks, Body, Depends, HTTPException, Path, Query, Request, Response, status
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from .notification_router import router as notification_router
 from .assistant_router import router as assistant_router
 from .sync_router import router as sync_router
 from .chat_router import router as chat_router
@@ -1824,3 +1825,5 @@ async def pengaturan_stok(
     return await get_settings(session)
 
 marketplace_erp_router.include_router(assistant_router)
+
+marketplace_erp_router.include_router(notification_router)

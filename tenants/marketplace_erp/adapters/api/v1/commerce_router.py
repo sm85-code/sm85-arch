@@ -143,3 +143,13 @@ async def channel(id: str, body: ChannelEdit, channel_id: int = Path(gt=0), sess
 @router.put("/akun/{id}/pengaturan-shopee/alamat")
 async def address_config(id: str, body: AddressConfig, session: AsyncSession = DB, user: UserMarketplaceErp = ADMIN):
     return await adapter.address_config(session, await account(session, user, id), body)
+
+
+@router.get("/koneksi-toko")
+async def connections(session: AsyncSession = DB, user: UserMarketplaceErp = ADMIN):
+    rows = await services.list_akun_marketplace(session)
+    return [{"id": a.id, "status": a.status,
+             "otorisasi_tersedia": bool(a.id_toko_eksternal and a.access_token),
+             "perlu_otorisasi_ulang": a.platform == "shopee" and bool(a.id_toko_eksternal) and (not a.access_token or a.status == "token_kadaluarsa"),
+             "sinkron_pesanan_at": a.watermark_sinkron_pesanan,
+             "sinkron_penuh_at": a.sinkron_penuh_pesanan_at} for a in rows]

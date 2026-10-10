@@ -12,12 +12,20 @@ from pydantic import model_validator
 from .. import services
 from ..management_schemas import ItemEdit, ModelsEdit, TiersEdit, GmvCreate, GmvEdit, GmvItems
 from ..schemas import PromosiIn, PromosiUpdateIn, PromosiProdukIn
-from ...infrastructure.adapters import erp_shopee_management as management, erp_shopee_insights as insights, erp_shopee_promotions as promotions
+from ...infrastructure.adapters import erp_shopee_management as management, erp_shopee_insights as insights, erp_shopee_promotions as promotions, erp_shopee_commerce as commerce
 from ...infrastructure import ads_ai
 
 
 class Empty(Input):
     pass
+
+
+class ShopSettingsRead(Input):
+    bagian: Literal["profil", "libur", "jasa-kirim", "alamat"]
+
+
+class OrderRef(Input):
+    pesanan_id: str = Field(min_length=1, max_length=64)
 
 
 class Page(Input):
@@ -130,6 +138,9 @@ class SummaryPeriod(Input):
 
 # name: (input model, writes, description). No official campaign nomination/enrollment.
 TOOLS = {
+    "pengaturan_toko": (ShopSettingsRead, False, "Baca profil, mode libur, jasa kirim/COD/penjemputan atau alamat live toko terpilih. Tidak mengubah pengaturan."),
+    "ringkasan_pendapatan": (Empty, False, "Total pendapatan Shopee terkini: belum cair dan sudah dirilis. Bukan total periode historis atau saldo kas."),
+    "detail_pesanan": (OrderRef, False, "Baca ringkasan dan item pesanan snapshot ERP pada toko terpilih, termasuk status, resi dan catatan pembeli. ID dapat berasal dari konteks halaman."),
     "daftar_toko": (Empty, False, "Daftar nama dan ID toko ERP tanpa credential."),
     "cari_produk": (CatalogSearch, False, "Cari katalog toko terpilih atau seluruh toko; 20 produk per halaman. Snapshot ERP, bukan stok live."),
     "statistik_produk": (CatalogRef, False, "Statistik live Shopee: views 30 hari, sale kumulatif, rating; bukan skor kualitas."),
@@ -227,6 +238,21 @@ async def execute(session, user, turn, name, payload, fingerprint):
     if not turn.akun_id:
         raise HTTPException(422, "Pilih toko sebelum membaca data live atau menjalankan tindakan")
     akun = await services.akun_shopee_pengelolaan(session, turn.akun_id)
+    if name == "pengaturan_toko":
+        return await commerce.settings_read(session, akun, payload.bagian)
+    if name == "ringkasan_pendapatan":
+        return await commerce.income_overview(session, akun)
+    if name == "detail_pesanan":
+        order = await services.get_pesanan(session, payload.pesanan_id)
+        if order.akun_id != akun.id:
+            raise HTTPException(403, "Pesanan tidak berasal dari toko yang dipilih")
+        detail = json.loads(order.detail_json or "{}")
+        return {"id": order.id, "order_sn": order.id_eksternal, "status": order.status,
+                "status_shopee": order.status_marketplace, "total": order.total,
+                "kurir": order.kurir, "resi": order.nomor_resi,
+                "catatan_pembeli": detail.get("message_to_seller"),
+                "items": [{"nama": i.nama_produk, "qty": i.qty, "subtotal": i.subtotal} for i in order.items],
+                "definisi": "Snapshot ERP; sinkronkan pesanan untuk data terbaru."}
     if isinstance(payload, CatalogRef):
         katalog, _ = await services.get_katalog_shopee(session, payload.katalog_id)
         if katalog.akun_id != akun.id:

@@ -17,7 +17,7 @@ ADMIN = Depends(require_roles_marketplace_erp("admin"))
 async def turn_out(session, turn):
     receipts = (await session.execute(select(AiToolReceipt).where(AiToolReceipt.turn_id == turn.id).order_by(AiToolReceipt.created_at, AiToolReceipt.id))).scalars().all()
     return {"id": turn.id, "conversation_id": turn.conversation_id, "akun_id": turn.akun_id, "mode": turn.mode,
-            "prompt": turn.prompt, "status": turn.status, "answer": turn.answer, "model": turn.model,
+            "prompt": turn.prompt, "context": json.loads(turn.context_json or "{}"), "status": turn.status, "answer": turn.answer, "model": turn.model,
             "input_tokens": turn.input_tokens, "output_tokens": turn.output_tokens, "cost_usd": str(turn.cost_usd),
             "created_at": turn.created_at, "finished_at": turn.finished_at,
             "actions": [{"id": r.id, "tool": r.tool, "label": tools.TOOLS.get(r.tool, (None, None, r.tool))[2],
