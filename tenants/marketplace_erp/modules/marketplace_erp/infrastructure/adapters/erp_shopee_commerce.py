@@ -1,8 +1,12 @@
 """Local-seller commerce operations, using the copied official endpoint schemas."""
 from decimal import Decimal, InvalidOperation
+import logging
 from fastapi import HTTPException
 
 from . import erp_shopee as provider, erp_shopee_management as management, erp_shopee_workflows as workflows
+
+
+_log = logging.getLogger(__name__)
 
 
 async def acknowledged(session, akun, path, body):
@@ -103,17 +107,34 @@ async def income(session, akun, start, end, status, cursor, size):
         raise HTTPException(422, "Pendapatan dirilis memerlukan periode lebih dari satu hari dan maksimal 14 hari")
     path = "/api/v2/payment/get_income_detail"
     data = await provider.signed_shop_request(session, akun, path, params={"date_from": start.isoformat(), "date_to": end.isoformat(), "income_status": status, "cursor": cursor, "page_size": size})
-    # This endpoint returns income_detail_list at the top level, not in response.
+    # The reference sample is top-level; accept the same contract inside the
+    # usual Shopee response wrapper as well. Never turn missing data into [].
+    wrapped = data.get("response")
     envelope = data.get("income_detail_list")
-    if not isinstance(envelope, dict) or not isinstance(envelope.get("next_page"), dict):
+    if envelope is None and isinstance(wrapped, dict):
+        envelope = wrapped.get("income_detail_list")
+
+    def reject(reason):
+        # Log only types at fixed contract paths, never values/records, amounts,
+        # cursors, signed URLs or arbitrary provider keys.
+        fields = ("income_detail_list", "response", "error")
+        top_types = {key: type(data.get(key)).__name__ for key in fields}
+        envelope_types = {key: type(envelope.get(key)).__name__ for key in ("list", "income_detail_list_item", "next_page")} if isinstance(envelope, dict) else {}
+        wrapped_type = type(wrapped.get("income_detail_list")).__name__ if isinstance(wrapped, dict) else "missing"
+        _log.warning("shopee_income phase=contract_failed request_id=%s reason=%s top_types=%s envelope_types=%s wrapped_income_type=%s", data.get("request_id"), reason, top_types, envelope_types, wrapped_type)
         management.incomplete(path, data)
+
+    if not isinstance(envelope, dict):
+        reject("income_envelope")
+    if not isinstance(envelope.get("next_page"), dict):
+        reject("pagination_envelope")
     # The endpoint's real IDR sample uses `list`; its field table calls this
     # `income_detail_list_item`. Accept both documented forms without guessing values.
     rows = envelope.get("list", envelope.get("income_detail_list_item"))
     if isinstance(rows, dict):
         rows = [rows]
     if not isinstance(rows, list) or any(not isinstance(r, dict) for r in rows):
-        management.incomplete(path, data)
+        reject("income_rows")
     for row in rows:
         for key in ("estimated_escrow_amount", "released_amount", "to_release_amount"):
             value = row.get(key)
@@ -122,10 +143,10 @@ async def income(session, akun, start, end, status, cursor, size):
                     if isinstance(value, bool) or not Decimal(str(value)).is_finite():
                         raise InvalidOperation
                 except (InvalidOperation, ValueError):
-                    management.incomplete(path, data)
+                    reject("monetary_value")
     following = envelope["next_page"].get("cursor") or ""
     if not isinstance(following, str) or (following and following == cursor):
-        management.incomplete(path, data)
+        reject("pagination_cursor")
     return {"items": rows, "next_cursor": following, "ada_lagi": bool(following), "request_id": data.get("request_id")}
 
 
