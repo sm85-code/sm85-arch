@@ -104,7 +104,13 @@ async def execute(session, user, turn, name, payload, akun, fingerprint):
     if name in ("pengaturan_pesanan_otomatis", "atur_pesanan_otomatis"):
         from tenants.marketplace_erp.adapters.api.v1 import auto_order_router as automatic
         if name == "atur_pesanan_otomatis":
-            return await automatic.save(automatic.PoliciesIn(items=[automatic.PolicyIn(akun_id=akun.id, **payload.model_dump())]), session, user)
+            fields = payload.model_dump()
+            existing = await session.get(automatic.AutoOrderPolicy, akun.id)
+            if existing:
+                for field in ("branch_id", "sender_real_name"):
+                    if field not in payload.model_fields_set:
+                        fields[field] = getattr(existing, field)
+            return await automatic.save(automatic.PoliciesIn(items=[automatic.PolicyIn(akun_id=akun.id, **fields)]), session, user)
         data = await automatic.settings(session, user)
         data["items"] = [r for r in data["items"] if r["akun_id"] == akun.id]
         data["attempts"] = [r for r in data["attempts"] if r["akun_id"] == akun.id]

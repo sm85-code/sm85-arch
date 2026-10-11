@@ -45,6 +45,9 @@ async def run_one(factory, ident):
             actor = await session.get(UserMarketplaceErp, policy.enabled_by) if policy and policy.enabled_by else None
             if not policy or not policy.enabled or not actor or actor.role != "admin" or not shop or shop.status == "nonaktif":
                 raise HTTPException(409, "Izin otomatis tidak aktif; proses manual bila diperlukan.")
+            after_activation = await session.scalar(select(func.coalesce(Pesanan.dipesan_at, Pesanan.created_at) >= policy.enabled_at).where(Pesanan.id == ident))
+            if not after_activation:
+                raise HTTPException(409, "Pesanan mendahului izin aktif terbaru; proses manual bila diperlukan.")
             if order.status != "to_ship" or order.status_marketplace != "READY_TO_SHIP":
                 raise HTTPException(409, "Pesanan tidak lagi siap diproses.")
             if (await services.get_settings(session))["gudang_aktif"]:

@@ -322,7 +322,12 @@ async def execute(session, user, turn, name, payload, fingerprint):
         raise HTTPException(422, "Pilih toko sebelum membaca data live atau menjalankan tindakan")
     akun = await services.akun_shopee_pengelolaan(session, turn.akun_id)
     if name in extra_tools.TOOLS:
-        return await extra_tools.execute(session, user, turn, name, payload, akun, fingerprint)
+        try:
+            return await extra_tools.execute(session, user, turn, name, payload, akun, fingerprint)
+        except HTTPException as exc:
+            if write and exc.status_code == 424:
+                raise HTTPException(502, exc.detail) from exc
+            raise
     if name == "kotak_masuk_chat":
         return await chat.inbox(session, akun, payload.cursor, payload.unread)
     if name in ("riwayat_chat", "balas_chat"):
