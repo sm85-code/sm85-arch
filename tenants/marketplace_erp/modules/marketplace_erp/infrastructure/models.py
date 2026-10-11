@@ -752,3 +752,25 @@ class NotificationRead(MarketplaceErpBase):
     user_id: Mapped[str] = mapped_column(String(64), ForeignKey("mpe_users.id", ondelete="CASCADE"), primary_key=True)
     key: Mapped[str] = mapped_column(String(255), primary_key=True)
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=_utcnow, index=True)
+
+
+class AutoOrderPolicy(MarketplaceErpBase):
+    __tablename__ = "mpe_auto_order_policy"
+    akun_id: Mapped[str] = mapped_column(String(64), ForeignKey("mpe_akun_marketplace.id", ondelete="CASCADE"), primary_key=True)
+    enabled: Mapped[bool] = mapped_column(Boolean, nullable=False, default=False)
+    enabled_at: Mapped[Optional[datetime]] = mapped_column(DateTime(timezone=True), nullable=True)
+    enabled_by: Mapped[Optional[str]] = mapped_column(String(64), ForeignKey("mpe_users.id", ondelete="SET NULL"), nullable=True)
+    branch_id: Mapped[Optional[str]] = mapped_column(String(64), nullable=True)
+    sender_real_name: Mapped[Optional[str]] = mapped_column(String(255), nullable=True)
+    updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=_utcnow, onupdate=_utcnow)
+
+
+class AutoOrderAttempt(MarketplaceErpBase):
+    __tablename__ = "mpe_auto_order_attempt"
+    pesanan_id: Mapped[str] = mapped_column(String(64), ForeignKey("mpe_pesanan.id", ondelete="CASCADE"), primary_key=True)
+    akun_id: Mapped[str] = mapped_column(String(64), ForeignKey("mpe_akun_marketplace.id", ondelete="CASCADE"), nullable=False, index=True)
+    status: Mapped[str] = mapped_column(String(16), nullable=False, default="running")
+    message: Mapped[str] = mapped_column(Text, nullable=False, default="")
+    reviewed_by: Mapped[Optional[str]] = mapped_column(String(64), nullable=True)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=_utcnow)
+    updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=_utcnow, onupdate=_utcnow)

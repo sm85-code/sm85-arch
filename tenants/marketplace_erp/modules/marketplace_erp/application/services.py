@@ -1990,10 +1990,16 @@ async def _pesanan_marketplace(session: AsyncSession, pesanan_id: str) -> tuple[
     return pesanan, akun
 
 
-async def proses_pesanan_marketplace(session: AsyncSession, pesanan_id: str, pengaturan: dict | None = None) -> Pesanan:
+async def proses_pesanan_marketplace(session: AsyncSession, pesanan_id: str, pengaturan: dict | None = None, *, auto_authorized: bool = False) -> Pesanan:
     """Arrange shipment using explicit or legacy automatic settings; retain the actual method."""
     from tenants.marketplace_erp.modules.marketplace_erp.infrastructure.adapters import erp_shopee
 
+    from ..infrastructure.models import AutoOrderAttempt
+    # Serialize manual and automatic dispatch for the same order.
+    await session.execute(select(Pesanan).where(Pesanan.id == pesanan_id).with_for_update().execution_options(populate_existing=True))
+    attempt = await session.get(AutoOrderAttempt, pesanan_id)
+    if attempt and attempt.status in ("running", "unknown") and not auto_authorized:
+        raise HTTPException(409, "Pesanan sedang diproses otomatis atau hasilnya belum pasti. Periksa catatan otomatis terlebih dahulu.")
     pesanan, akun = await _pesanan_marketplace(session, pesanan_id)
     if pesanan.status != "to_ship":
         raise HTTPException(

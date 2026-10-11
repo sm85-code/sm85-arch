@@ -1527,10 +1527,28 @@ _DOC_TIMEOUT = 15.0
 def pilih_parameter_kirim(param: dict, nama_toko: str) -> dict:
     """get_shipping_parameter response -> the pickup/dropoff/non_integrated part of ship_order's body.
 
-    Prefers courier pickup (seller does nothing), then drop-off. Modes that need a tracking number
+    Prefers drop-off, then courier pickup when drop-off is not offered. Modes that need a tracking number
     assigned by a 3PL cannot be automated, so those raise a clear 409 pointing at Seller Centre.
     """
     info = param.get("info_needed") or {}
+    dropoff = param.get("dropoff") or {}
+    needed = info.get("dropoff") or []
+    if "dropoff" in info:
+        if "tracking_no" in needed or "tracking_number" in needed:
+            raise HTTPException(
+                status_code=status.HTTP_409_CONFLICT,
+                detail="Kurir pesanan ini butuh nomor resi dari kurir; proses lewat Seller Centre Shopee.",
+            )
+        body = {}
+        if "branch_id" in needed:
+            branches = dropoff.get("branch_list") or []
+            if not branches:
+                raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail="Shopee tidak mengembalikan cabang drop-off.")
+            body["branch_id"] = branches[0]["branch_id"]
+        if "sender_real_name" in needed:
+            body["sender_real_name"] = nama_toko
+        return {"dropoff": body}
+
     pickup = param.get("pickup") or {}
     addresses = pickup.get("address_list") or []
     if "pickup" in info and addresses:
@@ -1555,24 +1573,6 @@ def pilih_parameter_kirim(param: dict, nama_toko: str) -> dict:
             slot = next((x for x in slots if "recommended" in (x.get("flags") or [])), slots[0])
             body["pickup_time_id"] = slot["pickup_time_id"]
         return {"pickup": body}
-
-    dropoff = param.get("dropoff") or {}
-    needed = info.get("dropoff") or []
-    if "dropoff" in info:
-        if "tracking_no" in needed or "tracking_number" in needed:
-            raise HTTPException(
-                status_code=status.HTTP_409_CONFLICT,
-                detail="Kurir pesanan ini butuh nomor resi dari kurir; proses lewat Seller Centre Shopee.",
-            )
-        body = {}
-        if "branch_id" in needed:
-            branches = dropoff.get("branch_list") or []
-            if not branches:
-                raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail="Shopee tidak mengembalikan cabang drop-off.")
-            body["branch_id"] = branches[0]["branch_id"]
-        if "sender_real_name" in needed:
-            body["sender_real_name"] = nama_toko
-        return {"dropoff": body}
 
     if info.get("non_integrated") is not None and "non_integrated" in info:
         if "tracking_no" in (info.get("non_integrated") or []):
@@ -1705,6 +1705,9 @@ async def proses_pengiriman(session: Any, akun: Any, order_sn: str, pengaturan: 
         raise ShopeeNotConfigured("Shopee live sync nonaktif atau akun belum terhubung.")
     order = await pastikan_belum_diproses(session, akun, order_sn)
     data = await signed_shop_request(session, akun, _PATH_SHIP_PARAM, params={"order_sn": order_sn})
+    if pengaturan is None and order["order_status"] == "RETRY_SHIP":
+        response = data.get("response") or {}
+        data["response"] = {**response, "info_needed": {k: v for k, v in (response.get("info_needed") or {}).items() if k != "dropoff"}, "dropoff": {}}
     mode = (parameter_kirim_eksplisit(data.get("response") or {}, akun.nama_toko, pengaturan)
             if pengaturan is not None else pilih_parameter_kirim(data.get("response") or {}, akun.nama_toko))
     if pengaturan is None and "non_integrated" not in mode:
