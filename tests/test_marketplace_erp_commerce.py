@@ -90,8 +90,9 @@ async def test_income_top_level_envelope_pending_and_cursor(monkeypatch):
     with pytest.raises(adapter.provider.ShopeeAPIError):
         await adapter.income(None, None, date(2026, 9, 1), date(2026, 9, 2), 2, "next", 30)
     request.return_value = {"response": {"income_detail_list": []}}
-    with pytest.raises(adapter.provider.ShopeeAPIError):
-        await adapter.income(None, None, date(2026, 9, 1), date(2026, 9, 2), 2, "", 30)
+    empty = await adapter.income(None, None, date(2026, 9, 1), date(2026, 9, 2), 2, "", 30)
+    assert empty["items"] == [] and empty["pagination_known"] is False
+    assert request.call_args.kwargs["timeout"] == 15.0
 
 
 @pytest.mark.asyncio
@@ -347,3 +348,17 @@ async def test_income_overview_preserves_missing_and_zero_rejects_invalid(monkey
         request.return_value = payload
         with pytest.raises(adapter.provider.ShopeeAPIError):
             await adapter.income_overview(None, None)
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("wrapped", [False, True])
+async def test_income_explicit_empty_envelope_and_missing_data_are_distinct(monkeypatch, wrapped):
+    request = AsyncMock(return_value={"error": "", "request_id": "empty", **({"response": {"income_detail_list": []}} if wrapped else {"income_detail_list": []})})
+    monkeypatch.setattr(adapter.provider, "signed_shop_request", request)
+    result = await adapter.income(None, None, date(2026, 9, 28), date(2026, 10, 10), 1, "", 30)
+    assert result["items"] == [] and result["ada_lagi"] is None
+    assert result["pagination_known"] is False and result["warnings"]
+    for malformed in (None, {}, "", [{"order_sn": "unexpected-shape"}]):
+        request.return_value = {"response": {"income_detail_list": malformed}} if wrapped else {"income_detail_list": malformed}
+        with pytest.raises(adapter.provider.ShopeeAPIError):
+            await adapter.income(None, None, date(2026, 9, 28), date(2026, 10, 10), 1, "", 30)

@@ -106,7 +106,7 @@ async def income(session, akun, start, end, status, cursor, size):
     if status == 1 and (start >= end or (end - start).days > 14):
         raise HTTPException(422, "Pendapatan dirilis memerlukan periode lebih dari satu hari dan maksimal 14 hari")
     path = "/api/v2/payment/get_income_detail"
-    data = await provider.signed_shop_request(session, akun, path, params={"date_from": start.isoformat(), "date_to": end.isoformat(), "income_status": status, "cursor": cursor, "page_size": size})
+    data = await provider.signed_shop_request(session, akun, path, params={"date_from": start.isoformat(), "date_to": end.isoformat(), "income_status": status, "cursor": cursor, "page_size": size}, timeout=15.0)
     # The reference sample is top-level; accept the same contract inside the
     # usual Shopee response wrapper as well. Never turn missing data into [].
     wrapped = data.get("response")
@@ -126,6 +126,10 @@ async def income(session, akun, start, end, status, cursor, size):
         _log.warning("shopee_income phase=contract_failed request_id=%s reason=%s top_types=%s envelope_types=%s wrapped_income_type=%s", data.get("request_id"), reason, top_types, envelope_types, wrapped_type)
         management.incomplete(path, data)
 
+    # An explicit empty list is a successful zero-row response, not a missing
+    # envelope. Pagination remains unknown when Shopee omits its metadata.
+    if isinstance(envelope, list) and not envelope:
+        envelope = {"list": []}
     if not isinstance(envelope, dict):
         reject("income_envelope")
     page = envelope.get("next_page")
