@@ -156,3 +156,15 @@ Contoh mode Otomatis:
 
 Coding saat ini **belum mengedit BE/FE, membuat PR, atau redeploy**. Sol tidak
 memperluas daftar kemampuan sistem yang belum diimplementasikan.
+
+
+## Verifikasi hasil spesialis
+
+Spesialis menerima bukti receipt pembacaan pada pesan saat ini, bukan hanya
+ringkasan manajer. Jawaban spesialis bukan sumber fakta terverifikasi. Manajer
+menerima bukti terbaru pada setiap langkah, tanpa panggilan model tambahan.
+Kesimpulan kelayakan Shop GMV Max dibentuk ulang oleh backend dari boolean
+`is_eligible` pada receipt terbaru pesan ini: true layak, false belum layak,
+nilai kosong/tipe lain atau pembacaan gagal belum dapat dipastikan. Klaim
+kelayakan dari model diganti; analisis lain tetap bersifat hasil model.
+Kelayakan bukan kampanye aktif atau jaminan keuntungan.

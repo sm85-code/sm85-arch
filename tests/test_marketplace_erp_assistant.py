@@ -577,3 +577,47 @@ async def test_delegation_cannot_exceed_parent_reservation(setup, monkeypatch):
         turn = await s.get(AiTurn, ident)
         budget = await s.get(AiDailyBudget, config.day())
         assert budget.spent_usd == turn.cost_usd and budget.reserved_usd == 0
+
+
+@pytest.mark.parametrize('value,expected', [(True, 'is_eligible=true'), (False, 'is_eligible=false'), (None, 'belum dapat dipastikan')])
+def test_verified_eligibility_overrides_generated_claim(value, expected):
+    from tenants.marketplace_erp.modules.marketplace_erp.application.assistant import evidence
+    answer = 'Analisis iklan tetap tersedia.\n\nSonnet menyebut toko layak membuat Shop GMV Max. Klaim ini tidak didukung data yang dibaca.\n\nTidak ada budget yang diubah.'
+    output = evidence.reconcile(answer, {'kelayakan_gmv': {'is_eligible': value}})
+    assert expected in output
+    assert 'tidak didukung' not in output
+    assert 'Analisis iklan tetap tersedia.' in output and 'Tidak ada budget yang diubah.' in output
+    assert evidence.reconcile(answer, {'kelayakan_gmv': None}) == answer
+
+
+@pytest.mark.asyncio
+async def test_manager_passes_tool_evidence_and_reconciles_late_verification(setup, monkeypatch):
+    from tenants.marketplace_erp.modules.marketplace_erp.application.assistant import evidence
+    factory, user = setup
+    monkeypatch.setenv('OPENAI_API_KEY', 'test-only')
+    monkeypatch.setattr(config, 'MANAGER_MODEL', 'gpt-6.1-sol')
+    monkeypatch.setattr(tools.services, 'akun_shopee_pengelolaan', AsyncMock(return_value=SimpleNamespace(id='shop')))
+    monkeypatch.setattr(tools.management, 'eligibility', AsyncMock(return_value={'is_eligible': True, 'reason': None, 'request_id': 'verified-test'}))
+    model = AsyncMock(side_effect=[
+        response({'type': 'tool_use', 'id': 'g1', 'name': 'kelayakan_gmv', 'input': {}}),
+        response({'type': 'tool_use', 'id': 'd1', 'name': 'delegasi_sonnet', 'input': {'bidang': 'iklan', 'tugas': 'Evaluasi kelayakan'}}),
+        response({'type': 'text', 'text': 'Kelayakan terkonfirmasi.'}),
+        response({'type': 'text', 'text': 'Sonnet menyebut toko layak membuat Shop GMV Max. Klaim ini tidak didukung data yang dibaca.'}),
+    ])
+    monkeypatch.setattr(service, 'model_call', model)
+    async with factory() as s:
+        turn = await service.enqueue(s, user, message(akun_id='shop'))
+        ident = turn.id
+    assert await service.claim(factory) == ident
+    await service.process(factory, ident)
+    await service.release(factory, ident)
+    async with factory() as s:
+        turn = await s.get(AiTurn, ident)
+        assert turn.status == 'completed' and 'is_eligible=true' in turn.answer and 'tidak didukung' not in turn.answer
+        facts = await evidence.snapshot(s, turn)
+        assert facts['kelayakan_gmv']['request_id'] == 'verified-test'
+        delegate = (await s.execute(select(AiToolReceipt).where(AiToolReceipt.tool == 'delegasi_sonnet'))).scalar_one()
+        assert json.loads(delegate.result_json)['bukti_tool']['kelayakan_gmv']['is_eligible'] is True
+    specialist_prompt = model.call_args_list[2].args[1][0]['content']
+    assert 'verified-test' in specialist_prompt and '"is_eligible":true' in specialist_prompt.replace(' ', '')
+    assert 'verified-test' in model.call_args_list[3].args[3]
