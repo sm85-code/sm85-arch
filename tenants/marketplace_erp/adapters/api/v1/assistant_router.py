@@ -4,7 +4,7 @@ from fastapi import APIRouter, Depends, Query, HTTPException
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 from tenants.marketplace_erp.modules.marketplace_erp.application.assistant import config, service, tools
-from tenants.marketplace_erp.modules.marketplace_erp.application.assistant.schemas import TurnIn, ResolveIn
+from tenants.marketplace_erp.modules.marketplace_erp.application.assistant.schemas import TurnIn, ResolveIn, DecisionIn
 from tenants.marketplace_erp.modules.marketplace_erp.infrastructure.auth import require_roles_marketplace_erp
 from tenants.marketplace_erp.modules.marketplace_erp.infrastructure.database import get_db_marketplace_erp
 from tenants.marketplace_erp.modules.marketplace_erp.infrastructure.models import AiConversation, AiTurn, AiToolReceipt, AiDailyBudget, UserMarketplaceErp
@@ -28,7 +28,9 @@ async def turn_out(session, turn):
 async def status(session: AsyncSession = DB, user: UserMarketplaceErp = ADMIN):
     budget = await session.get(AiDailyBudget, config.day())
     unresolved = (await session.execute(select(AiToolReceipt, AiTurn.akun_id).join(AiTurn, AiTurn.id == AiToolReceipt.turn_id).where(AiToolReceipt.status == "unknown", AiToolReceipt.is_write.is_(True)).order_by(AiToolReceipt.created_at).limit(20))).all()
-    return {"unresolved": [{"id": r.id, "tool": r.tool, "akun_id": akun_id} for r, akun_id in unresolved], "available": config.ready() and config.valid_limits(), "model": config.MODEL,
+    return {"unresolved": [{"id": r.id, "tool": r.tool, "akun_id": akun_id} for r, akun_id in unresolved], "available": True, "llm_available": config.ready() and config.valid_limits(), "model": config.MODEL,
+            "agents": [{"id": "operasional", "available": True, "execution": "internal + Sonnet bila tersedia"}, {"id": "iklan", "available": True, "execution": "internal + Sonnet bila tersedia"}, {"id": "coding", "available": config.ready() and config.valid_limits(), "execution": "perencanaan saja; worker coding belum tersedia"}],
+            "manager": {"available": False, "reason": "GPT manager belum dikonfigurasi"}, "writes_require_confirmation": True,
             "usd_idr": str(config.USD_IDR), "daily_usd": str(config.DAILY_USD), "turn_usd": str(config.TURN_USD), "daily_turns": config.DAILY_TURNS,
             "spent_usd": str(budget.spent_usd if budget else 0), "reserved_usd": str(budget.reserved_usd if budget else 0),
             "used_turns": budget.turns if budget else 0, "max_writes": config.MAX_WRITES,
@@ -51,6 +53,11 @@ async def history(id: str, session: AsyncSession = DB, user: UserMarketplaceErp 
 @router.post("/pesan", status_code=202)
 async def send(payload: TurnIn, session: AsyncSession = DB, user: UserMarketplaceErp = ADMIN):
     return await turn_out(session, await service.enqueue(session, user, payload))
+
+
+@router.post("/tindakan/{id}/keputusan", status_code=202)
+async def decision(id: str, body: DecisionIn, session: AsyncSession = DB, user: UserMarketplaceErp = ADMIN):
+    return await turn_out(session, await service.decide(session, user, id, body))
 
 
 @router.post("/tindakan/{id}/selesai-periksa")
