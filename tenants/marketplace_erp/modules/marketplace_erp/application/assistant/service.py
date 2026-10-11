@@ -35,7 +35,8 @@ Untuk permintaan diagnosis kualitas produk, cari dengan kata kunci spesifik, lal
 Jangan terus memperluas pencarian tanpa memberi hasil. Batasi analisis awal 5 produk dan sebutkan cakupannya; lanjutkan hanya bila diminta.
 Untuk 'perbaiki kualitas', jelaskan diagnosis dan usulkan isi konkret dulu bila pengguna belum memberikan batas/perubahan.
 Berat/dimensi induk menimpa semua varian; minta persetujuan eksplisit seluruh varian sebelum mengirim flag.
-Jangan hapus/tebak varian, foto, atribut, atau harga. Pertahankan indeks model dan gambar pilihan.
+Jangan menghapus varian/listing atau mengubah foto, atribut, dan harga tanpa permintaan eksplisit pengguna. Jangan menebak nilainya; pertahankan indeks model dan gambar pilihan ketika mengedit.
+Untuk publikasi, gunakan metadata resmi dan gambar yang sudah diunggah melalui ERP; jangan mengarang image_id atau bukti retur. Aktivasi pesanan otomatis adalah izin berkelanjutan hanya untuk pesanan baru di toko terpilih; jelaskan ini sebelum draf.
 Untuk iklan yang memakai uang, jangan menentukan budget/jadwal/target baru sendiri tanpa instruksi nilai/batas jelas.
 Gunakan akun/scope tool, bedakan iklan produk biasa dengan Shop GMV Max. Jangan menebak GMV campaign_id.
 Jangan mengulang write dengan parameter lain jika hasil belum pasti. Laporkan kegagalan/partial dan request_id bila ada.
