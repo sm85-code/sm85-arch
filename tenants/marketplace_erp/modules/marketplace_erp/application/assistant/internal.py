@@ -1,4 +1,4 @@
-"""Deterministic, bounded commands. Unrecognised/compound text goes to Sonnet.
+"""Deterministic, bounded commands. Unrecognised/compound text goes to the configured model.
 
 Only exact complete requests are routed here; no partial keyword match can turn
 an analysis, negation, or different period into an operational instruction.
@@ -9,7 +9,7 @@ from decimal import Decimal
 from . import config
 
 MODEL = "internal-v1"
-HELP = """**Asisten ERP: internal + Sonnet**
+HELP = """**Asisten ERP: internal + manajer Sol + Sonnet**
 Permintaan rutin berikut memakai kode internal, tanpa token model:
 - daftar toko
 - cari produk rak bambu
@@ -23,9 +23,9 @@ Permintaan rutin berikut memakai kode internal, tanpa token model:
 - sinkron katalog
 - catat perbaikan fitur: jelaskan masalah dan hasil yang diinginkan
 Pilih toko untuk data live dan perubahan. Semua perubahan menjadi draf yang perlu dikonfirmasi.
-Untuk analisis, nama produk ambigu, atau bahasa bebas, Sonnet membantu memakai tools resmi.
+Untuk analisis, nama produk ambigu, atau bahasa bebas, model yang tersedia membantu memakai tools resmi. Mode Otomatis memakai Sol bila dikonfigurasi; Sol dapat meminta analisis Sonnet.
 Coding saat ini membantu menyusun kebutuhan dan rencana; belum mengeksekusi kode, migrasi, PR atau deploy.
-GPT manajer dan otomasi terjadwal belum diaktifkan. Ada hal lain yang ingin Anda periksa?"""
+Manajer memerlukan konfigurasi OpenAI backend. Otomasi terjadwal belum tersedia. Ada hal lain yang ingin Anda periksa?"""
 
 
 def period(value):

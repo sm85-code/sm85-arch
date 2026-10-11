@@ -17,6 +17,7 @@ from tenants.marketplace_erp.modules.marketplace_erp.application.assistant.schem
 
 @pytest_asyncio.fixture
 async def setup(monkeypatch):
+    monkeypatch.delenv('OPENAI_API_KEY', raising=False)
     monkeypatch.setenv('ANTHROPIC_API_KEY', 'test-only')
     monkeypatch.setenv('ERP_AI_ENABLED', 'true')
     engine = create_async_engine('sqlite+aiosqlite:///:memory:')
@@ -477,3 +478,102 @@ async def test_large_rejected_receipt_keeps_status_request_id_and_original_resul
         assert not stop and result['ok'] is False and result['request_id']=='provider-123' and result['terpotong']
         receipt = (await s.execute(select(AiToolReceipt).where(AiToolReceipt.status=='rejected'))).scalar_one()
         assert json.loads(receipt.result_json)==original
+
+
+@pytest.mark.asyncio
+async def test_sol_delegates_coding_without_granting_write_access(setup, monkeypatch):
+    factory, user = setup
+    monkeypatch.setenv('OPENAI_API_KEY', 'test-only')
+    monkeypatch.setattr(config, 'MANAGER_MODEL', 'gpt-6.1-sol')
+    monkeypatch.setattr(config, 'INPUT_RATE', Decimal('3'))
+    monkeypatch.setattr(config, 'OUTPUT_RATE', Decimal('15'))
+    monkeypatch.setattr(config, 'TURN_USD', Decimal('1'))
+    monkeypatch.setattr(config, 'DAILY_USD', Decimal('2'))
+    model = AsyncMock(side_effect=[
+        response({'type': 'tool_use', 'id': 'd1', 'name': 'delegasi_sonnet', 'input': {'bidang': 'coding', 'tugas': 'Analisis masalah stok'}}),
+        response({'type': 'tool_use', 'id': 'w1', 'name': 'ubah_iklan', 'input': {'campaign_id': 7, 'aksi': 'pause'}}),
+        response({'type': 'text', 'text': 'Susun reproduksi masalah; belum mengubah kode.'}),
+        response({'type': 'text', 'text': 'Rencana perbaikan tersedia; tidak ada perubahan dijalankan.'}),
+    ])
+    monkeypatch.setattr(service, 'model_call', model)
+    execute = AsyncMock()
+    monkeypatch.setattr(tools, 'execute', execute)
+    async with factory() as s:
+        turn = await service.enqueue(s, user, message())
+        ident = turn.id
+        assert turn.model == 'gpt-6.1-sol'
+    assert await service.claim(factory) == ident
+    await service.process(factory, ident)
+    await service.release(factory, ident)
+    async with factory() as s:
+        turn = await s.get(AiTurn, ident)
+        receipt = (await s.execute(select(AiToolReceipt))).scalar_one()
+        assert turn.status == 'completed' and receipt.tool == 'delegasi_sonnet'
+        assert receipt.status == 'succeeded' and not receipt.is_write
+        assert turn.cost_usd == Decimal('0.0035')  # Two Sol + two Sonnet calls, each at its own rates.
+        budget = await s.get(AiDailyBudget, config.day())
+        assert budget.spent_usd == turn.cost_usd and budget.reserved_usd == 0 and budget.turns == 1
+    assert [call.args[0] for call in model.call_args_list] == ['gpt-6.1-sol', config.MODEL, config.MODEL, 'gpt-6.1-sol']
+    assert all(not tools.TOOLS[d['name']][1] for d in model.call_args_list[1].args[2])
+    assert 'delegasi_sonnet' not in {d['name'] for d in model.call_args_list[1].args[2]}
+    assert 'Tool di luar bidang' in model.call_args_list[2].args[1][-1]['content'][0]['content']
+    execute.assert_not_awaited()
+
+
+@pytest.mark.asyncio
+async def test_sol_drafts_write_and_requires_existing_confirmation(setup, monkeypatch):
+    factory, user = setup
+    monkeypatch.setenv('OPENAI_API_KEY', 'test-only')
+    monkeypatch.setattr(config, 'MANAGER_MODEL', 'gpt-6.1-sol')
+    monkeypatch.setattr(tools.services, 'akun_shopee_pengelolaan', AsyncMock(return_value=SimpleNamespace(id='shop')))
+    monkeypatch.setattr(service, 'model_call', AsyncMock(side_effect=[
+        response({'type': 'tool_use', 'id': 'w1', 'name': 'ubah_iklan', 'input': {'campaign_id': 7, 'aksi': 'pause'}}),
+        response({'type': 'text', 'text': 'Periksa draf dahulu.'}),
+    ]))
+    execute = AsyncMock(return_value={'ok': True})
+    monkeypatch.setattr(tools, 'execute', execute)
+    async with factory() as s:
+        turn = await service.enqueue(s, user, message(mode='perintah', akun_id='shop'))
+        ident = turn.id
+    assert await service.claim(factory) == ident
+    await service.process(factory, ident)
+    await service.release(factory, ident)
+    execute.assert_not_awaited()
+    async with factory() as s:
+        draft = (await s.execute(select(AiToolReceipt))).scalar_one()
+        assert draft.status == 'draft'
+        execution = await service.decide(s, user, draft.id, DecisionIn(decision='confirm'))
+        execution_id = execution.id
+        assert execution.model == 'internal-execution' and execution.reserved_usd == 0
+    assert await service.claim(factory) == execution_id
+    await service.process(factory, execution_id)
+    await service.release(factory, execution_id)
+    execute.assert_awaited_once()
+
+
+@pytest.mark.asyncio
+async def test_delegation_cannot_exceed_parent_reservation(setup, monkeypatch):
+    factory, user = setup
+    monkeypatch.setenv('OPENAI_API_KEY', 'test-only')
+    monkeypatch.setattr(config, 'MANAGER_MODEL', 'gpt-6.1-sol')
+    monkeypatch.setattr(config, 'INPUT_RATE', Decimal('100'))
+    monkeypatch.setattr(config, 'OUTPUT_RATE', Decimal('100'))
+    model = AsyncMock(side_effect=[
+        response({'type': 'tool_use', 'id': 'd1', 'name': 'delegasi_sonnet', 'input': {'bidang': 'coding', 'tugas': 'Susun rencana'}}),
+        response({'type': 'text', 'text': 'Cadangan spesialis tidak cukup.'}),
+    ])
+    monkeypatch.setattr(service, 'model_call', model)
+    async with factory() as s:
+        turn = await service.enqueue(s, user, message())
+        ident = turn.id
+    assert await service.claim(factory) == ident
+    await service.process(factory, ident)
+    await service.release(factory, ident)
+    assert model.await_count == 2
+    assert all(call.args[0] == 'gpt-6.1-sol' for call in model.call_args_list)
+    async with factory() as s:
+        receipt = (await s.execute(select(AiToolReceipt))).scalar_one()
+        assert receipt.status == 'failed' and Decimal(json.loads(receipt.result_json)['cost_usd']) == 0
+        turn = await s.get(AiTurn, ident)
+        budget = await s.get(AiDailyBudget, config.day())
+        assert budget.spent_usd == turn.cost_usd and budget.reserved_usd == 0

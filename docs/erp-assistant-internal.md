@@ -1,13 +1,18 @@
-# Asisten ERP: kode internal dan Sonnet
+# Asisten ERP: internal, manajer Sol dan spesialis Sonnet
 
-Asisten tetap khusus Admin ERP. Tidak ada model GPT/manajer tambahan, API key baru,
-worker coding, atau migrasi database produksi yang diperlukan untuk perubahan ini.
+Asisten tetap khusus Admin ERP. Tidak ada worker coding atau migrasi database baru.
+API key hanya berada di environment backend; tidak dikirim ke browser atau model lain.
 
 ## Pembagian kerja
 
 - **Internal:** mengenali permintaan rutin lengkap, membaca API/service resmi,
   menghitung laporan melalui service yang ada, menyimpan catatan, dan mengeksekusi
   argumen draf yang telah disetujui. Token dan biaya model nol.
+- **Sol (mode Otomatis):** menangani bahasa bebas setelah parser internal, membaca data
+  lewat tools resmi, dan dapat mendelegasikan satu analisis operasional/iklan/rencana
+  coding ke Sonnet. Hasil delegasi diperiksa dan dirangkum manajer. Tidak ada
+  perulangan agen: maksimal satu delegasi, tiga panggilan spesialis dan enam
+  panggilan model gabungan per pesan.
 - **Sonnet:** memahami bahasa bebas, meminta informasi yang kurang, membaca data
   melalui tools, menganalisis dan menyusun draf. Tarif tetap mengikuti konfigurasi
   server/penyedia; tidak menjanjikan akurasi model 100%.
@@ -21,7 +26,8 @@ worker coding, atau migrasi database produksi yang diperlukan untuk perubahan in
 ## Perintah internal tanpa token
 
 Pilih toko untuk data live. Awalan `cek`, `lihat`, `tampilkan`, atau `tolong`
-boleh digunakan. Permintaan yang tidak dikenali secara lengkap memakai Sonnet,
+boleh digunakan. Permintaan yang tidak dikenali secara lengkap memakai manajer Sol bila tersedia
+(mode Otomatis), atau Sonnet,
 bukan dipaksakan ke periode/tindakan yang berbeda.
 
 | Contoh | Hasil |
@@ -49,7 +55,7 @@ bukan dipaksakan ke periode/tindakan yang berbeda.
 
 Mode **Tanya** tidak memberikan izin perubahan. Pilih **Perintah** dan satu toko
 untuk membuat draf tindakan. Kata negatif/permintaan gabungan yang tidak cocok
-penuh tidak dieksekusi oleh parser internal. Nama/nomor ambigu dibantu Sonnet.
+penuh tidak dieksekusi oleh parser internal. Nama/nomor ambigu dibantu model, bukan ditebak oleh parser.
 
 ## Kemampuan tambahan melalui Sonnet
 
@@ -96,7 +102,10 @@ belum pasti dari provider tidak ditampilkan sebagai keberhasilan penuh.
 
 - Internal: maksimum 200 turn per Admin per hari WIB, termasuk konfirmasi.
   Tidak memakai kuota token/pesan Sonnet. Tetap berjalan tanpa API key Sonnet.
-- Sonnet: batas biaya, pesan, langkah dan tools yang sudah ada tetap berlaku.
+- Sol + Sonnet dalam chat memakai satu cadangan pesan dan budget harian yang sama.
+  Token delegasi dijumlahkan; biaya memakai tarif masing-masing model. Reasoning
+  tokens OpenAI termasuk output berbayar. Tarif adalah estimasi konfigurasi, bukan
+  pengganti tagihan provider. Cadangan tidak cukup menghentikan panggilan berikutnya.
 - Advisor iklan terpisah: reservasi percobaan dicatat sebelum model dipanggil,
   diserialisasi melalui lock database, dan hari dihitung dalam WIB. Permintaan
   terputus tetap memakai satu percobaan; biaya tanpa jawaban belum bisa dipastikan.
@@ -106,3 +115,44 @@ belum pasti dari provider tidak ditampilkan sebagai keberhasilan penuh.
   backend baru tetap tidak mengeksekusi perubahan hanya dari keputusan model.
 - Dokumentasi ini menggantikan keterangan lama bahwa mode Perintah langsung
   mengeksekusi perubahan tanpa persetujuan.
+
+
+## Konfigurasi manajer di DigitalOcean
+
+Simpan hanya di backend:
+
+```text
+OPENAI_API_KEY=<rahasia project OpenAI>
+OPENAI_MODEL=gpt-6.1-sol
+ERP_AI_DAILY_USD=0.50
+ERP_AI_TURN_USD=0.20
+```
+
+Tanpa konfigurasi batas khusus, default budget gabungan chat adalah $0,50/hari
+WIB dan cadangan $0,20/pesan. Nilai environment lama mengalahkan default: periksa
+jika sebelumnya sudah memasang batas lebih tinggi. Ini batas lokal chat, bukan
+batas saldo seluruh project OpenAI. Advisor iklan terpisah masih memakai kuota
+sendiri. Biaya aktual lihat billing provider, termasuk pemakaian aplikasi lain.
+
+`ANTHROPIC_API_KEY` dan `ERP_AI_MODEL` tetap untuk Sonnet. Mode Otomatis memakai
+internal dahulu lalu Sol; memilih Operasional/Iklan/Coding langsung memakai
+Sonnet bila tersedia untuk menghemat koordinasi. Jika Sonnet tidak tersedia,
+Sol menangani bidang tersebut tanpa delegasi. Jika OpenAI belum dipasang, jalur
+Sonnet lama tetap tersedia. Provider gagal tidak otomatis dialihkan/dicoba ulang.
+
+Responses API menggunakan `store=false`, endpoint resmi tetap, effort `low`,
+tanpa web search, browser, shell, atau tool di luar registry ERP. Reasoning
+terenkripsi hanya dipertahankan dalam loop sementara, tidak dicatat di riwayat.
+Model allowlist: `gpt-6.1-sol`, `gpt-6-luna`, `gpt-6-astra`; tarif default mengikuti
+katalog saat integrasi dan dapat diperbarui lewat `ERP_MANAGER_INPUT_USD_PER_MILLION`
+serta `ERP_MANAGER_OUTPUT_USD_PER_MILLION`. Model/key yang tidak dapat diakses
+provider tetap bisa ditolak; status “siap” hanya menunjukkan konfigurasi lokal,
+bukan bukti uji API/deployment sukses.
+
+Contoh mode Otomatis:
+- “Periksa kondisi toko dan tentukan tiga pekerjaan paling penting hari ini.”
+- “Minta Sonnet evaluasi iklan, lalu rangkum rekomendasi tanpa mengubah budget.”
+- “Minta agen coding susun rencana mengatasi stok yang tidak kembali saat batal.”
+
+Coding saat ini **belum mengedit BE/FE, membuat PR, atau redeploy**. Sol tidak
+memperluas daftar kemampuan sistem yang belum diimplementasikan.
