@@ -376,7 +376,7 @@ async def tool_call(session, user, turn, block, *, authorization=None):
         payload = tools.validate(name, arguments, str(uuid5(NAMESPACE_URL, turn.id)))
     except (ValidationError, ValueError, TypeError) as exc:
         return {"error": "Parameter tidak valid", "detail": str(exc)[:1200]}, False
-    canonical = payload.model_dump(exclude_none=True, exclude={"reference_id"})
+    canonical = payload.model_dump(exclude_none=True, exclude={"reference_id", "operation_id"})
     digest = fingerprint({"tool": name, "arguments": canonical})
     if hasattr(payload, "reference_id"):
         payload.reference_id = uuid5(NAMESPACE_URL, turn.id + digest)

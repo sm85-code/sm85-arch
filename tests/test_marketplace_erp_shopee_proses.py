@@ -55,8 +55,8 @@ PICKUP_PARAM = {
 # --- choosing how to arrange shipment ---------------------------------------------
 
 
-def test_prefers_pickup_address_and_recommended_slot():
-    assert erp_shopee.pilih_parameter_kirim(PICKUP_PARAM, "Toko") == {"pickup": {"address_id": 2, "pickup_time_id": "t2"}}
+def test_prefers_dropoff_when_both_modes_are_available():
+    assert erp_shopee.pilih_parameter_kirim(PICKUP_PARAM, "Toko") == {"dropoff": {}}
 
 
 def test_pickup_without_slots_is_a_clear_409():
@@ -104,9 +104,9 @@ async def test_proses_pengiriman_calls_param_then_ship_then_tracking(live, monke
     monkeypatch.setattr(erp_shopee, "signed_shop_request", fake)
     out = await erp_shopee.proses_pengiriman(None, live, "SN1")
 
-    assert out == {"status_marketplace": "PROCESSED", "nomor_resi": "ID123", "metode_pengiriman": "pickup"}
+    assert out == {"status_marketplace": "PROCESSED", "nomor_resi": "ID123", "metode_pengiriman": "dropoff"}
     assert [c[0] for c in calls] == [erp_shopee._PATH_ORDER_DETAIL, erp_shopee._PATH_SHIP_PARAM, erp_shopee._PATH_SHIP_ORDER, erp_shopee._PATH_TRACKING]
-    assert calls[2][1:3] == ("POST", {"order_sn": "SN1", "pickup": {"address_id": 2, "pickup_time_id": "t2"}})
+    assert calls[2][1:3] == ("POST", {"order_sn": "SN1", "dropoff": {}})
 
 
 # --- service: process + follow Shopee afterwards ------------------------------------------

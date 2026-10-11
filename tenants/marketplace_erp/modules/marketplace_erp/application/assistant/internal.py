@@ -21,11 +21,14 @@ Permintaan rutin berikut memakai kode internal, tanpa token model:
 - kotak masuk chat / chat belum dibaca
 - jeda iklan 123 / lanjutkan iklan 123 / ubah budget iklan 123 menjadi 50 ribu
 - sinkron katalog
+- pesanan otomatis / aktifkan pesanan otomatis / nonaktifkan pesanan otomatis
+- ringkasan pendapatan shopee
+Lewat bahasa bebas: publikasi produk, tambah/inisialisasi/hapus varian, hapus listing, profil toko, mode libur, jasa kirim/alamat, pelacakan, konfirmasi/sengketa retur, dan akhiri/hapus promosi. Gambar/bukti diunggah dari halaman ERP terlebih dahulu.
 - catat perbaikan fitur: jelaskan masalah dan hasil yang diinginkan
 Pilih toko untuk data live dan perubahan. Semua perubahan menjadi draf yang perlu dikonfirmasi.
 Untuk analisis, nama produk ambigu, atau bahasa bebas, model yang tersedia membantu memakai tools resmi. Mode Otomatis memakai Sol bila dikonfigurasi; Sol dapat meminta analisis Sonnet.
 Coding saat ini membantu menyusun kebutuhan dan rencana; belum mengeksekusi kode, migrasi, PR atau deploy.
-Manajer memerlukan konfigurasi OpenAI backend. Otomasi terjadwal belum tersedia. Ada hal lain yang ingin Anda periksa?"""
+Manajer memerlukan konfigurasi OpenAI backend. Pesanan drop off otomatis dapat diaktifkan per toko pada halaman Toko; hanya pesanan baru sejak izin aktif. Ada hal lain yang ingin Anda periksa?"""
 
 
 def period(value):
@@ -56,7 +59,9 @@ def plan(prompt, agent="auto"):
         if text.startswith("catat perbaikan fitur:"):
             return {"answer": "**Permintaan perbaikan dicatat dalam percakapan ini.**\n" + raw.split(":", 1)[1].strip() + "\n\nBelum ada perubahan kode. Jelaskan langkah terjadinya masalah, hasil sekarang, dan hasil yang diinginkan. Pilih Coding untuk meminta Sonnet menyusun rencana dan kriteria penerimaan."}
         return None
-    simple = {"daftar toko": "daftar_toko", "saldo toko": "saldo_toko", "saldo shopee": "saldo_toko", "pendapatan toko": "ringkasan_pendapatan", "kesehatan toko": "performa_toko", "daftar promosi": "daftar_promosi", "daftar iklan": "daftar_iklan", "kelayakan gmv": "kelayakan_gmv", "sinkron katalog": "sinkron_katalog"}
+    simple = {"daftar toko": "daftar_toko", "saldo toko": "saldo_toko", "saldo shopee": "saldo_toko", "pendapatan toko": "ringkasan_pendapatan", "kesehatan toko": "performa_toko", "daftar promosi": "daftar_promosi", "daftar iklan": "daftar_iklan", "kelayakan gmv": "kelayakan_gmv", "sinkron katalog": "sinkron_katalog", "pesanan otomatis": "pengaturan_pesanan_otomatis", "ringkasan pendapatan shopee": "ringkasan_pendapatan_shopee"}
+    if text in ("aktifkan pesanan otomatis", "nonaktifkan pesanan otomatis"):
+        return {"name": "atur_pesanan_otomatis", "input": {"enabled": text.startswith("aktifkan")}}
     if text in simple:
         return {"name": simple[text], "input": {}}
     if text in ("kotak masuk chat", "chat belum dibaca"):
