@@ -28,9 +28,12 @@ async def turn_out(session, turn):
 async def status(session: AsyncSession = DB, user: UserMarketplaceErp = ADMIN):
     budget = await session.get(AiDailyBudget, config.day())
     unresolved = (await session.execute(select(AiToolReceipt, AiTurn.akun_id).join(AiTurn, AiTurn.id == AiToolReceipt.turn_id).where(AiToolReceipt.status == "unknown", AiToolReceipt.is_write.is_(True)).order_by(AiToolReceipt.created_at).limit(20))).all()
-    return {"unresolved": [{"id": r.id, "tool": r.tool, "akun_id": akun_id} for r, akun_id in unresolved], "available": True, "llm_available": config.ready() and config.valid_limits(), "model": config.MODEL,
-            "agents": [{"id": "operasional", "available": True, "execution": "internal + Sonnet bila tersedia"}, {"id": "iklan", "available": True, "execution": "internal + Sonnet bila tersedia"}, {"id": "coding", "available": config.ready() and config.valid_limits(), "execution": "perencanaan saja; worker coding belum tersedia"}],
-            "manager": {"available": False, "reason": "GPT manager belum dikonfigurasi"}, "writes_require_confirmation": True,
+    model = config.selected_model()
+    manager_ready = config.manager_ready() and config.model_limits(config.MANAGER_MODEL)
+    sonnet_ready = config.ready() and config.model_limits(config.MODEL)
+    return {"unresolved": [{"id": r.id, "tool": r.tool, "akun_id": akun_id} for r, akun_id in unresolved], "available": True, "llm_available": config.model_ready(model) and config.model_limits(model), "model": model,
+            "agents": [{"id": "operasional", "available": True, "execution": "internal; Sol/Sonnet bila tersedia"}, {"id": "iklan", "available": True, "execution": "internal; Sol/Sonnet bila tersedia"}, {"id": "coding", "available": manager_ready or sonnet_ready, "execution": "perencanaan saja; worker coding belum tersedia"}],
+            "manager": {"available": manager_ready, "model": config.MANAGER_MODEL, "execution": "tools internal dan delegasi Sonnet; perubahan memerlukan konfirmasi"}, "specialist": {"available": sonnet_ready, "model": config.MODEL}, "writes_require_confirmation": True,
             "usd_idr": str(config.USD_IDR), "daily_usd": str(config.DAILY_USD), "turn_usd": str(config.TURN_USD), "daily_turns": config.DAILY_TURNS,
             "spent_usd": str(budget.spent_usd if budget else 0), "reserved_usd": str(budget.reserved_usd if budget else 0),
             "used_turns": budget.turns if budget else 0, "max_writes": config.MAX_WRITES,

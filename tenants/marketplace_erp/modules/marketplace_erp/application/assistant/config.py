@@ -22,8 +22,8 @@ MODEL = os.getenv("ERP_AI_MODEL", "claude-sonnet-5-5")
 RATES = {"claude-sonnet-5-5": ("2", "10"), "claude-opus-5-5": ("4", "20"), "claude-sonnet-4-6": ("3", "15")}
 INPUT_RATE = decimal_setting("ERP_AI_INPUT_USD_PER_MILLION", RATES.get(MODEL, ("4", "20"))[0])
 OUTPUT_RATE = decimal_setting("ERP_AI_OUTPUT_USD_PER_MILLION", RATES.get(MODEL, ("4", "20"))[1])
-DAILY_USD = decimal_setting("ERP_AI_DAILY_USD", "10")
-TURN_USD = decimal_setting("ERP_AI_TURN_USD", "1.5")
+DAILY_USD = decimal_setting("ERP_AI_DAILY_USD", "0.50")
+TURN_USD = decimal_setting("ERP_AI_TURN_USD", "0.20")
 DAILY_TURNS = integer_setting("ERP_AI_DAILY_TURNS", "30")
 MAX_CALLS = 6
 MAX_WRITES = 5
@@ -49,3 +49,40 @@ def ready():
 
 def valid_limits():
     return (MODEL in RATES or bool(os.getenv("ERP_AI_INPUT_USD_PER_MILLION") and os.getenv("ERP_AI_OUTPUT_USD_PER_MILLION"))) and all(v.is_finite() and v > 0 for v in (INPUT_RATE, OUTPUT_RATE, DAILY_USD, TURN_USD)) and DAILY_TURNS > 0
+
+
+# Explicit allowlist: never infer an API provider from an arbitrary model name.
+MANAGER_MODEL = os.getenv("OPENAI_MODEL", "gpt-6.1-sol")
+MANAGER_RATES = {"gpt-6.1-sol": ("2", "10"), "gpt-6-luna": ("0.1", "0.5"), "gpt-6-astra": ("10", "50")}
+MANAGER_INPUT_RATE = decimal_setting("ERP_MANAGER_INPUT_USD_PER_MILLION", MANAGER_RATES.get(MANAGER_MODEL, ("0", "0"))[0])
+MANAGER_OUTPUT_RATE = decimal_setting("ERP_MANAGER_OUTPUT_USD_PER_MILLION", MANAGER_RATES.get(MANAGER_MODEL, ("0", "0"))[1])
+
+
+def manager_ready():
+    return os.getenv("ERP_AI_ENABLED", "true").lower() == "true" and bool(os.getenv("OPENAI_API_KEY", "").strip())
+
+
+def is_manager(model):
+    return model in MANAGER_RATES
+
+
+def selected_model(agent="auto"):
+    if manager_ready() and (agent == "auto" or not ready()):
+        return MANAGER_MODEL
+    return MODEL
+
+
+def model_ready(model):
+    return manager_ready() if is_manager(model) else model == MODEL and ready()
+
+
+def rates(model):
+    if is_manager(model):
+        return MANAGER_INPUT_RATE, MANAGER_OUTPUT_RATE
+    return INPUT_RATE, OUTPUT_RATE
+
+
+def model_limits(model):
+    price = rates(model)
+    known = model in MANAGER_RATES if is_manager(model) else model == MODEL and (MODEL in RATES or bool(os.getenv("ERP_AI_INPUT_USD_PER_MILLION") and os.getenv("ERP_AI_OUTPUT_USD_PER_MILLION")))
+    return known and all(v.is_finite() and v > 0 for v in (*price, DAILY_USD, TURN_USD)) and DAILY_TURNS > 0

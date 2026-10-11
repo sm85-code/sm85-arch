@@ -1,6 +1,6 @@
 # Asisten AI ERP — T3/T4/T5
 
-Pembaruan internal + Sonnet: lihat [panduan terbaru](erp-assistant-internal.md).
+Pembaruan internal + manajer Sol + Sonnet: lihat [panduan terbaru](erp-assistant-internal.md).
 
 ## Pengoperasian
 
@@ -33,11 +33,11 @@ Kunci tetap di server, tidak melalui FE. Default aktif jika ANTHROPIC_API_KEY su
 | Environment | Default | Fungsi |
 |---|---|---|
 | ANTHROPIC_API_KEY | kosong | Kunci Anthropic existing |
-| ERP_AI_ENABLED | true | false untuk menonaktifkan Sonnet; perintah internal tetap tersedia |
+| ERP_AI_ENABLED | true | false untuk menonaktifkan seluruh model AI; perintah internal tetap tersedia |
 | ERP_AI_MODEL | claude-sonnet-5-5 | Model asisten |
 | ADS_AI_MODEL | claude-sonnet-5-5 | Default advisor iklan existing |
-| ERP_AI_DAILY_USD | 10 | Batas estimasi harian asisten |
-| ERP_AI_TURN_USD | 1.5 | Cadangan/batas per pesan |
+| ERP_AI_DAILY_USD | 0.50 | Batas estimasi harian asisten |
+| ERP_AI_TURN_USD | 0.20 | Cadangan/batas per pesan |
 | ERP_AI_DAILY_TURNS | 30 | Batas pesan harian, WIB |
 | ERP_AI_INPUT_USD_PER_MILLION | 2 untuk Sonnet5.5 | Tarif estimasi token masuk |
 | ERP_AI_OUTPUT_USD_PER_MILLION | 10 untuk Sonnet5.5 | Tarif estimasi token keluar |
