@@ -3008,25 +3008,28 @@ async def saran_ai_iklan(session: AsyncSession, akun: AkunMarketplace, pengguna,
     nol = {"token_masuk": 0, "token_keluar": 0, "biaya_usd": 0.0, "biaya_rp": 0, "model": None}
     if not ringkas:
         return {"ringkasan": "Tidak ada kampanye berjalan atau dijeda di toko ini, jadi tidak ada yang perlu dianalisis.", "saran": [], "pemakaian": nol, "kuota_sisa": None, "bulan_ini_usd": None}
-    sekarang = datetime.now(timezone.utc)
-    awal_hari = sekarang.replace(hour=0, minute=0, second=0, microsecond=0)
+    from zoneinfo import ZoneInfo
+    from .assistant import service as assistant_service, config as assistant_config
+    sekarang = datetime.now(ZoneInfo("Asia/Jakarta"))
+    awal_hari = sekarang.replace(hour=0, minute=0, second=0, microsecond=0).astimezone(timezone.utc)
+    # Serialize COUNT + durable reservation, not COUNT + a later model call.
+    await assistant_service.lock_row(session, assistant_service.AiDailyBudget, assistant_config.day(), day=assistant_config.day(), reserved_usd=0, spent_usd=0, turns=0)
     terpakai = (await session.execute(select(func.count()).select_from(SaranIklanAi).where(SaranIklanAi.created_at >= awal_hari))).scalar_one()
     if terpakai >= ADS_AI_BATAS_HARIAN:
         raise HTTPException(status_code=429, detail=f"Batas {ADS_AI_BATAS_HARIAN} analisis AI per hari sudah tercapai. Coba lagi besok.")
+    record = SaranIklanAi(akun_id=akun.id, user_id=getattr(pengguna, "id", None), model="reserved", token_masuk=0, token_keluar=0, biaya_usd=0, jumlah_saran=0)
+    session.add(record)
+    await session.commit()  # An interrupted request still consumes an attempt; never free uncertain quota.
     try:
         hasil = await ads_ai.minta_saran(ads_ai.susun_pesan(akun.nama_toko, kampanye["hari"], kampanye["saldo"], ringkas))
     except ads_ai.AiTidakTersedia as exc:
         raise HTTPException(status_code=502 if "ANTHROPIC_API_KEY" not in str(exc) else 501, detail=str(exc)) from exc
     saran = ads_ai.validasi_saran(hasil["mentah"], ringkas)
     biaya = ads_ai.biaya_usd(hasil["model"], hasil["token_masuk"], hasil["token_keluar"])
-    session.add(
-        SaranIklanAi(
-            akun_id=akun.id, user_id=getattr(pengguna, "id", None), model=hasil["model"], token_masuk=hasil["token_masuk"],
-            token_keluar=hasil["token_keluar"], biaya_usd=biaya, jumlah_saran=len(saran),
-        )
-    )
-    await session.flush()
-    awal_bulan = sekarang.replace(day=1, hour=0, minute=0, second=0, microsecond=0)
+    record.model, record.token_masuk, record.token_keluar = hasil["model"], hasil["token_masuk"], hasil["token_keluar"]
+    record.biaya_usd, record.jumlah_saran = biaya, len(saran)
+    await session.commit()
+    awal_bulan = sekarang.replace(day=1, hour=0, minute=0, second=0, microsecond=0).astimezone(timezone.utc)
     bulan_ini = (await session.execute(select(func.coalesce(func.sum(SaranIklanAi.biaya_usd), 0)).where(SaranIklanAi.created_at >= awal_bulan))).scalar_one()
     logging.getLogger(__name__).warning(
         "saran ai iklan toko %s oleh %s: %s saran, %s+%s token, $%s", akun.nama_toko, getattr(pengguna, "username", None), len(saran),

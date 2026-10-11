@@ -12,7 +12,7 @@ from sqlalchemy.ext.asyncio import async_sessionmaker, create_async_engine
 from tenants.marketplace_erp.modules.marketplace_erp.infrastructure.database import MarketplaceErpBase
 from tenants.marketplace_erp.modules.marketplace_erp.infrastructure.models import UserMarketplaceErp, AiTurn, AiToolReceipt, AiDailyBudget, AiWorkerLease
 from tenants.marketplace_erp.modules.marketplace_erp.application.assistant import service, tools, config
-from tenants.marketplace_erp.modules.marketplace_erp.application.assistant.schemas import TurnIn
+from tenants.marketplace_erp.modules.marketplace_erp.application.assistant.schemas import TurnIn, DecisionIn
 
 
 @pytest_asyncio.fixture
@@ -33,6 +33,18 @@ async def setup(monkeypatch):
 
 def message(**kwargs):
     return TurnIn(operation_id=uuid4(), prompt='Ringkas toko saya', **kwargs)
+
+
+async def confirmed_call(session, user, turn, block):
+    proposal, stop = await service.tool_call(session, user, turn, block)
+    if stop or "draft_id" not in proposal:
+        return proposal, stop
+    await service.finish(session, turn, 'completed', 'Draf siap')
+    execution = await service.decide(session, user, proposal['draft_id'], DecisionIn(decision='confirm'))
+    draft = await session.get(AiToolReceipt, proposal['draft_id'])
+    result = await service.tool_call(session, user, execution, block, authorization=draft)
+    await service.finish(session, execution, 'unknown' if result[1] else 'completed', 'Hasil')
+    return result
 
 
 def response(*blocks, stop='end_turn'):
@@ -101,12 +113,16 @@ async def test_write_replay_and_transport_failure_halts(setup, monkeypatch):
         block = {'name': 'ubah_iklan', 'input': {'campaign_id': 7, 'aksi': 'pause'}}
         a, stop = await service.tool_call(s, user, turn, block)
         b, stop2 = await service.tool_call(s, user, turn, block)
-        assert a == b and not stop and not stop2 and execute.await_count == 1
+        assert a == b and not stop and not stop2 and execute.await_count == 0
+        await confirmed_call(s, user, turn, block)
+        assert execute.await_count == 1
         execute.side_effect = HTTPException(504, 'timeout')
         block['input']['aksi'] = 'resume'
-        result, stop = await service.tool_call(s, user, turn, block)
+        result, stop = await confirmed_call(s, user, turn, block)
         assert stop and result['error'] == 'timeout'
-        _, stop = await service.tool_call(s, user, turn, block)
+        draft = (await s.execute(select(AiToolReceipt).where(AiToolReceipt.turn_id == turn.id, AiToolReceipt.tool == 'ubah_iklan', AiToolReceipt.arguments_json.contains('resume')))).scalar_one()
+        execution = await s.get(AiTurn, json.loads(draft.result_json)['execution_turn_id'])
+        _, stop = await service.tool_call(s, user, execution, block, authorization=draft)
         assert stop and execute.await_count == 2
         receipt = (await s.execute(select(AiToolReceipt).where(AiToolReceipt.status == 'unknown'))).scalar_one()
         assert receipt.is_write
@@ -180,7 +196,7 @@ async def test_unknown_write_blocks_new_turn_same_shop(setup, monkeypatch):
     monkeypatch.setattr(tools, 'execute', execute)
     async with factory() as s:
         turn = await service.enqueue(s, user, message(mode='perintah', akun_id='shop'))
-        await service.tool_call(s, user, turn, {'name': 'ubah_iklan', 'input': {'campaign_id': 7, 'aksi': 'pause'}})
+        await confirmed_call(s, user, turn, {'name': 'ubah_iklan', 'input': {'campaign_id': 7, 'aksi': 'pause'}})
         await service.finish(s, turn, 'unknown', 'periksa dulu')
         new = await service.enqueue(s, user, message(mode='perintah', akun_id='shop'))
         result, stop = await service.tool_call(s, user, new, {'name': 'ubah_iklan', 'input': {'campaign_id': 7, 'aksi': 'resume'}})
@@ -230,8 +246,10 @@ async def test_semantic_receipt_ignores_key_order_and_decimal_format(setup, monk
         turn = await service.enqueue(s, user, message(mode='perintah', akun_id='shop'))
         a = {'name': 'ubah_iklan', 'input': {'campaign_id': 7, 'aksi': 'change_budget', 'budget': '10000.00'}}
         b = {'name': 'ubah_iklan', 'input': {'budget': 10000, 'aksi': 'change_budget', 'campaign_id': '7', 'roas_target': None}}
-        await service.tool_call(s, user, turn, a)
-        await service.tool_call(s, user, turn, b)
+        first, _ = await service.tool_call(s, user, turn, a)
+        second, _ = await service.tool_call(s, user, turn, b)
+        assert first['draft_id'] == second['draft_id'] and execute.await_count == 0
+        await confirmed_call(s, user, turn, b)
         assert execute.await_count == 1
 
 
@@ -244,9 +262,9 @@ async def test_real_tool_refuses_product_from_other_shop(setup, monkeypatch):
     monkeypatch.setattr(tools.management, 'update_item', write)
     async with factory() as s:
         turn = await service.enqueue(s, user, message(mode='perintah', akun_id='selected'))
-        _, stop = await service.tool_call(s, user, turn, {'name': 'ubah_produk', 'input': {'katalog_id': 'foreign-product', 'perubahan': {'item_name': 'new'}}})
+        _, stop = await confirmed_call(s, user, turn, {'name': 'ubah_produk', 'input': {'katalog_id': 'foreign-product', 'perubahan': {'item_name': 'new'}}})
         assert not stop
-        receipt = (await s.execute(select(AiToolReceipt))).scalar_one()
+        receipt = (await s.execute(select(AiToolReceipt).where(AiToolReceipt.status == 'rejected'))).scalar_one()
         assert receipt.status == 'rejected' and 'toko' in receipt.result_json
     write.assert_not_awaited()
 
@@ -351,6 +369,111 @@ async def test_context_read_tools_pin_shop_and_reject_foreign_order(monkeypatch)
     with pytest.raises(HTTPException) as error:
         await tools.execute(None, user, turn, 'detail_pesanan', tools.OrderRef(pesanan_id='foreign'), 'f')
     assert error.value.status_code == 403
+    send = AsyncMock()
+    monkeypatch.setattr(tools.chat, 'send', send)
+    monkeypatch.setattr(tools.chat, 'conversation', AsyncMock(side_effect=HTTPException(403, 'Percakapan berasal dari toko lain')))
+    with pytest.raises(HTTPException) as error:
+        await tools.execute(None, user, SimpleNamespace(session_version=1,mode='perintah',akun_id='shop'), 'balas_chat', tools.ChatReply(conversation_id='foreign',text='Halo'), 'f')
+    assert error.value.status_code == 403
+    send.assert_not_awaited()
     definitions = tools.definitions(False)
-    assert {'pengaturan_toko', 'detail_pesanan', 'ringkasan_pendapatan'} <= {d['name'] for d in definitions}
+    assert {'kotak_masuk_chat', 'riwayat_chat', 'pengaturan_toko', 'detail_pesanan', 'ringkasan_pendapatan'} <= {d['name'] for d in definitions}
     assert all(not tools.TOOLS[d['name']][1] for d in definitions)
+
+
+@pytest.mark.asyncio
+async def test_internal_read_works_without_model_key_and_preserves_period(setup, monkeypatch):
+    from tenants.marketplace_erp.modules.marketplace_erp.application.assistant import internal
+    factory, user = setup
+    monkeypatch.delenv('ANTHROPIC_API_KEY')
+    model = AsyncMock()
+    monkeypatch.setattr(service, 'model_call', model)
+    monkeypatch.setattr(tools.services, 'list_akun_marketplace', AsyncMock(return_value=[SimpleNamespace(id='s', nama_toko='Toko', platform='shopee')]))
+    async with factory() as s:
+        turn = await service.enqueue(s, user, TurnIn(operation_id=uuid4(), prompt='daftar toko'))
+        ident = turn.id
+        assert turn.model == internal.MODEL and turn.reserved_usd == 0
+    assert await service.claim(factory) == ident
+    await service.process(factory, ident)
+    await service.release(factory, ident)
+    async with factory() as s:
+        assert (await s.get(AiTurn, ident)).status == 'completed'
+        assert (await s.get(AiDailyBudget, config.day())).turns == 0
+    model.assert_not_awaited()
+    assert internal.plan('jangan jeda iklan 7') is None
+    assert internal.plan('ringkasan penjualan 2025 dibanding 2026') is None
+    assert internal.plan('ringkasan penjualan kemarin')['input']['selesai'] != str(config.day())
+    assert internal.plan('ubah budget iklan 7 menjadi 50 ribu')['input']['budget'] == '50000'
+
+
+@pytest.mark.asyncio
+async def test_confirm_is_owned_bound_to_draft_and_replayed_without_llm(setup, monkeypatch):
+    factory, user = setup
+    monkeypatch.setattr(tools.services, 'akun_shopee_pengelolaan', AsyncMock(return_value=SimpleNamespace(id='shop')))
+    execute = AsyncMock(return_value={'ok': True})
+    monkeypatch.setattr(tools, 'execute', execute)
+    async with factory() as s:
+        turn = await service.enqueue(s, user, TurnIn(operation_id=uuid4(), prompt='jeda iklan 7', mode='perintah', akun_id='shop'))
+        ident = turn.id
+    await service.claim(factory)
+    await service.process(factory, ident)
+    await service.release(factory, ident)
+    execute.assert_not_awaited()
+    async with factory() as s:
+        draft = (await s.execute(select(AiToolReceipt))).scalar_one()
+        with pytest.raises(HTTPException) as error:
+            await service.decide(s, SimpleNamespace(id='other',role='admin'), draft.id, DecisionIn(decision='confirm'))
+        assert error.value.status_code == 404
+        await s.rollback()
+        draft = (await s.execute(select(AiToolReceipt))).scalar_one()
+        execution = await service.decide(s, user, draft.id, DecisionIn(decision='confirm'))
+        again = await service.decide(s, user, draft.id, DecisionIn(decision='confirm'))
+        assert execution.id == again.id and execution.reserved_usd == 0
+        executed_id = execution.id
+    await service.claim(factory)
+    await service.process(factory, executed_id)
+    await service.release(factory, executed_id)
+    assert execute.await_count == 1
+    async with factory() as s:
+        assert (await s.get(AiTurn, executed_id)).status == 'completed'
+        replay = await service.decide(s, user, draft.id, DecisionIn(decision='confirm'))
+        assert replay.id == executed_id
+    assert execute.await_count == 1
+
+
+@pytest.mark.asyncio
+async def test_all_variants_requires_separate_consent_and_draft_expiry(setup, monkeypatch):
+    factory, user = setup
+    monkeypatch.setattr(tools.services, 'akun_shopee_pengelolaan', AsyncMock(return_value=SimpleNamespace(id='shop')))
+    execute = AsyncMock()
+    monkeypatch.setattr(tools, 'execute', execute)
+    async with factory() as s:
+        turn = await service.enqueue(s, user, TurnIn(operation_id=uuid4(), prompt='Jangan ubah semua varian', mode='perintah', akun_id='shop'))
+        result, _ = await service.tool_call(s, user, turn, {'name':'ubah_produk','input':{'katalog_id':'p','perubahan':{'weight':1,'apply_to_all_models':True}}})
+        await service.finish(s, turn, 'completed', 'Draf')
+        with pytest.raises(HTTPException) as error:
+            await service.decide(s, user, result['draft_id'], DecisionIn(decision='confirm'))
+        assert error.value.status_code == 422
+        draft = await s.get(AiToolReceipt, result['draft_id'])
+        draft.created_at = service.now() - timedelta(minutes=11)
+        await s.commit()
+        with pytest.raises(HTTPException) as error:
+            await service.decide(s, user, result['draft_id'], DecisionIn(decision='confirm',all_variants=True))
+        assert error.value.status_code == 409
+        await service.decide(s, user, result['draft_id'], DecisionIn(decision='cancel'))
+        assert draft.status == 'cancelled'
+    execute.assert_not_awaited()
+
+
+@pytest.mark.asyncio
+async def test_large_rejected_receipt_keeps_status_request_id_and_original_result(setup, monkeypatch):
+    factory, user = setup
+    monkeypatch.setattr(tools.services, 'akun_shopee_pengelolaan', AsyncMock(return_value=SimpleNamespace(id='shop')))
+    original = {'ok':False,'request_id':'provider-123','details':'x'*25000}
+    monkeypatch.setattr(tools, 'execute', AsyncMock(return_value=original))
+    async with factory() as s:
+        turn = await service.enqueue(s, user, message(mode='perintah',akun_id='shop'))
+        result, stop = await confirmed_call(s, user, turn, {'name':'ubah_iklan','input':{'campaign_id':7,'aksi':'pause'}})
+        assert not stop and result['ok'] is False and result['request_id']=='provider-123' and result['terpotong']
+        receipt = (await s.execute(select(AiToolReceipt).where(AiToolReceipt.status=='rejected'))).scalar_one()
+        assert json.loads(receipt.result_json)==original

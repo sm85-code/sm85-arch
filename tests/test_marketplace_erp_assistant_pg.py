@@ -74,3 +74,42 @@ async def test_concurrent_budget_cap_never_over_reserves(pg, monkeypatch):
     async with factory() as s:
         budget = await s.get(AiDailyBudget, config.day())
         assert budget.reserved_usd <= config.DAILY_USD and budget.turns == 1
+
+
+@pytest.mark.asyncio
+async def test_concurrent_confirm_queues_once_and_advisor_reserves_before_model(pg, monkeypatch):
+    """One focused check of both cross-process decision and advisor quota locks."""
+    from types import SimpleNamespace
+    from unittest.mock import AsyncMock
+    from tenants.marketplace_erp.modules.marketplace_erp.application.assistant import tools
+    from tenants.marketplace_erp.modules.marketplace_erp.application.assistant.schemas import DecisionIn
+    from tenants.marketplace_erp.modules.marketplace_erp.application import services
+    from tenants.marketplace_erp.modules.marketplace_erp.infrastructure import ads_ai
+    from tenants.marketplace_erp.modules.marketplace_erp.infrastructure.models import AiToolReceipt
+    factory, user = pg
+    monkeypatch.setattr(tools.services, 'akun_shopee_pengelolaan', AsyncMock(return_value=SimpleNamespace(id='shop')))
+    async with factory() as s:
+        turn = await service.enqueue(s, user, TurnIn(operation_id=uuid4(), prompt='jeda iklan 7', mode='perintah', akun_id='shop'))
+        result, _ = await service.tool_call(s, user, turn, {'name':'ubah_iklan','input':{'campaign_id':7,'aksi':'pause'}})
+        await service.finish(s, turn, 'completed', 'Draf')
+        draft_id = result['draft_id']
+    async def confirm():
+        async with factory() as s:
+            return (await service.decide(s, user, draft_id, DecisionIn(decision='confirm'))).id
+    ids = await asyncio.gather(confirm(), confirm(), confirm())
+    assert len(set(ids)) == 1
+    async with factory() as s:
+        assert (await s.get(AiToolReceipt,draft_id)).status == 'confirmed'
+    monkeypatch.setattr(services, 'ADS_AI_BATAS_HARIAN', 1)
+    monkeypatch.setattr(services, 'daftar_kampanye_iklan', AsyncMock(return_value={'hari':7,'saldo':0,'kampanye':[{'campaign_id':'7','status':'ongoing'}]}))
+    model = AsyncMock(return_value={'mentah':{'ringkasan':'OK','saran':[]},'token_masuk':1,'token_keluar':1,'model':'claude-sonnet-5-5'})
+    monkeypatch.setattr(ads_ai, 'minta_saran', model)
+    async def advisor():
+        async with factory() as s:
+            try:
+                return await services.saran_ai_iklan(s, SimpleNamespace(id=None,nama_toko='Toko'), user)
+            except HTTPException as error:
+                assert error.status_code == 429
+                return None
+    results = await asyncio.gather(advisor(), advisor())
+    assert sum(r is not None for r in results) == 1 and model.await_count == 1
