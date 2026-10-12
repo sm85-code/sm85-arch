@@ -9,13 +9,14 @@ from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from tenants.marketplace_erp.modules.marketplace_erp.application import services
-from tenants.marketplace_erp.modules.marketplace_erp.application.commerce_schemas import AddressConfig, ChannelEdit, HolidayEdit, ModelAdd, ModelsInit, OrderNote, ShopProfileEdit
+from tenants.marketplace_erp.modules.marketplace_erp.application.commerce_schemas import AddressConfig, BoostProducts, ReplyComments, ChannelEdit, HolidayEdit, ModelAdd, ModelsInit, OrderNote, ShopProfileEdit
 from tenants.marketplace_erp.modules.marketplace_erp.infrastructure.adapters import erp_shopee_commerce as adapter
 from tenants.marketplace_erp.modules.marketplace_erp.infrastructure.auth import pastikan_akses_akun, require_roles_marketplace_erp
 from tenants.marketplace_erp.modules.marketplace_erp.infrastructure.database import get_db_marketplace_erp
 from tenants.marketplace_erp.modules.marketplace_erp.infrastructure.models import ProdukListing, UserMarketplaceErp
 
 from .management_router import account, listing, refreshed
+from tenants.marketplace_erp.modules.marketplace_erp.infrastructure.adapters import erp_shopee_engagement as engagement
 
 logger = logging.getLogger(__name__)
 router = APIRouter()
@@ -153,3 +154,32 @@ async def connections(session: AsyncSession = DB, user: UserMarketplaceErp = ADM
              "perlu_otorisasi_ulang": a.platform == "shopee" and bool(a.id_toko_eksternal) and (not a.access_token or a.status == "token_kadaluarsa"),
              "sinkron_pesanan_at": a.watermark_sinkron_pesanan,
              "sinkron_penuh_at": a.sinkron_penuh_pesanan_at} for a in rows]
+
+
+@router.get("/katalog-shopee/{id}/ulasan")
+async def product_comments(id: str, cursor: str = Query("", max_length=500), page_size: int = Query(20, ge=1, le=100), session: AsyncSession = DB, user: UserMarketplaceErp = ADMIN):
+    k, a = await listing(session, user, id)
+    return await engagement.comments(session, a, k.item_id, cursor, page_size)
+
+
+@router.post("/katalog-shopee/{id}/ulasan/balas")
+async def reply_comments(id: str, body: ReplyComments, session: AsyncSession = DB, user: UserMarketplaceErp = ADMIN):
+    k, a = await listing(session, user, id)
+    return await engagement.reply(session, a, k.item_id, body)
+
+
+@router.get("/akun/{id}/produk-boost")
+async def boosted_products(id: str, session: AsyncSession = DB, user: UserMarketplaceErp = ADMIN):
+    return await engagement.boosted(session, await account(session, user, id))
+
+
+@router.post("/akun/{id}/produk-boost")
+async def boost_products(id: str, body: BoostProducts, session: AsyncSession = DB, user: UserMarketplaceErp = ADMIN):
+    a = await account(session, user, id)
+    products = []
+    for ident in body.katalog_ids:
+        k, _ = await services.get_katalog_shopee(session, ident)
+        if k.akun_id != id:
+            raise HTTPException(403, "Produk bukan milik toko yang dipilih")
+        products.append(k.item_id)
+    return await engagement.boost(session, a, products)

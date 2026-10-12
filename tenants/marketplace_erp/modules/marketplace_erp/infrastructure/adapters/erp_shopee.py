@@ -35,8 +35,9 @@ _log = logging.getLogger(__name__)
 class ShopeeAPIError(HTTPException):
     """A structured rejection from Shopee, distinct from an uncertain transport failure."""
 
-    def __init__(self, api_path: str, error: str, message: str, request_id: str | None = None):
+    def __init__(self, api_path: str, error: str, message: str, request_id: str | None = None, response: dict | None = None):
         self.request_id = request_id
+        self.api_path, self.error, self.message, self.response = api_path, error, message, response
         reference = f" (request_id: {request_id})" if request_id else ""
         super().__init__(status_code=502, detail=f"Shopee {api_path} gagal: {error} {message}{reference}".strip())
 
@@ -514,7 +515,17 @@ async def _call_shop_api(
             "shopee_request phase=business_failed path=%s request_id=%s error=%s message=%s",
             api_path, data.get("request_id"), safe_log(data["error"]), safe_log(data.get("message")),
         )
-        raise ShopeeAPIError(api_path, str(data["error"]), str(data.get("message", "")), data.get("request_id"))
+        # Preserve allowlisted per-item outcomes for review/boost partial errors.
+        partial = None
+        if api_path in {"/api/v2/product/reply_comment", "/api/v2/product/boost_item"} and isinstance(data.get("response"), dict):
+            def scrub(value):
+                if isinstance(value, dict):
+                    return {k: scrub(v) for k, v in value.items() if k in {"result_list", "success_list", "failure_list", "item_id_list", "item_id", "comment_id", "fail_error", "fail_message", "failed_reason"}}
+                if isinstance(value, list):
+                    return [scrub(v) for v in value[:100]]
+                return safe_log(value) if isinstance(value, str) else value
+            partial = scrub(data["response"])
+        raise ShopeeAPIError(api_path, safe_log(data["error"]), safe_log(data.get("message")), safe_log(data.get("request_id")) or None, response=partial)
     return data
 
 

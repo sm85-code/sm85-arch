@@ -48,3 +48,23 @@ Reference: `sm85-code/api-docs` main `77ebf7e17f5bb3a4726d3315baaa1e40cd677382`,
 This release covers local seller workflows for Indonesian ERP accounts. The copied repository has hundreds of schemas; they are not all exposed as ERP actions. Cross-border payout, FBS/warehouse-specific workflows, market-specific/Mall features and the Brazil-only Business Insights hot-listing endpoint are outside this release. Availability of any endpoint still depends on the app's Shopee permissions and the shop's eligibility.
 
 Synchronization behavior is unchanged. Build, automated contracts and browser flows validate the implementation; deployment and production Shopee permissions must be checked separately after release.
+
+## Review replies and product boost
+
+Reference: `sm85-code/api-docs` `77ebf7e17f5bb3a4726d3315baaa1e40cd677382`, endpoint JSON schemas and response samples. The manager guide's single-comment example is not the wire contract. The SDK boost success array type disagrees with the JSON response: this implementation reads the documented object `success_list.item_id_list`.
+
+| Shopee API | ERP route | UI |
+| --- | --- | --- |
+| `v2.product.get_item_list` | Existing `POST akun/{id}/sync/produk` catalogue pipeline, with base/model reads | Existing catalogue synchronization and product selection |
+| `v2.product.get_comment` | `GET katalog-shopee/{id}/ulasan?cursor=&page_size=20` | Catalogue → product detail → Ulasan pembeli & balasan |
+| `v2.product.reply_comment` | `POST katalog-shopee/{id}/ulasan/balas` with `comment_list` | Reply form with explicit confirmation |
+| `v2.product.get_boosted_list` | `GET akun/{id}/produk-boost` | Product detail → Boost produk, cooldown |
+| `v2.product.boost_item` | `POST akun/{id}/produk-boost` with 1–5 local `katalog_ids` | Product detail → Boost produk with confirmation |
+
+New routes follow the existing admin-only product-management policy. Products must belong to the selected authorized shop. Review replies accept 1–100 unique comments with nonblank text (ERP text cap 5000 characters); each comment is checked through a product/shop-filtered read before POST. Already-replied comments are rejected before writing. UI sends one reply at a time. Large external IDs remain strings in the UI and exact integers server-side. Comments use `cursor`/`next_cursor`, not comment-ID pagination; `comment_reply` and the official sample's older `cmt_reply` are accepted. Shopee can expose at most 500 comments despite `more=true`; the UI never loops on an empty/unchanged cursor.
+
+Boost results reconcile every requested item exactly once between successful IDs and per-item failures. A top-level Shopee error may still carry confirmed partial outcomes; those are retained. Missing, contradictory or incomplete acknowledgements are not success. No write is retried automatically, including network/decode failures. Reply and boost are also assistant write tools, requiring the existing receipt confirmation; reads and cooldown inspection are read tools. The advertising specialist can inspect/boost products; the operational specialist can read/reply to reviews.
+
+On rejection, timeout or unconfirmed response, the UI displays a safe diagnostic containing timestamp, endpoint, account ID, provider request ID, diagnostic ID, error code and per-item failures. Use **Salin diagnostik error** and share that text for troubleshooting; nothing is sent automatically. The backend logs the same report under `shopee_engagement_diagnostic`. Tokens, signatures, partner keys, refresh tokens and review text are excluded/redacted. Proxies that fail before a backend response get a client-only HTTP diagnostic; their provider request ID is explicitly unavailable. Successful/partial results remain in assistant receipts where applicable.
+
+Contract tests use four copied official response fixtures, plus malformed responses, partial failures, secret redaction, shop boundaries, cursor/cooldown and confirmation classification. No live Shopee write is performed by tests; actual application/shop permissions still depend on Shopee.
