@@ -60,7 +60,9 @@ def incomplete(name, akun, data):
 
 
 async def comments(session, akun, item_id, cursor='', page_size=20, comment_id=None):
-    params = {'item_id': int(item_id), 'cursor': cursor, 'page_size': page_size}
+    params = {'cursor': cursor, 'page_size': page_size}
+    if item_id is not None:
+        params['item_id'] = int(item_id)
     if comment_id is not None:
         params['comment_id'] = comment_id
     data = await call(session, akun, 'get_comment', params=params)
@@ -70,7 +72,7 @@ async def comments(session, akun, item_id, cursor='', page_size=20, comment_id=N
     rows = result['item_comment_list']
     if any(not isinstance(r, dict) or not isinstance(r.get('comment', ''), str) or not isinstance(r.get('comment_reply') or r.get('cmt_reply') or {}, dict) for r in rows):
         incomplete('get_comment', akun, data)
-    if any(not isinstance(row, dict) or str(row.get('item_id')) != str(item_id) or not str(row.get('comment_id', '')).isdigit() or int(row['comment_id']) <= 0 for row in rows):
+    if any(not isinstance(row, dict) or (item_id is not None and str(row.get('item_id')) != str(item_id)) or not str(row.get('item_id', '')).isdigit() or not str(row.get('comment_id', '')).isdigit() or int(row['comment_id']) <= 0 for row in rows):
         incomplete('get_comment', akun, data)
     return {'items': [{'comment_id': str(row['comment_id']), 'item_id': str(row['item_id']),
                        'comment': row.get('comment', ''), 'rating_star': row.get('rating_star'),
@@ -79,7 +81,7 @@ async def comments(session, akun, item_id, cursor='', page_size=20, comment_id=N
             'more': result['more'], 'next_cursor': result['next_cursor'], 'request_id': data.get('request_id')}
 
 
-async def reply(session, akun, item_id, payload):
+async def reply(session, akun, item_id, payload, *, before_send=None):
     # Verify every review on the product and authorized shop before sending any reply.
     for row in payload.comment_list:
         found = await comments(session, akun, item_id, page_size=1, comment_id=row.comment_id)
@@ -88,6 +90,8 @@ async def reply(session, akun, item_id, payload):
             raise HTTPException(422, 'Ulasan tidak ditemukan pada produk dan toko ini.')
         if match['reply']:
             raise HTTPException(409, 'Ulasan ini sudah dibalas. Muat ulang sebelum mengirim ulang.')
+    if before_send is not None:
+        await before_send()
     data = await call(session, akun, 'reply_comment', method='POST', body=payload.model_dump(mode='json'))
     response = data.get('response')
     results = response.get('result_list') if isinstance(response, dict) else None
@@ -113,12 +117,14 @@ async def boosted(session, akun):
     return {'items': [{'item_id': str(r['item_id']), 'cool_down_second': r['cool_down_second']} for r in rows], 'request_id': data.get('request_id')}
 
 
-async def boost(session, akun, item_ids):
+async def boost(session, akun, item_ids, *, before_send=None):
     item_ids = [str(i) for i in item_ids]
     if not 1 <= len(item_ids) <= 5 or len(set(item_ids)) != len(item_ids):
         raise HTTPException(422, 'Boost memerlukan 1–5 produk berbeda.')
     for item in item_ids:
         await management.item(session, akun, item)
+    if before_send is not None:
+        await before_send()
     data = await call(session, akun, 'boost_item', method='POST', body={'item_id_list': [int(i) for i in item_ids]})
     response = data.get('response')
     if not isinstance(response, dict):
