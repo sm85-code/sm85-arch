@@ -23,6 +23,7 @@ from fastapi import APIRouter, BackgroundTasks, Body, Depends, HTTPException, Pa
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from .auto_order_router import router as auto_order_router
+from .engagement_automation_router import router as engagement_automation_router
 from .notification_router import router as notification_router
 from .assistant_router import router as assistant_router
 from .sync_router import router as sync_router
@@ -1830,3 +1831,5 @@ marketplace_erp_router.include_router(assistant_router)
 marketplace_erp_router.include_router(notification_router)
 
 marketplace_erp_router.include_router(auto_order_router)
+
+marketplace_erp_router.include_router(engagement_automation_router)

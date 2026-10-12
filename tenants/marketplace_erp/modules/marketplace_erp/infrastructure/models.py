@@ -774,3 +774,33 @@ class AutoOrderAttempt(MarketplaceErpBase):
     reviewed_by: Mapped[Optional[str]] = mapped_column(String(64), nullable=True)
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=_utcnow)
     updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=_utcnow, onupdate=_utcnow)
+
+
+class EngagementPolicy(MarketplaceErpBase):
+    __tablename__ = 'mpe_engagement_policy'
+    akun_id: Mapped[str] = mapped_column(String(64), ForeignKey('mpe_akun_marketplace.id', ondelete='CASCADE'), primary_key=True)
+    replies_enabled: Mapped[bool] = mapped_column(Boolean, nullable=False, default=False)
+    replies_enabled_at: Mapped[Optional[datetime]] = mapped_column(DateTime(timezone=True), nullable=True)
+    high_template: Mapped[str] = mapped_column(Text, nullable=False, default='')
+    low_template: Mapped[str] = mapped_column(Text, nullable=False, default='')
+    boost_enabled: Mapped[bool] = mapped_column(Boolean, nullable=False, default=False)
+    boost_catalog_ids: Mapped[str] = mapped_column(Text, nullable=False, default='[]')
+    boost_interval_minutes: Mapped[int] = mapped_column(Integer, nullable=False, default=240)
+    next_boost_at: Mapped[Optional[datetime]] = mapped_column(DateTime(timezone=True), nullable=True)
+    next_scan_at: Mapped[Optional[datetime]] = mapped_column(DateTime(timezone=True), nullable=True, index=True)
+    enabled_by: Mapped[Optional[str]] = mapped_column(String(64), ForeignKey('mpe_users.id', ondelete='SET NULL'), nullable=True)
+    last_scan_at: Mapped[Optional[datetime]] = mapped_column(DateTime(timezone=True), nullable=True)
+    last_message: Mapped[str] = mapped_column(Text, nullable=False, default='')
+    updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=_utcnow, onupdate=_utcnow)
+
+
+class EngagementAttempt(MarketplaceErpBase):
+    __tablename__ = 'mpe_engagement_attempt'
+    akun_id: Mapped[str] = mapped_column(String(64), ForeignKey('mpe_akun_marketplace.id', ondelete='CASCADE'), primary_key=True)
+    key: Mapped[str] = mapped_column(String(100), primary_key=True)
+    kind: Mapped[str] = mapped_column(String(16), nullable=False)
+    target: Mapped[str] = mapped_column(Text, nullable=False)
+    status: Mapped[str] = mapped_column(String(16), nullable=False, default='running')
+    result_json: Mapped[str] = mapped_column(Text, nullable=False, default='{}')
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=_utcnow, index=True)
+    updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=_utcnow, onupdate=_utcnow)
