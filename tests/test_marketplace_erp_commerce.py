@@ -381,3 +381,17 @@ async def test_income_order_batch_is_scoped_and_does_not_invent_delivery_dates(m
     assert result["warnings"]
     assert read.call_args.args[1] is shop
     assert read.call_args.args[3]["order_sn_list"] == "A1,A2"
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("wrapped", [False, True])
+async def test_income_reads_pagination_beside_income_envelope(monkeypatch, wrapped):
+    payload = {"income_detail_list": {"list": [{"order_sn": "A1"}]}, "next_page": {"cursor": "next"}}
+    response = {"error": "", "request_id": "trace", **({"response": payload} if wrapped else payload)}
+    monkeypatch.setattr(adapter.provider, "signed_shop_request", AsyncMock(return_value=response))
+    result = await adapter.income(None, None, date(2026, 9, 1), date(2026, 9, 14), 1, "", 10)
+    assert result["next_cursor"] == "next" and result["ada_lagi"] is True
+    assert result["pagination_known"] and not result["warnings"]
+    payload["next_page"]["cursor"] = ""
+    result = await adapter.income(None, None, date(2026, 9, 1), date(2026, 9, 14), 1, "next", 10)
+    assert result["ada_lagi"] is False and not result["warnings"]
