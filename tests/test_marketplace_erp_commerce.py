@@ -362,3 +362,22 @@ async def test_income_explicit_empty_envelope_and_missing_data_are_distinct(monk
         request.return_value = {"response": {"income_detail_list": malformed}} if wrapped else {"income_detail_list": malformed}
         with pytest.raises(adapter.provider.ShopeeAPIError):
             await adapter.income(None, None, date(2026, 9, 28), date(2026, 10, 10), 1, "", 30)
+
+@pytest.mark.asyncio
+async def test_income_order_batch_is_scoped_and_does_not_invent_delivery_dates(monkeypatch):
+    read = AsyncMock(return_value={"order_list": [
+        {"order_sn": "A1", "order_status": "COMPLETED", "pickup_done_time": 1700000000,
+         "item_list": [{"item_name": "Produk", "model_name": "Biru"}],
+         "package_list": [{"package_number": "P1", "logistics_status": "LOGISTICS_DELIVERY_DONE"}]},
+        {"order_sn": "OTHER", "item_list": [], "package_list": []},
+    ]})
+    monkeypatch.setattr(adapter.workflows, "read", read)
+    shop = SimpleNamespace(id="shop")
+    result = await adapter.income_orders(None, shop, ["A1", "A2"])
+    assert [r["order_sn"] for r in result["items"]] == ["A1"]
+    assert result["items"][0]["items"] == [{"name": "Produk", "variant": "Biru"}]
+    assert result["items"][0]["pickup_done_time"] == 1700000000
+    assert "received_time" not in result["items"][0]
+    assert result["warnings"]
+    assert read.call_args.args[1] is shop
+    assert read.call_args.args[3]["order_sn_list"] == "A1,A2"
