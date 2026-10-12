@@ -274,3 +274,30 @@ async def address_config(session, akun, payload):
     if payload.show_pickup_address is not None:
         body["show_pickup_address"] = payload.show_pickup_address
     return await acknowledged(session, akun, "/api/v2/logistics/set_address_config", body)
+
+
+async def income_orders(session, akun, numbers):
+    """Read product/variant and pickup snapshots in one shop-scoped batch, without importing orders."""
+    response = await workflows.read(session, akun, "/api/v2/order/get_order_detail", {
+        "order_sn_list": ",".join(numbers),
+        "response_optional_fields": "item_list,package_list,pickup_done_time",
+    })
+    rows = response.get("order_list")
+    if not isinstance(rows, list) or any(not isinstance(r, dict) for r in rows):
+        management.incomplete("get_order_detail", response)
+    wanted = set(numbers)
+    result = []
+    for row in rows:
+        if row.get("order_sn") not in wanted:
+            continue
+        items, packages = row.get("item_list"), row.get("package_list", [])
+        if not isinstance(items, list) or any(not isinstance(i, dict) for i in items) or not isinstance(packages, list) or any(not isinstance(i, dict) for i in packages):
+            management.incomplete("get_order_detail", response)
+        result.append({
+            "order_sn": row["order_sn"], "order_status": row.get("order_status"),
+            "pickup_done_time": row.get("pickup_done_time"),
+            "items": [{"name": i.get("item_name"), "variant": i.get("model_name")} for i in items],
+            "packages": [{"package_number": p.get("package_number"), "logistics_status": p.get("logistics_status")} for p in packages],
+        })
+    missing = len(wanted - {r["order_sn"] for r in result})
+    return {"items": result, "warnings": [f"Rincian {missing} pesanan tidak tersedia dari Shopee."] if missing else [], "request_id": response.get("request_id")}

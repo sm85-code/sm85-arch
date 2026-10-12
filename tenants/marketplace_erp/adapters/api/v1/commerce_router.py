@@ -107,6 +107,19 @@ async def income(id: str, dari: date, sampai: date, income_status: int = Query(2
     return await adapter.income(session, await account(session, user, id), dari, sampai, income_status, cursor, page_size)
 
 
+@router.get("/akun/{id}/rincian-pesanan-pendapatan")
+async def income_orders(id: str, order_sn_list: str = Query(..., min_length=1, max_length=1500, pattern=r"^[A-Za-z0-9]+(,[A-Za-z0-9]+)*$"), session: AsyncSession = DB, user: UserMarketplaceErp = ADMIN):
+    numbers = list(dict.fromkeys(order_sn_list.split(",")))
+    if len(numbers) > 30 or any(len(sn) > 50 for sn in numbers):
+        raise HTTPException(422, "Maksimal 30 nomor pesanan per permintaan")
+    return await adapter.income_orders(session, await account(session, user, id), numbers)
+
+
+@router.get("/akun/{id}/pelacakan-pendapatan/{order_sn}")
+async def income_tracking(id: str, order_sn: str = Path(..., min_length=1, max_length=50, pattern=r"^[A-Za-z0-9]+$"), package_number: str | None = Query(None, min_length=1, max_length=100), session: AsyncSession = DB, user: UserMarketplaceErp = ADMIN):
+    return await adapter.tracking(session, await account(session, user, id), order_sn, package_number)
+
+
 @router.get("/akun/{id}/ringkasan-pendapatan-shopee")
 async def income_overview(id: str, session: AsyncSession = DB, user: UserMarketplaceErp = ADMIN):
     return await adapter.income_overview(session, await account(session, user, id))
