@@ -409,3 +409,17 @@ async def test_income_provider_timeout_has_safe_distinct_diagnostic(monkeypatch)
     assert diagnostic['endpoint'] == '/api/v2/payment/get_income_detail'
     assert diagnostic['upstream_status'] == 504 and diagnostic['account_id'] == 'shop'
     assert 'PRIVATE' not in str(caught.value.detail)
+
+
+@pytest.mark.asyncio
+async def test_unknown_income_wrapper_diagnostic_reports_shape_not_values(monkeypatch):
+    payload = {"response": {"data": {"income_records": [{"order_sn": "PRIVATE-ORDER", "amount": 12345}]},
+                            "message": "PRIVATE-MESSAGE", "access_token": "PRIVATE-TOKEN"}, "error": ""}
+    monkeypatch.setattr(adapter.provider, "signed_shop_request", AsyncMock(return_value=payload))
+    with pytest.raises(adapter.provider.ShopeeAPIError) as caught:
+        await adapter.income(None, None, date(2026, 9, 1), date(2026, 9, 14), 2, "", 10)
+    report = caught.value.detail["diagnostic"]
+    assert report["response_fields"] == {"data": "dict", "message": "str"}
+    assert report["nested_data_fields"] == {"income_records": "list"}
+    assert report["response_field_count"] == 3
+    assert "PRIVATE" not in str(report) and "12345" not in str(report)

@@ -1,6 +1,7 @@
 """Local-seller commerce operations, using the copied official endpoint schemas."""
 from decimal import Decimal, InvalidOperation
 import logging
+import re
 import time
 from uuid import uuid4
 from datetime import datetime, timezone
@@ -139,18 +140,28 @@ async def income(session, akun, start, end, status, cursor, size):
             envelope = wrapped
 
     def reject(reason):
-        # Log only types at fixed contract paths, never values/records, amounts,
-        # cursors, signed URLs or arbitrary provider keys.
+        # Report fixed paths and schema-like wrapper field names only. Never
+        # include field values, financial records, cursors or credentials.
         fields = ("income_detail_list", "response", "error")
         top_types = {key: type(data.get(key)).__name__ for key in fields}
         envelope_types = {key: type(envelope.get(key)).__name__ for key in ("list", "income_detail_list_item", "next_page")} if isinstance(envelope, dict) else {}
         wrapped_type = {key: type(wrapped.get(key)).__name__ for key in ("income_detail_list", "list", "income_detail_list_item", "next_page")} if isinstance(wrapped, dict) else "missing"
+        def schema_fields(value):
+            if not isinstance(value, dict):
+                return {}
+            return {key: type(item).__name__ for key, item in list(value.items())[:50]
+                    if isinstance(key, str) and re.fullmatch(r"[a-z]+(?:_[a-z]+)*", key)
+                    and not any(secret in key for secret in ("token", "secret", "password", "cookie", "authorization", "sign"))}
+        response_fields = schema_fields(wrapped)
         _log.warning("shopee_income phase=contract_failed request_id=%s reason=%s top_types=%s envelope_types=%s wrapped_income_type=%s", data.get("request_id"), reason, top_types, envelope_types, wrapped_type)
         report = {"diagnostic_id": str(uuid4()), "time": datetime.now(timezone.utc).isoformat(),
                   "endpoint": path, "account_id": getattr(akun, "id", None), "income_status": status,
                   "error": "income_response_incomplete", "reason": reason,
                   "elapsed_ms": round((time.monotonic() - started) * 1000),
                   "top_types": top_types, "envelope_types": envelope_types,
+                  "response_types": wrapped_type, "response_fields": response_fields,
+                  "response_field_count": len(wrapped) if isinstance(wrapped, dict) else None,
+                  "nested_data_fields": schema_fields(wrapped.get("data")) if isinstance(wrapped, dict) else {},
                   "request_id": None, "failures": []}
         failure = provider.ShopeeAPIError(path, "incomplete_response", "Respons pendapatan Shopee tidak lengkap.")
         failure.status_code = 424
