@@ -92,7 +92,7 @@ async def test_income_top_level_envelope_pending_and_cursor(monkeypatch):
     request.return_value = {"response": {"income_detail_list": []}}
     empty = await adapter.income(None, None, date(2026, 9, 1), date(2026, 9, 2), 2, "", 30)
     assert empty["items"] == [] and empty["pagination_known"] is False
-    assert request.call_args.kwargs["timeout"] == 15.0
+    assert request.call_args.kwargs["timeout"] == 30.0
 
 
 @pytest.mark.asyncio

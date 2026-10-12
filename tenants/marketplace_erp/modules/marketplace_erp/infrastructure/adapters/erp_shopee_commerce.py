@@ -113,7 +113,7 @@ async def income(session, akun, start, end, status, cursor, size):
     try:
         data = await provider.signed_shop_request(session, akun, path, params={"date_from": start.isoformat(), "date_to": end.isoformat(), "income_status": status, "cursor": cursor, "page_size": size}, timeout=30.0)
     except HTTPException as exc:
-        if exc.status_code not in (502, 503, 504):
+        if isinstance(exc, provider.ShopeeNotConfigured) or exc.status_code not in (502, 503, 504):
             raise
         # Keep a provider failure distinguishable from an HTML gateway timeout.
         # Fixed metadata only: no signed URL, credentials, cursor or income rows.
@@ -146,7 +146,16 @@ async def income(session, akun, start, end, status, cursor, size):
         envelope_types = {key: type(envelope.get(key)).__name__ for key in ("list", "income_detail_list_item", "next_page")} if isinstance(envelope, dict) else {}
         wrapped_type = {key: type(wrapped.get(key)).__name__ for key in ("income_detail_list", "list", "income_detail_list_item", "next_page")} if isinstance(wrapped, dict) else "missing"
         _log.warning("shopee_income phase=contract_failed request_id=%s reason=%s top_types=%s envelope_types=%s wrapped_income_type=%s", data.get("request_id"), reason, top_types, envelope_types, wrapped_type)
-        management.incomplete(path, data)
+        report = {"diagnostic_id": str(uuid4()), "time": datetime.now(timezone.utc).isoformat(),
+                  "endpoint": path, "account_id": getattr(akun, "id", None), "income_status": status,
+                  "error": "income_response_incomplete", "reason": reason,
+                  "elapsed_ms": round((time.monotonic() - started) * 1000),
+                  "top_types": top_types, "envelope_types": envelope_types,
+                  "request_id": None, "failures": []}
+        failure = provider.ShopeeAPIError(path, "incomplete_response", "Respons pendapatan Shopee tidak lengkap.")
+        failure.status_code = 424
+        failure.detail = {"message": "Respons pendapatan Shopee berhasil diterima, tetapi format datanya belum lengkap. Salin rincian untuk pemeriksaan.", "diagnostic": report}
+        raise failure
 
     # An explicit empty list is a successful zero-row response, not a missing
     # envelope. Pagination remains unknown when Shopee omits its metadata.
