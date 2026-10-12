@@ -132,7 +132,14 @@ async def income(session, akun, start, end, status, cursor, size):
         envelope = {"list": []}
     if not isinstance(envelope, dict):
         reject("income_envelope")
-    page = envelope.get("next_page")
+    # Some gateways put pagination beside income_detail_list, not inside it.
+    # Use only an explicitly returned cursor; never guess one from an order id.
+    if "next_page" in envelope:
+        page = envelope["next_page"]
+    elif isinstance(wrapped, dict) and "next_page" in wrapped:
+        page = wrapped["next_page"]
+    else:
+        page = data.get("next_page")
     if page is not None and not isinstance(page, dict):
         reject("pagination_envelope")
     # The endpoint's real IDR sample uses `list`; its field table calls this
