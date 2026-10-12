@@ -5,7 +5,7 @@ from fastapi import HTTPException
 from uuid import uuid5, NAMESPACE_URL
 from ..workflow_schemas import Input, DisputeIn, PublishIn
 from .. import workflows
-from ..commerce_schemas import ShopProfileEdit, HolidayEdit, ChannelEdit, AddressConfig, ModelAdd, ModelsInit
+from ..commerce_schemas import ShopProfileEdit, ReplyComments, BoostProducts, HolidayEdit, ChannelEdit, AddressConfig, ModelAdd, ModelsInit
 from .. import services
 from ...infrastructure.adapters import erp_shopee_commerce as commerce, erp_shopee_promotions as promotions, erp_shopee_returns as returns, erp_shopee_workflows as workflow
 
@@ -35,6 +35,15 @@ class Empty(Input):
 
 class Catalog(Input):
     katalog_id: str = Field(min_length=1, max_length=64)
+
+
+class Comments(Catalog):
+    cursor: str = Field('', max_length=500)
+    page_size: int = Field(20, ge=1, le=100)
+
+
+class Reply(Catalog):
+    balasan: ReplyComments
 
 
 class ProductInfo(Catalog):
@@ -77,6 +86,10 @@ class EndPromotion(Input):
 
 
 TOOLS = {
+    'baca_ulasan_produk': (Comments, False, 'Baca ulasan produk dan balasan existing; gunakan cursor untuk halaman berikutnya.'),
+    'balas_ulasan_produk': (Reply, True, 'Balas ulasan pembeli memakai ID terdaftar dan teks yang diminta admin. Memerlukan konfirmasi; jangan balas ulang tanpa memeriksa hasil.'),
+    'daftar_produk_boost': (Empty, False, 'Baca produk yang sedang di-boost dan cooldown pada toko terpilih.'),
+    'boost_produk': (BoostProducts, True, 'Boost 1–5 produk katalog pada toko terpilih setelah konfirmasi; baca cooldown, kegagalan parsial harus dijelaskan.'),
     "pengaturan_pesanan_otomatis": (Empty, False, "Baca pengaturan dan hasil pesanan drop off otomatis pada toko terpilih."),
     "atur_pesanan_otomatis": (Automatic, True, "Aktif/nonaktifkan pesanan drop off otomatis untuk toko terpilih, hanya pesanan baru setelah izin aktif. Konfirmasi adalah izin proses tanpa AI/token."),
     'metadata_publikasi': (Metadata, False, 'Baca kategori, atribut dan jasa kirim untuk publikasi produk baru.'),
@@ -133,6 +146,14 @@ async def execute(session, user, turn, name, payload, akun, fingerprint):
         if row.akun_id != akun.id or row.platform != 'shopee':
             raise HTTPException(403, 'Pesanan bukan milik toko yang dipilih')
     from tenants.marketplace_erp.adapters.api.v1 import commerce_router as routes
+    if name == 'baca_ulasan_produk':
+        return await routes.product_comments(payload.katalog_id, payload.cursor, payload.page_size, session, user)
+    if name == 'balas_ulasan_produk':
+        return await routes.reply_comments(payload.katalog_id, payload.balasan, session, user)
+    if name == 'daftar_produk_boost':
+        return await routes.boosted_products(akun.id, session, user)
+    if name == 'boost_produk':
+        return await routes.boost_products(akun.id, payload, session, user)
     if name == 'informasi_produk_shopee':
         return await routes.product_details(payload.katalog_id, payload.jenis, session, user)
     if name == 'hapus_produk_shopee':

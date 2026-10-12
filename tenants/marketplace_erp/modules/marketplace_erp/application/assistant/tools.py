@@ -240,7 +240,7 @@ def encode(value):
 
 TOOLS.update(extra_tools.TOOLS)
 
-ADS_TOOLS = {"daftar_toko", "cari_produk", "pengaturan_produk", "statistik_produk", "ringkasan_usaha", "saldo_toko", "mutasi_dana", "modal_produk", "daftar_iklan", "kelayakan_gmv", "laporan_gmv", "buat_iklan", "ubah_iklan", "ubah_kata_kunci", "buat_gmv", "ubah_gmv", "produk_gmv"}
+ADS_TOOLS = {"boost_produk", "daftar_produk_boost","daftar_toko", "cari_produk", "pengaturan_produk", "statistik_produk", "ringkasan_usaha", "saldo_toko", "mutasi_dana", "modal_produk", "daftar_iklan", "kelayakan_gmv", "laporan_gmv", "buat_iklan", "ubah_iklan", "ubah_kata_kunci", "buat_gmv", "ubah_gmv", "produk_gmv"}
 
 
 def definitions(writes, agent="auto"):

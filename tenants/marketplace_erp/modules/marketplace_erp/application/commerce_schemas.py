@@ -2,7 +2,7 @@
 from typing import Literal
 from itertools import product
 
-from pydantic import Field, HttpUrl, model_validator
+from pydantic import Field, HttpUrl, field_validator, model_validator
 
 from .workflow_schemas import Input, Model, Tier
 
@@ -106,4 +106,43 @@ class ModelsInit(ModelAdd):
         for tier in self.tiers:
             if len({o.option.casefold().strip() for o in tier.options}) != len(tier.options) or not tier.name.strip() or any(not o.option.strip() for o in tier.options):
                 raise ValueError("Nama pilihan varian tidak boleh kosong/duplikat")
+        return self
+
+
+class CommentReply(Input):
+    comment_id: int = Field(gt=0, le=9223372036854775807)
+    comment: str = Field(min_length=1, max_length=5000)
+
+    @field_validator("comment_id", mode="before")
+    @classmethod
+    def exact_id(cls, value):
+        if type(value) not in {int, str} or isinstance(value, str) and not value.isdigit():
+            raise ValueError("ID ulasan harus bilangan bulat atau string angka yang tepat")
+        return value
+
+    @model_validator(mode="after")
+    def nonblank(self):
+        self.comment = self.comment.strip()
+        if not self.comment:
+            raise ValueError("Isi balasan ulasan")
+        return self
+
+
+class ReplyComments(Input):
+    comment_list: list[CommentReply] = Field(min_length=1, max_length=100)
+
+    @model_validator(mode="after")
+    def unique(self):
+        if len({c.comment_id for c in self.comment_list}) != len(self.comment_list):
+            raise ValueError("ID ulasan tidak boleh berulang")
+        return self
+
+
+class BoostProducts(Input):
+    katalog_ids: list[str] = Field(min_length=1, max_length=5)
+
+    @model_validator(mode="after")
+    def unique(self):
+        if len(set(self.katalog_ids)) != len(self.katalog_ids) or any(not value.strip() or len(value) > 64 for value in self.katalog_ids):
+            raise ValueError("Pilih 1–5 produk ERP berbeda")
         return self
