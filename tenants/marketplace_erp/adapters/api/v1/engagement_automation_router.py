@@ -44,7 +44,10 @@ class SettingsIn(Input):
 async def settings(id: str, session: AsyncSession = DB, user: UserMarketplaceErp = ADMIN):
     shop = await account(session, user, id)
     rule = await session.get(EngagementPolicy, id)
-    attempts = (await session.scalars(select(EngagementAttempt).where(EngagementAttempt.akun_id == id).order_by(EngagementAttempt.created_at.desc()).limit(30))).all()
+    attempts = []
+    for kind in ('reply', 'boost'):
+        attempts.extend((await session.scalars(select(EngagementAttempt).where(EngagementAttempt.akun_id == id, EngagementAttempt.kind == kind).order_by(EngagementAttempt.created_at.desc()).limit(30))).all())
+    attempts.sort(key=lambda a: a.created_at, reverse=True)
     return {'nama_toko': shop.nama_toko, 'worker_enabled': erp_shopee.live_sync_enabled(), 'poll_seconds': 300,
             **{k: getattr(rule, k) if rule else v for k, v in {'replies_enabled': False, 'high_template': '', 'low_template': '', 'boost_enabled': False, 'boost_interval_minutes': 240}.items()},
             'boost_catalog_ids': json.loads(rule.boost_catalog_ids) if rule else [],
