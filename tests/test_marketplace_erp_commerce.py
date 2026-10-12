@@ -92,7 +92,7 @@ async def test_income_top_level_envelope_pending_and_cursor(monkeypatch):
     request.return_value = {"response": {"income_detail_list": []}}
     empty = await adapter.income(None, None, date(2026, 9, 1), date(2026, 9, 2), 2, "", 30)
     assert empty["items"] == [] and empty["pagination_known"] is False
-    assert request.call_args.kwargs["timeout"] == 15.0
+    assert request.call_args.kwargs["timeout"] == 30.0
 
 
 @pytest.mark.asyncio
@@ -395,3 +395,17 @@ async def test_income_reads_pagination_beside_income_envelope(monkeypatch, wrapp
     payload["next_page"]["cursor"] = ""
     result = await adapter.income(None, None, date(2026, 9, 1), date(2026, 9, 14), 1, "next", 10)
     assert result["ada_lagi"] is False and not result["warnings"]
+
+
+@pytest.mark.asyncio
+async def test_income_provider_timeout_has_safe_distinct_diagnostic(monkeypatch):
+    request = AsyncMock(side_effect=HTTPException(504, 'PRIVATE signed URL token'))
+    monkeypatch.setattr(adapter.provider, 'signed_shop_request', request)
+    with pytest.raises(HTTPException) as caught:
+        await adapter.income(None, SimpleNamespace(id='shop'), date(2026, 9, 1), date(2026, 9, 14), 1, 'PRIVATE-CURSOR', 10)
+    assert request.call_args.kwargs['timeout'] == 30.0
+    assert caught.value.status_code == 424
+    diagnostic = caught.value.detail['diagnostic']
+    assert diagnostic['endpoint'] == '/api/v2/payment/get_income_detail'
+    assert diagnostic['upstream_status'] == 504 and diagnostic['account_id'] == 'shop'
+    assert 'PRIVATE' not in str(caught.value.detail)

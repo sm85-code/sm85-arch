@@ -1,6 +1,9 @@
 """Local-seller commerce operations, using the copied official endpoint schemas."""
 from decimal import Decimal, InvalidOperation
 import logging
+import time
+from uuid import uuid4
+from datetime import datetime, timezone
 from fastapi import HTTPException
 
 from . import erp_shopee as provider, erp_shopee_management as management, erp_shopee_workflows as workflows
@@ -106,7 +109,26 @@ async def income(session, akun, start, end, status, cursor, size):
     if status == 1 and (start >= end or (end - start).days >= 14):
         raise HTTPException(422, "Pendapatan dirilis memerlukan periode lebih dari satu hari dan maksimal 14 hari")
     path = "/api/v2/payment/get_income_detail"
-    data = await provider.signed_shop_request(session, akun, path, params={"date_from": start.isoformat(), "date_to": end.isoformat(), "income_status": status, "cursor": cursor, "page_size": size}, timeout=15.0)
+    started = time.monotonic()
+    try:
+        data = await provider.signed_shop_request(session, akun, path, params={"date_from": start.isoformat(), "date_to": end.isoformat(), "income_status": status, "cursor": cursor, "page_size": size}, timeout=30.0)
+    except HTTPException as exc:
+        if isinstance(exc, provider.ShopeeNotConfigured) or exc.status_code not in (502, 503, 504):
+            raise
+        # Keep a provider failure distinguishable from an HTML gateway timeout.
+        # Fixed metadata only: no signed URL, credentials, cursor or income rows.
+        report = {"diagnostic_id": str(uuid4()), "time": datetime.now(timezone.utc).isoformat(), "endpoint": path,
+                  "account_id": getattr(akun, "id", None), "income_status": status,
+                  "upstream_status": exc.status_code, "elapsed_ms": round((time.monotonic() - started) * 1000),
+                  "error": exc.error if isinstance(exc, provider.ShopeeAPIError) else "income_provider_unavailable",
+                  "request_id": exc.request_id if isinstance(exc, provider.ShopeeAPIError) else None,
+                  "message": exc.message if isinstance(exc, provider.ShopeeAPIError) else "Koneksi pendapatan Shopee tidak selesai tepat waktu atau tidak tersedia.",
+                  "failures": []}
+        _log.warning("shopee_income phase=request_failed diagnostic=%s", report)
+        raise HTTPException(424, detail={
+            "message": (f"Pendapatan ditolak Shopee: {exc.message}" if isinstance(exc, provider.ShopeeAPIError) else "Pendapatan Shopee belum merespons melalui koneksi/proxy toko. Mutasi Saldo memakai endpoint berbeda. Coba lagi; jika berulang, salin rincian untuk pemeriksaan."),
+            "diagnostic": report,
+        }) from exc
     # The reference sample is top-level; accept the same contract inside the
     # usual Shopee response wrapper as well. Never turn missing data into [].
     wrapped = data.get("response")
@@ -124,7 +146,16 @@ async def income(session, akun, start, end, status, cursor, size):
         envelope_types = {key: type(envelope.get(key)).__name__ for key in ("list", "income_detail_list_item", "next_page")} if isinstance(envelope, dict) else {}
         wrapped_type = {key: type(wrapped.get(key)).__name__ for key in ("income_detail_list", "list", "income_detail_list_item", "next_page")} if isinstance(wrapped, dict) else "missing"
         _log.warning("shopee_income phase=contract_failed request_id=%s reason=%s top_types=%s envelope_types=%s wrapped_income_type=%s", data.get("request_id"), reason, top_types, envelope_types, wrapped_type)
-        management.incomplete(path, data)
+        report = {"diagnostic_id": str(uuid4()), "time": datetime.now(timezone.utc).isoformat(),
+                  "endpoint": path, "account_id": getattr(akun, "id", None), "income_status": status,
+                  "error": "income_response_incomplete", "reason": reason,
+                  "elapsed_ms": round((time.monotonic() - started) * 1000),
+                  "top_types": top_types, "envelope_types": envelope_types,
+                  "request_id": None, "failures": []}
+        failure = provider.ShopeeAPIError(path, "incomplete_response", "Respons pendapatan Shopee tidak lengkap.")
+        failure.status_code = 424
+        failure.detail = {"message": "Respons pendapatan Shopee berhasil diterima, tetapi format datanya belum lengkap. Salin rincian untuk pemeriksaan.", "diagnostic": report}
+        raise failure
 
     # An explicit empty list is a successful zero-row response, not a missing
     # envelope. Pagination remains unknown when Shopee omits its metadata.
