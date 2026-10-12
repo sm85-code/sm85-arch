@@ -28,7 +28,7 @@ async def factory(monkeypatch):
     async with factory() as session:
         session.add(UserMarketplaceErp(id='admin', username='admin', nama='Admin', role='admin', password_hash='test'))
         session.add(AkunMarketplace(id='shop', platform='shopee', nama_toko='Shop', status='terhubung', access_token='mock-token', id_toko_eksternal='1'))
-        session.add(EngagementPolicy(akun_id='shop', replies_enabled=True, replies_enabled_at=worker.now()-timedelta(minutes=1), high_template='Terima kasih', low_template='Mohon hubungi kami', boost_enabled=True, boost_catalog_ids='["product"]', enabled_by='admin'))
+        session.add(EngagementPolicy(akun_id='shop', replies_enabled=True, replies_enabled_at=worker.now()-timedelta(minutes=2), high_template='Terima kasih', low_template='Mohon hubungi kami', boost_enabled=True, boost_catalog_ids='["product"]', enabled_by='admin'))
         session.add(KatalogShopee(id='product', akun_id='shop', item_id='7', nama='Produk', status='NORMAL'))
         await session.commit()
     yield factory
@@ -37,7 +37,7 @@ async def factory(monkeypatch):
 
 @pytest.mark.asyncio
 async def test_new_ratings_choose_templates_once_old_and_answered_are_skipped(factory, monkeypatch):
-    fresh = {'item_id': '7', 'comment_id': '1', 'rating_star': 5, 'create_time': int(worker.now().timestamp()), 'reply': ''}
+    fresh = {'item_id': '7', 'comment_id': '1', 'rating_star': 5, 'create_time': int((worker.now()-timedelta(seconds=61)).timestamp()), 'reply': ''}
     async def read(*args, **kwargs):
         return {'items': [{**fresh, 'comment_id': str(kwargs['comment_id']), 'rating_star': 1 if kwargs['comment_id'] == 2 else 5}]}
     sent = []
@@ -84,7 +84,7 @@ async def test_revoked_policy_and_cooldown_prevent_send(factory, monkeypatch):
         assert worker.utc(rule.next_boost_at) > worker.now()
         rule.replies_enabled = False
         await session.commit()
-    await worker.run_review(factory, 'shop', {'item_id': '7', 'comment_id': '1', 'rating_star': 5, 'create_time': int(worker.now().timestamp()), 'reply': ''})
+    await worker.run_review(factory, 'shop', {'item_id': '7', 'comment_id': '1', 'rating_star': 5, 'create_time': int((worker.now()-timedelta(seconds=61)).timestamp()), 'reply': ''})
     async with factory() as session:
         assert await session.get(EngagementAttempt, ('shop', 'reply:1')) is None
 
@@ -103,3 +103,12 @@ async def test_settings_reject_incomplete_templates_and_foreign_product(factory)
         await save('shop', SettingsIn(replies_enabled=True, high_template='Terima kasih', low_template='Hubungi kami'), session, user)
         policy = await session.get(EngagementPolicy, 'shop')
         assert policy.replies_enabled and json.loads(policy.boost_catalog_ids) == []
+
+
+def test_reply_waits_one_minute_and_never_accepts_future_or_pre_activation_rating(monkeypatch):
+    current = worker.now().replace(microsecond=0)
+    monkeypatch.setattr(worker, 'now', lambda: current)
+    since = current - timedelta(minutes=2)
+    review = {'rating_star': 5, 'reply': ''}
+    for age, expected in [(0, False), (59, False), (60, True), (61, True), (-10, False), (121, False)]:
+        assert worker.eligible({**review, 'create_time': int((current-timedelta(seconds=age)).timestamp())}, since) is expected

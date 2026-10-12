@@ -13,6 +13,7 @@ from ..infrastructure.adapters import erp_shopee, erp_shopee_engagement as engag
 
 logger = logging.getLogger(__name__)
 POLL_SECONDS = 300
+REPLY_DELAY_SECONDS = 60
 
 
 def now():
@@ -29,7 +30,7 @@ def eligible(review, since):
         return False
     try:
         created = datetime.fromtimestamp(timestamp, timezone.utc)
-        return utc(since) <= created <= now() + timedelta(minutes=5)
+        return utc(since) <= created <= now() - timedelta(seconds=REPLY_DELAY_SECONDS)
     except (ValueError, OverflowError, OSError):
         return False
 
