@@ -103,7 +103,7 @@ async def income(session, akun, start, end, status, cursor, size):
     from ...application.management_schemas import today
     if start > end or end > today():
         raise HTTPException(422, "Periode pendapatan tidak valid")
-    if status == 1 and (start >= end or (end - start).days > 14):
+    if status == 1 and (start >= end or (end - start).days >= 14):
         raise HTTPException(422, "Pendapatan dirilis memerlukan periode lebih dari satu hari dan maksimal 14 hari")
     path = "/api/v2/payment/get_income_detail"
     data = await provider.signed_shop_request(session, akun, path, params={"date_from": start.isoformat(), "date_to": end.isoformat(), "income_status": status, "cursor": cursor, "page_size": size}, timeout=15.0)

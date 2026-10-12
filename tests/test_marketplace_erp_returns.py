@@ -33,10 +33,10 @@ async def session():
 
 
 def test_date_range_uses_full_wib_days_and_limit():
-    start, end = adapter.rentang_retur(date(2026, 10, 1), date(2026, 10, 15))
+    start, end = adapter.rentang_retur(date(2026, 10, 1), date(2026, 10, 14))
     assert datetime.fromtimestamp(start, timezone.utc).isoformat() == "2026-09-30T17:00:00+00:00"
-    assert end - start == 15 * 86400 - 1
-    for dates in [(date(2026, 10, 1), date(2026, 10, 16)), (date(2026, 10, 3), date(2026, 10, 2))]:
+    assert end - start == 14 * 86400 - 1
+    for dates in [(date(2026, 10, 1), date(2026, 10, 15)), (date(2026, 10, 3), date(2026, 10, 2))]:
         with pytest.raises(HTTPException) as exc:
             adapter.rentang_retur(*dates)
         assert exc.value.status_code == 422

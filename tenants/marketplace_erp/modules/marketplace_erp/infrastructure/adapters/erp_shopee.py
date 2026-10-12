@@ -914,7 +914,7 @@ _PATH_ORDER_DETAIL = "/api/v2/order/get_order_detail"
 # item_list / buyer_username / total_amount are not returned unless asked for.
 _ORDER_DETAIL_FIELDS = "buyer_user_id,buyer_username,item_list,total_amount,shipping_carrier,payment_method,estimated_shipping_fee,actual_shipping_fee,actual_shipping_fee_confirmed,note,pay_time,cancel_by,cancel_reason,buyer_cancel_reason,package_list,recipient_address,cod,ship_by_date"
 # Shopee rejects a time_from..time_to span over 15 days; stay a minute under.
-_ORDER_WINDOW_SECONDS = 15 * 24 * 3600 - 60
+_ORDER_WINDOW_SECONDS = 14 * 24 * 3600 - 60
 # An incremental pull starts this much before the previous one, so a change that landed while it ran is not missed.
 _ORDER_OVERLAP_SECONDS = 10 * 60
 
@@ -1027,7 +1027,7 @@ async def sync_pesanan(
     dari: datetime | None = None,
     lengkapi: list[str] | None = None,
 ) -> list[dict]:
-    """Pull orders updated since ``dari`` (default: the last ~15 days) via get_order_list, then get_order_detail in batches.
+    """Pull orders updated since ``dari`` (default: the last ~14 days) via get_order_list, then get_order_detail in batches.
 
     Orders already arranged for shipping get their tracking number (get_tracking_number) too, except
     those in ``lewati_resi`` (already stored), so repeated pulls do not re-ask Shopee for every order.
@@ -1110,8 +1110,8 @@ _PATH_ESCROW_LIST = "/api/v2/payment/get_escrow_list"
 _PATH_ESCROW_DETAIL = "/api/v2/payment/get_escrow_detail"
 _ESCROW_PAGE_SIZE = 100
 _ESCROW_MAX_PAGES = 50
-# The docs state no limit for release_time_from/to; windows of ~15 days (like the order list) keep each call narrow.
-ESCROW_WINDOW_SECONDS = 15 * 24 * 3600 - 60
+# The docs state no limit for release_time_from/to; windows of ~14 days (like the order list) keep each call narrow.
+ESCROW_WINDOW_SECONDS = 14 * 24 * 3600 - 60
 
 
 def _uang(value: Any) -> Decimal:
@@ -1156,7 +1156,7 @@ def normalisasi_escrow(order_sn: str, dirilis: datetime | None, payout: Any, det
 
 
 async def daftar_escrow(session: Any, akun: Any, dari: int, sampai: int) -> list[dict]:
-    """Orders whose money was released between two unix times (get_escrow_list, all pages, windows of ~15 days)."""
+    """Orders whose money was released between two unix times (get_escrow_list, all pages, windows of ~14 days)."""
     keluar: list[dict] = []
     awal = dari
     while awal < sampai:

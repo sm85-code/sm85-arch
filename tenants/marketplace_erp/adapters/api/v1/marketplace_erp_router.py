@@ -1312,7 +1312,7 @@ async def list_iklan_harian_toko(
 @marketplace_erp_router.post("/akun/{akun_id}/sync/settlement")
 async def sync_settlement_akun(
     akun_id: str,
-    hari: int = Query(15, ge=1, le=90, description="berapa hari ke belakang"),
+    hari: int = Query(14, ge=1, le=90, description="berapa hari ke belakang"),
     session: AsyncSession = Depends(get_db_marketplace_erp),
     _: UserMarketplaceErp = Depends(require_roles_marketplace_erp(*ADMIN_ONLY)),
 ):

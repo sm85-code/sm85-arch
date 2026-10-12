@@ -1854,7 +1854,7 @@ async def impor_pesanan_marketplace(session: AsyncSession, akun: AkunMarketplace
     return hasil
 
 
-# Even with incremental pulls, the whole 15-day window is re-read this often to repair any drift.
+# Even with incremental pulls, the whole 14-day window is re-read this often to repair any drift.
 BATAS_SINKRON_PENUH = timedelta(hours=6)
 
 
@@ -1881,7 +1881,7 @@ async def sinkron_pesanan_akun(session: AsyncSession, akun: AkunMarketplace, *, 
     """Pull one shop's orders from Shopee and import them. Returns the import counts + pulled.
 
     Normally incremental: only orders changed since the last successful sync are requested, which is
-    a handful of API calls instead of re-reading 15 days every time. A full 15-day read happens the
+    a handful of API calls instead of re-reading 14 days every time. A full 14-day read happens the
     first time, when ``penuh`` is set (manual sync), or when the last full read is over 6 hours old.
     The watermark only advances when the whole sync succeeded.
     """
@@ -2658,7 +2658,7 @@ async def simpan_settlement_pesanan(session: AsyncSession, akun: AkunMarketplace
     return {"baru": baru, "diperbarui": diperbarui}
 
 
-async def sinkron_settlement_akun(session: AsyncSession, akun: AkunMarketplace, hari: int = 15) -> dict:
+async def sinkron_settlement_akun(session: AsyncSession, akun: AkunMarketplace, hari: int = 14) -> dict:
     """Pull what Shopee released to this shop in the last ``hari`` days (1..90). Orders already stored are not
     read again; a big backlog is taken in parts (``sisa`` > 0 means: pull again)."""
     from tenants.marketplace_erp.modules.marketplace_erp.infrastructure.adapters import erp_shopee

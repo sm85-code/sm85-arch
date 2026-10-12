@@ -13,8 +13,8 @@ WIB = timezone(timedelta(hours=7))
 
 
 def rentang_retur(dari: date, sampai: date) -> tuple[int, int]:
-    if sampai < dari or (sampai - dari).days >= 15:
-        raise HTTPException(status_code=422, detail="Rentang tanggal retur harus berurutan dan maksimal 15 hari kalender.")
+    if sampai < dari or (sampai - dari).days >= 14:
+        raise HTTPException(status_code=422, detail="Rentang tanggal retur harus berurutan dan maksimal 14 hari kalender.")
     start = datetime.combine(dari, time.min, WIB)
     end = datetime.combine(sampai + timedelta(days=1), time.min, WIB) - timedelta(seconds=1)
     return int(start.timestamp()), int(end.timestamp())

@@ -192,7 +192,7 @@ async def shop_balance_snapshot(session, akun_id):
     ambiguous = False
     offset = 0
     for _ in range(10):
-        page = await adapter.wallet(session, akun, today - timedelta(days=14), today, offset)
+        page = await adapter.wallet(session, akun, today - timedelta(days=13), today, offset)
         for row in page["items"]:
             if row.get("current_balance") is not None and (
                 latest is None or row["create_time"] > latest["create_time"]
