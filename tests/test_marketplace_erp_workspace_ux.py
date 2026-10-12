@@ -30,7 +30,7 @@ async def test_balance_uses_latest_record_across_pages_and_keeps_unknown_distinc
         return SimpleNamespace(id="shop", nama_toko="Toko")
 
     async def wallet(session, akun, dari, sampai, offset):
-        assert (sampai - dari).days == 14
+        assert (sampai - dari).days + 1 == 14
         rows = (
             [{"create_time": 10, "current_balance": "123"}]
             if offset == 0

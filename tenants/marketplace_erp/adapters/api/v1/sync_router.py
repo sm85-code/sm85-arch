@@ -99,7 +99,7 @@ async def create(
                     "kind": "orders" if body.jenis == "pesanan" else "items",
                     "cursor": "",
                     "offset": 0,
-                    "from": now - 15 * 86400,
+                    "from": now - 14 * 86400,
                     "to": now,
                 }
             )
