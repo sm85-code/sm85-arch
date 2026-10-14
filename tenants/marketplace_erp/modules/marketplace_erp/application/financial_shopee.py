@@ -1,9 +1,9 @@
-"""Read-only Shopee comparison by order date, Monday–Saturday (WIB)."""
+"""Read-only Shopee comparison by shipping date, Monday–Saturday (WIB)."""
 
 from datetime import date, datetime, time, timedelta
 
 from fastapi import HTTPException
-from sqlalchemy import and_, func, select
+from sqlalchemy import and_, select
 
 from .financial_reports import WIB, ZERO, money
 from ..infrastructure.models import AkunMarketplace, Pesanan, SettlementPesanan
@@ -28,7 +28,7 @@ async def weekly_income(session, periode: str, jumlah_kolom: int | None = None):
         .order_by(AkunMarketplace.nama_toko, AkunMarketplace.id)
     )).all()
     cells = {s.id: [{"estimasi": ZERO, "riil": ZERO, "belum_riil": 0} for _ in periods] for s in shops}
-    ordered = func.coalesce(Pesanan.dipesan_at, Pesanan.created_at)
+    ordered = Pesanan.tanggal_kirim
     rows = (await session.execute(
         select(Pesanan.akun_id, ordered.label("tanggal"), Pesanan.status, Pesanan.total,
                SettlementPesanan.jumlah_cair)
@@ -69,5 +69,5 @@ async def weekly_income(session, periode: str, jumlah_kolom: int | None = None):
     return {
         "periode": periode, "minggu": periods,
         "toko": [{"id": s.id, "nama": s.nama_toko, "minggu": [output(c) for c in cells[s.id]]} for s in shops],
-        "catatan": "Berdasarkan tanggal pesanan (WIB) dan status terkini; Minggu tidak dihitung. Pengiriman memakai total pesanan bruto sebagai estimasi, sebelum potongan. Pesanan selesai memakai jumlah pencairan riil tersimpan. Ini pembanding ERP, bukan tambahan pemasukan buku utama.",
+        "catatan": "Berdasarkan tanggal dikirim (WIB) dan status terkini; Minggu dan pesanan tanpa tanggal kirim tidak dihitung. Pengiriman memakai total pesanan bruto sebagai estimasi, sebelum potongan. Pesanan selesai memakai jumlah pencairan riil tersimpan. Ini pembanding ERP, bukan tambahan pemasukan buku utama.",
     }

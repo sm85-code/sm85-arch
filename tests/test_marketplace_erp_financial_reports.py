@@ -548,7 +548,11 @@ async def test_shopee_weekly_comparison_boundaries_real_payout_and_missing(sessi
     ]:
         session.add(Pesanan(
             platform="shopee", id_eksternal=sn, akun_id="shop-a",
-            dipesan_at=datetime.fromisoformat(day+"T12:00:00+07:00"), status=status, total=total))
+            tanggal_kirim=datetime.fromisoformat(day+"T12:00:00+07:00"),
+            dipesan_at=datetime(2026, 8, 1, tzinfo=timezone.utc), status=status, total=total))
+    session.add(Pesanan(
+        platform="shopee", id_eksternal="no-shipping-date", akun_id="shop-a",
+        dipesan_at=datetime(2026, 9, 29, tzinfo=timezone.utc), status="shipped", total=999))
     session.add(SettlementPesanan(akun_id="shop-a", order_sn="sat", jumlah_cair=180))
     await session.commit()
     result = await weekly_income(session, "2026-10", 5)
