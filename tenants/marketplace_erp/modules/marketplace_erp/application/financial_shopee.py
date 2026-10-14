@@ -1,12 +1,13 @@
 """Read-only Shopee comparison by shipping date, Monday–Saturday (WIB)."""
 
 from datetime import date, datetime, time, timedelta
+from unicodedata import normalize
 
 from fastapi import HTTPException
-from sqlalchemy import and_, func, select
+from sqlalchemy import or_, select
 
 from .financial_reports import WIB, ZERO, money
-from ..infrastructure.models import AkunMarketplace, Pesanan, SettlementPesanan
+from ..infrastructure.models import AkunMarketplace, Pesanan
 
 
 REPORT_SHOPS = (
@@ -17,7 +18,11 @@ REPORT_SHOPS = (
     "CAHAYA LANGIT IND",
     "AZFA Furniture Official",
 )
-SHOP_ORDER = {name.upper(): index for index, name in enumerate(REPORT_SHOPS)}
+def shop_key(name):
+    return " ".join(normalize("NFKC", name).casefold().split())
+
+
+SHOP_ORDER = {shop_key(name): index for index, name in enumerate(REPORT_SHOPS)}
 
 
 async def weekly_income(session, periode: str, jumlah_kolom: int | None = None):
@@ -35,24 +40,20 @@ async def weekly_income(session, periode: str, jumlah_kolom: int | None = None):
     ]
     shops = (await session.execute(
         select(AkunMarketplace.id, AkunMarketplace.nama_toko)
-        .where(
-            AkunMarketplace.platform == "shopee",
-            func.upper(func.trim(AkunMarketplace.nama_toko)).in_(SHOP_ORDER),
-        )
+        .where(AkunMarketplace.platform == "shopee")
         .order_by(AkunMarketplace.nama_toko, AkunMarketplace.id)
     )).all()
-    shops.sort(key=lambda s: (SHOP_ORDER[s.nama_toko.strip().upper()], s.id))
-    cells = {s.id: [{"estimasi": ZERO, "riil": ZERO, "belum_riil": 0} for _ in periods] for s in shops}
+    shops = [s for s in shops if shop_key(s.nama_toko) in SHOP_ORDER]
+    shops.sort(key=lambda s: (SHOP_ORDER[shop_key(s.nama_toko)], s.id))
+    cells = {s.id: [ZERO for _ in periods] for s in shops}
     ordered = Pesanan.tanggal_kirim
     rows = (await session.execute(
-        select(Pesanan.akun_id, ordered.label("tanggal"), Pesanan.status, Pesanan.total,
-               SettlementPesanan.jumlah_cair)
-        .outerjoin(SettlementPesanan, and_(
-            SettlementPesanan.akun_id == Pesanan.akun_id,
-            SettlementPesanan.order_sn == Pesanan.id_eksternal))
+        select(Pesanan.akun_id, ordered.label("tanggal"), Pesanan.total)
         .where(
             Pesanan.akun_id.in_([s.id for s in shops]),
-            Pesanan.platform == "shopee", Pesanan.status.in_(["shipped", "completed"]),
+            Pesanan.platform == "shopee", Pesanan.status == "shipped",
+            or_(Pesanan.status_marketplace.is_(None),
+                Pesanan.status_marketplace.in_(["SHIPPED", "TO_CONFIRM_RECEIVE"])),
             ordered >= datetime.combine(monday, time.min, WIB),
             ordered < datetime.combine(monday + timedelta(days=count*7), time.min, WIB))
     )).all()
@@ -67,23 +68,24 @@ async def weekly_income(session, periode: str, jumlah_kolom: int | None = None):
         index = (day - monday).days // 7
         if not 0 <= index < count:
             continue
-        cell = cells[row.akun_id][index]
-        if row.status == "shipped":
-            cell["estimasi"] += money(row.total)
-        elif row.jumlah_cair is None:
-            cell["belum_riil"] += 1
-        else:
-            cell["riil"] += money(row.jumlah_cair)
+        cells[row.akun_id][index] += money(row.total)
 
-    def output(cell):
-        return {
-            "estimasi": str(cell["estimasi"]), "riil": str(cell["riil"]),
-            "belum_riil": cell["belum_riil"],
-            "jumlah": None if cell["belum_riil"] else str(cell["estimasi"] + cell["riil"]),
-        }
+    def output(estimate):
+        # Keep zero-valued legacy fields for previously deployed clients.
+        return {"estimasi": str(estimate), "riil": "0", "belum_riil": 0, "jumlah": str(estimate)}
 
+    shop_rows = []
+    for name in REPORT_SHOPS:
+        matched = [s for s in shops if shop_key(s.nama_toko) == shop_key(name)]
+        values = [sum((cells[s.id][i] for s in matched), ZERO) for i in range(count)]
+        shop_rows.append({
+            "id": shop_key(name), "nama": name, "akun_ditemukan": bool(matched),
+            "minggu": [output(v) if matched else {
+                "estimasi": None, "riil": "0", "belum_riil": 0, "jumlah": None
+            } for v in values],
+        })
     return {
         "periode": periode, "minggu": periods,
-        "toko": [{"id": s.id, "nama": REPORT_SHOPS[SHOP_ORDER[s.nama_toko.strip().upper()]], "minggu": [output(c) for c in cells[s.id]]} for s in shops],
-        "catatan": "Berdasarkan tanggal dikirim (WIB) dan status terkini; Minggu dan pesanan tanpa tanggal kirim tidak dihitung. Pengiriman memakai total pesanan bruto sebagai estimasi, sebelum potongan. Pesanan selesai memakai jumlah pencairan riil tersimpan. Ini pembanding ERP, bukan tambahan pemasukan buku utama.",
+        "toko": shop_rows,
+        "catatan": "Berdasarkan tanggal dikirim (WIB) dan status terkini; Minggu dan pesanan tanpa tanggal kirim tidak dihitung. Hanya dalam pengiriman atau diterima tetapi belum selesai (SHIPPED / TO_CONFIRM_RECEIVE). Semua angka memakai total pesanan bruto sebagai estimasi, sebelum potongan; pesanan selesai tidak dihitung. Ini pembanding ERP, bukan tambahan pemasukan buku utama.",
     }
