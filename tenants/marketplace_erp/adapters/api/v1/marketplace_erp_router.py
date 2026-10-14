@@ -28,6 +28,7 @@ from .notification_router import router as notification_router
 from .assistant_router import router as assistant_router
 from .sync_router import router as sync_router
 from .chat_router import router as chat_router
+from .financial_reports_router import router as financial_reports_router
 
 from tenants.marketplace_erp.modules.marketplace_erp.application import services
 from tenants.marketplace_erp.modules.marketplace_erp.application.schemas import (
@@ -1833,3 +1834,6 @@ marketplace_erp_router.include_router(notification_router)
 marketplace_erp_router.include_router(auto_order_router)
 
 marketplace_erp_router.include_router(engagement_automation_router)
+
+# Isolated report projection; no new operational ERP mutations.
+marketplace_erp_router.include_router(financial_reports_router)
