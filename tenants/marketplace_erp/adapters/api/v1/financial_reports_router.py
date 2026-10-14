@@ -32,6 +32,17 @@ async def overview(
     return await reports.overview(session, periode)
 
 
+@router.get("/pemasukan-shopee")
+async def shopee_income(
+    periode: str = Query(pattern=r"^\d{4}-\d{2}$"),
+    jumlah_kolom: int | None = Query(default=None, ge=1, le=7),
+    session: AsyncSession = Depends(get_db_marketplace_erp),
+):
+    from tenants.marketplace_erp.modules.marketplace_erp.application.financial_shopee import weekly_income
+
+    return await weekly_income(session, periode, jumlah_kolom)
+
+
 @router.post("/saldo-awal")
 async def save_opening(
     payload: reports.Opening,
