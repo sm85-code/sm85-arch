@@ -238,6 +238,7 @@ async def test_every_report_endpoint_denies_non_admin_before_db_access(role):
         for method, path in [
             ("GET", "?periode=2026-10"),
             ("GET", "/sumber?tanggal=2026-10-06"),
+            ("GET", "/pemasukan-shopee?periode=2026-10"),
             ("GET", "/riwayat"),
             ("POST", "/saldo-awal"),
             ("POST", "/pratinjau"),
@@ -525,3 +526,38 @@ async def test_drive_import_primary_no_erp_overwrite_and_comparison(session):
     payload_import.rows[44][2] = 123
     with pytest.raises(HTTPException):
         parse(payload_import)
+
+
+@pytest.mark.asyncio
+async def test_shopee_weekly_comparison_boundaries_real_payout_and_missing(session):
+    from tenants.marketplace_erp.modules.marketplace_erp.application.financial_shopee import weekly_income
+    from tenants.marketplace_erp.modules.marketplace_erp.infrastructure.models import SettlementPesanan
+
+    session.add_all([
+        AkunMarketplace(id="shop-a", platform="shopee", nama_toko="Toko A"),
+        AkunMarketplace(id="shop-b", platform="shopee", nama_toko="Toko B"),
+        AkunMarketplace(id="other", platform="lazada", nama_toko="Bukan Shopee"),
+    ])
+    for sn, day, status, total in [
+        ("mon", "2026-09-28", "shipped", 100),
+        ("sat", "2026-10-03", "completed", 200),
+        ("sun", "2026-10-04", "shipped", 999),
+        ("next", "2026-10-05", "shipped", 300),
+        ("missing", "2026-10-12", "completed", 400),
+        ("cancel", "2026-09-29", "cancelled", 999),
+    ]:
+        session.add(Pesanan(
+            platform="shopee", id_eksternal=sn, akun_id="shop-a",
+            dipesan_at=datetime.fromisoformat(day+"T12:00:00+07:00"), status=status, total=total))
+    session.add(SettlementPesanan(akun_id="shop-a", order_sn="sat", jumlah_cair=180))
+    await session.commit()
+    result = await weekly_income(session, "2026-10", 5)
+    assert result["minggu"][0] == {"mulai": "2026-09-28", "akhir": "2026-10-03"}
+    assert result["minggu"][-1] == {"mulai": "2026-10-26", "akhir": "2026-10-31"}
+    assert len(result["toko"]) == 2
+    weeks = result["toko"][0]["minggu"]
+    assert weeks[0] == {"estimasi": "100.00", "riil": "180.00", "belum_riil": 0, "jumlah": "280.00"}
+    assert weeks[1]["jumlah"] == "300.00"
+    assert weeks[2]["jumlah"] is None
+    assert weeks[2]["belum_riil"] == 1
+    assert result["toko"][1]["minggu"][0]["jumlah"] == "0"
