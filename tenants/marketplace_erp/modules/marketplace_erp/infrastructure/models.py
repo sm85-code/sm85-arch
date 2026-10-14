@@ -804,3 +804,41 @@ class EngagementAttempt(MarketplaceErpBase):
     result_json: Mapped[str] = mapped_column(Text, nullable=False, default='{}')
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=_utcnow, index=True)
     updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=_utcnow, onupdate=_utcnow)
+
+
+class LaporanKeuanganAwal(MarketplaceErpBase):
+    """Report-only baseline. Never posts to ERP orders, stock or settlement."""
+    __tablename__ = "mpe_laporan_keuangan_awal"
+    id: Mapped[str] = mapped_column(String(16), primary_key=True, default="global")
+    tanggal: Mapped[date] = mapped_column(Date, nullable=False)
+    saldo_json: Mapped[str] = mapped_column(Text, nullable=False)
+    created_by: Mapped[str] = mapped_column(String(64), nullable=False)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=_utcnow)
+
+
+class LaporanKeuanganTutup(MarketplaceErpBase):
+    __tablename__ = "mpe_laporan_keuangan_tutup"
+    tanggal: Mapped[date] = mapped_column(Date, primary_key=True)
+    snapshot_json: Mapped[str] = mapped_column(Text, nullable=False)
+    created_by: Mapped[str] = mapped_column(String(64), nullable=False)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=_utcnow)
+
+
+class LaporanKeuanganAudit(MarketplaceErpBase):
+    __tablename__ = "mpe_laporan_keuangan_audit"
+    id: Mapped[str] = mapped_column(String(64), primary_key=True, default=_uuid)
+    tanggal: Mapped[date] = mapped_column(Date, nullable=False)
+    action: Mapped[str] = mapped_column(String(16), nullable=False)
+    reason: Mapped[str] = mapped_column(Text, nullable=False)
+    snapshot_json: Mapped[str] = mapped_column(Text, nullable=False)
+    created_by: Mapped[str] = mapped_column(String(64), nullable=False)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=_utcnow)
+
+
+class LaporanKeuanganAsal(MarketplaceErpBase):
+    """Private provenance for the imported running-period books; ERP is comparison only."""
+    __tablename__ = "mpe_laporan_keuangan_asal"
+    id: Mapped[str] = mapped_column(String(16), primary_key=True, default="global")
+    asal_json: Mapped[str] = mapped_column(Text, nullable=False)
+    created_by: Mapped[str] = mapped_column(String(64), nullable=False)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=_utcnow)
