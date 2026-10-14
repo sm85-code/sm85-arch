@@ -3,10 +3,21 @@
 from datetime import date, datetime, time, timedelta
 
 from fastapi import HTTPException
-from sqlalchemy import and_, select
+from sqlalchemy import and_, func, select
 
 from .financial_reports import WIB, ZERO, money
 from ..infrastructure.models import AkunMarketplace, Pesanan, SettlementPesanan
+
+
+REPORT_SHOPS = (
+    "BUMI TANI IND",
+    "BUMI LESTARI INDONESIA",
+    "RESTU BUMI IND",
+    "MAJAPAHIT STORE IND",
+    "CAHAYA LANGIT IND",
+    "AZFA Furniture Official",
+)
+SHOP_ORDER = {name.upper(): index for index, name in enumerate(REPORT_SHOPS)}
 
 
 async def weekly_income(session, periode: str, jumlah_kolom: int | None = None):
@@ -24,9 +35,13 @@ async def weekly_income(session, periode: str, jumlah_kolom: int | None = None):
     ]
     shops = (await session.execute(
         select(AkunMarketplace.id, AkunMarketplace.nama_toko)
-        .where(AkunMarketplace.platform == "shopee")
+        .where(
+            AkunMarketplace.platform == "shopee",
+            func.upper(func.trim(AkunMarketplace.nama_toko)).in_(SHOP_ORDER),
+        )
         .order_by(AkunMarketplace.nama_toko, AkunMarketplace.id)
     )).all()
+    shops.sort(key=lambda s: (SHOP_ORDER[s.nama_toko.strip().upper()], s.id))
     cells = {s.id: [{"estimasi": ZERO, "riil": ZERO, "belum_riil": 0} for _ in periods] for s in shops}
     ordered = Pesanan.tanggal_kirim
     rows = (await session.execute(
@@ -36,6 +51,7 @@ async def weekly_income(session, periode: str, jumlah_kolom: int | None = None):
             SettlementPesanan.akun_id == Pesanan.akun_id,
             SettlementPesanan.order_sn == Pesanan.id_eksternal))
         .where(
+            Pesanan.akun_id.in_([s.id for s in shops]),
             Pesanan.platform == "shopee", Pesanan.status.in_(["shipped", "completed"]),
             ordered >= datetime.combine(monday, time.min, WIB),
             ordered < datetime.combine(monday + timedelta(days=count*7), time.min, WIB))
@@ -68,6 +84,6 @@ async def weekly_income(session, periode: str, jumlah_kolom: int | None = None):
 
     return {
         "periode": periode, "minggu": periods,
-        "toko": [{"id": s.id, "nama": s.nama_toko, "minggu": [output(c) for c in cells[s.id]]} for s in shops],
+        "toko": [{"id": s.id, "nama": REPORT_SHOPS[SHOP_ORDER[s.nama_toko.strip().upper()]], "minggu": [output(c) for c in cells[s.id]]} for s in shops],
         "catatan": "Berdasarkan tanggal dikirim (WIB) dan status terkini; Minggu dan pesanan tanpa tanggal kirim tidak dihitung. Pengiriman memakai total pesanan bruto sebagai estimasi, sebelum potongan. Pesanan selesai memakai jumlah pencairan riil tersimpan. Ini pembanding ERP, bukan tambahan pemasukan buku utama.",
     }
