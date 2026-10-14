@@ -534,9 +534,10 @@ async def test_shopee_weekly_comparison_boundaries_real_payout_and_missing(sessi
     from tenants.marketplace_erp.modules.marketplace_erp.infrastructure.models import SettlementPesanan
 
     session.add_all([
-        AkunMarketplace(id="shop-a", platform="shopee", nama_toko="Toko A"),
-        AkunMarketplace(id="shop-b", platform="shopee", nama_toko="Toko B"),
-        AkunMarketplace(id="other", platform="lazada", nama_toko="Bukan Shopee"),
+        AkunMarketplace(id="shop-a", platform="shopee", nama_toko="BUMI TANI IND"),
+        AkunMarketplace(id="shop-b", platform="shopee", nama_toko=" azfa furniture official "),
+        AkunMarketplace(id="other", platform="lazada", nama_toko="BUMI TANI IND"),
+        AkunMarketplace(id="excluded", platform="shopee", nama_toko="Toko lain"),
     ])
     for sn, day, status, total in [
         ("mon", "2026-09-28", "shipped", 100),
@@ -553,12 +554,15 @@ async def test_shopee_weekly_comparison_boundaries_real_payout_and_missing(sessi
     session.add(Pesanan(
         platform="shopee", id_eksternal="no-shipping-date", akun_id="shop-a",
         dipesan_at=datetime(2026, 9, 29, tzinfo=timezone.utc), status="shipped", total=999))
+    session.add(Pesanan(
+        platform="shopee", id_eksternal="excluded-order", akun_id="excluded",
+        tanggal_kirim=datetime(2026, 9, 29, tzinfo=timezone.utc), status="shipped", total=999))
     session.add(SettlementPesanan(akun_id="shop-a", order_sn="sat", jumlah_cair=180))
     await session.commit()
     result = await weekly_income(session, "2026-10", 5)
     assert result["minggu"][0] == {"mulai": "2026-09-28", "akhir": "2026-10-03"}
     assert result["minggu"][-1] == {"mulai": "2026-10-26", "akhir": "2026-10-31"}
-    assert len(result["toko"]) == 2
+    assert [s["nama"] for s in result["toko"]] == ["BUMI TANI IND", "AZFA Furniture Official"]
     weeks = result["toko"][0]["minggu"]
     assert weeks[0] == {"estimasi": "100.00", "riil": "180.00", "belum_riil": 0, "jumlah": "280.00"}
     assert weeks[1]["jumlah"] == "300.00"
