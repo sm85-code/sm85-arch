@@ -529,15 +529,15 @@ async def test_drive_import_primary_no_erp_overwrite_and_comparison(session):
 
 
 @pytest.mark.asyncio
-async def test_shopee_weekly_comparison_boundaries_real_payout_and_missing(session):
+async def test_shopee_weekly_unfinished_estimates_shipping_dates_and_selected_shops(session):
     from tenants.marketplace_erp.modules.marketplace_erp.application.financial_shopee import weekly_income
     from tenants.marketplace_erp.modules.marketplace_erp.infrastructure.models import SettlementPesanan
 
     session.add_all([
         AkunMarketplace(id="shop-a", platform="shopee", nama_toko="BUMI TANI IND"),
-        AkunMarketplace(id="shop-b", platform="shopee", nama_toko=" azfa furniture official "),
+        AkunMarketplace(id="shop-b", platform="shopee", nama_toko=" AZFA\u00a0Furniture   Official "),
         AkunMarketplace(id="other", platform="lazada", nama_toko="BUMI TANI IND"),
-        AkunMarketplace(id="excluded", platform="shopee", nama_toko="Toko lain"),
+        AkunMarketplace(id="excluded", platform="shopee", nama_toko="AZFA Furniture"),
     ])
     for sn, day, status, total in [
         ("mon", "2026-09-28", "shipped", 100),
@@ -557,15 +557,29 @@ async def test_shopee_weekly_comparison_boundaries_real_payout_and_missing(sessi
     session.add(Pesanan(
         platform="shopee", id_eksternal="excluded-order", akun_id="excluded",
         tanggal_kirim=datetime(2026, 9, 29, tzinfo=timezone.utc), status="shipped", total=999))
+    session.add_all([
+        Pesanan(platform="shopee", id_eksternal="azfa-received", akun_id="shop-b",
+                tanggal_kirim=datetime(2026, 9, 29, tzinfo=timezone.utc),
+                status="shipped", status_marketplace="TO_CONFIRM_RECEIVE", total=50),
+        Pesanan(platform="shopee", id_eksternal="stale-completed", akun_id="shop-a",
+                tanggal_kirim=datetime(2026, 9, 29, tzinfo=timezone.utc),
+                status="shipped", status_marketplace="COMPLETED", total=999),
+    ])
     session.add(SettlementPesanan(akun_id="shop-a", order_sn="sat", jumlah_cair=180))
     await session.commit()
     result = await weekly_income(session, "2026-10", 5)
     assert result["minggu"][0] == {"mulai": "2026-09-28", "akhir": "2026-10-03"}
     assert result["minggu"][-1] == {"mulai": "2026-10-26", "akhir": "2026-10-31"}
-    assert [s["nama"] for s in result["toko"]] == ["BUMI TANI IND", "AZFA Furniture Official"]
+    assert [s["nama"] for s in result["toko"]] == [
+        "BUMI TANI IND", "BUMI LESTARI INDONESIA", "RESTU BUMI IND",
+        "MAJAPAHIT STORE IND", "CAHAYA LANGIT IND", "AZFA Furniture Official",
+    ]
+    assert result["toko"][1]["akun_ditemukan"] is False
+    assert result["toko"][1]["minggu"][0]["estimasi"] is None
     weeks = result["toko"][0]["minggu"]
-    assert weeks[0] == {"estimasi": "100.00", "riil": "180.00", "belum_riil": 0, "jumlah": "280.00"}
+    assert weeks[0] == {"estimasi": "100.00", "riil": "0", "belum_riil": 0, "jumlah": "100.00"}
     assert weeks[1]["jumlah"] == "300.00"
-    assert weeks[2]["jumlah"] is None
-    assert weeks[2]["belum_riil"] == 1
-    assert result["toko"][1]["minggu"][0]["jumlah"] == "0"
+    assert weeks[2]["jumlah"] == "0"
+    assert weeks[2]["belum_riil"] == 0
+    assert result["toko"][5]["minggu"][0]["jumlah"] == "50.00"
+    assert result["toko"][5]["akun_ditemukan"] is True
