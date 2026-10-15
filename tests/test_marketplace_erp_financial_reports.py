@@ -622,12 +622,12 @@ async def test_shopee_released_funds_use_release_date_not_shipping_or_order_stat
 
 
 @pytest.mark.asyncio
-async def test_comparison_matches_income_totals_six_shops_and_same_end_date(session):
+async def test_comparison_matches_income_totals_six_shops_and_same_end_date(session, monkeypatch):
     import json
     from tenants.marketplace_erp.adapters.api.v1.financial_reports_router import comparison
     from tenants.marketplace_erp.modules.marketplace_erp.application.financial_shopee import REPORT_SHOPS, weekly_income
 
-    session.add_all([AkunMarketplace(id=f"s{i}", platform="shopee", nama_toko=name) for i, name in enumerate(REPORT_SHOPS)])
+    session.add_all([AkunMarketplace(id=f"s{i}", platform="shopee", nama_toko=name, id_toko_eksternal=str(i+1)) for i, name in enumerate(REPORT_SHOPS)])
     session.add(AkunMarketplace(id="other-azfa", platform="shopee", nama_toko="AZFA Furniture"))
     for sn, shop, day, status, amount in [
         ("first", "s0", "2026-09-28T00:00:00+07:00", "shipped", 100),
@@ -654,7 +654,19 @@ async def test_comparison_matches_income_totals_six_shops_and_same_end_date(sess
         IklanHarianToko(akun_id="other-azfa", tanggal=date(2026, 10, 13), expense=999),
     ])
     await session.commit()
+    from tenants.marketplace_erp.modules.marketplace_erp.application import workflows
+    called = []
+    async def historical_wallet(session, account_id, *, cutoff):
+        assert cutoff == date(2026, 10, 13)
+        called.append(account_id)
+        return {"saldo_terakhir": {"s1": "100", "s4": "50", "s2": "25"}[account_id],
+                "currency": "IDR", "transaksi_at": 1791900000, "diperiksa_at": "2026-10-15T00:00:00Z"}
+    monkeypatch.setattr(workflows, "shop_balance_snapshot", historical_wallet)
     result = await comparison(date(2026, 10, 13), session)
+    assert called == ["s1", "s4", "s2"]
+    assert D(result["erp"]["saldo_toko"]) == 175
+    assert result["erp"]["saldo_tertahan_cutoff"] == "2026-10-13"
+    assert result["erp"]["saldo_tertahan_lengkap"] is True
     assert result["periode"] == {"mulai": "2026-09-28", "akhir": "2026-10-13", "hari": "Senin–Sabtu"}
     assert D(result["erp"]["piutang_pengiriman_bruto"]) == 330
     assert D(result["erp"]["estimasi_bumi_tani"]) == 300
@@ -670,3 +682,38 @@ async def test_comparison_matches_income_totals_six_shops_and_same_end_date(sess
     assert D(result["erp"]["biaya_iklan"]) == 33
     assert D(result["laporan"]["biaya_iklan"]) == 100
     assert result["periode_iklan_laporan"]["mulai"] == "2026-10-01"
+
+
+@pytest.mark.asyncio
+async def test_held_wallet_total_requires_three_complete_idr_balances_and_preserves_zero(session, monkeypatch):
+    from tenants.marketplace_erp.modules.marketplace_erp.application import workflows
+    from tenants.marketplace_erp.modules.marketplace_erp.application.financial_held_balance import HELD_SHOPS, held_balance
+
+    for i, name in enumerate(HELD_SHOPS):
+        session.add(AkunMarketplace(id=f"held-{i}", platform="shopee", nama_toko=name, id_toko_eksternal=str(i+1)))
+    session.add(AkunMarketplace(id="other", platform="shopee", nama_toko="BUMI TANI IND", id_toko_eksternal="other"))
+    await session.commit()
+    values = {"held-0": "100", "held-1": "50", "held-2": "0"}
+
+    async def wallet(session, account_id, *, cutoff):
+        assert account_id != "other"
+        assert cutoff == date(2026, 10, 13)
+        return {"saldo_terakhir": values[account_id], "currency": "IDR", "transaksi_at": 1791900000, "diperiksa_at": "2026-10-15T00:00:00Z"}
+
+    monkeypatch.setattr(workflows, "shop_balance_snapshot", wallet)
+    complete = await held_balance(session, date(2026, 10, 13))
+    assert D(complete["saldo_toko"]) == 150
+    assert complete["lengkap"] is True
+    values["held-1"] = None
+    missing = await held_balance(session, date(2026, 10, 13))
+    assert missing["saldo_toko"] is None and missing["lengkap"] is False
+    assert missing["rincian"][1]["nominal"] is None
+    assert D(missing["rincian"][2]["nominal"]) == 0
+
+    async def unavailable(*args, **kwargs):
+        raise HTTPException(502, "Unavailable")
+
+    monkeypatch.setattr(workflows, "shop_balance_snapshot", unavailable)
+    failed = await held_balance(session, date(2026, 10, 13))
+    assert failed["saldo_toko"] is None
+    assert all(r["keterangan"] for r in failed["rincian"])

@@ -225,6 +225,9 @@ async def comparison(tanggal: date, session: AsyncSession = Depends(get_db_marke
         by_week.append({"mulai": week.isoformat(), "akhir": last.isoformat(), **breakdown(
             [o for o in orders if week.isoformat() <= o["tanggal_kirim"] <= last.isoformat()])})
         week += timedelta(days=7)
+    from tenants.marketplace_erp.modules.marketplace_erp.application.financial_held_balance import held_balance
+
+    held = await held_balance(session, tanggal)
     end = report["hasil"]["saldo_akhir"]
     return {
         "periode": {"mulai": start.isoformat(), "akhir": tanggal.isoformat(), "hari": "Senin–Sabtu"},
@@ -239,7 +242,10 @@ async def comparison(tanggal: date, session: AsyncSession = Depends(get_db_marke
             "piutang_pengiriman_bruto": str(
                 sum((reports.money(o["total_bruto"]) for o in orders), reports.ZERO)
             ),
-            "saldo_toko": None,
+            "saldo_toko": held["saldo_toko"],
+            "saldo_tertahan_cutoff": held["cutoff"],
+            "saldo_tertahan_lengkap": held["lengkap"],
+            "rincian_saldo_tertahan": held["rincian"],
             "piutang_belum_ditarik": None,
             "biaya_iklan": str(sum(ads, reports.ZERO)),
             "pesanan": orders,
@@ -251,5 +257,5 @@ async def comparison(tanggal: date, session: AsyncSession = Depends(get_db_marke
             "rincian_minggu": by_week,
         },
         "dibaca_at": datetime.now(ZoneInfo("Asia/Jakarta")).isoformat(),
-        "catatan": "Pengiriman dibatasi enam toko laporan, tanggal kirim dari Senin pada minggu tanggal 1 sampai tanggal laporan terakhir, Senin–Sabtu, sama dengan tabel estimasi pada tab Pemasukan. Status pesanan memakai kondisi saat dibaca; nilai bruto bukan saldo bersih historis. Estimasi BUMI TANI IND (Dana Cepat) dipisahkan dari subtotal lima toko yang masuk cakupan estimasi Drive. Saldo tertahan dan piutang gabungan terverifikasi belum tersedia.",
+        "catatan": "Pengiriman dibatasi enam toko laporan, tanggal kirim dari Senin pada minggu tanggal 1 sampai tanggal laporan terakhir, Senin–Sabtu, sama dengan tabel estimasi pada tab Pemasukan. Status pesanan memakai kondisi saat dibaca; nilai bruto bukan saldo bersih historis. Estimasi BUMI TANI IND (Dana Cepat) dipisahkan dari subtotal lima toko yang masuk cakupan estimasi Drive. Saldo tertahan berarti sisa wallet BUMI LESTARI INDONESIA, CAHAYA LANGIT IND, dan RESTU BUMI IND pada tanggal laporan pukul 23:59 WIB, berdasarkan mutasi historis. Total saldo hanya tersedia bila ketiga toko lengkap. Piutang gabungan tidak dihitung dari estimasi bruto.",
     }
