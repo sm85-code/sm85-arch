@@ -240,6 +240,7 @@ async def test_every_report_endpoint_denies_non_admin_before_db_access(role):
             ("GET", "/sumber?tanggal=2026-10-06"),
             ("GET", "/pemasukan-shopee?periode=2026-10"),
             ("GET", "/saldo-penjual-shopee?periode=2026-10"),
+            ("GET", "/saldo-wallet-shopee/shop?tanggal=2026-10-04"),
             ("GET", "/riwayat"),
             ("POST", "/saldo-awal"),
             ("POST", "/pratinjau"),

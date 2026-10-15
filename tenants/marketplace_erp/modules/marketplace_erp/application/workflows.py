@@ -177,23 +177,27 @@ async def wallet(session, akun_id, dari, sampai, offset):
     return result
 
 
-async def shop_balance_snapshot(session, akun_id):
+async def shop_balance_snapshot(session, akun_id, *, cutoff=None):
     """Last recorded wallet balance, never an assertion of withdrawable/held funds.
 
     Read the complete bounded 15-day window so provider ordering cannot fabricate
     a latest balance. If the window exceeds the bound, report unavailable instead.
     """
-    from datetime import datetime, timedelta, timezone
+    from datetime import datetime, time, timedelta, timezone
     from zoneinfo import ZoneInfo
 
     akun = await services.akun_shopee_pengelolaan(session, akun_id, "saldo toko")
-    today = datetime.now(ZoneInfo("Asia/Jakarta")).date()
+    today = cutoff or datetime.now(ZoneInfo("Asia/Jakarta")).date()
+    stop = int(datetime.combine(today + timedelta(days=1), time.min, ZoneInfo("Asia/Jakarta")).timestamp())
+    start = int(datetime.combine(today - timedelta(days=13), time.min, ZoneInfo("Asia/Jakarta")).timestamp())
     latest = None
     ambiguous = False
     offset = 0
     for _ in range(10):
         page = await adapter.wallet(session, akun, today - timedelta(days=13), today, offset)
         for row in page["items"]:
+            if cutoff is not None and not start <= row["create_time"] < stop:
+                continue
             if row.get("current_balance") is not None and (
                 latest is None or row["create_time"] > latest["create_time"]
             ):
@@ -221,4 +225,5 @@ async def shop_balance_snapshot(session, akun_id):
         "saldo_tersedia": None,
         "saldo_tertahan": None,
         "sumber": "mutasi_saldo_15_hari",
+        "cutoff": cutoff.isoformat() if cutoff else None,
     }

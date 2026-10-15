@@ -60,3 +60,7 @@ GET /laporan-keuangan/pemasukan-shopee?periode=YYYY-MM&jumlah_kolom=5 khusus adm
 ### Dana cair per toko
 
 GET /laporan-keuangan/saldo-penjual-shopee?periode=YYYY-MM&jumlah_kolom=5 membaca SettlementPesanan.jumlah_cair berdasarkan dirilis_at WIB. Tabel SALDO PENJUAL (SHOPEE) berada di bawah estimasi pengiriman pada tab Pemasukan, memakai enam nama toko yang sama, Senin–Sabtu, Jumlah dan TOTAL. Tidak bergantung tanggal kirim, status pesanan terkini, atau keberadaan pesanan di inbox. Pencairan hari Minggu dan tanpa tanggal rilis tidak dimasukkan. Angka adalah dana yang cair selama periode, bukan saldo wallet setelah penarikan. Khusus admin, hanya membaca data ERP yang tersimpan, tidak memicu sinkronisasi dan tidak mengubah buku utama.
+
+### Posisi saldo penjual mingguan
+
+Endpoint admin /laporan-keuangan/saldo-wallet-shopee/{akun_id}?tanggal=YYYY-MM-DD hanya menerima Minggu yang telah berakhir WIB dan enam nama toko laporan. Saldo memakai current_balance dari mutasi terakhir sebelum Senin 00:00 WIB, dicari dalam 14 hari hingga Minggu tersebut dengan pagination lengkap yang dibatasi. Transaksi sesudah cut-off atau di luar jendela tidak dipakai. Riwayat kosong/ambigu/tidak lengkap tetap tidak tersedia, bukan saldo saat ini atau nol. Saldo mingguan tidak dijumlahkan; kolom terakhir memakai posisi Minggu terakhir yang sudah tutup. Tabel estimasi tetap berdasarkan tanggal kirim dan tabel DANA CAIR berdasarkan tanggal pencairan, Senin–Sabtu. Sumber wallet belum memisahkan tersedia/tertahan.

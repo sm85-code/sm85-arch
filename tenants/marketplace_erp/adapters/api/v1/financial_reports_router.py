@@ -19,6 +19,7 @@ from tenants.marketplace_erp.modules.marketplace_erp.infrastructure.models impor
     LaporanKeuanganTutup,
     LaporanKeuanganAudit,
     UserMarketplaceErp,
+    AkunMarketplace,
 )
 
 admin = require_roles_marketplace_erp("admin")
@@ -52,6 +53,25 @@ async def shopee_released_funds(
     from tenants.marketplace_erp.modules.marketplace_erp.application.financial_shopee import weekly_income
 
     return await weekly_income(session, periode, jumlah_kolom, released=True)
+
+
+@router.get("/saldo-wallet-shopee/{akun_id}")
+async def shopee_weekly_wallet(
+    akun_id: str,
+    tanggal: date,
+    session: AsyncSession = Depends(get_db_marketplace_erp),
+):
+    from tenants.marketplace_erp.modules.marketplace_erp.application import workflows
+    from tenants.marketplace_erp.modules.marketplace_erp.application.financial_shopee import SHOP_ORDER, shop_key
+
+    if tanggal.weekday() != 6 or tanggal >= datetime.now(ZoneInfo("Asia/Jakarta")).date():
+        raise HTTPException(422, "Saldo mingguan hanya untuk Minggu yang sudah berakhir pukul 23:59 WIB")
+    name = await session.scalar(select(AkunMarketplace.nama_toko).where(
+        AkunMarketplace.id == akun_id, AkunMarketplace.platform == "shopee",
+    ))
+    if name is None or shop_key(name) not in SHOP_ORDER:
+        raise HTTPException(404, "Toko tidak termasuk enam toko laporan")
+    return await workflows.shop_balance_snapshot(session, akun_id, cutoff=tanggal)
 
 
 @router.post("/saldo-awal")

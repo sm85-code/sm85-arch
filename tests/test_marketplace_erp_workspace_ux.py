@@ -135,3 +135,38 @@ async def test_balance_does_not_guess_between_conflicting_simultaneous_records(m
     monkeypatch.setattr(workflows.adapter, "wallet", wallet)
     monkeypatch.setattr(workflows.shopee, "signed_shop_request", info)
     assert (await workflows.shop_balance_snapshot(None, "shop"))["saldo_terakhir"] is None
+
+
+@pytest.mark.asyncio
+async def test_historical_wallet_cutoff_excludes_post_sunday_withdrawals_and_keeps_unknown(monkeypatch):
+    from zoneinfo import ZoneInfo
+
+    cutoff = date(2026, 10, 11)
+    wib = ZoneInfo("Asia/Jakarta")
+
+    async def account(*args):
+        return SimpleNamespace(id="shop", nama_toko="AZFA Furniture Official")
+
+    async def wallet(session, akun, dari, sampai, offset):
+        assert sampai == cutoff and dari == date(2026, 9, 28)
+        return {"items": [
+            {"create_time": int(datetime(2026, 10, 10, 12, tzinfo=wib).timestamp()), "current_balance": "2000"},
+            {"create_time": int(datetime(2026, 10, 11, 23, 59, 59, tzinfo=wib).timestamp()), "current_balance": "750"},
+            {"create_time": int(datetime(2026, 10, 12, 0, 0, tzinfo=wib).timestamp()), "current_balance": "999"},
+        ], "next_offset": 0, "ada_lagi": False}
+
+    async def info(*args):
+        return {"region": "ID"}
+
+    monkeypatch.setattr(services, "akun_shopee_pengelolaan", account)
+    monkeypatch.setattr(workflows.adapter, "wallet", wallet)
+    monkeypatch.setattr(workflows.shopee, "signed_shop_request", info)
+    snapshot = await workflows.shop_balance_snapshot(None, "shop", cutoff=cutoff)
+    assert snapshot["saldo_terakhir"] == "750"
+    assert snapshot["cutoff"] == "2026-10-11"
+
+    async def empty(*args):
+        return {"items": [], "next_offset": 0, "ada_lagi": False}
+
+    monkeypatch.setattr(workflows.adapter, "wallet", empty)
+    assert (await workflows.shop_balance_snapshot(None, "shop", cutoff=cutoff))["saldo_terakhir"] is None
