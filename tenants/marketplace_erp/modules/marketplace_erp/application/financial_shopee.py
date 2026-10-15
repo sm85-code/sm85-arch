@@ -7,7 +7,7 @@ from fastapi import HTTPException
 from sqlalchemy import or_, select
 
 from .financial_reports import WIB, ZERO, money
-from ..infrastructure.models import AkunMarketplace, Pesanan
+from ..infrastructure.models import AkunMarketplace, Pesanan, SettlementPesanan
 
 
 REPORT_SHOPS = (
@@ -25,7 +25,7 @@ def shop_key(name):
 SHOP_ORDER = {shop_key(name): index for index, name in enumerate(REPORT_SHOPS)}
 
 
-async def weekly_income(session, periode: str, jumlah_kolom: int | None = None):
+async def weekly_income(session, periode: str, jumlah_kolom: int | None = None, *, released: bool = False):
     try:
         first = date.fromisoformat(f"{periode}-01")
     except ValueError:
@@ -46,17 +46,23 @@ async def weekly_income(session, periode: str, jumlah_kolom: int | None = None):
     shops = [s for s in shops if shop_key(s.nama_toko) in SHOP_ORDER]
     shops.sort(key=lambda s: (SHOP_ORDER[shop_key(s.nama_toko)], s.id))
     cells = {s.id: [ZERO for _ in periods] for s in shops}
-    ordered = Pesanan.tanggal_kirim
-    rows = (await session.execute(
-        select(Pesanan.akun_id, ordered.label("tanggal"), Pesanan.total)
-        .where(
+    if released:
+        ordered = SettlementPesanan.dirilis_at
+        query = select(
+            SettlementPesanan.akun_id, ordered.label("tanggal"), SettlementPesanan.jumlah_cair.label("total")
+        ).where(SettlementPesanan.akun_id.in_([s.id for s in shops]))
+    else:
+        ordered = Pesanan.tanggal_kirim
+        query = select(Pesanan.akun_id, ordered.label("tanggal"), Pesanan.total).where(
             Pesanan.akun_id.in_([s.id for s in shops]),
             Pesanan.platform == "shopee", Pesanan.status == "shipped",
             or_(Pesanan.status_marketplace.is_(None),
                 Pesanan.status_marketplace.in_(["SHIPPED", "TO_CONFIRM_RECEIVE"])),
-            ordered >= datetime.combine(monday, time.min, WIB),
-            ordered < datetime.combine(monday + timedelta(days=count*7), time.min, WIB))
-    )).all()
+        )
+    rows = (await session.execute(query.where(
+        ordered >= datetime.combine(monday, time.min, WIB),
+        ordered < datetime.combine(monday + timedelta(days=count*7), time.min, WIB),
+    ))).all()
     for row in rows:
         if row.akun_id not in cells:
             continue
@@ -72,7 +78,7 @@ async def weekly_income(session, periode: str, jumlah_kolom: int | None = None):
 
     def output(estimate):
         # Keep zero-valued legacy fields for previously deployed clients.
-        return {"estimasi": str(estimate), "riil": "0", "belum_riil": 0, "jumlah": str(estimate)}
+        return {"estimasi": "0" if released else str(estimate), "riil": str(estimate) if released else "0", "belum_riil": 0, "jumlah": str(estimate)}
 
     shop_rows = []
     for name in REPORT_SHOPS:
@@ -87,5 +93,5 @@ async def weekly_income(session, periode: str, jumlah_kolom: int | None = None):
     return {
         "periode": periode, "minggu": periods,
         "toko": shop_rows,
-        "catatan": "Berdasarkan tanggal dikirim (WIB) dan status terkini; Minggu dan pesanan tanpa tanggal kirim tidak dihitung. Hanya dalam pengiriman atau diterima tetapi belum selesai (SHIPPED / TO_CONFIRM_RECEIVE). Semua angka memakai total pesanan bruto sebagai estimasi, sebelum potongan; pesanan selesai tidak dihitung. Ini pembanding ERP, bukan tambahan pemasukan buku utama.",
+        "catatan": ("Dana pesanan yang sudah cair, dikelompokkan berdasarkan tanggal cair (dirilis_at) WIB, Senin–Sabtu. Minggu dan pencairan tanpa tanggal cair tidak dihitung. Nilai riil memakai jumlah_cair yang tersimpan di ERP, tanpa melihat tanggal kirim atau status pesanan saat ini. Angka ini jumlah dana cair per periode, bukan saldo wallet tersisa setelah penarikan. Ini pembanding ERP, tidak menambah pemasukan buku utama." if released else "Berdasarkan tanggal dikirim (WIB) dan status terkini; Minggu dan pesanan tanpa tanggal kirim tidak dihitung. Hanya dalam pengiriman atau diterima tetapi belum selesai (SHIPPED / TO_CONFIRM_RECEIVE). Semua angka memakai total pesanan bruto sebagai estimasi, sebelum potongan; pesanan selesai tidak dihitung. Ini pembanding ERP, bukan tambahan pemasukan buku utama."),
     }
