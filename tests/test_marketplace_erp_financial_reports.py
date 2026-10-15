@@ -239,6 +239,7 @@ async def test_every_report_endpoint_denies_non_admin_before_db_access(role):
             ("GET", "?periode=2026-10"),
             ("GET", "/sumber?tanggal=2026-10-06"),
             ("GET", "/pemasukan-shopee?periode=2026-10"),
+            ("GET", "/saldo-penjual-shopee?periode=2026-10"),
             ("GET", "/riwayat"),
             ("POST", "/saldo-awal"),
             ("POST", "/pratinjau"),
@@ -583,3 +584,36 @@ async def test_shopee_weekly_unfinished_estimates_shipping_dates_and_selected_sh
     assert weeks[2]["belum_riil"] == 0
     assert result["toko"][5]["minggu"][0]["jumlah"] == "50.00"
     assert result["toko"][5]["akun_ditemukan"] is True
+
+
+@pytest.mark.asyncio
+async def test_shopee_released_funds_use_release_date_not_shipping_or_order_status(session):
+    from tenants.marketplace_erp.modules.marketplace_erp.application.financial_shopee import weekly_income
+    from tenants.marketplace_erp.modules.marketplace_erp.infrastructure.models import SettlementPesanan
+
+    session.add_all([
+        AkunMarketplace(id="official", platform="shopee", nama_toko="AZFA Furniture Official"),
+        AkunMarketplace(id="other-azfa", platform="shopee", nama_toko="AZFA Furniture"),
+        Pesanan(platform="shopee", id_eksternal="cross-week", akun_id="official",
+                status="completed", total=999, tanggal_kirim=datetime(2026, 9, 29, tzinfo=timezone.utc)),
+    ])
+    for sn, account, stamp, payout in [
+        ("cross-week", "official", "2026-10-05T00:00:00+07:00", 125),
+        ("no-order-record", "official", "2026-10-03T23:59:59+07:00", 80),
+        ("sunday", "official", "2026-10-04T12:00:00+07:00", 999),
+        ("missing-release-date", "official", None, 999),
+        ("other-azfa", "other-azfa", "2026-10-05T12:00:00+07:00", 999),
+    ]:
+        session.add(SettlementPesanan(
+            akun_id=account, order_sn=sn, dirilis_at=datetime.fromisoformat(stamp) if stamp else None,
+            jumlah_cair=payout))
+    await session.commit()
+    result = await weekly_income(session, "2026-10", 5, released=True)
+    assert len(result["toko"]) == 6
+    azfa = result["toko"][5]
+    assert azfa["nama"] == "AZFA Furniture Official"
+    assert azfa["minggu"][0]["jumlah"] == "80.00"
+    assert azfa["minggu"][1]["jumlah"] == "125.00"
+    assert azfa["minggu"][1]["riil"] == "125.00"
+    assert azfa["minggu"][1]["estimasi"] == "0"
+    assert sum(D(w["jumlah"]) for w in azfa["minggu"]) == 205
