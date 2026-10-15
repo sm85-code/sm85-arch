@@ -842,3 +842,13 @@ class LaporanKeuanganAsal(MarketplaceErpBase):
     asal_json: Mapped[str] = mapped_column(Text, nullable=False)
     created_by: Mapped[str] = mapped_column(String(64), nullable=False)
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=_utcnow)
+
+
+class ProcessingCatalog(MarketplaceErpBase):
+    """Admin-only reference catalog; isolated from orders, inventory and accounting."""
+    __tablename__ = "mpe_processing_catalog"
+    id: Mapped[str] = mapped_column(String(16), primary_key=True, default="global")
+    checksum: Mapped[str] = mapped_column(String(64), nullable=False)
+    payload_json: Mapped[str] = mapped_column(Text, nullable=False)
+    imported_by: Mapped[str] = mapped_column(String(64), nullable=False)
+    imported_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=_utcnow)
