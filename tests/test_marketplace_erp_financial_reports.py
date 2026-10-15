@@ -657,6 +657,10 @@ async def test_comparison_matches_income_totals_six_shops_and_same_end_date(sess
     result = await comparison(date(2026, 10, 13), session)
     assert result["periode"] == {"mulai": "2026-09-28", "akhir": "2026-10-13", "hari": "Senin–Sabtu"}
     assert D(result["erp"]["piutang_pengiriman_bruto"]) == 330
+    assert D(result["erp"]["estimasi_bumi_tani"]) == 300
+    assert D(result["erp"]["estimasi_cakupan_drive"]) == 30
+    assert result["erp"]["rincian_toko"][0]["masuk_estimasi_drive"] is False
+    assert all(t["masuk_estimasi_drive"] for t in result["erp"]["rincian_toko"][1:])
     assert {p["nomor"] for p in result["erp"]["pesanan"]} == {"first", "last", "official"}
     assert len(result["erp"]["rincian_toko"]) == 6
     assert [D(w["nominal"]) for w in result["erp"]["rincian_minggu"]] == [100, 30, 200]

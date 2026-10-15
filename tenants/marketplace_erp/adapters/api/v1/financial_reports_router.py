@@ -216,7 +216,7 @@ async def comparison(tanggal: date, session: AsyncSession = Depends(get_db_marke
     by_shop = []
     for name in REPORT_SHOPS:
         ids = {s.id for s in shops if shop_key(s.nama_toko) == shop_key(name)}
-        by_shop.append({"nama": name, "akun_ditemukan": bool(ids),
+        by_shop.append({"nama": name, "akun_ditemukan": bool(ids), "masuk_estimasi_drive": name != "BUMI TANI IND",
                         **breakdown([o for o in orders if o["akun_id"] in ids])})
     by_week = []
     week = start
@@ -244,8 +244,12 @@ async def comparison(tanggal: date, session: AsyncSession = Depends(get_db_marke
             "biaya_iklan": str(sum(ads, reports.ZERO)),
             "pesanan": orders,
             "rincian_toko": by_shop,
+            "estimasi_bumi_tani": next(t["nominal"] for t in by_shop if t["nama"] == "BUMI TANI IND"),
+            "estimasi_cakupan_drive": str(sum(
+                (reports.money(t["nominal"]) for t in by_shop if t["masuk_estimasi_drive"]), reports.ZERO)),
+            "catatan_dana_cepat": "Estimasi BUMI TANI IND tidak masuk Google Drive. Dana Cepat: dikirim sebelum pukul 17.00 cair pukul 17.00 hari itu; setelah pukul 17.00 cair hari berikutnya. Jadwal ini keterangan, bukan pengganti tanggal/nilai pencairan riil.",
             "rincian_minggu": by_week,
         },
         "dibaca_at": datetime.now(ZoneInfo("Asia/Jakarta")).isoformat(),
-        "catatan": "Pengiriman dibatasi enam toko laporan, tanggal kirim dari Senin pada minggu tanggal 1 sampai tanggal laporan terakhir, Senin–Sabtu, sama dengan tabel estimasi pada tab Pemasukan. Status pesanan memakai kondisi saat dibaca; nilai bruto bukan saldo bersih historis. Saldo tertahan dan piutang gabungan terverifikasi belum tersedia.",
+        "catatan": "Pengiriman dibatasi enam toko laporan, tanggal kirim dari Senin pada minggu tanggal 1 sampai tanggal laporan terakhir, Senin–Sabtu, sama dengan tabel estimasi pada tab Pemasukan. Status pesanan memakai kondisi saat dibaca; nilai bruto bukan saldo bersih historis. Estimasi BUMI TANI IND (Dana Cepat) dipisahkan dari subtotal lima toko yang masuk cakupan estimasi Drive. Saldo tertahan dan piutang gabungan terverifikasi belum tersedia.",
     }
