@@ -495,10 +495,11 @@ async def test_drive_import_primary_no_erp_overwrite_and_comparison(session):
     actor = SimpleNamespace(id="admin", role="admin")
     assert (await import_drive(session, payload_import, actor))["jumlah"] == 1
     assert (await import_drive(session, payload_import, actor))["sudah_ada"] is True
-    session.add(AkunMarketplace(id="compare", platform="shopee", nama_toko="Pembanding"))
+    session.add(AkunMarketplace(id="compare", platform="shopee", nama_toko="BUMI TANI IND"))
     session.add(
         Pesanan(
             id="compare-order",
+            tanggal_kirim=datetime(2026, 10, 1, tzinfo=timezone.utc),
             platform="shopee",
             id_eksternal="cmp",
             akun_id="compare",
@@ -618,3 +619,54 @@ async def test_shopee_released_funds_use_release_date_not_shipping_or_order_stat
     assert azfa["minggu"][1]["riil"] == "125.00"
     assert azfa["minggu"][1]["estimasi"] == "0"
     assert sum(D(w["jumlah"]) for w in azfa["minggu"]) == 205
+
+
+@pytest.mark.asyncio
+async def test_comparison_matches_income_totals_six_shops_and_same_end_date(session):
+    import json
+    from tenants.marketplace_erp.adapters.api.v1.financial_reports_router import comparison
+    from tenants.marketplace_erp.modules.marketplace_erp.application.financial_shopee import REPORT_SHOPS, weekly_income
+
+    session.add_all([AkunMarketplace(id=f"s{i}", platform="shopee", nama_toko=name) for i, name in enumerate(REPORT_SHOPS)])
+    session.add(AkunMarketplace(id="other-azfa", platform="shopee", nama_toko="AZFA Furniture"))
+    for sn, shop, day, status, amount in [
+        ("first", "s0", "2026-09-28T00:00:00+07:00", "shipped", 100),
+        ("last", "s0", "2026-10-13T23:59:59+07:00", "shipped", 200),
+        ("official", "s5", "2026-10-08T12:00:00+07:00", "shipped", 30),
+        ("future", "s0", "2026-10-14T00:00:00+07:00", "shipped", 9000),
+        ("sunday", "s0", "2026-10-04T12:00:00+07:00", "shipped", 8000),
+        ("prior", "s0", "2026-09-27T12:00:00+07:00", "shipped", 7000),
+        ("missing", "s0", None, "shipped", 6000),
+        ("completed", "s0", "2026-10-07T12:00:00+07:00", "completed", 5000),
+        ("other", "other-azfa", "2026-10-07T12:00:00+07:00", "shipped", 4000),
+    ]:
+        session.add(Pesanan(platform="shopee", id_eksternal=sn, akun_id=shop, status=status, total=amount,
+                            tanggal_kirim=datetime.fromisoformat(day) if day else None))
+    for cutoff, start, ads in [(6, 1, 40), (13, 7, 60)]:
+        session.add(LaporanKeuanganTutup(
+            tanggal=date(2026, 10, cutoff), created_by="admin",
+            snapshot_json=json.dumps({"mulai": f"2026-10-{start:02d}", "hasil": {
+                "saldo_akhir": {"piutang_pengiriman": "300", "saldo_toko": "20"}, "biaya_iklan": str(ads)}})))
+    session.add_all([
+        IklanHarianToko(akun_id="s0", tanggal=date(2026, 9, 29), expense=11),
+        IklanHarianToko(akun_id="s0", tanggal=date(2026, 10, 13), expense=22),
+        IklanHarianToko(akun_id="s0", tanggal=date(2026, 10, 14), expense=999),
+        IklanHarianToko(akun_id="other-azfa", tanggal=date(2026, 10, 13), expense=999),
+    ])
+    await session.commit()
+    result = await comparison(date(2026, 10, 13), session)
+    assert result["periode"] == {"mulai": "2026-09-28", "akhir": "2026-10-13", "hari": "Senin–Sabtu"}
+    assert D(result["erp"]["piutang_pengiriman_bruto"]) == 330
+    assert D(result["erp"]["estimasi_bumi_tani"]) == 300
+    assert D(result["erp"]["estimasi_cakupan_drive"]) == 30
+    assert result["erp"]["rincian_toko"][0]["masuk_estimasi_drive"] is False
+    assert all(t["masuk_estimasi_drive"] for t in result["erp"]["rincian_toko"][1:])
+    assert {p["nomor"] for p in result["erp"]["pesanan"]} == {"first", "last", "official"}
+    assert len(result["erp"]["rincian_toko"]) == 6
+    assert [D(w["nominal"]) for w in result["erp"]["rincian_minggu"]] == [100, 30, 200]
+    assert sum(D(t["nominal"]) for t in result["erp"]["rincian_toko"]) == 330
+    table = await weekly_income(session, "2026-10", 5, sampai=date(2026, 10, 13))
+    assert sum(D(w["jumlah"]) for t in table["toko"] for w in t["minggu"]) == 330
+    assert D(result["erp"]["biaya_iklan"]) == 33
+    assert D(result["laporan"]["biaya_iklan"]) == 100
+    assert result["periode_iklan_laporan"]["mulai"] == "2026-10-01"
