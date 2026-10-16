@@ -298,3 +298,49 @@ async def test_price_category_is_editable_and_omitted_category_preserves_existin
     assert response.status_code == 200, response.text
     price = next(p for p in (await http.get("/processing/prices")).json()["items"] if p["id"] == "p1")
     assert price["jenis"] == "Rak Dinding" and price["harga"] == "160000"
+
+
+@pytest.mark.asyncio
+async def test_paint_color_saved_and_legacy_edits_preserve_it(client):
+    http, _, _ = client
+    payload = {"version": 0, "kind": "pengecatan", "produk": "Rak", "harga": "30000", "warna": "Putih"}
+    response = await http.put("/processing/prices/cat-putih", json=payload)
+    assert response.status_code == 200, response.text
+    price = next(p for p in (await http.get("/processing/prices")).json()["items"] if p["id"] == "cat-putih")
+    assert price["warna"] == "Putih"
+    payload.pop("warna")
+    payload.update(version=price["version"], harga="35000")
+    assert (await http.put("/processing/prices/cat-putih", json=payload)).status_code == 200
+    price = next(p for p in (await http.get("/processing/prices")).json()["items"] if p["id"] == "cat-putih")
+    assert price["warna"] == "Putih" and price["harga"] == "35000"
+    payload.update(version=price["version"], warna=" ")
+    assert (await http.put("/processing/prices/cat-putih", json=payload)).status_code == 422
+    response = await http.post(
+        "/processing/jobs/manual",
+        json={
+            "customer": "Reseller",
+            "ordered_at": "2026-10-16T09:00:00+07:00",
+            "deadline": "2026-10-20T17:00:00+07:00",
+            "items": [{"produk": "Rak", "qty": 1}],
+        },
+    )
+    assert response.status_code == 200, response.text
+    job = await save(http, (await rows(http))[0], paint_price_id="cat-putih")
+    assert job["color"] == "Putih" and job["paint_price"] == "35000"
+    assert job["painting_reference"]["warna"] == "Putih"
+    # Catalog edits must not change the color/price snapshot of an existing order.
+    payload.update(version=price["version"], warna="Walnut", harga="50000")
+    assert (await http.put("/processing/prices/cat-putih", json=payload)).status_code == 200
+    job = await save(http, job, paint_price_id="cat-putih")
+    assert job["paint_price"] == "35000" and job["painting_reference"]["warna"] == "Putih"
+    response = await http.put(
+        "/processing/jobs/" + job["id"],
+        json={
+            "version": job["version"],
+            "party_id": "t1",
+            "price_id": "p1",
+            "color": "Walnut",
+            "paint_price_id": "cat-putih",
+        },
+    )
+    assert response.status_code == 422
