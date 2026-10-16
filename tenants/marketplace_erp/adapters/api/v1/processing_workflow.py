@@ -226,6 +226,8 @@ class ManualItem(Strict):
 
 
 class ManualOrder(Strict):
+    source: Literal["internal", "reseller"] = "reseller"
+    route: Literal["tukang", "supplier"] = "tukang"
     customer: str = Field(min_length=1, max_length=200)
     ordered_at: datetime
     deadline: datetime
@@ -247,21 +249,22 @@ async def manual_order(
     session: AsyncSession = Depends(get_db_marketplace_erp),
     actor: UserMarketplaceErp = Depends(admin),
 ):
-    number = "RSL-" + datetime.now(timezone.utc).strftime("%Y%m%d") + "-" + uuid.uuid4().hex[:8].upper()
+    prefix = "RSL-" if payload.source == "reseller" else "INT-"
+    number = prefix + datetime.now(timezone.utc).strftime("%Y%m%d") + "-" + uuid.uuid4().hex[:8].upper()
     for item in payload.items:
         data = dict(
             item.model_dump(),
-            source="reseller",
+            source=payload.source,
             order_id=number,
             order_number=number,
             reference=payload.reference,
             customer=payload.customer,
-            shop="Reseller",
+            shop="Reseller" if payload.source == "reseller" else "Internal",
             ordered_at=payload.ordered_at.isoformat(),
             deadline=payload.deadline.isoformat(),
             foto=None,
         )
-        session.add(ProcessingJob(payload_json=json.dumps(draft(data, "tukang", actor))))
+        session.add(ProcessingJob(payload_json=json.dumps(draft(data, payload.route, actor))))
     await session.commit()
     return {"order_number": number}
 
@@ -372,7 +375,7 @@ async def edit_job(
             )
         else:
             data.update(production_price=str(price["harga"]), production_reference=price)
-    elif data["source"] != "reseller" and data["route"] != "supplier":
+    elif data["source"] == "erp" and data["route"] != "supplier":
         raise HTTPException(422, "Pilih produk dari daftar harga produksi")
     if data["production_price"] is None:
         raise HTTPException(422, "Harga produksi/harga beli wajib diisi")
