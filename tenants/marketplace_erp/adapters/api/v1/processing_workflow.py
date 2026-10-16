@@ -40,9 +40,10 @@ class Strict(BaseModel):
 
 class PriceInput(Strict):
     version: int = Field(ge=0)
-    kind: Literal["produksi", "pengecatan"]
+    kind: Literal["produksi", "pengecatan", "non_kayu", "packing"]
     produk: str = Field(min_length=1, max_length=300)
     jenis: str | None = Field(default=None, max_length=200)
+    packing_type: Literal["biasa", "kayu"] | None = None
     structure_model_id: str | None = Field(default=None, max_length=80)
     warna: str | None = Field(default=None, max_length=200)
     sku: str = Field(default="", max_length=200)
@@ -193,6 +194,8 @@ async def save_price(price_id: str, payload: PriceInput, session: AsyncSession =
         value.update(structure_fields(await structure_nodes(session), model_id, payload.ukuran))
     elif current and current.get("structure_model_id"):
         raise HTTPException(422, "Pilih model untuk harga yang sudah terstruktur")
+    if payload.kind == "packing":
+        value.setdefault("packing_type", "biasa")
     value.setdefault("sumber", "Input admin")
     serialized = json.dumps(value)
     try:
@@ -476,6 +479,11 @@ class JobEdit(Strict):
     price_id: str = Field(default="", max_length=80)
     production_price: Money | None = None
     production_sku: str | None = Field(default=None, max_length=200)
+    catalog_mode: Literal["manual", "otomatis"] | None = None
+    supplier_product_id: str | None = Field(default=None, max_length=80)
+    supplier_product_name: str | None = Field(default=None, max_length=300)
+    supplier_sku: str | None = Field(default=None, max_length=200)
+    refresh_catalog_price: bool = False
     color: str = Field(default="", max_length=200)
     paint_price_id: str = Field(default="", max_length=80)
     paint_price: Money = Decimal(0)
@@ -544,21 +552,104 @@ async def edit_job(
     if not party:
         raise HTTPException(422, "Pilih tukang kayu atau supplier yang tersedia")
     previous = dict(data)
-    data.update(payload.model_dump(mode="json", exclude={"version", "production_sku"}), party_name=party["nama"])
-    price = next(
-        (p for p in await price_list(session) if p["id"] == payload.price_id and p["kind"] == "produksi"), None
+    data.update(
+        payload.model_dump(
+            mode="json",
+            exclude={
+                "version",
+                "production_sku",
+                "catalog_mode",
+                "supplier_product_id",
+                "supplier_product_name",
+                "supplier_sku",
+                "refresh_catalog_price",
+            },
+        ),
+        party_name=party["nama"],
     )
-    if payload.price_id and not price:
-        raise HTTPException(422, "Harga produksi tidak ditemukan")
-    if price:
-        if previous.get("price_id") == payload.price_id and previous.get("production_price") is not None:
+    price = None
+    if data["route"] == "supplier":
+        mode = payload.catalog_mode or previous.get("catalog_mode", "manual")
+        if mode == "otomatis":
+            product_id = payload.supplier_product_id or previous.get("supplier_product_id", "")
+            if not product_id:
+                raise HTTPException(422, "Pilih produk dari katalog Siabumdes")
+            if (
+                previous.get("catalog_mode") == mode
+                and previous.get("supplier_product_id") == product_id
+                and previous.get("production_price") is not None
+                and not payload.refresh_catalog_price
+            ):
+                reference = previous.get("supplier_reference")
+                data["production_price"] = previous["production_price"]
+            else:
+                from .processing_supplier_catalog import fetch_supplier_catalog
+
+                catalog = await fetch_supplier_catalog(session)
+                chosen = next((p for p in catalog["items"] if p["id"] == product_id), None)
+                if not chosen:
+                    raise HTTPException(422, "Produk tidak ditemukan di katalog Siabumdes")
+                reference = dict(chosen, read_at=catalog["read_at"])
+                data["production_price"] = str(chosen["sell_price"])
             data.update(
-                production_price=previous["production_price"], production_reference=previous.get("production_reference")
+                catalog_mode=mode,
+                supplier_product_id=product_id,
+                supplier_reference=reference,
+                supplier_product_name=reference["name"],
+                supplier_sku=reference["sku"],
+                price_id="",
+                production_reference=None,
             )
         else:
-            data.update(production_price=str(price["harga"]), production_reference=price)
-    elif data["source"] == "erp" and data["route"] != "supplier":
-        raise HTTPException(422, "Pilih produk dari daftar harga produksi")
+            price = next(
+                (
+                    p
+                    for p in await price_list(session)
+                    if p["id"] == payload.price_id
+                    and (p["kind"] == "non_kayu" or (p["kind"] == "produksi" and p["id"] == previous.get("price_id")))
+                ),
+                None,
+            )
+            if payload.price_id and not price:
+                raise HTTPException(422, "Pilih produk dari katalog manual non kayu")
+            if price:
+                data.update(
+                    production_price=previous["production_price"]
+                    if previous.get("price_id") == price["id"] and previous.get("production_price") is not None
+                    else str(price["harga"]),
+                    production_reference=previous.get("production_reference")
+                    if previous.get("price_id") == price["id"]
+                    else price,
+                )
+            data.update(
+                catalog_mode="manual",
+                supplier_product_id="",
+                supplier_reference=None,
+                supplier_product_name=price["produk"]
+                if price
+                else payload.supplier_product_name or previous.get("supplier_product_name") or data["produk"],
+                supplier_sku=price.get("sku", "")
+                if price
+                else payload.supplier_sku
+                if payload.supplier_sku is not None
+                else previous.get("supplier_sku", ""),
+            )
+    else:
+        price = next(
+            (p for p in await price_list(session) if p["id"] == payload.price_id and p["kind"] == "produksi"), None
+        )
+        if payload.price_id and not price:
+            raise HTTPException(422, "Harga produksi tidak ditemukan")
+        if price:
+            if previous.get("price_id") == payload.price_id and previous.get("production_price") is not None:
+                data.update(
+                    production_price=previous["production_price"],
+                    production_reference=previous.get("production_reference"),
+                )
+            else:
+                data.update(production_price=str(price["harga"]), production_reference=price)
+        elif data["source"] == "erp" and data["route"] != "supplier":
+            raise HTTPException(422, "Pilih produk dari daftar harga produksi")
     if data["production_price"] is None:
         raise HTTPException(422, "Harga produksi/harga beli wajib diisi")
     if data["route"] == "tukang":
@@ -596,7 +687,13 @@ async def edit_job(
     else:
         data.update(paint_price="0", paint_price_id="", painting_reference=None)
     if data["source"] == "reseller" and data.get("seller_code"):
-        reference_sku = (data.get("production_reference") or {}).get("sku") if price else ""
+        reference_sku = (
+            data.get("supplier_sku", "")
+            if data["route"] == "supplier"
+            else (data.get("production_reference") or {}).get("sku")
+            if price
+            else ""
+        )
         sku = reference_sku or payload.production_sku or previous.get("production_sku", "")
         if not sku:
             raise HTTPException(422, "Tentukan SKU produksi untuk membuat kode pesanan penjual lain")
@@ -697,6 +794,7 @@ async def edit_packing(
 
 
 class PartyEdit(Strict):
+    keahlian: str | None = Field(default=None, max_length=1000)
     alamat: str | None = Field(default=None, max_length=1000)
     no_wa: str | None = Field(default=None, max_length=50)
     no_rekening: str | None = Field(default=None, max_length=100)
