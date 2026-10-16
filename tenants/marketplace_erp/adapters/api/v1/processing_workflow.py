@@ -38,6 +38,7 @@ class PriceInput(Strict):
     version: int = Field(ge=0)
     kind: Literal["produksi", "pengecatan"]
     produk: str = Field(min_length=1, max_length=300)
+    jenis: str | None = Field(default=None, max_length=200)
     sku: str = Field(default="", max_length=200)
     ukuran: str = Field(default="", max_length=100)
     harga: Money
@@ -67,7 +68,7 @@ async def save_price(price_id: str, payload: PriceInput, session: AsyncSession =
         raise HTTPException(409, "Harga telah berubah. Muat ulang sebelum menyimpan.")
     if not current and payload.version != 0:
         raise HTTPException(409, "Harga tidak ditemukan; muat ulang")
-    value = dict(current or {}, **payload.model_dump(mode="json", exclude={"version"}), id=price_id)
+    value = dict(current or {}, **payload.model_dump(mode="json", exclude={"version"}, exclude_none=True), id=price_id)
     value.setdefault("sumber", "Input admin")
     serialized = json.dumps(value)
     try:
