@@ -21,6 +21,7 @@ from tenants.marketplace_erp.modules.marketplace_erp.infrastructure.models impor
     ProcessingCatalog,
     ProcessingJob,
     ProcessingPrice,
+    ProcessingParty,
     UserMarketplaceErp,
 )
 
@@ -349,9 +350,7 @@ async def edit_job(
     row, data = await load_job(session, job_id, payload.version)
     if data["stage"] not in ["draft", "produksi", "supplier"]:
         raise HTTPException(409, "Pekerjaan sudah dilanjutkan. Buka kembali tahap sebelumnya untuk mengubah pemetaan.")
-    original = await session.get(ProcessingCatalog, "global")
-    catalog = json.loads(original.payload_json) if original else {}
-    parties = catalog.get("tukang" if data["route"] == "tukang" else "supplier", [])
+    parties = await party_list(session, "tukang" if data["route"] == "tukang" else "supplier")
     party = next((p for p in parties if p["id"] == payload.party_id), None)
     if not party:
         raise HTTPException(422, "Pilih tukang kayu atau supplier yang tersedia")
@@ -486,3 +485,67 @@ async def edit_packing(
         raise HTTPException(409, "Packing hanya bisa diubah saat menunggu packing")
     data.update(payload.model_dump(mode="json", exclude={"version"}))
     return await persist(session, row, data, "ubah_packing", actor)
+
+
+class PartyEdit(Strict):
+    version: int = Field(ge=0)
+    nama: str = Field(min_length=1, max_length=200)
+    catatan: str = Field(default="", max_length=2000)
+
+
+async def party_list(session, kind):
+    original = await session.get(ProcessingCatalog, "global")
+    catalog = json.loads(original.payload_json) if original else {}
+    parties = {p["id"]: dict(p, version=0) for p in catalog.get(kind, [])}
+    for row in (await session.scalars(select(ProcessingParty).where(ProcessingParty.kind == kind))).all():
+        parties[row.source_id] = dict(json.loads(row.payload_json), id=row.source_id, version=row.version)
+    return list(parties.values())
+
+
+@router.put("/parties/{kind}/{party_id}")
+async def save_party(
+    kind: Literal["tukang", "supplier"],
+    party_id: str,
+    payload: PartyEdit,
+    session: AsyncSession = Depends(get_db_marketplace_erp),
+    actor: UserMarketplaceErp = Depends(admin),
+):
+    if not party_id or len(party_id) > 80:
+        raise HTTPException(422, "ID tidak valid")
+    current = next((p for p in await party_list(session, kind) if p["id"] == party_id), None)
+    if (current and current["version"] != payload.version) or (not current and payload.version != 0):
+        raise HTTPException(409, "Data berubah oleh admin lain. Muat ulang.")
+    # Identical names within the same directory would make selection ambiguous.
+    name_key = " ".join(payload.nama.casefold().split())
+    if any(
+        p["id"] != party_id and " ".join(p["nama"].casefold().split()) == name_key
+        for p in await party_list(session, kind)
+    ):
+        raise HTTPException(409, "Nama sudah ada di daftar ini")
+    data = dict(
+        current or {},
+        **payload.model_dump(exclude={"version"}),
+        sumber=(current or {}).get("sumber", "Input admin"),
+        updated_by=actor.id,
+        updated_at=datetime.now(timezone.utc).isoformat(),
+    )
+    try:
+        if current and current["version"]:
+            result = await session.execute(
+                update(ProcessingParty)
+                .where(
+                    ProcessingParty.kind == kind,
+                    ProcessingParty.source_id == party_id,
+                    ProcessingParty.version == payload.version,
+                )
+                .values(payload_json=json.dumps(data), version=payload.version + 1)
+            )
+            if result.rowcount != 1:
+                raise HTTPException(409, "Data baru saja berubah. Muat ulang.")
+        else:
+            session.add(ProcessingParty(kind=kind, source_id=party_id, payload_json=json.dumps(data), version=1))
+        await session.commit()
+    except IntegrityError:
+        await session.rollback()
+        raise HTTPException(409, "Data baru saja berubah. Muat ulang.")
+    return {"tersimpan": True}

@@ -43,3 +43,11 @@ payments or accounting. Only additive `mpe_processing_price` and
   remembered cross-order SKU mappings are not part of this first version.
 * Optimistic versions reject stale writes. Current cancelled/cancellation-request
   OMS orders are flagged and cannot advance; history is retained.
+
+### Editable directory
+
+Admins may add or edit woodworkers and suppliers via Data. Overrides use the
+additive `mpe_processing_party` table; the original Drive payload is unchanged.
+Optimistic versions reject stale edits, and duplicate names within each directory
+are rejected. New mappings resolve the edited directory; existing job name/price
+snapshots are retained. Owner/staff remain denied before database access.
