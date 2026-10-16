@@ -1,10 +1,12 @@
 """Internal work queue. No marketplace adapter, payment, stock or journal side effects."""
 
 import json
+import re
 import uuid
 from datetime import datetime, timezone
 from decimal import Decimal
 from typing import Annotated, Literal
+from zoneinfo import ZoneInfo
 
 from fastapi import APIRouter, Depends, HTTPException, Query
 from pydantic import BaseModel, ConfigDict, Field, model_validator
@@ -21,6 +23,8 @@ from tenants.marketplace_erp.modules.marketplace_erp.infrastructure.models impor
     ProcessingCatalog,
     ProcessingJob,
     ProcessingPrice,
+    ProcessingProductionStructure,
+    ProcessingOrderSequence,
     ProcessingParty,
     UserMarketplaceErp,
 )
@@ -39,11 +43,117 @@ class PriceInput(Strict):
     kind: Literal["produksi", "pengecatan"]
     produk: str = Field(min_length=1, max_length=300)
     jenis: str | None = Field(default=None, max_length=200)
+    structure_model_id: str | None = Field(default=None, max_length=80)
     warna: str | None = Field(default=None, max_length=200)
     sku: str = Field(default="", max_length=200)
     ukuran: str = Field(default="", max_length=100)
     harga: Money
     catatan: str = Field(default="", max_length=2000)
+
+
+class StructureInput(Strict):
+    version: int = Field(ge=0)
+    kind: Literal["kategori", "produk", "model"]
+    parent_id: str = Field(default="", max_length=80)
+    code: str = Field(min_length=1, max_length=80)
+    name: str = Field(min_length=1, max_length=200)
+
+
+async def structure_nodes(session):
+    return {r.id: r for r in (await session.scalars(select(ProcessingProductionStructure))).all()}
+
+
+def structure_fields(nodes, model_id, size):
+    model = nodes.get(model_id)
+    product = nodes.get(model.parent_key) if model else None
+    category = nodes.get(product.parent_key) if product else None
+    if (
+        not model
+        or model.kind != "model"
+        or not product
+        or product.kind != "produk"
+        or not category
+        or category.kind != "kategori"
+    ):
+        raise HTTPException(422, "Pilih kategori, produk, dan model yang tersedia")
+    normalized = re.sub(r"\s+", "", size).replace("×", "x").replace("*", "x")
+    normalized = re.sub(r"(?<=\d)X(?=\d)", "x", normalized)
+    if not normalized or not re.fullmatch(r"[A-Za-z0-9.,xX-]+", normalized):
+        raise HTTPException(422, "Isi ukuran, misalnya 150x200")
+    sku = ".".join([category.code, product.code, model.code, normalized])
+    if len(sku) > 200:
+        raise HTTPException(422, "Gabungan kode dan ukuran terlalu panjang")
+    return dict(
+        structure_model_id=model.id,
+        category_id=category.id,
+        product_id=product.id,
+        jenis=category.name,
+        kategori_kode=category.code,
+        produk=product.name,
+        sku_induk=product.code,
+        model=model.name,
+        model_kode=model.code,
+        ukuran=normalized,
+        sku=sku,
+    )
+
+
+@router.get("/production-structure")
+async def production_structure(session: AsyncSession = Depends(get_db_marketplace_erp)):
+    return {
+        "items": [
+            dict(id=n.id, kind=n.kind, parent_id=n.parent_key, code=n.code, name=n.name, version=n.version)
+            for n in (await structure_nodes(session)).values()
+            if n.kind != "varian"
+        ]
+    }
+
+
+@router.put("/production-structure/{node_id}")
+async def save_structure(
+    node_id: str, payload: StructureInput, session: AsyncSession = Depends(get_db_marketplace_erp)
+):
+    if not node_id or len(node_id) > 80:
+        raise HTTPException(422, "ID struktur tidak valid")
+    code = payload.code.upper()
+    pattern = r"[A-Z0-9]+(?:[.-][A-Z0-9]+)*" if payload.kind == "produk" else r"[A-Z0-9]+(?:-[A-Z0-9]+)*"
+    if not re.fullmatch(pattern, code):
+        raise HTTPException(422, "Kode memakai huruf/angka tanpa spasi; titik hanya untuk SKU induk")
+    nodes = await structure_nodes(session)
+    current = nodes.get(node_id)
+    expected_parent = {"kategori": None, "produk": "kategori", "model": "produk"}[payload.kind]
+    parent = nodes.get(payload.parent_id)
+    if (expected_parent is None and payload.parent_id) or (
+        expected_parent and (not parent or parent.kind != expected_parent)
+    ):
+        raise HTTPException(422, "Induk struktur tidak sesuai")
+    if current and (current.kind != payload.kind or current.parent_key != payload.parent_id):
+        raise HTTPException(422, "Jenis dan induk struktur yang sudah dibuat tidak dapat diganti")
+    if (current and current.version != payload.version) or (not current and payload.version):
+        raise HTTPException(409, "Struktur telah berubah. Muat ulang.")
+    try:
+        if current:
+            result = await session.execute(
+                update(ProcessingProductionStructure)
+                .where(
+                    ProcessingProductionStructure.id == node_id,
+                    ProcessingProductionStructure.version == payload.version,
+                )
+                .values(code=code, name=payload.name, version=payload.version + 1)
+            )
+            if result.rowcount != 1:
+                raise HTTPException(409, "Struktur baru saja berubah. Muat ulang.")
+        else:
+            session.add(
+                ProcessingProductionStructure(
+                    id=node_id, kind=payload.kind, parent_key=payload.parent_id, code=code, name=payload.name, version=1
+                )
+            )
+        await session.commit()
+    except IntegrityError:
+        await session.rollback()
+        raise HTTPException(409, "Kode sudah digunakan pada kategori/produk ini")
+    return {"id": node_id, "tersimpan": True}
 
 
 async def price_list(session):
@@ -52,6 +162,10 @@ async def price_list(session):
     prices = {r["id"]: dict(r, kind="produksi", version=0) for r in data.get("harga_produksi", [])}
     for row in (await session.scalars(select(ProcessingPrice))).all():
         prices[row.id] = dict(json.loads(row.payload_json), id=row.id, kind=row.kind, version=row.version)
+    nodes = await structure_nodes(session)
+    for value in prices.values():
+        if value.get("structure_model_id"):
+            value.update(structure_fields(nodes, value["structure_model_id"], value["ukuran"]))
     return list(prices.values())
 
 
@@ -72,6 +186,13 @@ async def save_price(price_id: str, payload: PriceInput, session: AsyncSession =
     if not current and payload.version != 0:
         raise HTTPException(409, "Harga tidak ditemukan; muat ulang")
     value = dict(current or {}, **payload.model_dump(mode="json", exclude={"version"}, exclude_none=True), id=price_id)
+    model_id = value.get("structure_model_id")
+    if model_id:
+        if payload.kind != "produksi":
+            raise HTTPException(422, "Struktur hanya untuk harga produksi")
+        value.update(structure_fields(await structure_nodes(session), model_id, payload.ukuran))
+    elif current and current.get("structure_model_id"):
+        raise HTTPException(422, "Pilih model untuk harga yang sudah terstruktur")
     value.setdefault("sumber", "Input admin")
     serialized = json.dumps(value)
     try:
@@ -88,10 +209,29 @@ async def save_price(price_id: str, payload: PriceInput, session: AsyncSession =
                 raise HTTPException(409, "Harga baru saja berubah; muat ulang")
         else:
             session.add(ProcessingPrice(id=price_id, kind=payload.kind, payload_json=serialized, version=1))
+        if model_id:
+            variant = await session.get(ProcessingProductionStructure, price_id)
+            if variant and variant.kind != "varian":
+                raise HTTPException(409, "ID harga berbenturan dengan struktur")
+            if variant:
+                variant.parent_key = model_id
+                variant.code = value["ukuran"].casefold()
+                variant.name = value["ukuran"]
+            else:
+                session.add(
+                    ProcessingProductionStructure(
+                        id=price_id,
+                        kind="varian",
+                        parent_key=model_id,
+                        code=value["ukuran"].casefold(),
+                        name=value["ukuran"],
+                        version=1,
+                    )
+                )
         await session.commit()
     except IntegrityError:
         await session.rollback()
-        raise HTTPException(409, "Harga baru saja berubah; muat ulang")
+        raise HTTPException(409, "Harga berubah atau ukuran pada model ini sudah ada; muat ulang")
     return {"tersimpan": True}
 
 
@@ -226,6 +366,8 @@ class ManualItem(Strict):
 
 
 class ManualOrder(Strict):
+    order_code: str | None = Field(default=None, max_length=200)
+    seller_code: str | None = Field(default=None, max_length=2)
     source: Literal["internal", "reseller"] = "reseller"
     route: Literal["tukang", "supplier"] = "tukang"
     customer: str = Field(min_length=1, max_length=200)
@@ -236,6 +378,14 @@ class ManualOrder(Strict):
 
     @model_validator(mode="after")
     def dates(self):
+        if self.source == "internal" and self.order_code is not None and not self.order_code:
+            raise ValueError("Isi kode pesanan internal")
+        if (
+            self.source == "reseller"
+            and self.seller_code is not None
+            and not re.fullmatch(r"[A-Za-z]{2}", self.seller_code)
+        ):
+            raise ValueError("Kode penjual lain harus 2 huruf")
         if self.ordered_at.tzinfo is None or self.deadline.tzinfo is None:
             raise ValueError("Tanggal harus memiliki zona waktu")
         if self.deadline < self.ordered_at:
@@ -251,12 +401,21 @@ async def manual_order(
 ):
     prefix = "RSL-" if payload.source == "reseller" else "INT-"
     number = prefix + datetime.now(timezone.utc).strftime("%Y%m%d") + "-" + uuid.uuid4().hex[:8].upper()
+    display_number = (
+        payload.order_code
+        if payload.source == "internal" and payload.order_code is not None
+        else "Menunggu SKU"
+        if payload.source == "reseller" and payload.seller_code
+        else number
+    )
     for item in payload.items:
         data = dict(
             item.model_dump(),
             source=payload.source,
             order_id=number,
-            order_number=number,
+            order_number=display_number,
+            seller_code=(payload.seller_code or "").upper() if payload.source == "reseller" else "",
+            manual_order_code=payload.order_code if payload.source == "internal" else None,
             reference=payload.reference,
             customer=payload.customer,
             shop="Reseller" if payload.source == "reseller" else "Internal",
@@ -266,7 +425,7 @@ async def manual_order(
         )
         session.add(ProcessingJob(payload_json=json.dumps(draft(data, payload.route, actor))))
     await session.commit()
-    return {"order_number": number}
+    return {"order_id": number, "order_number": display_number}
 
 
 def computed(row, data, order=None):
@@ -316,6 +475,7 @@ class JobEdit(Strict):
     party_id: str = Field(default="", max_length=80)
     price_id: str = Field(default="", max_length=80)
     production_price: Money | None = None
+    production_sku: str | None = Field(default=None, max_length=200)
     color: str = Field(default="", max_length=200)
     paint_price_id: str = Field(default="", max_length=80)
     paint_price: Money = Decimal(0)
@@ -347,6 +507,28 @@ async def persist(session, row, data, action, actor):
     return {"tersimpan": True}
 
 
+async def next_order_sequence(session, base):
+    increment = (
+        update(ProcessingOrderSequence)
+        .where(ProcessingOrderSequence.id == base)
+        .values(
+            last_number=ProcessingOrderSequence.last_number + 1,
+        )
+        .returning(ProcessingOrderSequence.last_number)
+    )
+    number = await session.scalar(increment)
+    if number is not None:
+        return number
+    try:
+        async with session.begin_nested():
+            session.add(ProcessingOrderSequence(id=base, last_number=1))
+            await session.flush()
+        return 1
+    except IntegrityError:
+        # Another admin reserved the first number while this request was creating it.
+        return await session.scalar(increment)
+
+
 @router.put("/jobs/{job_id}")
 async def edit_job(
     job_id: str,
@@ -362,7 +544,7 @@ async def edit_job(
     if not party:
         raise HTTPException(422, "Pilih tukang kayu atau supplier yang tersedia")
     previous = dict(data)
-    data.update(payload.model_dump(mode="json", exclude={"version"}), party_name=party["nama"])
+    data.update(payload.model_dump(mode="json", exclude={"version", "production_sku"}), party_name=party["nama"])
     price = next(
         (p for p in await price_list(session) if p["id"] == payload.price_id and p["kind"] == "produksi"), None
     )
@@ -413,6 +595,19 @@ async def edit_job(
             data.update(paint_price="0", paint_price_id="", painting_reference=None)
     else:
         data.update(paint_price="0", paint_price_id="", painting_reference=None)
+    if data["source"] == "reseller" and data.get("seller_code"):
+        reference_sku = (data.get("production_reference") or {}).get("sku") if price else ""
+        sku = reference_sku or payload.production_sku or previous.get("production_sku", "")
+        if not sku:
+            raise HTTPException(422, "Tentukan SKU produksi untuk membuat kode pesanan penjual lain")
+        cutoff = datetime.fromisoformat(data["deadline"]).astimezone(ZoneInfo("Asia/Jakarta"))
+        base = f"{sku}-{cutoff:%d%m}-{data['seller_code']}"
+        sequence = previous.get("order_sequence") if previous.get("numbering_base") == base else None
+        if sequence is None:
+            sequence = await next_order_sequence(session, base)
+        data.update(
+            production_sku=sku, numbering_base=base, order_sequence=sequence, order_number=f"{base}-{sequence:02d}"
+        )
     if data["stage"] == "draft":
         data["stage"] = "produksi" if data["route"] == "tukang" else "supplier"
     return await persist(session, row, data, "dipetakan", actor)
