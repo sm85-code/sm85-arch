@@ -852,3 +852,22 @@ class ProcessingCatalog(MarketplaceErpBase):
     payload_json: Mapped[str] = mapped_column(Text, nullable=False)
     imported_by: Mapped[str] = mapped_column(String(64), nullable=False)
     imported_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=_utcnow)
+
+
+class ProcessingPrice(MarketplaceErpBase):
+    """Editable price overrides; original Drive import remains intact."""
+    __tablename__ = "mpe_processing_price"
+    id: Mapped[str] = mapped_column(String(80), primary_key=True)
+    kind: Mapped[str] = mapped_column(String(20), nullable=False)
+    payload_json: Mapped[str] = mapped_column(Text, nullable=False)
+    version: Mapped[int] = mapped_column(Integer, nullable=False, default=1)
+
+
+class ProcessingJob(MarketplaceErpBase):
+    """One internal work item, never writes marketplace orders/stock/accounting."""
+    __tablename__ = "mpe_processing_job"
+    id: Mapped[str] = mapped_column(String(64), primary_key=True, default=_uuid)
+    source_item_id: Mapped[Optional[str]] = mapped_column(String(64), nullable=True, unique=True)
+    payload_json: Mapped[str] = mapped_column(Text, nullable=False)
+    version: Mapped[int] = mapped_column(Integer, nullable=False, default=1)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=_utcnow)
