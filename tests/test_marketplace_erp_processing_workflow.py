@@ -369,3 +369,33 @@ async def test_manual_internal_orders_have_no_reseller_fees_and_can_use_supplier
     supplier = await save(http, supplier, party_id="s1", price_id="", production_price="50000")
     supplier = await advance(http, supplier, "supplier")
     assert supplier["stage"] == "packing" and supplier["process_fee"] == "0"
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("kind,party_id", [("tukang", "t1"), ("supplier", "s1")])
+async def test_party_contact_fields_round_trip_and_preserve_on_legacy_edits(client, kind, party_id):
+    http, _, _ = client
+    contacts = {
+        "alamat": "Alamat contoh",
+        "no_wa": "081234567890",
+        "no_rekening": "001234567890",
+        "nama_bank": "Bank contoh",
+    }
+    response = await http.put(
+        f"/processing/parties/{kind}/{party_id}", json={"version": 0, "nama": "Nama contoh", **contacts}
+    )
+    assert response.status_code == 200, response.text
+    party = next(p for p in (await http.get("/processing/data")).json()["data"][kind] if p["id"] == party_id)
+    assert all(party[key] == value for key, value in contacts.items())
+    response = await http.put(
+        f"/processing/parties/{kind}/{party_id}", json={"version": party["version"], "nama": "Nama diperbarui"}
+    )
+    assert response.status_code == 200, response.text
+    party = next(p for p in (await http.get("/processing/data")).json()["data"][kind] if p["id"] == party_id)
+    assert all(party[key] == value for key, value in contacts.items())
+    response = await http.put(
+        f"/processing/parties/{kind}/{party_id}", json={"version": party["version"], "nama": party["nama"], "no_wa": ""}
+    )
+    assert response.status_code == 200, response.text
+    party = next(p for p in (await http.get("/processing/data")).json()["data"][kind] if p["id"] == party_id)
+    assert party["no_wa"] == "" and party["no_rekening"] == "001234567890"

@@ -502,6 +502,10 @@ async def edit_packing(
 
 
 class PartyEdit(Strict):
+    alamat: str | None = Field(default=None, max_length=1000)
+    no_wa: str | None = Field(default=None, max_length=50)
+    no_rekening: str | None = Field(default=None, max_length=100)
+    nama_bank: str | None = Field(default=None, max_length=100)
     version: int = Field(ge=0)
     nama: str = Field(min_length=1, max_length=200)
     catatan: str = Field(default="", max_length=2000)
@@ -538,7 +542,7 @@ async def save_party(
         raise HTTPException(409, "Nama sudah ada di daftar ini")
     data = dict(
         current or {},
-        **payload.model_dump(exclude={"version"}),
+        **payload.model_dump(exclude={"version"}, exclude_none=True),
         sumber=(current or {}).get("sumber", "Input admin"),
         updated_by=actor.id,
         updated_at=datetime.now(timezone.utc).isoformat(),
