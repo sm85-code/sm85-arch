@@ -478,3 +478,49 @@ async def test_production_hierarchy_reuse_auto_sku_unique_size_and_order_snapsho
     async with factory() as session:
         original = json.loads((await session.get(ProcessingCatalog, "global")).payload_json)
         assert original["harga_produksi"][0]["sku"] == "PROD.RAK"
+
+
+@pytest.mark.asyncio
+async def test_manual_order_codes_reseller_per_product_and_internal_typed(client):
+    http, _, _ = client
+    body = {
+        "source": "reseller",
+        "seller_code": "ab",
+        "customer": "Penjual A",
+        "ordered_at": "2026-10-16T09:00:00+07:00",
+        "deadline": "2026-10-20T18:30:00+00:00",
+        "items": [{"produk": "Rak", "qty": 1}, {"produk": "Custom", "qty": 2}],
+    }
+    response = await http.post("/processing/jobs/manual", json=body)
+    assert response.status_code == 200, response.text
+    jobs = await rows(http)
+    assert all(j["order_number"] == "Menunggu SKU" for j in jobs)
+    first = await save(http, next(j for j in jobs if j["produk"] == "Rak"))
+    assert first["order_number"] == "PROD.RAK-2110-AB-01"  # Cut-off is 21 October in WIB.
+    second = await save(
+        http,
+        next(j for j in jobs if j["produk"] == "Custom"),
+        price_id="",
+        production_price="120000",
+        production_sku="AZF.CUSTOM.RPL.150x200",
+    )
+    assert second["order_number"] == "AZF.CUSTOM.RPL.150x200-2110-AB-01"
+    assert first["order_id"] == second["order_id"] and first["id"] != second["id"]
+    again = await save(http, first)
+    assert again["order_number"] == first["order_number"]  # Resaving never consumes another number.
+    response = await http.post("/processing/jobs/manual", json={**body, "items": [{"produk": "Rak kedua", "qty": 1}]})
+    assert response.status_code == 200, response.text
+    another = await save(http, next(j for j in await rows(http) if j["produk"] == "Rak kedua"))
+    assert another["order_number"] == "PROD.RAK-2110-AB-02"
+
+    response = await http.post("/processing/jobs/manual", json={**body, "seller_code": "A1"})
+    assert response.status_code == 422
+    internal = {**body, "source": "internal", "order_code": "INTERNAL-001"}
+    response = await http.post("/processing/jobs/manual", json=internal)
+    assert response.status_code == 200, response.text
+    assert response.json()["order_number"] == "INTERNAL-001"
+    item = next(j for j in await rows(http) if j["source"] == "internal")
+    item = await save(http, item)
+    assert item["order_number"] == "INTERNAL-001" and item["process_fee"] == "0"
+    response = await http.post("/processing/jobs/manual", json={**internal, "order_code": " "})
+    assert response.status_code == 422

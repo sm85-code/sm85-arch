@@ -6,6 +6,7 @@ import uuid
 from datetime import datetime, timezone
 from decimal import Decimal
 from typing import Annotated, Literal
+from zoneinfo import ZoneInfo
 
 from fastapi import APIRouter, Depends, HTTPException, Query
 from pydantic import BaseModel, ConfigDict, Field, model_validator
@@ -23,6 +24,7 @@ from tenants.marketplace_erp.modules.marketplace_erp.infrastructure.models impor
     ProcessingJob,
     ProcessingPrice,
     ProcessingProductionStructure,
+    ProcessingOrderSequence,
     ProcessingParty,
     UserMarketplaceErp,
 )
@@ -364,6 +366,8 @@ class ManualItem(Strict):
 
 
 class ManualOrder(Strict):
+    order_code: str | None = Field(default=None, max_length=200)
+    seller_code: str | None = Field(default=None, max_length=2)
     source: Literal["internal", "reseller"] = "reseller"
     route: Literal["tukang", "supplier"] = "tukang"
     customer: str = Field(min_length=1, max_length=200)
@@ -374,6 +378,14 @@ class ManualOrder(Strict):
 
     @model_validator(mode="after")
     def dates(self):
+        if self.source == "internal" and self.order_code is not None and not self.order_code:
+            raise ValueError("Isi kode pesanan internal")
+        if (
+            self.source == "reseller"
+            and self.seller_code is not None
+            and not re.fullmatch(r"[A-Za-z]{2}", self.seller_code)
+        ):
+            raise ValueError("Kode penjual lain harus 2 huruf")
         if self.ordered_at.tzinfo is None or self.deadline.tzinfo is None:
             raise ValueError("Tanggal harus memiliki zona waktu")
         if self.deadline < self.ordered_at:
@@ -389,12 +401,21 @@ async def manual_order(
 ):
     prefix = "RSL-" if payload.source == "reseller" else "INT-"
     number = prefix + datetime.now(timezone.utc).strftime("%Y%m%d") + "-" + uuid.uuid4().hex[:8].upper()
+    display_number = (
+        payload.order_code
+        if payload.source == "internal" and payload.order_code is not None
+        else "Menunggu SKU"
+        if payload.source == "reseller" and payload.seller_code
+        else number
+    )
     for item in payload.items:
         data = dict(
             item.model_dump(),
             source=payload.source,
             order_id=number,
-            order_number=number,
+            order_number=display_number,
+            seller_code=(payload.seller_code or "").upper() if payload.source == "reseller" else "",
+            manual_order_code=payload.order_code if payload.source == "internal" else None,
             reference=payload.reference,
             customer=payload.customer,
             shop="Reseller" if payload.source == "reseller" else "Internal",
@@ -404,7 +425,7 @@ async def manual_order(
         )
         session.add(ProcessingJob(payload_json=json.dumps(draft(data, payload.route, actor))))
     await session.commit()
-    return {"order_number": number}
+    return {"order_id": number, "order_number": display_number}
 
 
 def computed(row, data, order=None):
@@ -454,6 +475,7 @@ class JobEdit(Strict):
     party_id: str = Field(default="", max_length=80)
     price_id: str = Field(default="", max_length=80)
     production_price: Money | None = None
+    production_sku: str | None = Field(default=None, max_length=200)
     color: str = Field(default="", max_length=200)
     paint_price_id: str = Field(default="", max_length=80)
     paint_price: Money = Decimal(0)
@@ -485,6 +507,28 @@ async def persist(session, row, data, action, actor):
     return {"tersimpan": True}
 
 
+async def next_order_sequence(session, base):
+    increment = (
+        update(ProcessingOrderSequence)
+        .where(ProcessingOrderSequence.id == base)
+        .values(
+            last_number=ProcessingOrderSequence.last_number + 1,
+        )
+        .returning(ProcessingOrderSequence.last_number)
+    )
+    number = await session.scalar(increment)
+    if number is not None:
+        return number
+    try:
+        async with session.begin_nested():
+            session.add(ProcessingOrderSequence(id=base, last_number=1))
+            await session.flush()
+        return 1
+    except IntegrityError:
+        # Another admin reserved the first number while this request was creating it.
+        return await session.scalar(increment)
+
+
 @router.put("/jobs/{job_id}")
 async def edit_job(
     job_id: str,
@@ -500,7 +544,7 @@ async def edit_job(
     if not party:
         raise HTTPException(422, "Pilih tukang kayu atau supplier yang tersedia")
     previous = dict(data)
-    data.update(payload.model_dump(mode="json", exclude={"version"}), party_name=party["nama"])
+    data.update(payload.model_dump(mode="json", exclude={"version", "production_sku"}), party_name=party["nama"])
     price = next(
         (p for p in await price_list(session) if p["id"] == payload.price_id and p["kind"] == "produksi"), None
     )
@@ -551,6 +595,19 @@ async def edit_job(
             data.update(paint_price="0", paint_price_id="", painting_reference=None)
     else:
         data.update(paint_price="0", paint_price_id="", painting_reference=None)
+    if data["source"] == "reseller" and data.get("seller_code"):
+        reference_sku = (data.get("production_reference") or {}).get("sku") if price else ""
+        sku = reference_sku or payload.production_sku or previous.get("production_sku", "")
+        if not sku:
+            raise HTTPException(422, "Tentukan SKU produksi untuk membuat kode pesanan penjual lain")
+        cutoff = datetime.fromisoformat(data["deadline"]).astimezone(ZoneInfo("Asia/Jakarta"))
+        base = f"{sku}-{cutoff:%d%m}-{data['seller_code']}"
+        sequence = previous.get("order_sequence") if previous.get("numbering_base") == base else None
+        if sequence is None:
+            sequence = await next_order_sequence(session, base)
+        data.update(
+            production_sku=sku, numbering_base=base, order_sequence=sequence, order_number=f"{base}-{sequence:02d}"
+        )
     if data["stage"] == "draft":
         data["stage"] = "produksi" if data["route"] == "tukang" else "supplier"
     return await persist(session, row, data, "dipetakan", actor)

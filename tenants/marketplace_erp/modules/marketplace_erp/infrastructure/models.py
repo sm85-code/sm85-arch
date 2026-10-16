@@ -894,3 +894,10 @@ class ProcessingProductionStructure(MarketplaceErpBase):
     code: Mapped[str] = mapped_column(String(100), nullable=False)
     name: Mapped[str] = mapped_column(String(300), nullable=False)
     version: Mapped[int] = mapped_column(Integer, nullable=False, default=1)
+
+
+class ProcessingOrderSequence(MarketplaceErpBase):
+    """Atomic reseller order-code counters, independent from marketplace orders."""
+    __tablename__ = "mpe_processing_order_sequence"
+    id: Mapped[str] = mapped_column(String(255), primary_key=True)
+    last_number: Mapped[int] = mapped_column(Integer, nullable=False)
