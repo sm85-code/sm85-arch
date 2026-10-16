@@ -239,6 +239,7 @@ async def test_all_workflow_endpoints_are_admin_only(client, role):
     app.dependency_overrides[get_db_marketplace_erp] = forbidden_db
     for method, path in [
         ("GET", "/prices"),
+        ("PUT", "/parties/tukang/t1"),
         ("PUT", "/prices/p1"),
         ("GET", "/jobs"),
         ("GET", "/candidates"),
@@ -251,3 +252,29 @@ async def test_all_workflow_endpoints_are_admin_only(client, role):
     ]:
         response = await http.request(method, "/processing" + path, json={} if method in ["PUT", "POST"] else None)
         assert response.status_code == 403, (method, path, response.text)
+
+
+@pytest.mark.asyncio
+async def test_directory_edit_create_versions_and_mapping_use_saved_party(client):
+    http, _, factory = client
+    response = await http.put(
+        "/processing/parties/tukang/t1", json={"version": 0, "nama": "Tukang Diperbarui", "catatan": "Catatan baru"}
+    )
+    assert response.status_code == 200, response.text
+    response = await http.put(
+        "/processing/parties/supplier/new", json={"version": 0, "nama": "Supplier Baru", "catatan": ""}
+    )
+    assert response.status_code == 200, response.text
+    data = (await http.get("/processing/data")).json()["data"]
+    assert next(p for p in data["tukang"] if p["id"] == "t1")["nama"] == "Tukang Diperbarui"
+    assert any(p["id"] == "new" for p in data["supplier"])
+    assert (await http.put("/processing/parties/tukang/t1", json={"version": 0, "nama": "Stale"})).status_code == 409
+    assert (
+        await http.put("/processing/parties/supplier/duplicate", json={"version": 0, "nama": "supplier baru"})
+    ).status_code == 409
+    await http.post("/processing/jobs/select", json={"route": "tukang", "item_ids": ["i1"]})
+    job = await save(http, (await rows(http))[0])
+    assert job["party_name"] == "Tukang Diperbarui"
+    async with factory() as session:
+        original = json.loads((await session.get(ProcessingCatalog, "global")).payload_json)
+        assert original["tukang"][0]["nama"] == "Tukang 1"

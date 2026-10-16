@@ -871,3 +871,14 @@ class ProcessingJob(MarketplaceErpBase):
     payload_json: Mapped[str] = mapped_column(Text, nullable=False)
     version: Mapped[int] = mapped_column(Integer, nullable=False, default=1)
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=_utcnow)
+
+
+class ProcessingParty(MarketplaceErpBase):
+    """Editable worker/supplier directory, independent of original Drive data."""
+    __tablename__ = "mpe_processing_party"
+    __table_args__ = (UniqueConstraint("kind", "source_id", name="uq_processing_party_source"),)
+    id: Mapped[str] = mapped_column(String(64), primary_key=True, default=_uuid)
+    kind: Mapped[str] = mapped_column(String(20), nullable=False)
+    source_id: Mapped[str] = mapped_column(String(80), nullable=False)
+    payload_json: Mapped[str] = mapped_column(Text, nullable=False)
+    version: Mapped[int] = mapped_column(Integer, nullable=False, default=1)

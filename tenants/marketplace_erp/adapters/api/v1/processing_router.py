@@ -67,10 +67,28 @@ class CatalogImport(Strict):
 
 @router.get("/data")
 async def catalog(session: AsyncSession = Depends(get_db_marketplace_erp)):
+    from .processing_workflow import party_list
+
     row = await session.get(ProcessingCatalog, "global")
+    tukang = await party_list(session, "tukang")
+    supplier = await party_list(session, "supplier")
     if row is None:
-        return {"data": None}
-    return {"data": json.loads(row.payload_json), "imported_at": row.imported_at, "imported_by": row.imported_by}
+        if not tukang and not supplier:
+            return {"data": None}
+        return {
+            "data": {
+                "source_url": "",
+                "source_title": "Data internal ERP",
+                "read_at": max(p["updated_at"] for p in tukang + supplier),
+                "tukang": tukang,
+                "supplier": supplier,
+                "harga_produksi": [],
+            }
+        }
+    data = json.loads(row.payload_json)
+    data["tukang"] = tukang
+    data["supplier"] = supplier
+    return {"data": data, "imported_at": row.imported_at, "imported_by": row.imported_by}
 
 
 @router.post("/import")
