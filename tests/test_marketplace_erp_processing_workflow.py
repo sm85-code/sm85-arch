@@ -344,3 +344,28 @@ async def test_paint_color_saved_and_legacy_edits_preserve_it(client):
         },
     )
     assert response.status_code == 422
+
+
+@pytest.mark.asyncio
+async def test_manual_internal_orders_have_no_reseller_fees_and_can_use_supplier(client):
+    http, _, _ = client
+    payload = {
+        "source": "internal",
+        "customer": "Pesanan langsung",
+        "ordered_at": "2026-10-16T09:00:00+07:00",
+        "deadline": "2026-10-20T17:00:00+07:00",
+        "items": [{"produk": "Custom internal", "qty": 2}],
+    }
+    response = await http.post("/processing/jobs/manual", json=payload)
+    assert response.status_code == 200, response.text
+    assert response.json()["order_number"].startswith("INT-")
+    job = await save(http, (await rows(http))[0], price_id="", production_price="123000", paint_price="40000")
+    assert job["source"] == "internal" and job["production_total"] == "246000"
+    assert job["process_fee"] == "0" and job["paint_price"] == "0" and job["reseller_total"] is None
+    payload["route"] = "supplier"
+    response = await http.post("/processing/jobs/manual", json=payload)
+    assert response.status_code == 200, response.text
+    supplier = next(j for j in await rows(http) if j["route"] == "supplier")
+    supplier = await save(http, supplier, party_id="s1", price_id="", production_price="50000")
+    supplier = await advance(http, supplier, "supplier")
+    assert supplier["stage"] == "packing" and supplier["process_fee"] == "0"
