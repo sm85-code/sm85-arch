@@ -120,3 +120,7 @@ async def import_catalog(
 from .processing_workflow import router as workflow_router  # noqa: E402
 
 router.include_router(workflow_router)
+
+from .processing_supplier_catalog import router as supplier_catalog_router  # noqa: E402
+
+router.include_router(supplier_catalog_router)

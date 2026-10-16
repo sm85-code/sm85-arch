@@ -901,3 +901,12 @@ class ProcessingOrderSequence(MarketplaceErpBase):
     __tablename__ = "mpe_processing_order_sequence"
     id: Mapped[str] = mapped_column(String(255), primary_key=True)
     last_number: Mapped[int] = mapped_column(Integer, nullable=False)
+
+
+class ProcessingSupplierConnection(MarketplaceErpBase):
+    __tablename__ = "mpe_processing_supplier_connection"
+    id: Mapped[str] = mapped_column(String(32), primary_key=True, default="siabumdes")
+    token: Mapped[str] = mapped_column(EncryptedToken(), nullable=False)
+    unit_id: Mapped[str] = mapped_column(String(36), nullable=False)
+    unit_name: Mapped[str] = mapped_column(String(255), nullable=False)
+    expires_at: Mapped[str] = mapped_column(String(64), nullable=False)

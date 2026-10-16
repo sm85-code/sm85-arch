@@ -247,6 +247,10 @@ async def test_all_workflow_endpoints_are_admin_only(client, role):
         ("POST", "/jobs/manual"),
         ("GET", "/production-structure"),
         ("PUT", "/production-structure/node"),
+        ("GET", "/supplier-catalog/connection"),
+        ("POST", "/supplier-catalog/connect"),
+        ("GET", "/supplier-catalog"),
+        ("DELETE", "/supplier-catalog/connection"),
         ("PUT", "/jobs/job1"),
         ("POST", "/jobs/job1/transition"),
         ("DELETE", "/jobs/job1?version=1"),
@@ -383,6 +387,8 @@ async def test_party_contact_fields_round_trip_and_preserve_on_legacy_edits(clie
         "no_rekening": "001234567890",
         "nama_bank": "Bank contoh",
     }
+    if kind == "tukang":
+        contacts["keahlian"] = "Meja dan lemari"
     response = await http.put(
         f"/processing/parties/{kind}/{party_id}", json={"version": 0, "nama": "Nama contoh", **contacts}
     )
@@ -524,3 +530,121 @@ async def test_manual_order_codes_reseller_per_product_and_internal_typed(client
     assert item["order_number"] == "INTERNAL-001" and item["process_fee"] == "0"
     response = await http.post("/processing/jobs/manual", json={**internal, "order_code": " "})
     assert response.status_code == 422
+
+
+@pytest.mark.asyncio
+async def test_supplier_catalog_connection_prices_stock_snapshots_and_manual_catalog(client, monkeypatch):
+    from cryptography.fernet import Fernet
+    from sqlalchemy import text
+    from tenants.marketplace_erp.adapters.api.v1 import processing_supplier_catalog as supplier
+
+    http, _, factory = client
+    monkeypatch.setenv("SHOPEE_TOKEN_ENCRYPTION_KEYS", Fernet.generate_key().decode())
+    remote = {
+        "unit_id": "u5",
+        "unit_name": "BUMDes",
+        "read_at": "2026-10-17T10:00:00+00:00",
+        "items": [
+            {
+                "id": "remote1",
+                "sku": "KRS.FUR-1",
+                "name": "Produk BUMDes",
+                "sell_price": "50000",
+                "qty_on_hand": 7,
+                "unit_of_measure": "pcs",
+                "category_name": "Furniture",
+            }
+        ],
+    }
+    reads = []
+
+    def transport(request):
+        if request.url.path == "/api/auth/login":
+            assert json.loads(request.content)["password"] == "one-time-password"
+            return httpx.Response(
+                200, json={"user": {"role": "admin"}}, headers={"set-cookie": "source=authenticated; Path=/; Secure"}
+            )
+        if request.method == "POST":
+            assert "source=authenticated" in request.headers.get("cookie", "")
+            return httpx.Response(
+                200,
+                json={
+                    "token": "remote-read-key",
+                    "unit_id": "u5",
+                    "unit_name": "BUMDes",
+                    "expires_at": "2027-10-17T00:00:00+00:00",
+                },
+            )
+        assert request.headers.get("X-ERP-Catalog-Key") == "remote-read-key"
+        reads.append(1)
+        return httpx.Response(200, json=remote)
+
+    monkeypatch.setattr(
+        supplier, "catalog_http_client", lambda *args: httpx.AsyncClient(transport=httpx.MockTransport(transport))
+    )
+    response = await http.post(
+        "/processing/supplier-catalog/connect", json={"username": "admin", "password": "one-time-password"}
+    )
+    assert response.status_code == 200, response.text
+    assert "token" not in response.json()
+    async with factory() as db:
+        stored = await db.scalar(text("SELECT token FROM mpe_processing_supplier_connection"))
+        assert stored.startswith("fernet:v1:") and "remote-read-key" not in stored and "password" not in stored
+    data = (await http.get("/processing/supplier-catalog")).json()
+    assert data["items"][0]["qty_on_hand"] == 7 and data["items"][0]["sell_price"] == "50000"
+    await http.post("/processing/jobs/select", json={"route": "supplier", "item_ids": ["i1"]})
+    job = await save(
+        http,
+        (await rows(http))[0],
+        party_id="s1",
+        price_id="",
+        catalog_mode="otomatis",
+        supplier_product_id="remote1",
+        production_price="1",
+    )
+    assert job["production_price"] == "50000" and job["supplier_reference"]["qty_on_hand"] == 7
+    assert job["supplier_product_name"] == "Produk BUMDes" and job["paint_price"] == "0"
+    count = len(reads)
+    remote["items"][0].update(sell_price="60000", qty_on_hand=3)
+    job = await save(
+        http,
+        job,
+        party_id="s1",
+        price_id="",
+        catalog_mode="otomatis",
+        supplier_product_id="remote1",
+        production_price="1",
+    )
+    assert len(reads) == count and job["production_price"] == "50000"  # Unchanged mapping keeps its saved price.
+    job = await save(
+        http,
+        job,
+        party_id="s1",
+        price_id="",
+        catalog_mode="otomatis",
+        supplier_product_id="remote1",
+        refresh_catalog_price=True,
+    )
+    assert job["production_price"] == "60000" and job["supplier_reference"]["qty_on_hand"] == 3
+    response = await http.put(
+        "/processing/prices/nonwood1",
+        json={"version": 0, "kind": "non_kayu", "produk": "Produk manual", "harga": "12345", "sku": "MANUAL-1"},
+    )
+    assert response.status_code == 200, response.text
+    job = await save(http, job, party_id="s1", price_id="nonwood1", catalog_mode="manual", production_price="1")
+    assert (
+        job["production_price"] == "12345"
+        and job["supplier_product_name"] == "Produk manual"
+        and job["supplier_reference"] is None
+    )
+    response = await http.put(
+        "/processing/prices/packing1",
+        json={"version": 0, "kind": "packing", "packing_type": "kayu", "produk": "Kemasan besar", "harga": "25000"},
+    )
+    assert response.status_code == 200, response.text
+    job = await advance(http, job, "supplier")
+    response = await http.put(
+        "/processing/jobs/" + job["id"] + "/packing",
+        json={"version": job["version"], "packing_type": "kayu", "packing_price": "27500"},
+    )
+    assert response.status_code == 200, response.text
