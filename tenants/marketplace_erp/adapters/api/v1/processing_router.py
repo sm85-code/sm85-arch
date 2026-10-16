@@ -96,3 +96,9 @@ async def import_catalog(
             return {"tersimpan": True, "sudah_ada": True}
         raise HTTPException(409, "Data Processing baru saja diimpor admin lain; muat ulang")
     return {"tersimpan": True, "sudah_ada": False}
+
+
+# All descendants inherit the admin dependency above, in addition to their own guard.
+from .processing_workflow import router as workflow_router  # noqa: E402
+
+router.include_router(workflow_router)
