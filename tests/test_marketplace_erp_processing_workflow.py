@@ -278,3 +278,23 @@ async def test_directory_edit_create_versions_and_mapping_use_saved_party(client
     async with factory() as session:
         original = json.loads((await session.get(ProcessingCatalog, "global")).payload_json)
         assert original["tukang"][0]["nama"] == "Tukang 1"
+
+
+@pytest.mark.asyncio
+async def test_price_category_is_editable_and_omitted_category_preserves_existing(client):
+    http, _, _ = client
+    response = await http.put(
+        "/processing/prices/p1",
+        json={"version": 0, "kind": "produksi", "produk": "Rak", "harga": "150000", "jenis": "Rak Dinding"},
+    )
+    assert response.status_code == 200, response.text
+    price = next(p for p in (await http.get("/processing/prices")).json()["items"] if p["id"] == "p1")
+    assert price["jenis"] == "Rak Dinding"
+    # Older clients do not send category; their price edits must not erase it.
+    response = await http.put(
+        "/processing/prices/p1",
+        json={"version": price["version"], "kind": "produksi", "produk": "Rak", "harga": "160000"},
+    )
+    assert response.status_code == 200, response.text
+    price = next(p for p in (await http.get("/processing/prices")).json()["items"] if p["id"] == "p1")
+    assert price["jenis"] == "Rak Dinding" and price["harga"] == "160000"
