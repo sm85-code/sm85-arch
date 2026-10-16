@@ -245,6 +245,8 @@ async def test_all_workflow_endpoints_are_admin_only(client, role):
         ("GET", "/candidates"),
         ("POST", "/jobs/select"),
         ("POST", "/jobs/manual"),
+        ("GET", "/production-structure"),
+        ("PUT", "/production-structure/node"),
         ("PUT", "/jobs/job1"),
         ("POST", "/jobs/job1/transition"),
         ("DELETE", "/jobs/job1?version=1"),
@@ -399,3 +401,80 @@ async def test_party_contact_fields_round_trip_and_preserve_on_legacy_edits(clie
     assert response.status_code == 200, response.text
     party = next(p for p in (await http.get("/processing/data")).json()["data"][kind] if p["id"] == party_id)
     assert party["no_wa"] == "" and party["no_rekening"] == "001234567890"
+
+
+@pytest.mark.asyncio
+async def test_production_hierarchy_reuse_auto_sku_unique_size_and_order_snapshots(client):
+    http, _, factory = client
+    for node_id, body in [
+        ("cat", {"kind": "kategori", "code": "azf", "name": "Furniture"}),
+        ("prod", {"kind": "produk", "parent_id": "cat", "code": "1r.10", "name": "Rak"}),
+        ("model", {"kind": "model", "parent_id": "prod", "code": "rpl", "name": "RPL"}),
+    ]:
+        response = await http.put(f"/processing/production-structure/{node_id}", json={"version": 0, **body})
+        assert response.status_code == 200, response.text
+    response = await http.put(
+        "/processing/production-structure/duplicate",
+        json={
+            "version": 0,
+            "kind": "kategori",
+            "code": "AZF",
+            "name": "Duplicate",
+        },
+    )
+    assert response.status_code == 409
+    response = await http.put(
+        "/processing/production-structure/wrong-parent",
+        json={
+            "version": 0,
+            "kind": "model",
+            "parent_id": "cat",
+            "code": "OTHER",
+            "name": "Wrong",
+        },
+    )
+    assert response.status_code == 422
+    price = {
+        "version": 0,
+        "kind": "produksi",
+        "produk": "Ignored",
+        "sku": "USER-SKU",
+        "harga": "150000",
+        "structure_model_id": "model",
+        "ukuran": "150 × 200",
+    }
+    response = await http.put("/processing/prices/structured", json=price)
+    assert response.status_code == 200, response.text
+    prices = (await http.get("/processing/prices")).json()["items"]
+    first = next(p for p in prices if p["id"] == "structured")
+    assert first["sku"] == "AZF.1R.10.RPL.150x200" and first["produk"] == "Rak" and first["jenis"] == "Furniture"
+    assert any(p["id"] == "p1" for p in prices)
+    assert (await http.put("/processing/prices/duplicate-size", json={**price, "ukuran": "150X200"})).status_code == 409
+    assert (
+        await http.put("/processing/prices/another-size", json={**price, "ukuran": "180x200", "harga": "175000"})
+    ).status_code == 200
+    await http.post("/processing/jobs/select", json={"route": "tukang", "item_ids": ["i1"]})
+    job = await save(http, (await rows(http))[0], price_id="structured")
+    assert job["production_reference"]["sku"] == "AZF.1R.10.RPL.150x200"
+    # Master edits update future catalog labels without rewriting existing order snapshots.
+    response = await http.put(
+        "/processing/production-structure/model",
+        json={
+            "version": 1,
+            "kind": "model",
+            "parent_id": "prod",
+            "code": "RPL2",
+            "name": "Rak polos baru",
+        },
+    )
+    assert response.status_code == 200, response.text
+    first = next(p for p in (await http.get("/processing/prices")).json()["items"] if p["id"] == "structured")
+    assert first["sku"] == "AZF.1R.10.RPL2.150x200"
+    job = await save(http, job, price_id="structured")
+    assert job["production_reference"]["sku"] == "AZF.1R.10.RPL.150x200"
+    assert job["production_price"] == "150000"
+    structure = (await http.get("/processing/production-structure")).json()["items"]
+    assert len(structure) == 3 and all(n["kind"] != "varian" for n in structure)
+    async with factory() as session:
+        original = json.loads((await session.get(ProcessingCatalog, "global")).payload_json)
+        assert original["harga_produksi"][0]["sku"] == "PROD.RAK"
