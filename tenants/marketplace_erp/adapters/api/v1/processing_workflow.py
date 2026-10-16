@@ -39,6 +39,7 @@ class PriceInput(Strict):
     kind: Literal["produksi", "pengecatan"]
     produk: str = Field(min_length=1, max_length=300)
     jenis: str | None = Field(default=None, max_length=200)
+    warna: str | None = Field(default=None, max_length=200)
     sku: str = Field(default="", max_length=200)
     ukuran: str = Field(default="", max_length=100)
     harga: Money
@@ -61,6 +62,8 @@ async def prices(session: AsyncSession = Depends(get_db_marketplace_erp)):
 
 @router.put("/prices/{price_id}")
 async def save_price(price_id: str, payload: PriceInput, session: AsyncSession = Depends(get_db_marketplace_erp)):
+    if payload.kind == "pengecatan" and payload.warna is not None and not payload.warna:
+        raise HTTPException(422, "Pilih warna cat untuk tarif pengecatan")
     if len(price_id) > 80:
         raise HTTPException(422, "ID harga terlalu panjang")
     current = next((p for p in await price_list(session) if p["id"] == price_id), None)
@@ -388,6 +391,13 @@ async def edit_job(
                 None,
             )
             if painting:
+                reference = (
+                    previous.get("painting_reference") or {}
+                    if previous.get("paint_price_id") == payload.paint_price_id
+                    else painting
+                )
+                if reference.get("warna") and reference["warna"].casefold() != payload.color.casefold():
+                    raise HTTPException(422, "Warna cat tidak sesuai dengan tarif pengecatan yang dipilih")
                 if previous.get("paint_price_id") == payload.paint_price_id:
                     data.update(
                         paint_price=previous["paint_price"], painting_reference=previous.get("painting_reference")
