@@ -124,3 +124,7 @@ router.include_router(workflow_router)
 from .processing_supplier_catalog import router as supplier_catalog_router  # noqa: E402
 
 router.include_router(supplier_catalog_router)
+
+from .processing_templates import router as templates_router  # noqa: E402
+
+router.include_router(templates_router)

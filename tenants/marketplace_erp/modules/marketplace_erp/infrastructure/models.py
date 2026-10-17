@@ -863,6 +863,14 @@ class ProcessingPrice(MarketplaceErpBase):
     version: Mapped[int] = mapped_column(Integer, nullable=False, default=1)
 
 
+class ProcessingDocumentTemplate(MarketplaceErpBase):
+    """Versioned INV/PO layouts, independent of orders and financial postings."""
+    __tablename__ = "mpe_processing_document_template"
+    id: Mapped[str] = mapped_column(String(8), primary_key=True)
+    payload_json: Mapped[str] = mapped_column(Text, nullable=False)
+    version: Mapped[int] = mapped_column(Integer, nullable=False, default=1)
+
+
 class ProcessingPaintColor(MarketplaceErpBase):
     """Admin-managed color names; historical order snapshots remain unchanged."""
     __tablename__ = "mpe_processing_paint_color"
