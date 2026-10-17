@@ -686,7 +686,7 @@ async def test_paint_color_master_and_structured_tariff(client):
 @pytest.mark.asyncio
 async def test_document_templates_version_scope_and_validation(client):
     http, app, factory = client
-    assert (await http.get('/processing/document-templates/INV')).json() == {'kind': 'INV', 'version': 0, 'blocks': None}
+    assert (await http.get('/processing/document-templates/INV')).json() == {'kind': 'INV', 'version': 0, 'orientation': 'portrait', 'blocks': None}
     block = {'id': 'title', 'kind': 'text', 'x': 40, 'y': 40, 'width': 300, 'height': 60,
              'text': 'INVOICE {{nomor_dokumen}}', 'font_size': 24}
     body = {'version': 0, 'blocks': [block]}
@@ -720,9 +720,26 @@ async def test_template_bootstrap_when_shared_startup_did_not_create_table(clien
             await connection.run_sync(ProcessingDocumentTemplate.__table__.drop)
     response = await http.get("/processing/document-templates/INV")
     assert response.status_code == 200, response.text
-    assert response.json() == {"kind": "INV", "version": 0, "blocks": None}
+    assert response.json() == {"kind": "INV", "version": 0, "orientation": "portrait", "blocks": None}
     assert (await http.put("/processing/document-templates/PO", json={"version": 0, "blocks": []})).status_code == 200
     assert (await http.get("/processing/document-templates/PO")).json()["version"] == 1
     assert (await http.get("/processing/document-templates/INV")).json()["blocks"] is None
     async with factory() as session:
         assert (await session.get(Pesanan, "order1")).status == "to_ship"
+
+
+@pytest.mark.asyncio
+async def test_landscape_template_columns_and_page_bounds(client):
+    http, _, _ = client
+    block = {"id": "table", "kind": "table", "x": 30, "y": 250, "width": 1060, "height": 240,
+             "row_count": 4, "show_totals": True,
+             "columns": [{"field": "harga_barang", "label": "Harga barang", "total": True},
+                         {"field": "biaya_pengecatan", "label": "Jasa pengecatan", "total": True}]}
+    body = {"version": 0, "orientation": "landscape", "blocks": [block]}
+    assert (await http.put("/processing/document-templates/INV", json=body)).status_code == 200
+    saved = (await http.get("/processing/document-templates/INV")).json()
+    assert saved["orientation"] == "landscape"
+    assert saved["blocks"][0]["columns"][1]["field"] == "biaya_pengecatan"
+    assert saved["blocks"][0]["row_count"] == 4
+    assert (await http.put("/processing/document-templates/PO", json={**body, "orientation": "portrait"})).status_code == 422
+    assert (await http.put("/processing/document-templates/PO", json={**body, "blocks": [{**block, "y": 790}]})).status_code == 422

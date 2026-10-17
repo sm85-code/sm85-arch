@@ -20,12 +20,22 @@ class Strict(BaseModel):
     model_config = ConfigDict(extra="forbid", allow_inf_nan=False, str_strip_whitespace=True)
 
 
+class TemplateColumn(Strict):
+    field: str = Field(min_length=1, max_length=80, pattern=r"^[a-z][a-z0-9_]*$")
+    label: str = Field(min_length=1, max_length=200)
+    width: int = Field(default=20, ge=1, le=100)
+    align: Literal["left", "center", "right"] = "left"
+    header_background: str = Field(default="#e2e8f0", pattern=r"^#[0-9a-fA-F]{6}$")
+    header_color: str = Field(default="#172033", pattern=r"^#[0-9a-fA-F]{6}$")
+    total: bool = False
+
+
 class TemplateBlock(Strict):
     id: str = Field(min_length=1, max_length=80)
     kind: Literal["text", "logo", "line", "table", "total"]
-    x: int = Field(ge=0, le=794)
+    x: int = Field(ge=0, le=1123)
     y: int = Field(ge=0, le=1123)
-    width: int = Field(ge=20, le=794)
+    width: int = Field(ge=20, le=1123)
     height: int = Field(ge=8, le=1123)
     text: str = Field(default="", max_length=5000)
     font_size: int = Field(default=14, ge=8, le=72)
@@ -33,11 +43,13 @@ class TemplateBlock(Strict):
     align: Literal["left", "center", "right"] = "left"
     color: str = Field(default="#172033", pattern=r"^#[0-9a-fA-F]{6}$")
     image_url: str = Field(default="", max_length=2000)
+    columns: list[TemplateColumn] = Field(default_factory=list, max_length=12)
+    row_count: int = Field(default=3, ge=1, le=12)
+    show_totals: bool = False
+    border: bool = False
 
     @model_validator(mode="after")
     def valid_block(self):
-        if self.x + self.width > 794 or self.y + self.height > 1123:
-            raise ValueError("Elemen harus berada di dalam halaman A4")
         if self.image_url:
             parsed = urlsplit(self.image_url)
             if parsed.scheme != "https" or not parsed.hostname or parsed.username or parsed.password:
@@ -47,10 +59,14 @@ class TemplateBlock(Strict):
 
 class TemplateInput(Strict):
     version: int = Field(ge=0)
+    orientation: Literal["portrait", "landscape"] = "portrait"
     blocks: list[TemplateBlock] = Field(max_length=100)
 
     @model_validator(mode="after")
     def unique_ids(self):
+        width, height = (1123, 794) if self.orientation == "landscape" else (794, 1123)
+        if any(block.x + block.width > width or block.y + block.height > height for block in self.blocks):
+            raise ValueError("Elemen harus berada di dalam halaman A4 yang dipilih")
         if len({block.id for block in self.blocks}) != len(self.blocks):
             raise ValueError("ID elemen harus unik")
         return self
@@ -85,8 +101,11 @@ async def template_row(session: AsyncSession, kind: str):
 @router.get("/document-templates/{kind}", summary="Load template with isolated storage initialization")
 async def read_template(kind: Literal["INV", "PO"], session: AsyncSession = Depends(get_db_marketplace_erp)):
     row = await template_row(session, kind)
-    return {"kind": kind, "version": row.version if row else 0,
-            "blocks": json.loads(row.payload_json) if row else None}
+    stored = json.loads(row.payload_json) if row else None
+    # Backward-compatible with templates stored before page settings were introduced.
+    if isinstance(stored, list) or stored is None:
+        stored = {"orientation": "portrait", "blocks": stored}
+    return {"kind": kind, "version": row.version if row else 0, **stored}
 
 
 @router.put("/document-templates/{kind}")
@@ -95,7 +114,7 @@ async def save_template(kind: Literal["INV", "PO"], payload: TemplateInput,
     current = await template_row(session, kind)
     if (current and current.version != payload.version) or (not current and payload.version):
         raise HTTPException(409, "Desain telah berubah. Muat ulang sebelum menyimpan.")
-    serialized = json.dumps([block.model_dump(mode="json") for block in payload.blocks])
+    serialized = json.dumps({"orientation": payload.orientation, "blocks": [block.model_dump(mode="json") for block in payload.blocks]})
     try:
         if current:
             result = await session.execute(update(ProcessingDocumentTemplate).where(
