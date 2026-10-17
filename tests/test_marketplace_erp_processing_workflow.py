@@ -758,3 +758,19 @@ async def test_existing_portrait_template_payload_is_read_without_rewrite(client
     assert saved == {"kind": "INV", "orientation": "portrait", "version": 2, "blocks": old}
     async with factory() as session:
         assert json.loads((await session.get(ProcessingDocumentTemplate, "INV")).payload_json) == old
+
+
+@pytest.mark.asyncio
+async def test_canvas_layer_metadata_and_embedded_logo(client):
+    import base64
+    http, _, _ = client
+    image = "data:image/png;base64," + base64.b64encode(b"\x89PNG\r\n\x1a\n" + b"logo").decode()
+    block = {"id": "logo", "kind": "logo", "x": 40, "y": 40, "width": 140, "height": 80,
+             "name": "Logo perusahaan", "locked": True, "hidden": False, "image_url": image}
+    response = await http.put("/processing/document-templates/INV", json={"version": 0, "blocks": [block]})
+    assert response.status_code == 200, response.text
+    saved = (await http.get("/processing/document-templates/INV")).json()["blocks"][0]
+    assert saved["name"] == "Logo perusahaan" and saved["locked"] is True
+    assert saved["image_url"] == image
+    for invalid in ["data:image/svg+xml;base64,PHN2Zz4=", "data:image/png;base64,PGh0bWw+", "data:image/png;base64,???"]:
+        assert (await http.put("/processing/document-templates/PO", json={"version": 0, "blocks": [{**block, "image_url": invalid}]})).status_code == 422

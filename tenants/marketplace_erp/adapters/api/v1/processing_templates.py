@@ -1,4 +1,6 @@
 """Admin-only document layout storage; never issues invoices or purchase orders."""
+import base64
+import binascii
 import json
 from typing import Literal
 from urllib.parse import urlsplit
@@ -42,7 +44,10 @@ class TemplateBlock(Strict):
     bold: bool = False
     align: Literal["left", "center", "right"] = "left"
     color: str = Field(default="#172033", pattern=r"^#[0-9a-fA-F]{6}$")
-    image_url: str = Field(default="", max_length=2000)
+    name: str = Field(default="", max_length=120)
+    locked: bool = False
+    hidden: bool = False
+    image_url: str = Field(default="", max_length=750000)
     columns: list[TemplateColumn] = Field(default_factory=list, max_length=12)
     row_count: int = Field(default=3, ge=1, le=12)
     show_totals: bool = False
@@ -50,7 +55,20 @@ class TemplateBlock(Strict):
 
     @model_validator(mode="after")
     def valid_block(self):
-        if self.image_url:
+        if self.image_url.startswith("data:"):
+            header, _, encoded = self.image_url.partition(",")
+            signatures = {"data:image/png;base64": lambda b: b.startswith(b"\x89PNG\r\n\x1a\n"),
+                          "data:image/jpeg;base64": lambda b: b.startswith(b"\xff\xd8\xff"),
+                          "data:image/webp;base64": lambda b: b.startswith(b"RIFF") and b[8:12] == b"WEBP"}
+            if header not in signatures:
+                raise ValueError("Logo memakai PNG, JPG, atau WebP")
+            try:
+                raw = base64.b64decode(encoded, validate=True)
+            except (ValueError, binascii.Error):
+                raise ValueError("Data logo tidak valid")
+            if len(raw) > 512000 or not signatures[header](raw):
+                raise ValueError("Logo tidak valid atau lebih besar dari 500 KB")
+        elif self.image_url:
             parsed = urlsplit(self.image_url)
             if parsed.scheme != "https" or not parsed.hostname or parsed.username or parsed.password:
                 raise ValueError("URL logo harus HTTPS tanpa kredensial")
@@ -64,6 +82,8 @@ class TemplateInput(Strict):
 
     @model_validator(mode="after")
     def unique_ids(self):
+        if sum(len(block.image_url) for block in self.blocks) > 2000000:
+            raise ValueError("Jumlah ukuran logo dalam desain terlalu besar")
         width, height = (1123, 794) if self.orientation == "landscape" else (794, 1123)
         if any(block.x + block.width > width or block.y + block.height > height for block in self.blocks):
             raise ValueError("Elemen harus berada di dalam halaman A4 yang dipilih")
