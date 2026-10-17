@@ -82,7 +82,7 @@ async def template_row(session: AsyncSession, kind: str):
         return await session.get(ProcessingDocumentTemplate, kind)
 
 
-@router.get("/document-templates/{kind}")
+@router.get("/document-templates/{kind}", summary="Load template with isolated storage initialization")
 async def read_template(kind: Literal["INV", "PO"], session: AsyncSession = Depends(get_db_marketplace_erp)):
     row = await template_row(session, kind)
     return {"kind": kind, "version": row.version if row else 0,
