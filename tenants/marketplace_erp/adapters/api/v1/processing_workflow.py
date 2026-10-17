@@ -10,7 +10,7 @@ from zoneinfo import ZoneInfo
 
 from fastapi import APIRouter, Depends, HTTPException, Query
 from pydantic import BaseModel, ConfigDict, Field, model_validator
-from sqlalchemy import func, or_, select, update
+from sqlalchemy import delete, func, or_, select, text, update
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -197,7 +197,13 @@ async def save_structure(
     return {"id": node_id, "tersimpan": True}
 
 
-async def price_list(session):
+async def lock_prices(session):
+    # Serialize retirement against new order assignments in PostgreSQL.
+    if session.bind.dialect.name == "postgresql":
+        await session.execute(text("SELECT pg_advisory_xact_lock(8265071801)"))
+
+
+async def price_list(session, *, include_inactive=False, include_deleted=False):
     original = await session.get(ProcessingCatalog, "global")
     data = json.loads(original.payload_json) if original else {}
     prices = {r["id"]: dict(r, kind="produksi", version=0) for r in data.get("harga_produksi", [])}
@@ -205,23 +211,92 @@ async def price_list(session):
         prices[row.id] = dict(json.loads(row.payload_json), id=row.id, kind=row.kind, version=row.version)
     nodes = await structure_nodes(session)
     for value in prices.values():
-        if value.get("structure_model_id"):
+        if not value.get("deleted") and value.get("structure_model_id"):
             value.update(structure_fields(nodes, value["structure_model_id"], value["ukuran"]))
-    return list(prices.values())
+    return [dict(p, active=p.get("active", True)) for p in prices.values()
+            if (include_deleted or not p.get("deleted"))
+            and (include_inactive or p.get("active", True))]
+
+
+async def used_price_ids(session):
+    used = set()
+    for row in (await session.scalars(select(ProcessingJob))).all():
+        value = json.loads(row.payload_json)
+        for field in ("price_id", "paint_price_id"):
+            if value.get(field):
+                used.add(value[field])
+        for field in ("production_reference", "painting_reference"):
+            if (value.get(field) or {}).get("id"):
+                used.add(value[field]["id"])
+    for price in await price_list(session, include_inactive=True):
+        if price.get("production_price_id"):
+            used.add(price["production_price_id"])
+    return used
 
 
 @router.get("/prices")
-async def prices(session: AsyncSession = Depends(get_db_marketplace_erp)):
-    return {"items": await price_list(session)}
+async def prices(include_inactive: bool = False, session: AsyncSession = Depends(get_db_marketplace_erp)):
+    used = await used_price_ids(session)
+    return {"items": [dict(p, in_use=p["id"] in used) for p in
+                      await price_list(session, include_inactive=include_inactive)]}
+
+
+async def change_price_status(session, price_id, version, *, activate=False):
+    await lock_prices(session)
+    current = next((p for p in await price_list(session, include_inactive=True) if p["id"] == price_id), None)
+    if not current:
+        raise HTTPException(404, "Produk katalog tidak ditemukan")
+    if current["version"] != version:
+        raise HTTPException(409, "Produk telah berubah. Muat ulang katalog.")
+    if current["kind"] not in ("produksi", "non_kayu"):
+        raise HTTPException(422, "Aksi ini hanya untuk katalog produk")
+    used = price_id in await used_price_ids(session)
+    action = "activated" if activate else "deactivated" if used else "deleted"
+    value = dict(current, active=activate, deleted=action == "deleted")
+    value.pop("version", None)
+    if version:
+        result = await session.execute(update(ProcessingPrice).where(
+            ProcessingPrice.id == price_id, ProcessingPrice.version == version
+        ).values(payload_json=json.dumps(value), version=version + 1))
+        if result.rowcount != 1:
+            raise HTTPException(409, "Produk baru saja berubah. Muat ulang katalog.")
+    else:
+        # Override imported entries too, so an original import cannot revive a removed product.
+        session.add(ProcessingPrice(id=price_id, kind=current["kind"], payload_json=json.dumps(value), version=1))
+    if action == "deleted":
+        await session.execute(delete(ProcessingProductionStructure).where(
+            ProcessingProductionStructure.id == price_id, ProcessingProductionStructure.kind == "varian"
+        ))
+    try:
+        await session.commit()
+    except IntegrityError:
+        await session.rollback()
+        raise HTTPException(409, "Produk baru saja berubah. Muat ulang katalog.")
+    return {"id": price_id, "action": action}
+
+
+@router.delete("/prices/{price_id}")
+async def retire_price(price_id: str, version: int = Query(ge=0),
+                       session: AsyncSession = Depends(get_db_marketplace_erp)):
+    return await change_price_status(session, price_id, version)
+
+
+@router.post("/prices/{price_id}/activate")
+async def activate_price(price_id: str, version: int = Query(ge=0),
+                         session: AsyncSession = Depends(get_db_marketplace_erp)):
+    return await change_price_status(session, price_id, version, activate=True)
 
 
 @router.put("/prices/{price_id}")
 async def save_price(price_id: str, payload: PriceInput, session: AsyncSession = Depends(get_db_marketplace_erp)):
+    await lock_prices(session)
     if payload.kind == "pengecatan" and payload.warna is not None and not payload.warna:
         raise HTTPException(422, "Pilih warna cat untuk tarif pengecatan")
     if len(price_id) > 80:
         raise HTTPException(422, "ID harga terlalu panjang")
-    current = next((p for p in await price_list(session) if p["id"] == price_id), None)
+    current = next((p for p in await price_list(session, include_inactive=True, include_deleted=True) if p["id"] == price_id), None)
+    if current and current.get("deleted"):
+        raise HTTPException(409, "Produk telah dihapus. Buat produk baru.")
     if current and (current["version"] != payload.version or current["kind"] != payload.kind):
         raise HTTPException(409, "Harga telah berubah. Muat ulang sebelum menyimpan.")
     if not current and payload.version != 0:
@@ -229,7 +304,9 @@ async def save_price(price_id: str, payload: PriceInput, session: AsyncSession =
     value = dict(current or {}, **payload.model_dump(mode="json", exclude={"version"}, exclude_none=True), id=price_id)
     if payload.kind == "pengecatan":
         if payload.production_price_id:
-            source = next((p for p in await price_list(session) if p["id"] == payload.production_price_id
+            source = next((p for p in await price_list(session, include_inactive=True)
+                           if p["id"] == payload.production_price_id
+                           and (p.get("active", True) or (current or {}).get("production_price_id") == p["id"])
                            and p["kind"] == "produksi" and p.get("structure_model_id")), None)
             if not source:
                 raise HTTPException(422, "Pilih produk produksi yang sudah disusun strukturnya")
@@ -599,6 +676,7 @@ async def edit_job(
     session: AsyncSession = Depends(get_db_marketplace_erp),
     actor: UserMarketplaceErp = Depends(admin),
 ):
+    await lock_prices(session)
     row, data = await load_job(session, job_id, payload.version)
     if data["stage"] not in ["draft", "produksi", "supplier"]:
         raise HTTPException(409, "Pekerjaan sudah dilanjutkan. Buka kembali tahap sebelumnya untuk mengubah pemetaan.")
@@ -659,8 +737,8 @@ async def edit_job(
             price = next(
                 (
                     p
-                    for p in await price_list(session)
-                    if p["id"] == payload.price_id
+                    for p in await price_list(session, include_inactive=True)
+                    if (p.get("active", True) or p["id"] == previous.get("price_id")) and p["id"] == payload.price_id
                     and (p["kind"] == "non_kayu" or (p["kind"] == "produksi" and p["id"] == previous.get("price_id")))
                 ),
                 None,
@@ -691,7 +769,7 @@ async def edit_job(
             )
     else:
         price = next(
-            (p for p in await price_list(session) if p["id"] == payload.price_id and p["kind"] == "produksi"), None
+            (p for p in await price_list(session, include_inactive=True) if (p.get("active", True) or p["id"] == previous.get("price_id")) and p["id"] == payload.price_id and p["kind"] == "produksi"), None
         )
         if payload.price_id and not price:
             raise HTTPException(422, "Harga produksi tidak ditemukan")
@@ -716,8 +794,8 @@ async def edit_job(
             painting = next(
                 (
                     p
-                    for p in await price_list(session)
-                    if p["id"] == payload.paint_price_id and p["kind"] == "pengecatan"
+                    for p in await price_list(session, include_inactive=True)
+                    if (p.get("active", True) or p["id"] == previous.get("paint_price_id")) and p["id"] == payload.paint_price_id and p["kind"] == "pengecatan"
                 ),
                 None,
             )
