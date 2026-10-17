@@ -107,3 +107,42 @@ async def test_product_family_tables_are_added_without_rewriting_existing_skus()
         async with engine.begin() as conn:
             await conn.execute(text(f'DROP SCHEMA IF EXISTS "{schema}" CASCADE'))
         await engine.dispose()
+
+
+@pytest.mark.asyncio
+async def test_template_requests_recover_missing_table_concurrently():
+    import asyncio
+    from sqlalchemy.ext.asyncio import async_sessionmaker, create_async_engine
+    from tenants.marketplace_erp.adapters.api.v1.processing_templates import (
+        TemplateInput, read_template, save_template,
+    )
+
+    schema = f"mpe_template_{uuid.uuid4().hex[:8]}"
+    root = create_async_engine(_asyncpg_url())
+    engine = create_async_engine(_asyncpg_url(), connect_args={"server_settings": {"search_path": schema}})
+    factory = async_sessionmaker(engine, expire_on_commit=False)
+    try:
+        async with root.begin() as conn:
+            await conn.execute(text(f'CREATE SCHEMA "{schema}"'))
+        async with engine.begin() as conn:
+            await conn.execute(text("CREATE TABLE untouched (value VARCHAR(20))"))
+            await conn.execute(text("INSERT INTO untouched VALUES ('original')"))
+        async def read(kind):
+            async with factory() as session:
+                return await read_template(kind, session)
+        inv, po = await asyncio.gather(read("INV"), read("PO"))
+        assert inv["blocks"] is None and po["blocks"] is None
+        async with factory() as session:
+            assert (await save_template("INV", TemplateInput(version=0, blocks=[]), session))["version"] == 1
+        assert (await read("INV"))["blocks"] == []
+        async with engine.connect() as conn:
+            assert (await conn.execute(text("SELECT value FROM untouched"))).scalar_one() == "original"
+            tables = set((await conn.execute(text(
+                "SELECT table_name FROM information_schema.tables WHERE table_schema = :schema"
+            ), {"schema": schema})).scalars())
+            assert tables == {"untouched", "mpe_processing_document_template"}
+    finally:
+        await engine.dispose()
+        async with root.begin() as conn:
+            await conn.execute(text(f'DROP SCHEMA IF EXISTS "{schema}" CASCADE'))
+        await root.dispose()
