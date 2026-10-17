@@ -743,3 +743,18 @@ async def test_landscape_template_columns_and_page_bounds(client):
     assert saved["blocks"][0]["row_count"] == 4
     assert (await http.put("/processing/document-templates/PO", json={**body, "orientation": "portrait"})).status_code == 422
     assert (await http.put("/processing/document-templates/PO", json={**body, "blocks": [{**block, "y": 790}]})).status_code == 422
+
+
+@pytest.mark.asyncio
+async def test_existing_portrait_template_payload_is_read_without_rewrite(client):
+    from tenants.marketplace_erp.modules.marketplace_erp.infrastructure.models import ProcessingDocumentTemplate
+
+    http, _, factory = client
+    old = [{"id": "old", "kind": "text", "x": 40, "y": 40, "width": 200, "height": 40, "text": "Existing"}]
+    async with factory() as session:
+        session.add(ProcessingDocumentTemplate(id="INV", payload_json=json.dumps(old), version=2))
+        await session.commit()
+    saved = (await http.get("/processing/document-templates/INV")).json()
+    assert saved == {"kind": "INV", "orientation": "portrait", "version": 2, "blocks": old}
+    async with factory() as session:
+        assert json.loads((await session.get(ProcessingDocumentTemplate, "INV")).payload_json) == old
