@@ -708,3 +708,21 @@ async def test_document_templates_version_scope_and_validation(client):
         app.dependency_overrides[get_current_user_marketplace_erp] = actor
         assert (await http.get('/processing/document-templates/INV')).status_code == 403
         assert (await http.put('/processing/document-templates/INV', json=body)).status_code == 403
+
+
+@pytest.mark.asyncio
+async def test_template_bootstrap_when_shared_startup_did_not_create_table(client):
+    from tenants.marketplace_erp.modules.marketplace_erp.infrastructure.models import ProcessingDocumentTemplate
+
+    http, _, factory = client
+    async with factory() as session:
+        async with session.bind.begin() as connection:
+            await connection.run_sync(ProcessingDocumentTemplate.__table__.drop)
+    response = await http.get("/processing/document-templates/INV")
+    assert response.status_code == 200, response.text
+    assert response.json() == {"kind": "INV", "version": 0, "blocks": None}
+    assert (await http.put("/processing/document-templates/PO", json={"version": 0, "blocks": []})).status_code == 200
+    assert (await http.get("/processing/document-templates/PO")).json()["version"] == 1
+    assert (await http.get("/processing/document-templates/INV")).json()["blocks"] is None
+    async with factory() as session:
+        assert (await session.get(Pesanan, "order1")).status == "to_ship"

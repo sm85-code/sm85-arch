@@ -5,8 +5,8 @@ from urllib.parse import urlsplit
 
 from fastapi import APIRouter, Depends, HTTPException
 from pydantic import BaseModel, ConfigDict, Field, model_validator
-from sqlalchemy import update
-from sqlalchemy.exc import IntegrityError
+from sqlalchemy import text, update
+from sqlalchemy.exc import DBAPIError, IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from tenants.marketplace_erp.modules.marketplace_erp.infrastructure.auth import require_roles_marketplace_erp
@@ -56,9 +56,35 @@ class TemplateInput(Strict):
         return self
 
 
-@router.get("/document-templates/{kind}")
+async def template_row(session: AsyncSession, kind: str):
+    """Recover only a missing template table when shared startup repair was skipped.
+
+    No existing layout is replaced; unrelated database failures still propagate.
+    """
+    try:
+        return await session.get(ProcessingDocumentTemplate, kind)
+    except DBAPIError as exc:
+        original = exc.orig
+        missing = getattr(original, "sqlstate", None) == "42P01" or (
+            session.bind.dialect.name == "sqlite"
+            and "no such table: mpe_processing_document_template" in str(original)
+        )
+        if not missing:
+            raise
+        await session.rollback()
+        async with session.bind.begin() as connection:
+            if connection.dialect.name == "postgresql":
+                # INV and PO load concurrently; serialize additive DDL across workers.
+                await connection.execute(text("SELECT pg_advisory_xact_lock(8265071701)"))
+            await connection.run_sync(
+                lambda sync: ProcessingDocumentTemplate.__table__.create(sync, checkfirst=True)
+            )
+        return await session.get(ProcessingDocumentTemplate, kind)
+
+
+@router.get("/document-templates/{kind}", summary="Load template with isolated storage initialization")
 async def read_template(kind: Literal["INV", "PO"], session: AsyncSession = Depends(get_db_marketplace_erp)):
-    row = await session.get(ProcessingDocumentTemplate, kind)
+    row = await template_row(session, kind)
     return {"kind": kind, "version": row.version if row else 0,
             "blocks": json.loads(row.payload_json) if row else None}
 
@@ -66,7 +92,7 @@ async def read_template(kind: Literal["INV", "PO"], session: AsyncSession = Depe
 @router.put("/document-templates/{kind}")
 async def save_template(kind: Literal["INV", "PO"], payload: TemplateInput,
                         session: AsyncSession = Depends(get_db_marketplace_erp)):
-    current = await session.get(ProcessingDocumentTemplate, kind)
+    current = await template_row(session, kind)
     if (current and current.version != payload.version) or (not current and payload.version):
         raise HTTPException(409, "Desain telah berubah. Muat ulang sebelum menyimpan.")
     serialized = json.dumps([block.model_dump(mode="json") for block in payload.blocks])
