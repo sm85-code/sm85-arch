@@ -681,3 +681,30 @@ async def test_paint_color_master_and_structured_tariff(client):
         app.dependency_overrides[get_current_user_marketplace_erp] = actor
         assert (await http.get("/processing/paint-colors")).status_code == 403
         assert (await http.put("/processing/paint-colors/no", json=color)).status_code == 403
+
+
+@pytest.mark.asyncio
+async def test_document_templates_version_scope_and_validation(client):
+    http, app, factory = client
+    assert (await http.get('/processing/document-templates/INV')).json() == {'kind': 'INV', 'version': 0, 'blocks': None}
+    block = {'id': 'title', 'kind': 'text', 'x': 40, 'y': 40, 'width': 300, 'height': 60,
+             'text': 'INVOICE {{nomor_dokumen}}', 'font_size': 24}
+    body = {'version': 0, 'blocks': [block]}
+    assert (await http.put('/processing/document-templates/INV', json=body)).status_code == 200
+    assert (await http.get('/processing/document-templates/PO')).json()['blocks'] is None
+    assert (await http.put('/processing/document-templates/INV', json=body)).status_code == 409
+    saved = (await http.get('/processing/document-templates/INV')).json()
+    assert saved['version'] == 1 and saved['blocks'][0]['text'] == block['text']
+    assert (await http.put('/processing/document-templates/INV', json={'version': 1, 'blocks': [{**block, 'x': 80}]})).status_code == 200
+    assert (await http.get('/processing/document-templates/INV')).json()['blocks'][0]['x'] == 80
+    for blocks in [[block, block], [{**block, 'x': 790}], [{**block, 'image_url': 'javascript:alert(1)'}]]:
+        assert (await http.put('/processing/document-templates/PO', json={'version': 0, 'blocks': blocks})).status_code == 422
+    assert (await http.get('/processing/document-templates/OTHER')).status_code == 422
+    async with factory() as session:
+        assert (await session.get(Pesanan, 'order1')).status == 'to_ship'
+    for role in ('owner', 'staff'):
+        async def actor():
+            return SimpleNamespace(id='other', role=role)
+        app.dependency_overrides[get_current_user_marketplace_erp] = actor
+        assert (await http.get('/processing/document-templates/INV')).status_code == 403
+        assert (await http.put('/processing/document-templates/INV', json=body)).status_code == 403
