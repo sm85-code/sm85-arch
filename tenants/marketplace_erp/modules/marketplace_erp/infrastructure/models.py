@@ -863,6 +863,15 @@ class ProcessingPrice(MarketplaceErpBase):
     version: Mapped[int] = mapped_column(Integer, nullable=False, default=1)
 
 
+class ProcessingPaintColor(MarketplaceErpBase):
+    """Admin-managed color names; historical order snapshots remain unchanged."""
+    __tablename__ = "mpe_processing_paint_color"
+    id: Mapped[str] = mapped_column(String(80), primary_key=True)
+    name: Mapped[str] = mapped_column(String(200), nullable=False)
+    normalized_name: Mapped[str] = mapped_column(String(200), nullable=False, unique=True)
+    version: Mapped[int] = mapped_column(Integer, nullable=False, default=1)
+
+
 class ProcessingJob(MarketplaceErpBase):
     """One internal work item, never writes marketplace orders/stock/accounting."""
     __tablename__ = "mpe_processing_job"

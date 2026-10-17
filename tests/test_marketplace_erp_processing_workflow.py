@@ -648,3 +648,36 @@ async def test_supplier_catalog_connection_prices_stock_snapshots_and_manual_cat
         json={"version": job["version"], "packing_type": "kayu", "packing_price": "27500"},
     )
     assert response.status_code == 200, response.text
+
+
+@pytest.mark.asyncio
+async def test_paint_color_master_and_structured_tariff(client):
+    http, app, _ = client
+    color = {"version": 0, "name": "  Biru   Laut "}
+    assert (await http.put("/processing/paint-colors/c1", json=color)).status_code == 200
+    assert (await http.get("/processing/paint-colors")).json()["items"] == [
+        {"id": "c1", "name": "Biru Laut", "version": 1}
+    ]
+    assert (await http.put("/processing/paint-colors/c2", json={"version": 0, "name": "biru laut"})).status_code == 409
+    assert (await http.put("/processing/paint-colors/c1", json=color)).status_code == 409
+    for node_id, kind, parent, code in [("cat", "kategori", "", "AZF"), ("product", "produk", "cat", "1R.10"), ("model", "model", "product", "RPL")]:
+        assert (await http.put(f"/processing/production-structure/{node_id}", json={
+            "version": 0, "kind": kind, "parent_id": parent, "code": code, "name": node_id
+        })).status_code == 200
+    source = {"version": 0, "kind": "produksi", "produk": "product", "structure_model_id": "model", "ukuran": "150x200", "harga": "100000"}
+    assert (await http.put("/processing/prices/structured", json=source)).status_code == 200
+    paint = {"version": 0, "kind": "pengecatan", "produk": "Forged", "sku": "wrong", "ukuran": "wrong", "warna": "wrong", "color_id": "c1", "production_price_id": "structured", "harga": "30000"}
+    assert (await http.put("/processing/prices/paint", json=paint)).status_code == 200
+    saved = next(p for p in (await http.get("/processing/prices")).json()["items"] if p["id"] == "paint")
+    assert (saved["produk"], saved["ukuran"], saved["sku"], saved["warna"]) == ("product", "150x200", "AZF.1R.10.RPL.150x200", "Biru Laut")
+    assert (await http.put("/processing/prices/bad", json={**paint, "production_price_id": "p1"})).status_code == 422
+    assert (await http.put("/processing/prices/bad", json={**paint, "color_id": "missing"})).status_code == 422
+    assert (await http.put("/processing/paint-colors/c1", json={"version": 1, "name": "Biru Tua"})).status_code == 200
+    saved = next(p for p in (await http.get("/processing/prices")).json()["items"] if p["id"] == "paint")
+    assert saved["warna"] == "Biru Laut"
+    for role in ("owner", "staff"):
+        async def actor():
+            return SimpleNamespace(id="other", role=role)
+        app.dependency_overrides[get_current_user_marketplace_erp] = actor
+        assert (await http.get("/processing/paint-colors")).status_code == 403
+        assert (await http.put("/processing/paint-colors/no", json=color)).status_code == 403

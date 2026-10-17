@@ -23,6 +23,7 @@ from tenants.marketplace_erp.modules.marketplace_erp.infrastructure.models impor
     ProcessingCatalog,
     ProcessingJob,
     ProcessingPrice,
+    ProcessingPaintColor,
     ProcessingProductionStructure,
     ProcessingOrderSequence,
     ProcessingParty,
@@ -46,6 +47,8 @@ class PriceInput(Strict):
     packing_type: Literal["biasa", "kayu"] | None = None
     structure_model_id: str | None = Field(default=None, max_length=80)
     warna: str | None = Field(default=None, max_length=200)
+    color_id: str | None = Field(default=None, max_length=80)
+    production_price_id: str | None = Field(default=None, max_length=80)
     sku: str = Field(default="", max_length=200)
     ukuran: str = Field(default="", max_length=100)
     harga: Money
@@ -58,6 +61,43 @@ class StructureInput(Strict):
     parent_id: str = Field(default="", max_length=80)
     code: str = Field(min_length=1, max_length=80)
     name: str = Field(min_length=1, max_length=200)
+
+
+class ColorInput(Strict):
+    version: int = Field(ge=0)
+    name: str = Field(min_length=1, max_length=200)
+
+
+@router.get("/paint-colors")
+async def paint_colors(session: AsyncSession = Depends(get_db_marketplace_erp)):
+    return {"items": [dict(id=r.id, name=r.name, version=r.version) for r in
+                      (await session.scalars(select(ProcessingPaintColor).order_by(ProcessingPaintColor.name))).all()]}
+
+
+@router.put("/paint-colors/{color_id}")
+async def save_paint_color(color_id: str, payload: ColorInput, session: AsyncSession = Depends(get_db_marketplace_erp)):
+    if not color_id or len(color_id) > 80:
+        raise HTTPException(422, "ID warna tidak valid")
+    name = " ".join(payload.name.split())
+    if not name or name.casefold() == "polos / tanpa cat":
+        raise HTTPException(422, "Isi nama warna cat; tanpa cat dipilih pada pemetaan")
+    current = await session.get(ProcessingPaintColor, color_id)
+    if (current and current.version != payload.version) or (not current and payload.version):
+        raise HTTPException(409, "Warna telah berubah. Muat ulang.")
+    try:
+        if current:
+            result = await session.execute(update(ProcessingPaintColor).where(
+                ProcessingPaintColor.id == color_id, ProcessingPaintColor.version == payload.version
+            ).values(name=name, normalized_name=name.casefold(), version=payload.version + 1))
+            if result.rowcount != 1:
+                raise HTTPException(409, "Warna baru saja berubah. Muat ulang.")
+        else:
+            session.add(ProcessingPaintColor(id=color_id, name=name, normalized_name=name.casefold(), version=1))
+        await session.commit()
+    except IntegrityError:
+        await session.rollback()
+        raise HTTPException(409, "Nama warna sudah ada")
+    return {"id": color_id, "tersimpan": True}
 
 
 async def structure_nodes(session):
@@ -187,6 +227,21 @@ async def save_price(price_id: str, payload: PriceInput, session: AsyncSession =
     if not current and payload.version != 0:
         raise HTTPException(409, "Harga tidak ditemukan; muat ulang")
     value = dict(current or {}, **payload.model_dump(mode="json", exclude={"version"}, exclude_none=True), id=price_id)
+    if payload.kind == "pengecatan":
+        if payload.production_price_id:
+            source = next((p for p in await price_list(session) if p["id"] == payload.production_price_id
+                           and p["kind"] == "produksi" and p.get("structure_model_id")), None)
+            if not source:
+                raise HTTPException(422, "Pilih produk produksi yang sudah disusun strukturnya")
+            for field in ("produk", "sku", "ukuran", "jenis", "model", "model_kode"):
+                value[field] = source.get(field, "")
+        if payload.color_id:
+            color = await session.get(ProcessingPaintColor, payload.color_id)
+            if not color:
+                raise HTTPException(422, "Warna tidak ditemukan; pilih kembali")
+            value["warna"] = color.name
+    elif payload.production_price_id or payload.color_id:
+        raise HTTPException(422, "Produk pengecatan dan warna hanya untuk tarif pengecatan")
     model_id = value.get("structure_model_id")
     if model_id:
         if payload.kind != "produksi":
