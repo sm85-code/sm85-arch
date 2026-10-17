@@ -154,6 +154,7 @@ async def production_structure(session: AsyncSession = Depends(get_db_marketplac
 async def save_structure(
     node_id: str, payload: StructureInput, session: AsyncSession = Depends(get_db_marketplace_erp)
 ):
+    await lock_prices(session)
     if not node_id or len(node_id) > 80:
         raise HTTPException(422, "ID struktur tidak valid")
     code = payload.code.upper()
@@ -368,6 +369,79 @@ async def save_price(price_id: str, payload: PriceInput, session: AsyncSession =
         await session.rollback()
         raise HTTPException(409, "Harga berubah atau ukuran pada model ini sudah ada; muat ulang")
     return {"tersimpan": True}
+
+
+class BulkProductionItem(Strict):
+    id: str = Field(min_length=1, max_length=80)
+    version: int = Field(ge=0)
+    ukuran: str = Field(min_length=1, max_length=100)
+    harga: Money
+
+
+class BulkProductionInput(Strict):
+    structure_model_id: str = Field(min_length=1, max_length=80)
+    items: list[BulkProductionItem] = Field(min_length=1, max_length=100)
+
+
+@router.post("/prices/bulk-structure")
+async def bulk_production_structure(payload: BulkProductionInput,
+                                    session: AsyncSession = Depends(get_db_marketplace_erp)):
+    await lock_prices(session)
+    ids = {item.id for item in payload.items}
+    if len(ids) != len(payload.items):
+        raise HTTPException(422, "Produk yang sama dipilih lebih dari sekali")
+    all_prices = {p["id"]: p for p in await price_list(session, include_inactive=True)}
+    nodes = await structure_nodes(session)
+    occupied = {(p.get("structure_model_id"), p["ukuran"].casefold()) for id_, p in all_prices.items()
+                if id_ not in ids and p.get("structure_model_id")}
+    occupied_skus = {p.get("sku", "").casefold() for id_, p in all_prices.items()
+                     if id_ not in ids and p["kind"] == "produksi" and p.get("sku")}
+    prepared = []
+    for index, item in enumerate(payload.items, 1):
+        current = all_prices.get(item.id)
+        if not current or current["kind"] != "produksi" or not current.get("active", True):
+            raise HTTPException(409, f"Baris {index}: produk tidak tersedia atau nonaktif. Muat ulang katalog.")
+        if current["version"] != item.version:
+            raise HTTPException(409, f"Baris {index}: produk sudah berubah. Muat ulang katalog.")
+        try:
+            fields = structure_fields(nodes, payload.structure_model_id, item.ukuran)
+        except HTTPException as exc:
+            raise HTTPException(exc.status_code, f"Baris {index}: {exc.detail}") from exc
+        key = (payload.structure_model_id, fields["ukuran"].casefold())
+        if key in occupied or fields["sku"].casefold() in occupied_skus:
+            raise HTTPException(409, f"Baris {index}: ukuran {fields['ukuran']} sudah digunakan pada model ini.")
+        occupied.add(key)
+        occupied_skus.add(fields["sku"].casefold())
+        value = dict(current, **fields)
+        value["harga"] = str(item.harga)
+        value.pop("version", None)
+        prepared.append((item, value))
+    try:
+        # Rebuild selected variant reservations together, allowing sizes to be swapped in one save.
+        await session.execute(delete(ProcessingProductionStructure).where(
+            ProcessingProductionStructure.id.in_(ids), ProcessingProductionStructure.kind == "varian"
+        ))
+        for item, value in prepared:
+            if item.version:
+                result = await session.execute(update(ProcessingPrice).where(
+                    ProcessingPrice.id == item.id, ProcessingPrice.version == item.version
+                ).values(payload_json=json.dumps(value), version=item.version + 1))
+                if result.rowcount != 1:
+                    raise HTTPException(409, "Produk baru saja berubah. Tidak ada perubahan yang disimpan.")
+            else:
+                session.add(ProcessingPrice(id=item.id, kind="produksi", payload_json=json.dumps(value), version=1))
+            session.add(ProcessingProductionStructure(
+                id=item.id, kind="varian", parent_key=payload.structure_model_id,
+                code=value["ukuran"].casefold(), name=value["ukuran"], version=1
+            ))
+        await session.commit()
+    except IntegrityError:
+        await session.rollback()
+        raise HTTPException(409, "Ukuran/SKU berbenturan atau produk berubah. Tidak ada perubahan yang disimpan.")
+    except HTTPException:
+        await session.rollback()
+        raise
+    return {"tersimpan": True, "count": len(prepared)}
 
 
 def processed():

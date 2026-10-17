@@ -239,6 +239,7 @@ async def test_all_workflow_endpoints_are_admin_only(client, role):
     app.dependency_overrides[get_db_marketplace_erp] = forbidden_db
     for method, path in [
         ("GET", "/prices"),
+        ("POST", "/prices/bulk-structure"),
         ("DELETE", "/prices/p1?version=0"),
         ("POST", "/prices/p1/activate?version=1"),
         ("PUT", "/parties/tukang/t1"),
@@ -851,3 +852,87 @@ async def test_deleted_variant_releases_size_and_related_tariff_prevents_deletio
     assert (await http.delete('/processing/prices/new?version=1')).json()['action'] == 'deactivated'
     assert (await http.put('/processing/prices/paint', json={**paint, 'version': 1})).status_code == 200
     assert (await http.put('/processing/prices/another-paint', json=paint)).status_code == 422
+
+
+async def bulk_fixture(http):
+    for id_, kind, parent, code in [('bc', 'kategori', '', 'AZF'), ('bp', 'produk', 'bc', 'PL20'), ('bm', 'model', 'bp', 'RBK')]:
+        result = await http.put('/processing/production-structure/' + id_, json={
+            'version': 0, 'kind': kind, 'parent_id': parent, 'code': code, 'name': code
+        })
+        assert result.status_code == 200, result.text
+    result = await http.put('/processing/prices/p2', json={
+        'version': 0, 'kind': 'produksi', 'produk': 'Produk lama 2', 'ukuran': '80x200', 'harga': '250000', 'catatan': 'Tetap utuh'
+    })
+    assert result.status_code == 200
+    return {'structure_model_id': 'bm', 'items': [
+        {'id': 'p1', 'version': 0, 'ukuran': '60 × 20 × 200', 'harga': '150000'},
+        {'id': 'p2', 'version': 1, 'ukuran': '80x20x200', 'harga': '250000'},
+    ]}
+
+
+@pytest.mark.asyncio
+async def test_bulk_structure_preserves_order_snapshots_and_allows_size_swap(client):
+    http, _, _ = client
+    payload = await bulk_fixture(http)
+    await http.post('/processing/jobs/manual', json={
+        'customer': 'Reseller', 'ordered_at': '2026-10-16T09:00:00+07:00',
+        'deadline': '2026-10-20T17:00:00+07:00', 'items': [{'produk': 'Rak', 'qty': 1}]
+    })
+    job = await save(http, (await rows(http))[0], color='Polos / Tanpa Cat')
+    result = await http.post('/processing/prices/bulk-structure', json=payload)
+    assert result.status_code == 200, result.text
+    assert result.json()['count'] == 2
+    prices = {p['id']: p for p in (await http.get('/processing/prices')).json()['items']}
+    assert prices['p1']['sku'] == 'AZF.PL20.RBK.60x20x200'
+    assert prices['p2']['sku'] == 'AZF.PL20.RBK.80x20x200'
+    assert prices['p1']['harga'] == '150000' and prices['p2']['harga'] == '250000'
+    assert prices['p2']['catatan'] == 'Tetap utuh'
+    assert (await rows(http))[0] == job
+    # Swap existing sizes atomically instead of colliding with the other selected row.
+    swapped = {'structure_model_id': 'bm', 'items': [
+        {'id': 'p1', 'version': 1, 'ukuran': '80x20x200', 'harga': '175000'},
+        {'id': 'p2', 'version': 2, 'ukuran': '60x20x200', 'harga': '250000'},
+    ]}
+    result = await http.post('/processing/prices/bulk-structure', json=swapped)
+    assert result.status_code == 200, result.text
+    prices = {p['id']: p for p in (await http.get('/processing/prices')).json()['items']}
+    assert prices['p1']['ukuran'] == '80x20x200' and prices['p1']['harga'] == '175000'
+    assert prices['p2']['ukuran'] == '60x20x200'
+    assert (await rows(http))[0] == job
+
+
+@pytest.mark.asyncio
+async def test_bulk_structure_rejects_conflicts_stale_invalid_and_inactive_without_partial_save(client):
+    http, _, _ = client
+    payload = await bulk_fixture(http)
+    before = (await http.get('/processing/prices?include_inactive=true')).json()
+    duplicate = {**payload, 'items': [payload['items'][0], {**payload['items'][1], 'ukuran': '60X20X200'}]}
+    assert (await http.post('/processing/prices/bulk-structure', json=duplicate)).status_code == 409
+    stale = {**payload, 'items': [payload['items'][0], {**payload['items'][1], 'version': 99}]}
+    assert (await http.post('/processing/prices/bulk-structure', json=stale)).status_code == 409
+    invalid = {**payload, 'items': [payload['items'][0], {**payload['items'][1], 'ukuran': '???'}]}
+    assert (await http.post('/processing/prices/bulk-structure', json=invalid)).status_code == 422
+    same_id = {**payload, 'items': [payload['items'][0], payload['items'][0]]}
+    assert (await http.post('/processing/prices/bulk-structure', json=same_id)).status_code == 422
+    assert (await http.get('/processing/prices?include_inactive=true')).json() == before
+    assert (await http.put('/processing/prices/occupied', json={
+        'version': 0, 'kind': 'produksi', 'produk': 'Bentrok', 'harga': '1', 'structure_model_id': 'bm', 'ukuran': '60x20x200'
+    })).status_code == 200
+    assert (await http.post('/processing/prices/bulk-structure', json=payload)).status_code == 409
+    # Deleted catalog products cannot be silently recreated by a stale bulk form.
+    assert (await http.delete('/processing/prices/p2?version=1')).status_code == 200
+    assert (await http.post('/processing/prices/bulk-structure', json={**payload, 'items': [payload['items'][1]]})).status_code == 409
+
+
+@pytest.mark.asyncio
+async def test_bulk_structure_rolls_back_database_conflict(client):
+    http, _, _ = client
+    payload = await bulk_fixture(http)
+    # Imported IDs may collide with master structure IDs created independently.
+    assert (await http.put('/processing/production-structure/p1', json={
+        'version': 0, 'kind': 'kategori', 'code': 'OTHER', 'name': 'Other'
+    })).status_code == 200
+    before = (await http.get('/processing/prices')).json()
+    result = await http.post('/processing/prices/bulk-structure', json=payload)
+    assert result.status_code == 409, result.text
+    assert (await http.get('/processing/prices')).json() == before
