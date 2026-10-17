@@ -239,6 +239,8 @@ async def test_all_workflow_endpoints_are_admin_only(client, role):
     app.dependency_overrides[get_db_marketplace_erp] = forbidden_db
     for method, path in [
         ("GET", "/prices"),
+        ("DELETE", "/prices/p1?version=0"),
+        ("POST", "/prices/p1/activate?version=1"),
         ("PUT", "/parties/tukang/t1"),
         ("PUT", "/prices/p1"),
         ("GET", "/jobs"),
@@ -774,3 +776,78 @@ async def test_canvas_layer_metadata_and_embedded_logo(client):
     assert saved["image_url"] == image
     for invalid in ["data:image/svg+xml;base64,PHN2Zz4=", "data:image/png;base64,PGh0bWw+", "data:image/png;base64,???"]:
         assert (await http.put("/processing/document-templates/PO", json={"version": 0, "blocks": [{**block, "image_url": invalid}]})).status_code == 422
+
+
+@pytest.mark.asyncio
+async def test_catalog_removal_does_not_revive_import_and_checks_version(client):
+    http, _, factory = client
+    from tenants.marketplace_erp.modules.marketplace_erp.infrastructure.models import ProcessingPrice
+
+    response = await http.delete('/processing/prices/p1?version=0')
+    assert response.status_code == 200, response.text
+    assert response.json()['action'] == 'deleted'
+    assert (await http.get('/processing/prices?include_inactive=true')).json()['items'] == []
+    # The immutable source remains, while its override prevents accidental resurrection.
+    async with factory() as session:
+        original = await session.get(ProcessingCatalog, 'global')
+        assert json.loads(original.payload_json)['harga_produksi'][0]['id'] == 'p1'
+        assert json.loads((await session.get(ProcessingPrice, 'p1')).payload_json)['deleted']
+    assert (await http.put('/processing/prices/p1', json={
+        'version': 0, 'kind': 'produksi', 'produk': 'Rak', 'harga': '1'
+    })).status_code == 409
+    assert (await http.post('/processing/prices/p1/activate?version=1')).status_code == 404
+    payload = {'version': 0, 'kind': 'non_kayu', 'produk': 'Produk supplier', 'harga': '50000'}
+    assert (await http.put('/processing/prices/manual', json=payload)).status_code == 200
+    assert (await http.delete('/processing/prices/manual?version=0')).status_code == 409
+    assert (await http.delete('/processing/prices/manual?version=1')).json()['action'] == 'deleted'
+
+
+@pytest.mark.asyncio
+async def test_used_catalog_deactivates_and_preserves_history_but_blocks_new_mapping(client):
+    http, _, _ = client
+    assert (await http.post('/processing/jobs/manual', json={
+        'customer': 'Reseller A', 'ordered_at': '2026-10-16T09:00:00+07:00',
+        'deadline': '2026-10-20T17:00:00+07:00', 'items': [{'produk': 'Rak', 'qty': 2}]
+    })).status_code == 200
+    job = await save(http, (await rows(http))[0], color='Polos / Tanpa Cat')
+    response = await http.delete('/processing/prices/p1?version=0')
+    assert response.json()['action'] == 'deactivated'
+    assert (await http.get('/processing/prices')).json()['items'] == []
+    inactive = (await http.get('/processing/prices?include_inactive=true')).json()['items'][0]
+    assert not inactive['active'] and inactive['in_use']
+    assert (await rows(http))[0] == job
+    # Editing the old assignment retains both its selected catalog ID and original cost.
+    updated = await save(http, job, color='Polos / Tanpa Cat')
+    assert updated['production_price'] == job['production_price']
+    assert updated['production_reference'] == job['production_reference']
+    assert (await http.post('/processing/jobs/manual', json={
+        'customer': 'Reseller B', 'ordered_at': '2026-10-16T09:00:00+07:00',
+        'deadline': '2026-10-20T17:00:00+07:00', 'items': [{'produk': 'Baru', 'qty': 1}]
+    })).status_code == 200
+    new = next(r for r in await rows(http) if r['produk'] == 'Baru')
+    response = await http.put('/processing/jobs/' + new['id'], json={
+        'version': new['version'], 'party_id': 't1', 'price_id': 'p1', 'color': 'Polos / Tanpa Cat'
+    })
+    assert response.status_code == 422
+    assert (await http.post('/processing/prices/p1/activate?version=0')).status_code == 409
+    assert (await http.post('/processing/prices/p1/activate?version=1')).json()['action'] == 'activated'
+    assert (await http.get('/processing/prices')).json()['items'][0]['active']
+
+
+@pytest.mark.asyncio
+async def test_deleted_variant_releases_size_and_related_tariff_prevents_deletion(client):
+    http, _, _ = client
+    for id_, kind, parent, code in [('c', 'kategori', '', 'AZF'), ('p', 'produk', 'c', 'RK'), ('m', 'model', 'p', 'ORI')]:
+        response = await http.put('/processing/production-structure/' + id_, json={
+            'version': 0, 'kind': kind, 'parent_id': parent, 'code': code, 'name': code
+        })
+        assert response.status_code == 200, response.text
+    product = {'version': 0, 'kind': 'produksi', 'produk': 'Rak', 'structure_model_id': 'm', 'ukuran': '100x200', 'harga': '150000'}
+    assert (await http.put('/processing/prices/old', json=product)).status_code == 200
+    assert (await http.delete('/processing/prices/old?version=1')).json()['action'] == 'deleted'
+    assert (await http.put('/processing/prices/new', json=product)).status_code == 200
+    paint = {'version': 0, 'kind': 'pengecatan', 'produk': 'Rak', 'production_price_id': 'new', 'warna': 'Putih', 'harga': '20000'}
+    assert (await http.put('/processing/prices/paint', json=paint)).status_code == 200
+    assert (await http.delete('/processing/prices/new?version=1')).json()['action'] == 'deactivated'
+    assert (await http.put('/processing/prices/paint', json={**paint, 'version': 1})).status_code == 200
+    assert (await http.put('/processing/prices/another-paint', json=paint)).status_code == 422
