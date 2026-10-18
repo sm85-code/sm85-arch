@@ -887,3 +887,39 @@ async def test_missing_pending_pagination_verified_by_total(monkeypatch, total, 
     rows, verified = await pending.pending_pages(None, SimpleNamespace(id='shop'), date(2026, 10, 18))
     assert set(rows) == {'A', 'B'}
     assert verified is complete
+
+
+@pytest.mark.asyncio
+async def test_fast_escrow_read_applies_only_to_bumi_tani(session, monkeypatch):
+    from unittest.mock import AsyncMock
+    from tenants.marketplace_erp.modules.marketplace_erp.application import financial_pending as pending
+    from tenants.marketplace_erp.modules.marketplace_erp.application import financial_fast_escrow as fast
+
+    session.add_all([
+        AkunMarketplace(id='fast-shop', platform='shopee', nama_toko='BUMI TANI IND'),
+        AkunMarketplace(id='ordinary-shop', platform='shopee', nama_toko='CAHAYA LANGIT IND'),
+        Pesanan(akun_id='fast-shop', platform='shopee', id_eksternal='FASTORDER', status='completed', total=999,
+                tanggal_kirim=datetime(2026, 9, 30, 12, tzinfo=f.WIB)),
+        Pesanan(akun_id='ordinary-shop', platform='shopee', id_eksternal='NORMALORDER', status='shipped', total=999,
+                tanggal_kirim=datetime(2026, 9, 30, 12, tzinfo=f.WIB)),
+    ])
+    await session.commit()
+    monkeypatch.setattr(pending, 'pending_pages', AsyncMock(side_effect=[
+        ({'FASTORDER': {'estimated_escrow_amount': '20'}}, True),
+        ({'NORMALORDER': {'estimated_escrow_amount': '20'}}, True),
+    ]))
+    monkeypatch.setattr(pending.erp_shopee, 'daftar_escrow', AsyncMock(return_value=[]))
+    wallet = AsyncMock(return_value=[dict(at=datetime(2026, 10, 6, 17, tzinfo=f.WIB),
+                     amount=f.money(80), kind='advance', orders={'FASTORDER'})])
+    monkeypatch.setattr(fast, 'wallet_income', wallet)
+    result = await pending.weekly_pending_receivables(session, 'fast-shop', '2026-10', 3,
+             sampai=date(2026, 10, 13), as_of=datetime(2026, 10, 16, 12, tzinfo=f.WIB))
+    assert result['dana_cepat'] is True
+    assert f.money(result['minggu'][0]['piutang']) == 100
+    assert f.money(result['minggu'][1]['piutang_lama']) == 20
+    assert f.money(result['minggu'][1]['dana_cair']) == 80
+    normal = await pending.weekly_pending_receivables(session, 'ordinary-shop', '2026-10', 3,
+             sampai=date(2026, 10, 13), as_of=datetime(2026, 10, 16, 12, tzinfo=f.WIB))
+    assert 'dana_cepat' not in normal
+    assert f.money(normal['minggu'][0]['piutang']) == 20
+    assert wallet.await_count == 1
