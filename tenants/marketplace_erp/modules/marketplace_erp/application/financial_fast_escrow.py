@@ -95,20 +95,19 @@ def fast_balances(shop, pending, complete, releases, shipping, not_shipped, even
         return (cohorts.pop(), None) if len(cohorts) == 1 else (None, 'beda_minggu_kirim')
 
     diagnosis = []
-    advance_times = sorted(e['at'] for e in events if e['kind'] == 'advance')
 
     def aware(stamp):
         return stamp.replace(tzinfo=WIB) if stamp.tzinfo is None else stamp.astimezone(WIB)
 
     def explain(event, reason):
-        # Read-only aid for admins. Final releases hint at escrow/repayment movements; an advance is paid
-        # in a daily batch before release, so its candidates are the orders picked up since the previous batch.
+        # Read-only aid for admins. Final releases hint at escrow/repayment movements. A Dana Cepat advance is paid
+        # at 17:00 WIB for orders whose waybill was confirmed between 16:00 the day before and 16:00 that day.
         entry = dict(waktu=event['at'].isoformat(), jenis=event['kind'], nominal=str(event['amount']),
                      pesanan=sorted(event['orders']), alasan=reason)
         if event['kind'] == 'advance':
-            earlier = [t for t in advance_times if t < event['at']]
-            window_start = earlier[-1] if earlier else event['at'] - timedelta(days=1)
-            candidates = [sn for sn, stamp in shipping.items() if window_start < aware(stamp) <= event['at']]
+            window_end = datetime.combine(event['at'].date(), time(16), WIB)
+            window_start = window_end - timedelta(days=1)
+            candidates = [sn for sn, stamp in shipping.items() if window_start < aware(stamp) <= window_end]
             pending_sum = sum((money(pending[sn].get('estimated_escrow_amount') or '0') for sn in candidates if sn in pending), ZERO)
             cohorts = {}
             for sn in candidates:
