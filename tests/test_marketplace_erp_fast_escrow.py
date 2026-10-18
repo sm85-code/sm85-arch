@@ -112,6 +112,7 @@ def test_advance_that_does_not_reconcile_stays_unmapped_with_expected_amount():
     assert result['mutasi_tidak_terpetakan'] == 1
     candidate = result['mutasi_diagnosa'][0]['kandidat']
     assert candidate['jumlah'] == 1 and candidate['diharapkan'] == '10000.00' and candidate['cocok'] is False
+    assert [o['order_sn'] for o in candidate['pesanan_3_hari']] == ['A']
 
 
 @pytest.mark.asyncio
