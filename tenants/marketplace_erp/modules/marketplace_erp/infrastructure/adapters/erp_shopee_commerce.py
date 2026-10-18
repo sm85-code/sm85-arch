@@ -103,7 +103,7 @@ async def product_details(session, akun, item_id, kind):
     return row
 
 
-async def income(session, akun, start, end, status, cursor, size):
+async def income(session, akun, start, end, status, cursor, size, *, tolerate_unlisted=False):
     from ...application.management_schemas import today
     if start > end or end > today():
         raise HTTPException(422, "Periode pendapatan tidak valid")
@@ -152,6 +152,13 @@ async def income(session, akun, start, end, status, cursor, size):
         if pending is not None and Decimal(str(pending)) == 0:
             return {"items": [], "next_cursor": "", "ada_lagi": False, "pagination_known": True,
                     "warnings": [], "request_id": data.get("request_id")}
+        if tolerate_unlisted and pending is not None and Decimal(str(pending)) > 0:
+            # The Menunggu cair menu only lists orders. Pending money Shopee cannot itemize is shown as a note, not an
+            # error; the financial report keeps the strict behavior because it must account for every rupiah.
+            amount = f"{int(Decimal(str(pending))):,}".replace(",", ".")
+            return {"items": [], "next_cursor": "", "ada_lagi": False, "pagination_known": True,
+                    "warnings": [f"Shopee mencatat dana menunggu cair sekitar Rp {amount} tanpa rincian pesanan (daftar kosong)."],
+                    "request_id": data.get("request_id")}
 
     def reject(reason):
         # Report fixed paths and schema-like wrapper field names only. Never
