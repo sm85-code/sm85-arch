@@ -213,7 +213,7 @@ async def weekly_shipping_receivables(session, periode, jumlah_kolom=None, *, sa
                                             ("piutang_lama", "piutang_lama_tidak_pasti"),
                                             ("cair_minggu_lalu", "cair_tidak_terpetakan"))}
             weeks.append(dict(**amounts, **counts))
-        rows.append(dict(id=shop_key(name), nama=name, akun_ditemukan=bool(matched), minggu=weeks))
+        rows.append(dict(id=shop_key(name), nama=name, akun_ids=matched, akun_ditemukan=bool(matched), minggu=weeks))
     return dict(periode=periode, sampai=end.isoformat(), minggu=[dict(w, cutoff=cutoffs[i].isoformat(),
                 hingga=(cutoffs[i] - timedelta(microseconds=1)).date().isoformat())
                 for i, w in enumerate(periods)], toko=rows)

@@ -240,6 +240,7 @@ async def test_every_report_endpoint_denies_non_admin_before_db_access(role):
             ("GET", "/sumber?tanggal=2026-10-06"),
             ("GET", "/pemasukan-shopee?periode=2026-10"),
             ("GET", "/piutang-pengiriman-shopee?periode=2026-10"),
+            ("GET", "/piutang-pengiriman-shopee/shop?periode=2026-10"),
             ("GET", "/saldo-penjual-shopee?periode=2026-10"),
             ("GET", "/saldo-wallet-shopee/shop?tanggal=2026-10-04"),
             ("GET", "/riwayat"),
@@ -783,3 +784,70 @@ async def test_shipping_receivable_incomplete_evidence_is_not_zero_and_accounts_
     assert b['minggu'][1]['piutang_lama'] == '100.00' and b['minggu'][1]['cair_minggu_lalu'] == '0'
     assert result['minggu'][1]['hingga'] == '2026-10-08'
     assert b['minggu'][2]['piutang'] is None
+
+
+@pytest.mark.asyncio
+async def test_live_pending_uses_estimate_even_when_received_or_completed(session, monkeypatch):
+    from unittest.mock import AsyncMock
+    from tenants.marketplace_erp.modules.marketplace_erp.application import financial_pending as pending
+
+    session.add(AkunMarketplace(id='pending-shop', platform='shopee', nama_toko='CAHAYA LANGIT IND'))
+    session.add_all([
+        Pesanan(akun_id='pending-shop', platform='shopee', id_eksternal='RECEIVED',
+                status='completed', status_marketplace='COMPLETED', total=999999,
+                tanggal_kirim=datetime(2026, 10, 5, 10, tzinfo=f.WIB)),
+        Pesanan(akun_id='pending-shop', platform='shopee', id_eksternal='RELEASED',
+                status='completed', total=888888,
+                tanggal_kirim=datetime(2026, 9, 29, 10, tzinfo=f.WIB)),
+    ])
+    await session.commit()
+    income = AsyncMock(side_effect=[
+        {'items': [{'order_sn': 'RECEIVED', 'estimated_escrow_amount': '120000'}],
+         'pagination_known': True, 'next_cursor': 'page2'},
+        {'items': [{'order_sn': 'NOTIMPORTED', 'estimated_escrow_amount': '50000'},
+                   {'order_sn': 'NOTSHIPPED', 'estimated_escrow_amount': '999999'}],
+         'pagination_known': True, 'next_cursor': ''},
+    ])
+    monkeypatch.setattr(pending.commerce, 'income', income)
+    details = AsyncMock(return_value={'items': [{'order_sn': 'NOTIMPORTED', 'pickup_done_time':
+                        int(datetime(2026, 10, 6, 10, tzinfo=f.WIB).timestamp())},
+                       {'order_sn': 'NOTSHIPPED', 'order_status': 'PROCESSED'}]})
+    monkeypatch.setattr(pending.commerce, 'income_orders', details)
+    monkeypatch.setattr(pending.erp_shopee, 'daftar_escrow', AsyncMock(return_value=[{
+        'order_sn': 'RELEASED', 'payout': '90000', 'dirilis': datetime(2026, 10, 6, 17, tzinfo=f.WIB),
+    }]))
+    result = await pending.weekly_pending_receivables(session, 'pending-shop', '2026-10', 4,
+             sampai=date(2026, 10, 13), as_of=datetime(2026, 10, 16, 12, tzinfo=f.WIB))
+    weeks = result['minggu']
+    assert weeks[0]['piutang'] == '90000.00'  # Net payout reconstructs historical unpaid balance.
+    assert weeks[1]['piutang'] == '170000.00'  # Estimates, never the gross ERP order total.
+    assert weeks[1]['cair_minggu_lalu'] == '90000.00'
+    assert weeks[2]['piutang_lama'] == '170000.00'  # Still unpaid despite COMPLETED / 2x24h elapsed.
+    assert weeks[2]['piutang_lama_tidak_pasti'] == 0
+    assert weeks[3]['piutang'] is None
+    assert result['halaman_lengkap'] is True
+    assert result['tanpa_tanggal_kirim'] == 0
+    assert income.call_args_list[1].args[-2] == 'page2'
+    assert set(details.call_args.args[-1]) == {'NOTIMPORTED', 'NOTSHIPPED'}
+    assert (await session.execute(select(Pesanan).where(Pesanan.id_eksternal == 'NOTIMPORTED'))).scalar_one_or_none() is None
+
+
+@pytest.mark.asyncio
+async def test_pending_partial_pages_and_missing_dates_are_explicit(session, monkeypatch):
+    from unittest.mock import AsyncMock
+    from tenants.marketplace_erp.modules.marketplace_erp.application import financial_pending as pending
+
+    session.add(AkunMarketplace(id='partial-pending', platform='shopee', nama_toko='RESTU BUMI IND'))
+    await session.commit()
+    monkeypatch.setattr(pending.commerce, 'income', AsyncMock(return_value={
+        'items': [{'order_sn': 'NODATE', 'estimated_escrow_amount': '100'}], 'pagination_known': False,
+    }))
+    monkeypatch.setattr(pending.commerce, 'income_orders', AsyncMock(return_value={'items': []}))
+    monkeypatch.setattr(pending.erp_shopee, 'daftar_escrow', AsyncMock(return_value=[]))
+    result = await pending.weekly_pending_receivables(session, 'partial-pending', '2026-10', 2,
+              as_of=datetime(2026, 10, 13, 12, tzinfo=f.WIB))
+    assert result['halaman_lengkap'] is False
+    assert result['tanpa_tanggal_kirim'] == 1
+    with pytest.raises(HTTPException) as exc:
+        await pending.weekly_pending_receivables(session, 'not-a-report-shop', '2026-10')
+    assert exc.value.status_code == 404
