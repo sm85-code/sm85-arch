@@ -82,12 +82,19 @@ def test_unmapped_movements_are_explained_with_nearest_releases():
     assert result['mutasi_diagnosa'][0]['rilis_terdekat'] == [dict(order_sn='R1', payout='75', selisih_menit=-60)]
 
 
-def test_advance_diagnosis_lists_orders_confirmed_in_the_16h_window():
-    result = balances([event(3, '30', 'advance', ()), event(6, '45', 'advance', ())],
-                      pending={'A': {'estimated_escrow_amount': '70'}, 'B': {'estimated_escrow_amount': '55'}},
+def test_advance_matching_the_50_percent_rule_is_attributed_to_its_cohort():
+    result = balances([event(6, '10200', 'advance', ())], pending={'A': {'estimated_escrow_amount': '10000'}},
+                      shipping={'A': stamp(5, 17)})
+    assert result['mutasi_tidak_terpetakan'] == 0
+    assert result['mutasi_diagnosa'] == []
+
+
+def test_advance_that_does_not_reconcile_stays_unmapped_with_expected_amount():
+    result = balances([event(6, '90000', 'advance', ())], pending={'A': {'estimated_escrow_amount': '10000'}},
                       shipping={'A': stamp(5, 17), 'B': stamp(2)})
-    last = result['mutasi_diagnosa'][-1]['kandidat']
-    assert last['jumlah'] == 1 and last['estimasi_pending'] == '70.00' and last['rasio'] == '0.391'
+    assert result['mutasi_tidak_terpetakan'] == 1
+    candidate = result['mutasi_diagnosa'][0]['kandidat']
+    assert candidate['jumlah'] == 1 and candidate['diharapkan'] == '10000.00' and candidate['cocok'] is False
 
 
 @pytest.mark.asyncio
