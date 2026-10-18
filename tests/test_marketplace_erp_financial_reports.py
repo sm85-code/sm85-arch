@@ -984,7 +984,7 @@ async def test_manual_sheet_round_trip_and_conflict(session):
     actor = SimpleNamespace(id="admin")
     assert await manual.muat(session, "2026-10") == {"version": 0, "lembar": {"sel": {}, "baris": [], "hapus": []}}
     sheet = manual.Lembar(
-        sel={"produk|2026-10-05": "125000.50", "c:abc|2026-10-05": "-30"},
+        sel={"produk|2026-10-05": "125000.50", "c:abc|2026-10-05": "-30", "shop:Pemasukan Toko [RISKA]|2026-10-05": "1"},
         baris=[{"id": "c:abc", "tabel": "pemasukan", "grup": "Penjualan dan jasa", "label": "Penjualan lain"}],
         hapus=["jasa_cat"],
     )
@@ -1002,6 +1002,8 @@ async def test_manual_sheet_round_trip_and_conflict(session):
     "bad",
     [
         {"sel": {"produk|besok": "1"}},
+        {"sel": {"produk\n|2026-10-05": "1"}},
+        {"sel": {"a|b|2026-10-05": "1"}},
         {"sel": {"produk|2026-10-05": "abc"}},
         {"sel": {"produk|2026-10-05": "NaN"}},
         {"sel": {"produk|2026-10-05": "1e30"}},
