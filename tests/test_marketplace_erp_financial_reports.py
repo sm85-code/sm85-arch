@@ -954,3 +954,22 @@ async def test_order_waiting_for_the_courier_is_not_counted_even_with_an_erp_shi
              sampai=date(2026, 10, 13), as_of=datetime(2026, 10, 16, 12, tzinfo=f.WIB))
     assert f.money(result['minggu'][1]['piutang']) == 300  # Only the order the courier collected.
     assert result['tanpa_tanggal_kirim'] == 0
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("overview,recent,complete,note", [
+    ("150", [], True, None),
+    ("200", [], False, "ringkasan Shopee Rp 200 vs daftar Rp 150"),
+    ("200", [50], True, None),          # The overview still counts an order released a moment ago.
+    ("200", [30, 20], True, None),
+    ("200", [40], False, "ringkasan Shopee Rp 200 vs daftar Rp 150"),
+])
+async def test_pending_total_tolerates_an_overview_that_lags_recent_releases(monkeypatch, overview, recent, complete, note):
+    from unittest.mock import AsyncMock
+    from tenants.marketplace_erp.modules.marketplace_erp.application import financial_pending as pending
+
+    monkeypatch.setattr(pending.commerce, 'income_overview', AsyncMock(return_value={'pending_amount': overview}))
+    rows = {'A': {'estimated_escrow_amount': '100'}, 'B': {'estimated_escrow_amount': '50'}}
+    info = {}
+    assert await pending.pending_total_matches(None, SimpleNamespace(id='shop'), rows, recent, info) is complete
+    assert info.get('catatan') == note
