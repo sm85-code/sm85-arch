@@ -108,24 +108,36 @@ async def weekly_pending_receivables(session, akun_id, periode, jumlah_kolom=Non
             shipping = {r.id_eksternal: r.tanggal_kirim for r in local if r.tanggal_kirim}
             # Pending income can exist before that order has ever been imported into the ERP.
             not_shipped = set()
-            missing = [sn for sn in pending.keys() | {r["order_sn"] for r in releases} if sn not in shipping]
-            for offset in range(0, len(missing), 30):
-                details = await commerce.income_orders(session, shop, missing[offset:offset+30])
+            # Every pending order is read once: Shopee's own status decides whether the courier has collected it. An order
+            # still waiting for the courier is not "dalam pengiriman", whatever shipping date the ERP stored when the
+            # courier/waybill was entered. Released orders only need a date when the ERP has none.
+            waiting = {"LOGISTICS_NOT_START", "LOGISTICS_REQUEST_CREATED", "LOGISTICS_READY"}
+            to_read = list(dict.fromkeys([*pending.keys(), *(r["order_sn"] for r in releases if r["order_sn"] not in shipping)]))
+            for offset in range(0, len(to_read), 30):
+                details = await commerce.income_orders(session, shop, to_read[offset:offset+30])
                 for detail in details["items"]:
+                    sn = detail["order_sn"]
                     stamp = epoch(detail.get("pickup_done_time"))
                     if not stamp and detail.get("order_status") in ("UNPAID", "READY_TO_SHIP", "PROCESSED"):
-                        not_shipped.add(detail["order_sn"])
+                        not_shipped.add(sn)
+                        shipping.pop(sn, None)
+                        continue
+                    if sn in shipping:
                         continue
                     if not stamp:
-                        times = []
+                        times, statuses = [], []
                         for package in detail.get("packages", []) or [{}]:
-                            trace = await commerce.tracking(session, shop, detail["order_sn"], package.get("package_number"))
+                            trace = await commerce.tracking(session, shop, sn, package.get("package_number"))
+                            statuses.append(trace.get("logistics_status"))
                             times.extend(epoch(event.get("update_time")) for event in trace.get("tracking_info", [])
                                          if event.get("logistics_status") in ("PICKED_UP", "LOGISTICS_PICKUP_DONE")
                                          and epoch(event.get("update_time")))
                         stamp = min(times) if times else None
+                        if not times and statuses and all(status in waiting for status in statuses):
+                            not_shipped.add(sn)
+                            continue
                     if stamp:
-                        shipping[detail["order_sn"]] = stamp
+                        shipping[sn] = stamp
     except TimeoutError as exc:
         raise HTTPException(504, "Pembacaan dana Shopee toko ini belum selesai. Coba lagi.") from exc
 
