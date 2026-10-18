@@ -423,3 +423,21 @@ async def test_unknown_income_wrapper_diagnostic_reports_shape_not_values(monkey
     assert report["nested_data_fields"] == {"income_records": "list"}
     assert report["response_field_count"] == 3
     assert "PRIVATE" not in str(report) and "12345" not in str(report)
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("pending,accepted", [(0, True), (100, False), (None, False)])
+async def test_empty_pending_income_verified_by_overview_for_shared_menu(monkeypatch, pending, accepted):
+    monkeypatch.setattr(management_schemas, "today", lambda: date(2026, 10, 18))
+    request = AsyncMock(side_effect=[
+        {"error": "", "response": {}, "request_id": "empty-income"},
+        {"error": "", "response": {"total_income": {"pending_amount": pending, "released_amount": 500}}},
+    ])
+    monkeypatch.setattr(adapter.provider, "signed_shop_request", request)
+    if accepted:
+        result = await adapter.income(None, None, date(2026, 10, 5), date(2026, 10, 18), 2, "", 10)
+        assert result["items"] == [] and result["ada_lagi"] is False and result["pagination_known"] is True
+    else:
+        with pytest.raises(HTTPException):
+            await adapter.income(None, None, date(2026, 10, 5), date(2026, 10, 18), 2, "", 10)
+    assert request.call_args_list[1].args[2] == "/api/v2/payment/get_income_overview"
