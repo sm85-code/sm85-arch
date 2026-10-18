@@ -244,6 +244,8 @@ async def test_every_report_endpoint_denies_non_admin_before_db_access(role):
             ("GET", "/saldo-penjual-shopee?periode=2026-10"),
             ("GET", "/saldo-wallet-shopee/shop?tanggal=2026-10-04"),
             ("GET", "/riwayat"),
+            ("GET", "/lembar-manual?periode=2026-10"),
+            ("PUT", "/lembar-manual?periode=2026-10"),
             ("POST", "/saldo-awal"),
             ("POST", "/pratinjau"),
             ("POST", "/tutup"),
@@ -973,3 +975,42 @@ async def test_pending_total_tolerates_an_overview_that_lags_recent_releases(mon
     info = {}
     assert await pending.pending_total_matches(None, SimpleNamespace(id='shop'), rows, recent, info) is complete
     assert info.get('catatan') == note
+
+
+@pytest.mark.asyncio
+async def test_manual_sheet_round_trip_and_conflict(session):
+    from tenants.marketplace_erp.modules.marketplace_erp.application import financial_manual as manual
+
+    actor = SimpleNamespace(id="admin")
+    assert await manual.muat(session, "2026-10") == {"version": 0, "lembar": {"sel": {}, "baris": [], "hapus": []}}
+    sheet = manual.Lembar(
+        sel={"produk|2026-10-05": "125000.50", "c:abc|2026-10-05": "-30"},
+        baris=[{"id": "c:abc", "tabel": "pemasukan", "grup": "Penjualan dan jasa", "label": "Penjualan lain"}],
+        hapus=["jasa_cat"],
+    )
+    saved = await manual.simpan(session, "2026-10", manual.Simpan(version=0, lembar=sheet), actor)
+    assert saved["version"] == 1
+    assert (await manual.muat(session, "2026-10"))["lembar"]["sel"]["produk|2026-10-05"] == "125000.50"
+    with pytest.raises(HTTPException) as stale:
+        await manual.simpan(session, "2026-10", manual.Simpan(version=0, lembar=sheet), actor)
+    assert stale.value.status_code == 409
+    again = await manual.simpan(session, "2026-10", manual.Simpan(version=1, lembar=manual.Lembar()), actor)
+    assert again["version"] == 2 and again["lembar"]["sel"] == {}
+
+
+@pytest.mark.parametrize(
+    "bad",
+    [
+        {"sel": {"produk|besok": "1"}},
+        {"sel": {"produk|2026-10-05": "abc"}},
+        {"sel": {"produk|2026-10-05": "NaN"}},
+        {"sel": {"produk|2026-10-05": "1e30"}},
+        {"baris": [{"id": "x", "tabel": "pemasukan", "grup": "g", "label": "l"}]},
+        {"baris": [{"id": "c:1", "tabel": "lainnya", "grup": "g", "label": "l"}]},
+    ],
+)
+def test_manual_sheet_rejects_bad_input(bad):
+    from tenants.marketplace_erp.modules.marketplace_erp.application import financial_manual as manual
+
+    with pytest.raises(ValidationError):
+        manual.Lembar(**bad)

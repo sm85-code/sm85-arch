@@ -9,6 +9,7 @@ from sqlalchemy import select
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from tenants.marketplace_erp.modules.marketplace_erp.application import financial_manual as manual
 from tenants.marketplace_erp.modules.marketplace_erp.application import financial_reports as reports
 from tenants.marketplace_erp.modules.marketplace_erp.application.financial_drive_import import DriveImport, import_drive
 from tenants.marketplace_erp.modules.marketplace_erp.infrastructure.auth import require_roles_marketplace_erp
@@ -33,6 +34,23 @@ async def overview(
     periode: str = Query(pattern=r"^\d{4}-\d{2}$"), session: AsyncSession = Depends(get_db_marketplace_erp)
 ):
     return await reports.overview(session, periode)
+
+
+@router.get("/lembar-manual")
+async def manual_sheet(
+    periode: str = Query(pattern=r"^\d{4}-\d{2}$"), session: AsyncSession = Depends(get_db_marketplace_erp)
+):
+    return await manual.muat(session, periode)
+
+
+@router.put("/lembar-manual")
+async def save_manual_sheet(
+    payload: manual.Simpan,
+    periode: str = Query(pattern=r"^\d{4}-\d{2}$"),
+    session: AsyncSession = Depends(get_db_marketplace_erp),
+    actor: UserMarketplaceErp = Depends(admin),
+):
+    return await manual.simpan(session, periode, payload, actor)
 
 
 @router.get("/pemasukan-shopee")
