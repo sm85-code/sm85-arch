@@ -117,19 +117,39 @@ def fast_balances(shop, pending, complete, releases, shipping, not_shipped, even
             key = (shipping_day(shipping[sn]) - first).days // 7
             cohorts[key] = cohorts.get(key, 0) + 1
         tolerance = max(Decimal(500), event['amount'] * Decimal('0.05'))
-        sums = [ZERO]
-        for value in values[:14]:
-            sums += [total + value for total in sums]
-        fits = any(total > ZERO and abs(event['amount'] - total) <= tolerance for total in sums)
-        return dict(dari=window_start, sampai=window_end, candidates=candidates, expected=expected, cohorts=cohorts, fits=fits)
+        sums = [(ZERO, ())]
+        for index, value in enumerate(values[:14]):
+            sums += [(total + value, chosen + (index,)) for total, chosen in sums]
+        matches = [(abs(event['amount'] - total), chosen) for total, chosen in sums
+                   if total > ZERO and abs(event['amount'] - total) <= tolerance]
+        return dict(dari=window_start, sampai=window_end, candidates=candidates, values=values, expected=expected,
+                    cohorts=cohorts, matches=matches, fits=bool(matches))
+
+    def bucket(sn):
+        day = shipping_day(shipping[sn])
+        return None if day.weekday() == 6 else (day - first).days // 7  # Sunday shipments belong to no weekly receivable.
 
     def advance_match(event):
-        # Attribute only when the amount reconciles with some combination of the candidates AND they share one weekly cohort.
+        # Attribute when the amount reconciles with a combination of the window's orders and every matching
+        # combination touches the same weekly cohorts (a Monday batch also pays the weekend). The advance is split
+        # across those cohorts in proportion to the matched orders; Sunday shipments are left out. None = no match.
         for days in (1, 2, 3):
             window = advance_window(event, days)
-            if window['fits'] and len(window['cohorts']) == 1 and not any(
-                    shipping_day(shipping[sn]).weekday() == 6 for sn in window['candidates']):
-                return next(iter(window['cohorts'])), max(shipping_day(shipping[sn]) for sn in window['candidates'])
+            if not window['matches']:
+                continue
+            candidates, values = window['candidates'], window['values']
+            if len({frozenset(bucket(candidates[i]) for i in chosen) for _, chosen in window['matches']}) != 1:
+                continue
+            _, chosen = min(window['matches'], key=lambda m: m[0])
+            total = sum((values[i] for i in chosen), ZERO)
+            parts = {}
+            for i in chosen:
+                cohort = bucket(candidates[i])
+                if cohort is None:
+                    continue
+                amount, newest = parts.get(cohort, (ZERO, shipping_day(shipping[candidates[i]])))
+                parts[cohort] = (amount + values[i], max(newest, shipping_day(shipping[candidates[i]])))
+            return [(cohort, money(event['amount'] * amount / total), newest) for cohort, (amount, newest) in parts.items()]
         return None
 
     def explain(event, reason):
@@ -153,13 +173,16 @@ def fast_balances(shop, pending, complete, releases, shipping, not_shipped, even
         if day.weekday() != 6 and 0 <= i < len(cells) and event['at'] < cutoffs[i]:
             cells[i]['dana_cair'] += event['amount']
         cohort, reason = batch_cohort(event['orders']) if len(event['orders']) > 1 else (None, 'tanpa_pesanan')
-        newest = max((shipping_day(shipping[sn]) for sn in event['orders']), default=None) if cohort is not None else None
-        if not event['orders'] and event['kind'] == 'advance' and (matched := advance_match(event)):
-            cohort, newest = matched
+        parts = None
         if cohort is not None:
-            resolved.append(dict(event, cohort=cohort, shipped=newest))
-            if 0 <= i < len(cells) and day.weekday() != 6 and cohort == i-1 and event['at'] < cutoffs[i]:
-                cells[i]['cair_minggu_lalu'] += event['amount']
+            parts = [(cohort, event['amount'], max(shipping_day(shipping[sn]) for sn in event['orders']))]
+        elif not event['orders'] and event['kind'] == 'advance':
+            parts = advance_match(event)
+        if parts is not None:
+            resolved.append(dict(event, parts=parts))
+            for part_cohort, amount, _ in parts:
+                if 0 <= i < len(cells) and day.weekday() != 6 and part_cohort == i-1 and event['at'] < cutoffs[i]:
+                    cells[i]['cair_minggu_lalu'] += amount
             continue
         if len(event['orders']) != 1:
             explain(event, reason)
@@ -210,12 +233,13 @@ def fast_balances(shop, pending, complete, releases, shipping, not_shipped, even
             cells[i][key] += max(ZERO, outstanding)
     for i, cutoff in enumerate(cutoffs):
         for event in resolved:
-            if event['kind'] in ('refund', 'negative') or event['at'] < cutoff or event['cohort'] > i:
+            if event['kind'] in ('refund', 'negative') or event['at'] < cutoff:
                 continue
-            if datetime.combine(event['shipped'], time.min, WIB) >= cutoff:
-                continue
-            key = 'piutang' if event['cohort'] == i else 'piutang_lama'
-            cells[i][key] = max(ZERO, cells[i][key] + event['amount'])
+            for part_cohort, amount, shipped in event['parts']:
+                if part_cohort > i or datetime.combine(shipped, time.min, WIB) >= cutoff:
+                    continue
+                key = 'piutang' if part_cohort == i else 'piutang_lama'
+                cells[i][key] = max(ZERO, cells[i][key] + amount)
     for i, cell in enumerate(cells):
         for event in batches:
             if not event['orders'] and event['kind'] not in ('refund', 'negative') and event['at'] >= cutoffs[i]:
