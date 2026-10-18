@@ -160,6 +160,11 @@ def fast_balances(shop, pending, complete, releases, shipping, not_shipped, even
             window = advance_window(event, 1)
             entry['kandidat'] = dict(dari=window['dari'].isoformat(), sampai=window['sampai'].isoformat(), jumlah=len(window['candidates']),
                                      diharapkan=str(window['expected']), cocok=window['fits'], minggu_kirim=window['cohorts'])
+            wide = advance_window(event, 3)  # Lists up to three days so a Monday batch shows the weekend's orders too.
+            entry['kandidat']['pesanan_3_hari'] = [
+                dict(order_sn=sn, nilai=str(value), sumber='menunggu' if sn in pending else 'cair', waktu=aware(shipping[sn]).isoformat(),
+                     minggu=bucket(sn))
+                for sn, value in sorted(zip(wide['candidates'], wide['values']), key=lambda pair: aware(shipping[pair[0]]))[:40]]
         else:
             entry['rilis_terdekat'] = sorted(
                 (dict(order_sn=r['order_sn'], payout=str(r.get('payout')), selisih_menit=round((r['dirilis'] - event['at']).total_seconds() / 60))
