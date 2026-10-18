@@ -60,6 +60,18 @@ def test_unallocated_batch_repayment_is_not_split_evenly_or_counted_twice():
     assert result['mutasi_tidak_terpetakan'] == 1
 
 
+def test_multi_order_movement_in_one_cohort_is_attributed_not_unmapped():
+    shipping = {'A': stamp(1), 'B': stamp(2)}
+    result = balances([event(3, '80', 'advance', ('A', 'B')), event(6, '120', 'escrow', ('A', 'B'))],
+                      pending={'A': {'estimated_escrow_amount': '90'}, 'B': {'estimated_escrow_amount': '110'}},
+                      shipping=shipping)
+    first, second = result['minggu'][:2]
+    assert result['mutasi_tidak_terpetakan'] == 0
+    assert first['piutang'] == '320.00'  # 200 still pending + 120 released after the Saturday cutoff; the 80 advance predates it.
+    assert second['cair_minggu_lalu'] == '120.00'
+    assert second['piutang_tidak_pasti'] == 0
+
+
 @pytest.mark.asyncio
 async def test_wallet_windows_offsets_statuses_and_boundaries(monkeypatch):
     def row(day, kind, amount, status='COMPLETED'):
