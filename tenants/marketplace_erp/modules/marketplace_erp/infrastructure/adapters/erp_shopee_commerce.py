@@ -153,11 +153,11 @@ async def income(session, akun, start, end, status, cursor, size, *, tolerate_un
             return {"items": [], "next_cursor": "", "ada_lagi": False, "pagination_known": True,
                     "warnings": [], "request_id": data.get("request_id")}
         if tolerate_unlisted and pending is not None and Decimal(str(pending)) > 0:
-            # The Menunggu cair menu only lists orders. Pending money Shopee cannot itemize is shown as a note, not an
-            # error; the financial report keeps the strict behavior because it must account for every rupiah.
+            # The overview can lag the order list for a few minutes after an order is released (the wallet already shows the
+            # credit). In the menu that is a note, not an error; the financial report keeps the strict behavior because it must account for every rupiah.
             amount = f"{int(Decimal(str(pending))):,}".replace(",", ".")
             return {"items": [], "next_cursor": "", "ada_lagi": False, "pagination_known": True,
-                    "warnings": [f"Shopee mencatat dana menunggu cair sekitar Rp {amount} tanpa rincian pesanan (daftar kosong)."],
+                    "warnings": [f"Ringkasan Shopee masih mencatat dana menunggu cair sekitar Rp {amount}, tetapi daftar rinciannya kosong. Biasanya karena pesanan baru saja cair; muat ulang beberapa menit lagi."],
                     "request_id": data.get("request_id")}
 
     def reject(reason):
