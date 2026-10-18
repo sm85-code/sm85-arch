@@ -142,11 +142,13 @@ async def income(session, akun, start, end, status, cursor, size):
     # Some local shops return an empty successful response when nothing is pending.
     # Confirm with the independent overview before normalizing it to an empty page.
     # This adapter is shared by Menunggu cair and the weekly financial report.
+    overview_pending = None
     if status == 2 and not cursor and wrapped == {} and envelope is None and not data.get("error"):
         try:
             pending = (await income_overview(session, akun)).get("pending_amount")
         except HTTPException:
             pending = None
+        overview_pending = pending
         if pending is not None and Decimal(str(pending)) == 0:
             return {"items": [], "next_cursor": "", "ada_lagi": False, "pagination_known": True,
                     "warnings": [], "request_id": data.get("request_id")}
@@ -177,7 +179,16 @@ async def income(session, akun, start, end, status, cursor, size):
                   "request_id": None, "failures": []}
         failure = provider.ShopeeAPIError(path, "incomplete_response", "Respons pendapatan Shopee tidak lengkap.")
         failure.status_code = 424
-        failure.detail = {"message": "Respons pendapatan Shopee berhasil diterima, tetapi format datanya belum lengkap. Salin rincian untuk pemeriksaan.", "diagnostic": report}
+        message = "Respons pendapatan Shopee berhasil diterima, tetapi format datanya belum lengkap. Salin rincian untuk pemeriksaan."
+        try:
+            if overview_pending is not None and Decimal(str(overview_pending)) > 0:
+                # The empty list is not "nothing pending": Shopee's own overview says money is waiting.
+                amount = f"{int(Decimal(str(overview_pending))):,}".replace(",", ".")
+                message = (f"Shopee mencatat dana menunggu cair sekitar Rp {amount} untuk toko ini, tetapi rincian pesanannya "
+                           "belum dikirim Shopee (daftar kosong). Coba lagi nanti; toko lain tetap ditampilkan.")
+        except (InvalidOperation, ValueError):
+            pass
+        failure.detail = {"message": message, "diagnostic": report}
         raise failure
 
     # An explicit empty list is a successful zero-row response, not a missing

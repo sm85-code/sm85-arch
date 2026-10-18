@@ -438,6 +438,9 @@ async def test_empty_pending_income_verified_by_overview_for_shared_menu(monkeyp
         result = await adapter.income(None, None, date(2026, 10, 5), date(2026, 10, 18), 2, "", 10)
         assert result["items"] == [] and result["ada_lagi"] is False and result["pagination_known"] is True
     else:
-        with pytest.raises(HTTPException):
+        with pytest.raises(HTTPException) as caught:
             await adapter.income(None, None, date(2026, 10, 5), date(2026, 10, 18), 2, "", 10)
+        message = str(caught.value.detail["message"])
+        # A positive overview must say money is waiting; an unknown overview keeps the generic wording.
+        assert ("dana menunggu cair sekitar Rp 100" in message) is (pending == 100)
     assert request.call_args_list[1].args[2] == "/api/v2/payment/get_income_overview"
