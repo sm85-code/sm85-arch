@@ -59,6 +59,19 @@ async def shipping_receivables(
     return await weekly_shipping_receivables(session, periode, jumlah_kolom, sampai=sampai)
 
 
+@router.get("/piutang-pengiriman-shopee/{akun_id}")
+async def shipping_receivables_pending(
+    akun_id: str,
+    periode: str = Query(pattern=r"^\d{4}-\d{2}$"),
+    jumlah_kolom: int | None = Query(default=None, ge=1, le=7),
+    sampai: date | None = None,
+    session: AsyncSession = Depends(get_db_marketplace_erp),
+):
+    from tenants.marketplace_erp.modules.marketplace_erp.application.financial_pending import weekly_pending_receivables
+
+    return await weekly_pending_receivables(session, akun_id, periode, jumlah_kolom, sampai=sampai)
+
+
 @router.get("/saldo-penjual-shopee")
 async def shopee_released_funds(
     periode: str = Query(pattern=r"^\d{4}-\d{2}$"),
