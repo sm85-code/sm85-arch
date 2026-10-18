@@ -97,6 +97,15 @@ def test_advance_matching_one_of_several_candidates_or_a_released_payout_is_attr
     assert result['mutasi_tidak_terpetakan'] == 0
 
 
+def test_monday_advance_covering_the_weekend_is_split_across_cohorts():
+    result = balances([event(12, '8000', 'advance', ())],
+                      pending={'S': {'estimated_escrow_amount': '5000'}, 'M': {'estimated_escrow_amount': '3000'}},
+                      shipping={'S': stamp(10, 17), 'M': stamp(12, 10)})
+    assert result['mutasi_tidak_terpetakan'] == 0
+    # Saturday's order was still owed in full at the Saturday cutoff: 5000 pending now + its 5000 advance paid later.
+    assert result['minggu'][1]['piutang'] == '10000.00'
+
+
 def test_advance_that_does_not_reconcile_stays_unmapped_with_expected_amount():
     result = balances([event(6, '90000', 'advance', ())], pending={'A': {'estimated_escrow_amount': '10000'}},
                       shipping={'A': stamp(5, 17), 'B': stamp(2)})
