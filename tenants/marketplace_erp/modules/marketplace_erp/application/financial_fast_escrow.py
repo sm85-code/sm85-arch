@@ -74,13 +74,32 @@ def fast_balances(shop, pending, complete, releases, shipping, not_shipped, even
     cutoffs = [min(end, datetime.combine(datetime.fromisoformat(w['akhir']).date() + timedelta(days=1), time.min, WIB)) for w in periods]
     cells = [dict(piutang=ZERO, piutang_lama=ZERO, cair_minggu_lalu=ZERO, dana_cair=ZERO,
                   piutang_tidak_pasti=0, piutang_lama_tidak_pasti=0, cair_tidak_terpetakan=0) for _ in periods]
-    by_order, ambiguous, unallocated, batches = {}, set(), [], []
+    by_order, ambiguous, unallocated, batches, resolved = {}, set(), [], [], []
     unmapped, unmapped_events = 0, 0
+    first = datetime.fromisoformat(periods[0]['mulai']).date()
+
+    def batch_cohort(orders):
+        # Shopee often pays several orders in one movement. The total is known even though the split is not,
+        # so it is attributable when every order shipped on a normal day in one weekly cohort.
+        cohorts = set()
+        for sn in orders:
+            stamp = shipping.get(sn)
+            if sn in not_shipped or stamp is None or shipping_day(stamp).weekday() == 6:
+                return None
+            cohorts.add((shipping_day(stamp) - first).days // 7)
+        return cohorts.pop() if len(cohorts) == 1 else None
+
     for event in events:
         day = event['at'].date()
         i = (day - datetime.fromisoformat(periods[0]['mulai']).date()).days // 7
         if day.weekday() != 6 and 0 <= i < len(cells) and event['at'] < cutoffs[i]:
             cells[i]['dana_cair'] += event['amount']
+        if len(event['orders']) > 1 and (cohort := batch_cohort(event['orders'])) is not None:
+            newest = max(shipping_day(shipping[sn]) for sn in event['orders'])
+            resolved.append(dict(event, cohort=cohort, shipped=newest))
+            if 0 <= i < len(cells) and day.weekday() != 6 and cohort == i-1 and event['at'] < cutoffs[i]:
+                cells[i]['cair_minggu_lalu'] += event['amount']
+            continue
         if len(event['orders']) != 1:
             # A batch repayment has no per-order allocation in this API. Count its cash once,
             # but do not divide it equally across shipping cohorts or pretend it was zero.
@@ -127,6 +146,14 @@ def fast_balances(shop, pending, complete, releases, shipping, not_shipped, even
                 continue
             outstanding = money(estimate) + sum((e['amount'] for e in receipts if e['at'] >= cutoff), ZERO)
             cells[i][key] += max(ZERO, outstanding)
+    for i, cutoff in enumerate(cutoffs):
+        for event in resolved:
+            if event['kind'] in ('refund', 'negative') or event['at'] < cutoff or event['cohort'] > i:
+                continue
+            if datetime.combine(event['shipped'], time.min, WIB) >= cutoff:
+                continue
+            key = 'piutang' if event['cohort'] == i else 'piutang_lama'
+            cells[i][key] = max(ZERO, cells[i][key] + event['amount'])
     for i, cell in enumerate(cells):
         for event in batches:
             if not event['orders'] and event['kind'] not in ('refund', 'negative') and event['at'] >= cutoffs[i]:
