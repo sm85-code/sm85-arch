@@ -72,6 +72,16 @@ def test_multi_order_movement_in_one_cohort_is_attributed_not_unmapped():
     assert second['piutang_tidak_pasti'] == 0
 
 
+def test_unmapped_movements_are_explained_with_nearest_releases():
+    release = {'order_sn': 'R1', 'payout': '75', 'dirilis': stamp(6, 11)}
+    result = fast.fast_balances(SimpleNamespace(id='bumi', nama_toko='BUMI TANI IND'), {}, True, [release],
+        {'A': stamp(1)}, set(), [event(6, '75', 'escrow', ()), event(6, '-80', 'repayment', ('A', 'B'))],
+        weekly_periods('2026-10', 4)[1], stamp(14, 0), stamp(16))
+    reasons = {d['alasan'] for d in result['mutasi_diagnosa']}
+    assert reasons == {'tanpa_pesanan', 'tanpa_tanggal_kirim'}
+    assert result['mutasi_diagnosa'][0]['rilis_terdekat'] == [dict(order_sn='R1', payout='75', selisih_menit=-60)]
+
+
 @pytest.mark.asyncio
 async def test_wallet_windows_offsets_statuses_and_boundaries(monkeypatch):
     def row(day, kind, amount, status='COMPLETED'):

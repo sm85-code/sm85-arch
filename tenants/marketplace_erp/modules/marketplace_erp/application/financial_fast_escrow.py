@@ -84,23 +84,40 @@ def fast_balances(shop, pending, complete, releases, shipping, not_shipped, even
         cohorts = set()
         for sn in orders:
             stamp = shipping.get(sn)
-            if sn in not_shipped or stamp is None or shipping_day(stamp).weekday() == 6:
-                return None
+            if sn in not_shipped:
+                return None, 'belum_dikirim'
+            if stamp is None:
+                return None, 'tanpa_tanggal_kirim'
+            if shipping_day(stamp).weekday() == 6:
+                return None, 'dikirim_hari_minggu'
             cohorts.add((shipping_day(stamp) - first).days // 7)
-        return cohorts.pop() if len(cohorts) == 1 else None
+        return (cohorts.pop(), None) if len(cohorts) == 1 else (None, 'beda_minggu_kirim')
+
+    diagnosis = []
+
+    def explain(event, reason):
+        # Read-only aid for admins: the closest per-order releases hint at which orders an unlabelled movement paid.
+        near = sorted(
+            (dict(order_sn=r['order_sn'], payout=str(r.get('payout')), selisih_menit=round((r['dirilis'] - event['at']).total_seconds() / 60))
+             for r in releases if r.get('dirilis')),
+            key=lambda r: abs(r['selisih_menit']))[:3]
+        diagnosis.append(dict(waktu=event['at'].isoformat(), jenis=event['kind'], nominal=str(event['amount']),
+                              pesanan=sorted(event['orders']), alasan=reason, rilis_terdekat=near))
 
     for event in events:
         day = event['at'].date()
         i = (day - datetime.fromisoformat(periods[0]['mulai']).date()).days // 7
         if day.weekday() != 6 and 0 <= i < len(cells) and event['at'] < cutoffs[i]:
             cells[i]['dana_cair'] += event['amount']
-        if len(event['orders']) > 1 and (cohort := batch_cohort(event['orders'])) is not None:
+        cohort, reason = batch_cohort(event['orders']) if len(event['orders']) > 1 else (None, 'tanpa_pesanan')
+        if cohort is not None:
             newest = max(shipping_day(shipping[sn]) for sn in event['orders'])
             resolved.append(dict(event, cohort=cohort, shipped=newest))
             if 0 <= i < len(cells) and day.weekday() != 6 and cohort == i-1 and event['at'] < cutoffs[i]:
                 cells[i]['cair_minggu_lalu'] += event['amount']
             continue
         if len(event['orders']) != 1:
+            explain(event, reason)
             # A batch repayment has no per-order allocation in this API. Count its cash once,
             # but do not divide it equally across shipping cohorts or pretend it was zero.
             ambiguous.update(event['orders'])
@@ -166,4 +183,4 @@ def fast_balances(shop, pending, complete, releases, shipping, not_shipped, even
             uncertain = key != 'dana_cair' and cell[key] == ZERO and (unknown or unmapped or (key != 'cair_minggu_lalu' and not complete))
             cell[key] = str(cell[key]) if available and not uncertain else None
     return dict(akun_id=shop.id, nama=shop.nama_toko, minggu=cells, halaman_lengkap=complete,
-                tanpa_tanggal_kirim=unmapped, mutasi_tidak_terpetakan=unmapped_events, sumber='shopee_wallet_dana_cepat', dana_cepat=True, dibaca_at=now.isoformat())
+                tanpa_tanggal_kirim=unmapped, mutasi_tidak_terpetakan=unmapped_events, mutasi_diagnosa=diagnosis[:60], sumber='shopee_wallet_dana_cepat', dana_cepat=True, dibaca_at=now.isoformat())
