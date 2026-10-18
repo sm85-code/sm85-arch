@@ -804,12 +804,14 @@ async def test_live_pending_uses_estimate_even_when_received_or_completed(sessio
     income = AsyncMock(side_effect=[
         {'items': [{'order_sn': 'RECEIVED', 'estimated_escrow_amount': '120000'}],
          'pagination_known': True, 'next_cursor': 'page2'},
-        {'items': [{'order_sn': 'NOTIMPORTED', 'estimated_escrow_amount': '50000'}],
+        {'items': [{'order_sn': 'NOTIMPORTED', 'estimated_escrow_amount': '50000'},
+                   {'order_sn': 'NOTSHIPPED', 'estimated_escrow_amount': '999999'}],
          'pagination_known': True, 'next_cursor': ''},
     ])
     monkeypatch.setattr(pending.commerce, 'income', income)
     details = AsyncMock(return_value={'items': [{'order_sn': 'NOTIMPORTED', 'pickup_done_time':
-                        int(datetime(2026, 10, 6, 10, tzinfo=f.WIB).timestamp())}]})
+                        int(datetime(2026, 10, 6, 10, tzinfo=f.WIB).timestamp())},
+                       {'order_sn': 'NOTSHIPPED', 'order_status': 'PROCESSED'}]})
     monkeypatch.setattr(pending.commerce, 'income_orders', details)
     monkeypatch.setattr(pending.erp_shopee, 'daftar_escrow', AsyncMock(return_value=[{
         'order_sn': 'RELEASED', 'payout': '90000', 'dirilis': datetime(2026, 10, 6, 17, tzinfo=f.WIB),
@@ -826,7 +828,7 @@ async def test_live_pending_uses_estimate_even_when_received_or_completed(sessio
     assert result['halaman_lengkap'] is True
     assert result['tanpa_tanggal_kirim'] == 0
     assert income.call_args_list[1].args[-2] == 'page2'
-    assert details.call_args.args[-1] == ['NOTIMPORTED']
+    assert set(details.call_args.args[-1]) == {'NOTIMPORTED', 'NOTSHIPPED'}
     assert (await session.execute(select(Pesanan).where(Pesanan.id_eksternal == 'NOTIMPORTED'))).scalar_one_or_none() is None
 
 

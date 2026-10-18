@@ -66,11 +66,15 @@ async def weekly_pending_receivables(session, akun_id, periode, jumlah_kolom=Non
             ))).all()
             shipping = {r.id_eksternal: r.tanggal_kirim for r in local if r.tanggal_kirim}
             # Pending income can exist before that order has ever been imported into the ERP.
+            not_shipped = set()
             missing = [sn for sn in pending.keys() | {r["order_sn"] for r in releases} if sn not in shipping]
             for offset in range(0, len(missing), 30):
                 details = await commerce.income_orders(session, shop, missing[offset:offset+30])
                 for detail in details["items"]:
                     stamp = epoch(detail.get("pickup_done_time"))
+                    if not stamp and detail.get("order_status") in ("UNPAID", "READY_TO_SHIP", "PROCESSED"):
+                        not_shipped.add(detail["order_sn"])
+                        continue
                     if not stamp:
                         times = []
                         for package in detail.get("packages", []) or [{}]:
@@ -90,6 +94,8 @@ async def weekly_pending_receivables(session, akun_id, periode, jumlah_kolom=Non
                   piutang_tidak_pasti=0, piutang_lama_tidak_pasti=0, cair_tidak_terpetakan=0) for _ in periods]
     unmapped = 0
     for sn in pending.keys() | paid.keys():
+        if sn in not_shipped:
+            continue
         stamp = shipping.get(sn)
         if stamp is None:
             unmapped += 1
