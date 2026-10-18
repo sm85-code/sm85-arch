@@ -809,7 +809,8 @@ async def test_live_pending_uses_estimate_even_when_received_or_completed(sessio
          'pagination_known': True, 'next_cursor': ''},
     ])
     monkeypatch.setattr(pending.commerce, 'income', income)
-    details = AsyncMock(return_value={'items': [{'order_sn': 'NOTIMPORTED', 'pickup_done_time':
+    details = AsyncMock(return_value={'items': [{'order_sn': 'RECEIVED', 'order_status': 'COMPLETED'},
+                       {'order_sn': 'NOTIMPORTED', 'pickup_done_time':
                         int(datetime(2026, 10, 6, 10, tzinfo=f.WIB).timestamp())},
                        {'order_sn': 'NOTSHIPPED', 'order_status': 'PROCESSED'}]})
     monkeypatch.setattr(pending.commerce, 'income_orders', details)
@@ -828,7 +829,7 @@ async def test_live_pending_uses_estimate_even_when_received_or_completed(sessio
     assert result['halaman_lengkap'] is True
     assert result['tanpa_tanggal_kirim'] == 0
     assert income.call_args_list[1].args[-2] == 'page2'
-    assert set(details.call_args.args[-1]) == {'NOTIMPORTED', 'NOTSHIPPED'}
+    assert set(details.call_args.args[-1]) == {'RECEIVED', 'NOTIMPORTED', 'NOTSHIPPED'}  # Every pending order is checked against Shopee's status.
     assert (await session.execute(select(Pesanan).where(Pesanan.id_eksternal == 'NOTIMPORTED'))).scalar_one_or_none() is None
 
 
@@ -909,6 +910,9 @@ async def test_fast_escrow_read_applies_only_to_bumi_tani(session, monkeypatch):
         ({'NORMALORDER': {'estimated_escrow_amount': '20'}}, True),
     ]))
     monkeypatch.setattr(pending.erp_shopee, 'daftar_escrow', AsyncMock(return_value=[]))
+    monkeypatch.setattr(pending.commerce, 'income_orders', AsyncMock(side_effect=[
+        {'items': [{'order_sn': 'FASTORDER', 'order_status': 'COMPLETED'}]},
+        {'items': [{'order_sn': 'NORMALORDER', 'order_status': 'SHIPPED'}]}]))
     wallet = AsyncMock(return_value=[dict(at=datetime(2026, 10, 6, 17, tzinfo=f.WIB),
                      amount=f.money(80), kind='advance', orders={'FASTORDER'})])
     monkeypatch.setattr(fast, 'wallet_income', wallet)
@@ -925,3 +929,28 @@ async def test_fast_escrow_read_applies_only_to_bumi_tani(session, monkeypatch):
     assert 'dana_cepat' not in normal
     assert f.money(normal['minggu'][0]['piutang']) == 20
     assert wallet.await_count == 1
+
+
+@pytest.mark.asyncio
+async def test_order_waiting_for_the_courier_is_not_counted_even_with_an_erp_shipping_date(session, monkeypatch):
+    from unittest.mock import AsyncMock
+    from tenants.marketplace_erp.modules.marketplace_erp.application import financial_pending as pending
+
+    session.add(AkunMarketplace(id='lestari', platform='shopee', nama_toko='BUMI LESTARI INDONESIA'))
+    session.add_all([
+        # The courier/waybill was entered in the ERP (stamping a shipping date) but Shopee still says PROCESSED.
+        Pesanan(akun_id='lestari', platform='shopee', id_eksternal='WAITING', status='to_ship', total=1,
+                tanggal_kirim=datetime(2026, 10, 5, 10, tzinfo=f.WIB)),
+        Pesanan(akun_id='lestari', platform='shopee', id_eksternal='SENT', status='shipped', total=1,
+                tanggal_kirim=datetime(2026, 10, 5, 10, tzinfo=f.WIB)),
+    ])
+    await session.commit()
+    monkeypatch.setattr(pending, 'pending_pages', AsyncMock(return_value=({
+        'WAITING': {'estimated_escrow_amount': '2000'}, 'SENT': {'estimated_escrow_amount': '300'}}, True)))
+    monkeypatch.setattr(pending.erp_shopee, 'daftar_escrow', AsyncMock(return_value=[]))
+    monkeypatch.setattr(pending.commerce, 'income_orders', AsyncMock(return_value={'items': [
+        {'order_sn': 'WAITING', 'order_status': 'PROCESSED'}, {'order_sn': 'SENT', 'order_status': 'SHIPPED'}]}))
+    result = await pending.weekly_pending_receivables(session, 'lestari', '2026-10', 3,
+             sampai=date(2026, 10, 13), as_of=datetime(2026, 10, 16, 12, tzinfo=f.WIB))
+    assert f.money(result['minggu'][1]['piutang']) == 300  # Only the order the courier collected.
+    assert result['tanpa_tanggal_kirim'] == 0
