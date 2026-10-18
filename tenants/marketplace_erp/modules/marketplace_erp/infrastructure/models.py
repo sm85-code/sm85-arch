@@ -844,6 +844,16 @@ class LaporanKeuanganAsal(MarketplaceErpBase):
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=_utcnow)
 
 
+class LaporanKeuanganManual(MarketplaceErpBase):
+    """Hand-typed figures of one month's report sheet. A layer over the sheet only: closed books and ERP data stay untouched."""
+    __tablename__ = "mpe_laporan_keuangan_manual"
+    periode: Mapped[str] = mapped_column(String(7), primary_key=True)
+    data_json: Mapped[str] = mapped_column(Text, nullable=False)
+    version: Mapped[int] = mapped_column(Integer, nullable=False, default=1)
+    updated_by: Mapped[str] = mapped_column(String(64), nullable=False)
+    updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=_utcnow, onupdate=_utcnow)
+
+
 class ProcessingCatalog(MarketplaceErpBase):
     """Admin-only reference catalog; isolated from orders, inventory and accounting."""
     __tablename__ = "mpe_processing_catalog"
