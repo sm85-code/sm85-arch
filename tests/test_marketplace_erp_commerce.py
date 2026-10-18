@@ -426,6 +426,22 @@ async def test_unknown_income_wrapper_diagnostic_reports_shape_not_values(monkey
 
 
 @pytest.mark.asyncio
+async def test_menu_shows_unitemized_pending_money_as_a_note_while_the_report_stays_strict(monkeypatch):
+    monkeypatch.setattr(management_schemas, "today", lambda: date(2026, 10, 18))
+    def request():
+        return AsyncMock(side_effect=[
+            {"error": "", "response": {}, "request_id": "empty-income"},
+            {"error": "", "response": {"total_income": {"pending_amount": 543, "released_amount": 500}}},
+        ])
+    monkeypatch.setattr(adapter.provider, "signed_shop_request", request())
+    result = await adapter.income(None, None, date(2026, 10, 5), date(2026, 10, 18), 2, "", 10, tolerate_unlisted=True)
+    assert result["items"] == [] and "Rp 543" in result["warnings"][0] and result["pagination_known"] is True
+    monkeypatch.setattr(adapter.provider, "signed_shop_request", request())
+    with pytest.raises(HTTPException):
+        await adapter.income(None, None, date(2026, 10, 5), date(2026, 10, 18), 2, "", 10)
+
+
+@pytest.mark.asyncio
 @pytest.mark.parametrize("pending,accepted", [(0, True), (100, False), (None, False)])
 async def test_empty_pending_income_verified_by_overview_for_shared_menu(monkeypatch, pending, accepted):
     monkeypatch.setattr(management_schemas, "today", lambda: date(2026, 10, 18))

@@ -104,7 +104,7 @@ async def order_income(id: str, session: AsyncSession = DB, user: UserMarketplac
 
 @router.get("/akun/{id}/pendapatan-shopee")
 async def income(id: str, dari: date, sampai: date, income_status: int = Query(2, ge=1, le=2), cursor: str = Query("", max_length=500), page_size: int = Query(30, ge=1, le=100), session: AsyncSession = DB, user: UserMarketplaceErp = ADMIN):
-    return await adapter.income(session, await account(session, user, id), dari, sampai, income_status, cursor, page_size)
+    return await adapter.income(session, await account(session, user, id), dari, sampai, income_status, cursor, page_size, tolerate_unlisted=True)
 
 
 @router.get("/akun/{id}/rincian-pesanan-pendapatan")
