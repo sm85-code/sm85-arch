@@ -99,24 +99,41 @@ def fast_balances(shop, pending, complete, releases, shipping, not_shipped, even
     def aware(stamp):
         return stamp.replace(tzinfo=WIB) if stamp.tzinfo is None else stamp.astimezone(WIB)
 
+    released = {r['order_sn']: money(r.get('payout') or 0) for r in releases}
+
+    def advance_window(event, days):
+        # A Dana Cepat advance is paid at 17:00 WIB for orders whose waybill was confirmed within the 16:00 cutoff
+        # window (Shopee pays 50% of the estimated escrow up front). Longer windows cover days without a batch.
+        window_end = datetime.combine(event['at'].date(), time(16), WIB)
+        window_start = window_end - timedelta(days=days)
+        candidates = [sn for sn, stamp in shipping.items() if window_start < aware(stamp) <= window_end and sn not in not_shipped]
+        # Pending estimates are what is still owed AFTER the advance (equal to it); released orders paid their final amount.
+        expected = sum((money(pending[sn].get('estimated_escrow_amount') or '0') if sn in pending else released.get(sn, ZERO) / 2
+                        for sn in candidates), ZERO)
+        cohorts = {}
+        for sn in candidates:
+            key = (shipping_day(shipping[sn]) - first).days // 7
+            cohorts[key] = cohorts.get(key, 0) + 1
+        fits = bool(candidates) and abs(event['amount'] - expected) <= max(Decimal(500), expected * Decimal('0.05'))
+        return dict(dari=window_start, sampai=window_end, candidates=candidates, expected=expected, cohorts=cohorts, fits=fits)
+
+    def advance_match(event):
+        # Attribute only when the amount reconciles with the 50% rule AND every candidate order is in one weekly cohort.
+        for days in (1, 2, 3):
+            window = advance_window(event, days)
+            if window['fits'] and len(window['cohorts']) == 1 and not any(
+                    shipping_day(shipping[sn]).weekday() == 6 for sn in window['candidates']):
+                return next(iter(window['cohorts'])), max(shipping_day(shipping[sn]) for sn in window['candidates'])
+        return None
+
     def explain(event, reason):
-        # Read-only aid for admins. Final releases hint at escrow/repayment movements. A Dana Cepat advance is paid
-        # at 17:00 WIB for orders whose waybill was confirmed between 16:00 the day before and 16:00 that day.
+        # Read-only aid for admins. Final releases hint at escrow/repayment movements.
         entry = dict(waktu=event['at'].isoformat(), jenis=event['kind'], nominal=str(event['amount']),
                      pesanan=sorted(event['orders']), alasan=reason)
         if event['kind'] == 'advance':
-            window_end = datetime.combine(event['at'].date(), time(16), WIB)
-            window_start = window_end - timedelta(days=1)
-            candidates = [sn for sn, stamp in shipping.items() if window_start < aware(stamp) <= window_end]
-            pending_sum = sum((money(pending[sn].get('estimated_escrow_amount') or '0') for sn in candidates if sn in pending), ZERO)
-            cohorts = {}
-            for sn in candidates:
-                key = (shipping_day(shipping[sn]) - first).days // 7
-                cohorts[key] = cohorts.get(key, 0) + 1
-            total = pending_sum + event['amount']
-            entry['kandidat'] = dict(dari=window_start.isoformat(), jumlah=len(candidates), estimasi_pending=str(pending_sum),
-                                     rasio=str((event['amount'] / total).quantize(Decimal('0.001'))) if total > ZERO else None,
-                                     minggu_kirim=cohorts)
+            window = advance_window(event, 1)
+            entry['kandidat'] = dict(dari=window['dari'].isoformat(), sampai=window['sampai'].isoformat(), jumlah=len(window['candidates']),
+                                     diharapkan=str(window['expected']), cocok=window['fits'], minggu_kirim=window['cohorts'])
         else:
             entry['rilis_terdekat'] = sorted(
                 (dict(order_sn=r['order_sn'], payout=str(r.get('payout')), selisih_menit=round((r['dirilis'] - event['at']).total_seconds() / 60))
@@ -130,8 +147,10 @@ def fast_balances(shop, pending, complete, releases, shipping, not_shipped, even
         if day.weekday() != 6 and 0 <= i < len(cells) and event['at'] < cutoffs[i]:
             cells[i]['dana_cair'] += event['amount']
         cohort, reason = batch_cohort(event['orders']) if len(event['orders']) > 1 else (None, 'tanpa_pesanan')
+        newest = max((shipping_day(shipping[sn]) for sn in event['orders']), default=None) if cohort is not None else None
+        if not event['orders'] and event['kind'] == 'advance' and (matched := advance_match(event)):
+            cohort, newest = matched
         if cohort is not None:
-            newest = max(shipping_day(shipping[sn]) for sn in event['orders'])
             resolved.append(dict(event, cohort=cohort, shipped=newest))
             if 0 <= i < len(cells) and day.weekday() != 6 and cohort == i-1 and event['at'] < cutoffs[i]:
                 cells[i]['cair_minggu_lalu'] += event['amount']
