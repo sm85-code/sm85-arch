@@ -17,102 +17,34 @@ def event(day, value, kind, orders=('A',)):
     return dict(at=stamp(day), amount=fast.money(value), kind=kind, orders=set(orders))
 
 
-def balances(events, pending=None, releases=None, shipping=None):
-    return fast.fast_balances(SimpleNamespace(id='bumi', nama_toko='BUMI TANI IND'), pending or {}, True,
-        releases or [], shipping or {'A': datetime(2026, 9, 30, 12, tzinfo=fast.WIB)}, set(), events,
-        weekly_periods('2026-10', 4)[1], stamp(14, 0), stamp(16))
+def cells(events, start=stamp(1, 0)):
+    return fast.dana_cepat_cells(events, weekly_periods('2026-10', 4)[1], stamp(14, 0), start)
 
 
-def test_advance_remainder_and_return_do_not_double_count_final_settlement():
-    result = balances([event(3, '80', 'advance'), event(6, '20', 'remainder'), event(8, '-10', 'refund')],
-                      releases=[{'order_sn': 'A', 'payout': '100'}])
-    first, second, third, future = result['minggu']
-    assert first['dana_cair'] == '80.00'
-    assert first['piutang'] == '20.00'  # Only the unpaid remainder at Saturday cutoff.
-    assert second['dana_cair'] == '10.00'
-    assert second['cair_minggu_lalu'] == '10.00'  # 20 released minus 10 refunded.
-    assert fast.money(second['piutang_lama']) == 0
-    assert fast.money(third['piutang_lama']) == 0
-    assert future['dana_cair'] is None
+def test_advance_is_cash_and_a_payable_with_a_half_percent_fee_never_income():
+    first, second = cells([event(3, '99.5', 'advance')])[:2]
+    assert first['dana_cair'] == '99.50'
+    assert first['utang_dana_cepat'] == '100.00'  # 99.5 grossed up for the 0.5% fee.
+    assert first['biaya_dana_cepat'] == '0.50'
+    assert second['utang_dana_cepat'] == '100.00' and second['biaya_dana_cepat'] == '0.00'
 
 
-def test_pending_estimate_already_remaining_is_not_reduced_twice():
-    result = balances([event(6, '80', 'advance')], pending={'A': {'estimated_escrow_amount': '20'}},
-                      shipping={'A': stamp(5)})
-    assert result['minggu'][1]['piutang'] == '20.00'
-    assert result['minggu'][1]['dana_cair'] == '80.00'
-    assert result['minggu'][2]['piutang_lama'] == '20.00'
+def test_release_and_repayment_clear_the_payable():
+    first, second = cells([event(3, '99.5', 'advance'), event(6, '100', 'escrow'), event(6, '-100', 'repayment')])[:2]
+    assert first['utang_dana_cepat'] == '100.00'
+    assert second['utang_dana_cepat'] == '0.00'
+    assert second['dana_cair'] == '0.00'  # +100 escrow, -100 repayment.
 
 
-def test_actual_settlement_credit_and_repayment_are_netted_not_added_to_escrow_total():
-    result = balances([event(3, '80', 'advance'), event(6, '100', 'escrow'), event(6, '-80', 'repayment')],
-                      releases=[{'order_sn': 'A', 'payout': '100'}])
-    assert result['minggu'][0]['piutang'] == '20.00'
-    assert result['minggu'][1]['dana_cair'] == '20.00'
-    assert fast.money(result['minggu'][1]['piutang_lama']) == 0
+def test_return_deduction_reduces_the_payable_and_loans_before_the_range_count():
+    result = cells([event(1, '199', 'advance'), event(8, '-100', 'refund')], start=stamp(2, 0))
+    assert result[0]['utang_dana_cepat'] == '200.00'  # The 1 Okt advance predates the range but is still owed.
+    assert result[0]['dana_cair'] == '0.00'  # ...and is not cash of this range.
+    assert result[1]['utang_dana_cepat'] == '100.00'
 
 
-def test_unallocated_batch_repayment_is_not_split_evenly_or_counted_twice():
-    result = balances([event(6, '100', 'escrow'), event(6, '-80', 'repayment', ('A', 'B'))])
-    assert result['minggu'][1]['dana_cair'] == '20.00'
-    assert result['minggu'][0]['piutang'] is None
-    assert result['minggu'][0]['piutang_tidak_pasti'] == 1
-    assert result['mutasi_tidak_terpetakan'] == 1
-
-
-def test_multi_order_movement_in_one_cohort_is_attributed_not_unmapped():
-    shipping = {'A': stamp(1), 'B': stamp(2)}
-    result = balances([event(3, '80', 'advance', ('A', 'B')), event(6, '120', 'escrow', ('A', 'B'))],
-                      pending={'A': {'estimated_escrow_amount': '90'}, 'B': {'estimated_escrow_amount': '110'}},
-                      shipping=shipping)
-    first, second = result['minggu'][:2]
-    assert result['mutasi_tidak_terpetakan'] == 0
-    assert first['piutang'] == '320.00'  # 200 still pending + 120 released after the Saturday cutoff; the 80 advance predates it.
-    assert second['cair_minggu_lalu'] == '120.00'
-    assert second['piutang_tidak_pasti'] == 0
-
-
-def test_unmapped_movements_are_explained_with_nearest_releases():
-    release = {'order_sn': 'R1', 'payout': '75', 'dirilis': stamp(6, 11)}
-    result = fast.fast_balances(SimpleNamespace(id='bumi', nama_toko='BUMI TANI IND'), {}, True, [release],
-        {'A': stamp(1)}, set(), [event(6, '75', 'escrow', ()), event(6, '-80', 'repayment', ('A', 'B'))],
-        weekly_periods('2026-10', 4)[1], stamp(14, 0), stamp(16))
-    reasons = {d['alasan'] for d in result['mutasi_diagnosa']}
-    assert reasons == {'tanpa_pesanan', 'tanpa_tanggal_kirim'}
-    assert result['mutasi_diagnosa'][0]['rilis_terdekat'] == [dict(order_sn='R1', payout='75', selisih_menit=-60)]
-
-
-def test_advance_matching_the_candidates_is_attributed_to_its_cohort():
-    result = balances([event(6, '10200', 'advance', ())], pending={'A': {'estimated_escrow_amount': '10000'}},
-                      shipping={'A': stamp(5, 17)})
-    assert result['mutasi_tidak_terpetakan'] == 0
-    assert result['mutasi_diagnosa'] == []
-
-
-def test_advance_matching_one_of_several_candidates_or_a_released_payout_is_attributed():
-    releases = [{'order_sn': 'R', 'payout': '11457'}]
-    result = balances([event(6, '11748', 'advance', ()), event(7, '8874', 'advance', ())],
-                      pending={'A': {'estimated_escrow_amount': '8900'}, 'B': {'estimated_escrow_amount': '23700'}},
-                      releases=releases, shipping={'R': stamp(5, 17), 'A': stamp(6, 17), 'B': stamp(6, 18)})
-    assert result['mutasi_tidak_terpetakan'] == 0
-
-
-def test_monday_advance_covering_the_weekend_is_split_across_cohorts():
-    result = balances([event(12, '8000', 'advance', ())],
-                      pending={'S': {'estimated_escrow_amount': '5000'}, 'M': {'estimated_escrow_amount': '3000'}},
-                      shipping={'S': stamp(10, 17), 'M': stamp(12, 10)})
-    assert result['mutasi_tidak_terpetakan'] == 0
-    # Saturday's order was still owed in full at the Saturday cutoff: 5000 pending now + its 5000 advance paid later.
-    assert result['minggu'][1]['piutang'] == '10000.00'
-
-
-def test_advance_that_does_not_reconcile_stays_unmapped_with_expected_amount():
-    result = balances([event(6, '90000', 'advance', ())], pending={'A': {'estimated_escrow_amount': '10000'}},
-                      shipping={'A': stamp(5, 17), 'B': stamp(2)})
-    assert result['mutasi_tidak_terpetakan'] == 1
-    candidate = result['mutasi_diagnosa'][0]['kandidat']
-    assert candidate['jumlah'] == 1 and candidate['diharapkan'] == '10000.00' and candidate['cocok'] is False
-    assert [o['order_sn'] for o in candidate['pesanan_3_hari']] == ['A']
+def test_future_weeks_have_no_figures():
+    assert cells([event(3, '99.5', 'advance')])[3] == dict(dana_cair=None, utang_dana_cepat=None, biaya_dana_cepat=None)
 
 
 @pytest.mark.asyncio

@@ -98,8 +98,8 @@ async def weekly_pending_receivables(session, akun_id, periode, jumlah_kolom=Non
             releases = await erp_shopee.daftar_escrow(session, shop, int(start.timestamp()), int(now.timestamp())) if start < now else []
             fast = shop_key(shop.nama_toko) == shop_key("BUMI TANI IND")
             if fast:
-                from .financial_fast_escrow import wallet_income, fast_balances
-                events = await wallet_income(session, shop, start, now)
+                from .financial_fast_escrow import LOOKBACK_DAYS, wallet_income
+                events = await wallet_income(session, shop, start - timedelta(days=LOOKBACK_DAYS), now)
             else:
                 events = []
             local = (await session.execute(select(Pesanan.id_eksternal, Pesanan.tanggal_kirim).where(
@@ -108,8 +108,7 @@ async def weekly_pending_receivables(session, akun_id, periode, jumlah_kolom=Non
             shipping = {r.id_eksternal: r.tanggal_kirim for r in local if r.tanggal_kirim}
             # Pending income can exist before that order has ever been imported into the ERP.
             not_shipped = set()
-            wallet_orders = {sn for event in events for sn in event["orders"]}
-            missing = [sn for sn in pending.keys() | {r["order_sn"] for r in releases} | wallet_orders if sn not in shipping]
+            missing = [sn for sn in pending.keys() | {r["order_sn"] for r in releases} if sn not in shipping]
             for offset in range(0, len(missing), 30):
                 details = await commerce.income_orders(session, shop, missing[offset:offset+30])
                 for detail in details["items"]:
@@ -129,9 +128,6 @@ async def weekly_pending_receivables(session, akun_id, periode, jumlah_kolom=Non
                         shipping[detail["order_sn"]] = stamp
     except TimeoutError as exc:
         raise HTTPException(504, "Pembacaan dana Shopee toko ini belum selesai. Coba lagi.") from exc
-
-    if fast:
-        return fast_balances(shop, pending, complete, releases, shipping, not_shipped, events, periods, end, now)
 
     paid = {r["order_sn"]: r for r in releases}
     cutoffs = [min(end, datetime.combine(date.fromisoformat(w["akhir"]) + timedelta(days=1), time.min, WIB)) for w in periods]
@@ -184,5 +180,11 @@ async def weekly_pending_receivables(session, akun_id, periode, jumlah_kolom=Non
                             "cair_minggu_lalu": "cair_tidak_terpetakan"}[field]]
             uncertain_zero = cell[field] == ZERO and (unknown or unmapped or (field != "cair_minggu_lalu" and not complete))
             cell[field] = str(cell[field]) if available and not uncertain_zero else None
-    return dict(akun_id=akun_id, nama=shop.nama_toko, minggu=cells, halaman_lengkap=complete,
-                tanpa_tanggal_kirim=unmapped, sumber="shopee_menunggu_cair", dibaca_at=now.isoformat())
+    result = dict(akun_id=akun_id, nama=shop.nama_toko, minggu=cells, halaman_lengkap=complete,
+                  tanpa_tanggal_kirim=unmapped, sumber="shopee_menunggu_cair", dibaca_at=now.isoformat())
+    if fast:
+        from .financial_fast_escrow import dana_cepat_cells
+        for cell, extra in zip(cells, dana_cepat_cells(events, periods, end, start)):
+            cell.update(extra)
+        result["dana_cepat"] = True
+    return result

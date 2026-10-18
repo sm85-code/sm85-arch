@@ -71,6 +71,16 @@ Pembanding pengiriman ERP memakai enam toko, status belum selesai, tanggal kirim
 
 BUMI TANI IND memakai Dana Cepat dan estimasinya tidak dimasukkan ke Google Drive. Total ERP tetap enam toko agar cocok dengan tab Pemasukan; pisahkan estimasi BUMI TANI dari subtotal lima toko cakupan estimasi Drive. Keterangan jadwal pukul 17.00 tidak digunakan untuk membuat pencairan fiktif atau mengeluarkan toko dari tabel dana cair/saldo penjual. Pencairan tetap memakai tanggal dan nilai riil.
 
+#### Dana Cepat BUMI TANI IND dalam piutang mingguan
+
+Dana Cepat adalah pinjaman sementara (tenor 14 hari, biaya pencairan 0,5% dari jumlah yang memenuhi syarat), bukan pendapatan. Data pesanan nyata (Rincian Dana Cepat Shopee) menunjukkan pencairan awal hampir sama dengan estimasi "menunggu cair" pesanan itu (dikurangi 0,5%), jadi estimasi menunggu cair **tidak berkurang** oleh advance. Karena itu:
+
+- **Piutang** BUMI TANI dihitung seperti toko lain: estimasi menunggu cair ditambah dana akhir yang dirilis setelah cut-off. Advance tidak mengurangi atau menambah piutang, sehingga tidak perlu dipetakan ke pesanan (mutasi advance Shopee tidak membawa kode pesanan).
+- **Utang Dana Cepat** per cut-off Sabtu = advance (dibagi 0,995 agar mencakup biaya) dikurangi pelunasan dan potongan retur, dari mutasi dompet. Pembacaan mundur 28 hari menangkap pinjaman yang masih terbuka di awal rentang.
+- **Biaya Dana Cepat** per minggu = 0,5% dari advance minggu itu (perkiraan).
+- **Dana cair** tetap mutasi saldo aktual (kas), sehingga pemasukan = perubahan saldo penjual + perubahan piutang - perubahan utang Dana Cepat.
+
+
 ### Saldo tertahan menurut cakupan Drive
 
 Di tab Pembanding ERP, saldo tertahan adalah jumlah sisa wallet BUMI LESTARI INDONESIA, CAHAYA LANGIT IND, dan RESTU BUMI IND pada tanggal laporan terakhir pukul 23:59 WIB (contoh 13 Oktober), bukan posisi Minggu sebelumnya atau dana cair kumulatif. Baca mutasi historis memakai helper cut-off yang sama dengan saldo mingguan, khusus ketiga nama lengkap itu. Total rupiah hanya tersedia jika ketiga akun cocok, terhubung, dan riwayat rupiah lengkap; nol sah dipertahankan, sedangkan riwayat kosong/error atau mata uang lain tidak dianggap nol. Rincian tiap toko dan waktu mutasi tersedia. Buku utama tidak ditimpa dan piutang gabungan tidak dihitung dengan menambahkan estimasi bruto.
