@@ -1,5 +1,6 @@
 """BUMI TANI only: actual wallet credits, never a second copy of final escrow totals."""
 from datetime import datetime, time, timedelta
+from decimal import Decimal
 import re
 
 from fastapi import HTTPException
@@ -94,15 +95,35 @@ def fast_balances(shop, pending, complete, releases, shipping, not_shipped, even
         return (cohorts.pop(), None) if len(cohorts) == 1 else (None, 'beda_minggu_kirim')
 
     diagnosis = []
+    advance_times = sorted(e['at'] for e in events if e['kind'] == 'advance')
+
+    def aware(stamp):
+        return stamp.replace(tzinfo=WIB) if stamp.tzinfo is None else stamp.astimezone(WIB)
 
     def explain(event, reason):
-        # Read-only aid for admins: the closest per-order releases hint at which orders an unlabelled movement paid.
-        near = sorted(
-            (dict(order_sn=r['order_sn'], payout=str(r.get('payout')), selisih_menit=round((r['dirilis'] - event['at']).total_seconds() / 60))
-             for r in releases if r.get('dirilis')),
-            key=lambda r: abs(r['selisih_menit']))[:3]
-        diagnosis.append(dict(waktu=event['at'].isoformat(), jenis=event['kind'], nominal=str(event['amount']),
-                              pesanan=sorted(event['orders']), alasan=reason, rilis_terdekat=near))
+        # Read-only aid for admins. Final releases hint at escrow/repayment movements; an advance is paid
+        # in a daily batch before release, so its candidates are the orders picked up since the previous batch.
+        entry = dict(waktu=event['at'].isoformat(), jenis=event['kind'], nominal=str(event['amount']),
+                     pesanan=sorted(event['orders']), alasan=reason)
+        if event['kind'] == 'advance':
+            earlier = [t for t in advance_times if t < event['at']]
+            window_start = earlier[-1] if earlier else event['at'] - timedelta(days=1)
+            candidates = [sn for sn, stamp in shipping.items() if window_start < aware(stamp) <= event['at']]
+            pending_sum = sum((money(pending[sn].get('estimated_escrow_amount') or '0') for sn in candidates if sn in pending), ZERO)
+            cohorts = {}
+            for sn in candidates:
+                key = (shipping_day(shipping[sn]) - first).days // 7
+                cohorts[key] = cohorts.get(key, 0) + 1
+            total = pending_sum + event['amount']
+            entry['kandidat'] = dict(dari=window_start.isoformat(), jumlah=len(candidates), estimasi_pending=str(pending_sum),
+                                     rasio=str((event['amount'] / total).quantize(Decimal('0.001'))) if total > ZERO else None,
+                                     minggu_kirim=cohorts)
+        else:
+            entry['rilis_terdekat'] = sorted(
+                (dict(order_sn=r['order_sn'], payout=str(r.get('payout')), selisih_menit=round((r['dirilis'] - event['at']).total_seconds() / 60))
+                 for r in releases if r.get('dirilis')),
+                key=lambda r: abs(r['selisih_menit']))[:3]
+        diagnosis.append(entry)
 
     for event in events:
         day = event['at'].date()
