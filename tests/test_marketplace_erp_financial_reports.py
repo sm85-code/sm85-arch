@@ -915,9 +915,11 @@ async def test_fast_escrow_read_applies_only_to_bumi_tani(session, monkeypatch):
     result = await pending.weekly_pending_receivables(session, 'fast-shop', '2026-10', 3,
              sampai=date(2026, 10, 13), as_of=datetime(2026, 10, 16, 12, tzinfo=f.WIB))
     assert result['dana_cepat'] is True
-    assert f.money(result['minggu'][0]['piutang']) == 100
+    # Receivables stay gross: the advance is a payable, not a reduction of the pending estimate.
+    assert f.money(result['minggu'][0]['piutang']) == 20
     assert f.money(result['minggu'][1]['piutang_lama']) == 20
     assert f.money(result['minggu'][1]['dana_cair']) == 80
+    assert f.money(result['minggu'][1]['utang_dana_cepat']) == f.money(80 / 0.995)
     normal = await pending.weekly_pending_receivables(session, 'ordinary-shop', '2026-10', 3,
              sampai=date(2026, 10, 13), as_of=datetime(2026, 10, 16, 12, tzinfo=f.WIB))
     assert 'dana_cepat' not in normal

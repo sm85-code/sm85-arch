@@ -6,7 +6,6 @@ import re
 from fastapi import HTTPException
 
 from .financial_reports import WIB, ZERO, money
-from .financial_shopee import shipping_day
 from ..infrastructure.adapters import erp_shopee_workflows as provider
 
 KINDS = {
@@ -71,190 +70,36 @@ async def wallet_income(session, shop, start, now):
     return events
 
 
-def fast_balances(shop, pending, complete, releases, shipping, not_shipped, events, periods, end, now):
+FEE_RATE = Decimal('0.005')  # Shopee's disbursement fee: 0.5% of the eligible amount, deducted from each advance.
+LOOKBACK_DAYS = 28  # Advances have a 14-day tenor; reading two tenors back recovers the loan open at the first cutoff.
+
+
+def dana_cepat_cells(events, periods, end, start):
+    """Dana Cepat is a loan, not income: cash in the wallet, a payable until repaid, and a 0.5% fee.
+
+    Receivables stay gross (estimate until the final escrow release) and are NOT touched by advances. Per week:
+    dana_cair   wallet cash received in the week (advances + releases - repayments), as shown by the wallet;
+    utang       total owed to Shopee at the Saturday cutoff = advances grossed up for the fee - repayments - deductions;
+    biaya       fee on the advances of the week (estimated at 0.5%).
+    """
     cutoffs = [min(end, datetime.combine(datetime.fromisoformat(w['akhir']).date() + timedelta(days=1), time.min, WIB)) for w in periods]
-    cells = [dict(piutang=ZERO, piutang_lama=ZERO, cair_minggu_lalu=ZERO, dana_cair=ZERO,
-                  piutang_tidak_pasti=0, piutang_lama_tidak_pasti=0, cair_tidak_terpetakan=0) for _ in periods]
-    by_order, ambiguous, unallocated, batches, resolved = {}, set(), [], [], []
-    unmapped, unmapped_events = 0, 0
     first = datetime.fromisoformat(periods[0]['mulai']).date()
-
-    def batch_cohort(orders):
-        # Shopee often pays several orders in one movement. The total is known even though the split is not,
-        # so it is attributable when every order shipped on a normal day in one weekly cohort.
-        cohorts = set()
-        for sn in orders:
-            stamp = shipping.get(sn)
-            if sn in not_shipped:
-                return None, 'belum_dikirim'
-            if stamp is None:
-                return None, 'tanpa_tanggal_kirim'
-            if shipping_day(stamp).weekday() == 6:
-                return None, 'dikirim_hari_minggu'
-            cohorts.add((shipping_day(stamp) - first).days // 7)
-        return (cohorts.pop(), None) if len(cohorts) == 1 else (None, 'beda_minggu_kirim')
-
-    diagnosis = []
-
-    def aware(stamp):
-        return stamp.replace(tzinfo=WIB) if stamp.tzinfo is None else stamp.astimezone(WIB)
-
-    released = {r['order_sn']: money(r.get('payout') or 0) for r in releases}
-
-    def advance_window(event, days):
-        # A Dana Cepat advance is paid at 17:00 WIB for orders whose waybill was confirmed within the 16:00 cutoff
-        # window (about 50% of the estimated escrow). Longer windows cover days without a batch.
-        window_end = datetime.combine(event['at'].date(), time(16), WIB)
-        window_start = window_end - timedelta(days=days)
-        candidates = [sn for sn, stamp in shipping.items() if window_start < aware(stamp) <= window_end and sn not in not_shipped]
-        # What is still owed after the first disbursement (pending estimate) or was paid out net of its repayment
-        # (released payout) is about what that disbursement was. Not every order in the window is advanced, so the
-        # amount is checked against any combination of candidates, not only their total.
-        values = [money(pending[sn].get('estimated_escrow_amount') or '0') if sn in pending else released.get(sn, ZERO) for sn in candidates]
-        expected = sum(values, ZERO)
-        cohorts = {}
-        for sn in candidates:
-            key = (shipping_day(shipping[sn]) - first).days // 7
-            cohorts[key] = cohorts.get(key, 0) + 1
-        tolerance = max(Decimal(500), event['amount'] * Decimal('0.05'))
-        sums = [(ZERO, ())]
-        for index, value in enumerate(values[:14]):
-            sums += [(total + value, chosen + (index,)) for total, chosen in sums]
-        matches = [(abs(event['amount'] - total), chosen) for total, chosen in sums
-                   if total > ZERO and abs(event['amount'] - total) <= tolerance]
-        return dict(dari=window_start, sampai=window_end, candidates=candidates, values=values, expected=expected,
-                    cohorts=cohorts, matches=matches, fits=bool(matches))
-
-    def bucket(sn):
-        day = shipping_day(shipping[sn])
-        return None if day.weekday() == 6 else (day - first).days // 7  # Sunday shipments belong to no weekly receivable.
-
-    def advance_match(event):
-        # Attribute when the amount reconciles with a combination of the window's orders and every matching
-        # combination touches the same weekly cohorts (a Monday batch also pays the weekend). The advance is split
-        # across those cohorts in proportion to the matched orders; Sunday shipments are left out. None = no match.
-        for days in (1, 2, 3):
-            window = advance_window(event, days)
-            if not window['matches']:
-                continue
-            candidates, values = window['candidates'], window['values']
-            if len({frozenset(bucket(candidates[i]) for i in chosen) for _, chosen in window['matches']}) != 1:
-                continue
-            _, chosen = min(window['matches'], key=lambda m: m[0])
-            total = sum((values[i] for i in chosen), ZERO)
-            parts = {}
-            for i in chosen:
-                cohort = bucket(candidates[i])
-                if cohort is None:
-                    continue
-                amount, newest = parts.get(cohort, (ZERO, shipping_day(shipping[candidates[i]])))
-                parts[cohort] = (amount + values[i], max(newest, shipping_day(shipping[candidates[i]])))
-            return [(cohort, money(event['amount'] * amount / total), newest) for cohort, (amount, newest) in parts.items()]
-        return None
-
-    def explain(event, reason):
-        # Read-only aid for admins. Final releases hint at escrow/repayment movements.
-        entry = dict(waktu=event['at'].isoformat(), jenis=event['kind'], nominal=str(event['amount']),
-                     pesanan=sorted(event['orders']), alasan=reason)
-        if event['kind'] == 'advance':
-            window = advance_window(event, 1)
-            entry['kandidat'] = dict(dari=window['dari'].isoformat(), sampai=window['sampai'].isoformat(), jumlah=len(window['candidates']),
-                                     diharapkan=str(window['expected']), cocok=window['fits'], minggu_kirim=window['cohorts'])
-            wide = advance_window(event, 3)  # Lists up to three days so a Monday batch shows the weekend's orders too.
-            entry['kandidat']['pesanan_3_hari'] = [
-                dict(order_sn=sn, nilai=str(value), sumber='menunggu' if sn in pending else 'cair', waktu=aware(shipping[sn]).isoformat(),
-                     minggu=bucket(sn))
-                for sn, value in sorted(zip(wide['candidates'], wide['values']), key=lambda pair: aware(shipping[pair[0]]))[:40]]
-        else:
-            entry['rilis_terdekat'] = sorted(
-                (dict(order_sn=r['order_sn'], payout=str(r.get('payout')), selisih_menit=round((r['dirilis'] - event['at']).total_seconds() / 60))
-                 for r in releases if r.get('dirilis')),
-                key=lambda r: abs(r['selisih_menit']))[:3]
-        diagnosis.append(entry)
-
-    for event in events:
-        day = event['at'].date()
-        i = (day - datetime.fromisoformat(periods[0]['mulai']).date()).days // 7
-        if day.weekday() != 6 and 0 <= i < len(cells) and event['at'] < cutoffs[i]:
-            cells[i]['dana_cair'] += event['amount']
-        cohort, reason = batch_cohort(event['orders']) if len(event['orders']) > 1 else (None, 'tanpa_pesanan')
-        parts = None
-        if cohort is not None:
-            parts = [(cohort, event['amount'], max(shipping_day(shipping[sn]) for sn in event['orders']))]
-        elif not event['orders'] and event['kind'] == 'advance':
-            parts = advance_match(event)
-        if parts is not None:
-            resolved.append(dict(event, parts=parts))
-            for part_cohort, amount, _ in parts:
-                if 0 <= i < len(cells) and day.weekday() != 6 and part_cohort == i-1 and event['at'] < cutoffs[i]:
-                    cells[i]['cair_minggu_lalu'] += amount
-            continue
-        if len(event['orders']) != 1:
-            explain(event, reason)
-            # A batch repayment has no per-order allocation in this API. Count its cash once,
-            # but do not divide it equally across shipping cohorts or pretend it was zero.
-            ambiguous.update(event['orders'])
-            batches.append(event)
-            unmapped_events += 1
-            if event['kind'] == 'repayment':
-                unallocated.append(event)
-            if 0 <= i < len(cells) and event['at'] < cutoffs[i] and day.weekday() != 6:
-                cells[i]['cair_tidak_terpetakan'] += 1
-            continue
-        sn = next(iter(event['orders']))
-        by_order.setdefault(sn, []).append(event)
-        stamp = shipping.get(sn)
-        if stamp is None:
-            continue
-        shipped = shipping_day(stamp)
-        cohort = (shipped - datetime.fromisoformat(periods[0]['mulai']).date()).days // 7
-        if (day.weekday() != 6 and shipped.weekday() != 6 and 0 <= i < len(cells)
-                and cohort == i-1 and event['at'] < cutoffs[i]):
-            cells[i]['cair_minggu_lalu'] += event['amount']
-    paid = {r['order_sn'] for r in releases}
-    for sn in pending.keys() | paid | by_order.keys() | ambiguous:
-        if sn in not_shipped:
-            continue
-        stamp = shipping.get(sn)
-        if stamp is None:
-            unmapped += 1
-            continue
-        stamp = stamp.replace(tzinfo=WIB) if stamp.tzinfo is None else stamp.astimezone(WIB)
-        if stamp.weekday() == 6:
-            continue
-        cohort = (stamp.date() - datetime.fromisoformat(periods[0]['mulai']).date()).days // 7
-        # Shopee describes estimated_escrow_amount as the amount STILL pending.
-        # Never subtract advances from that amount a second time.
-        estimate = pending[sn].get('estimated_escrow_amount') if sn in pending else '0'
-        receipts = [e for e in by_order.get(sn, []) if e['kind'] not in ('refund', 'negative')]
-        for i, cutoff in enumerate(cutoffs):
-            if stamp >= cutoff or cohort > i:
-                continue
-            key = 'piutang' if cohort == i else 'piutang_lama'
-            if estimate is None or any(e['at'] >= cutoff and sn in e['orders'] for e in batches) or any(e['at'] >= cutoff and not e['orders'] for e in unallocated):
-                cells[i][key + '_tidak_pasti'] += 1
-                continue
-            outstanding = money(estimate) + sum((e['amount'] for e in receipts if e['at'] >= cutoff), ZERO)
-            cells[i][key] += max(ZERO, outstanding)
-    for i, cutoff in enumerate(cutoffs):
-        for event in resolved:
-            if event['kind'] in ('refund', 'negative') or event['at'] < cutoff:
-                continue
-            for part_cohort, amount, shipped in event['parts']:
-                if part_cohort > i or datetime.combine(shipped, time.min, WIB) >= cutoff:
-                    continue
-                key = 'piutang' if part_cohort == i else 'piutang_lama'
-                cells[i][key] = max(ZERO, cells[i][key] + amount)
-    for i, cell in enumerate(cells):
-        for event in batches:
-            if not event['orders'] and event['kind'] not in ('refund', 'negative') and event['at'] >= cutoffs[i]:
-                cell['piutang_tidak_pasti'] += 1
-                cell['piutang_lama_tidak_pasti'] += 1
-        available = datetime.combine(datetime.fromisoformat(periods[i]['mulai']).date(), time.min, WIB) < end
-        for key in ('piutang', 'piutang_lama', 'cair_minggu_lalu', 'dana_cair'):
-            unknown = cell.get({'piutang': 'piutang_tidak_pasti', 'piutang_lama': 'piutang_lama_tidak_pasti',
-                                'cair_minggu_lalu': 'cair_tidak_terpetakan'}.get(key, ''), 0)
-            uncertain = key != 'dana_cair' and cell[key] == ZERO and (unknown or unmapped or (key != 'cair_minggu_lalu' and not complete))
-            cell[key] = str(cell[key]) if available and not uncertain else None
-    return dict(akun_id=shop.id, nama=shop.nama_toko, minggu=cells, halaman_lengkap=complete,
-                tanpa_tanggal_kirim=unmapped, mutasi_tidak_terpetakan=unmapped_events, mutasi_diagnosa=diagnosis[:60], sumber='shopee_wallet_dana_cepat', dana_cepat=True, dibaca_at=now.isoformat())
+    cells = []
+    for i, period in enumerate(periods):
+        available = datetime.combine(datetime.fromisoformat(period['mulai']).date(), time.min, WIB) < end
+        cash, owed, fee = ZERO, ZERO, ZERO
+        for event in events:
+            if event['at'] < cutoffs[i]:
+                if event['kind'] in ('advance', 'remainder'):
+                    owed += event['amount'] / (1 - FEE_RATE)
+                elif event['kind'] in ('repayment', 'refund'):
+                    owed += event['amount']  # Already negative.
+            day = event['at'].date()
+            if event['at'] >= start and day.weekday() != 6 and (day - first).days // 7 == i and event['at'] < cutoffs[i]:
+                cash += event['amount']
+                if event['kind'] in ('advance', 'remainder'):
+                    fee += event['amount'] * FEE_RATE / (1 - FEE_RATE)
+        cells.append(dict(dana_cair=str(money(cash)) if available else None,
+                          utang_dana_cepat=str(money(max(ZERO, owed))) if available else None,
+                          biaya_dana_cepat=str(money(fee)) if available else None))
+    return cells
