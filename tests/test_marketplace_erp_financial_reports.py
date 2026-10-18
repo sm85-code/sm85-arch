@@ -870,7 +870,7 @@ async def test_empty_pending_response_requires_independent_zero_confirmation(mon
     else:
         with pytest.raises(HTTPException):
             await pending.pending_pages(None, SimpleNamespace(id='shop'), date(2026, 10, 18))
-    assert [call.kwargs['params']['page_size'] for call in request.call_args_list] == [100, 10]
+    assert [call.kwargs['params']['page_size'] for call in request.call_args_list] == ([100] if accepted else [100, 10])
 
 
 @pytest.mark.asyncio

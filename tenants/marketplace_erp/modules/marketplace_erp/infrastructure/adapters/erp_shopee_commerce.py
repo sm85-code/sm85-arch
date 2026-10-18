@@ -139,6 +139,18 @@ async def income(session, akun, start, end, status, cursor, size):
         if envelope is None and ("list" in wrapped or "income_detail_list_item" in wrapped):
             envelope = wrapped
 
+    # Some local shops return an empty successful response when nothing is pending.
+    # Confirm with the independent overview before normalizing it to an empty page.
+    # This adapter is shared by Menunggu cair and the weekly financial report.
+    if status == 2 and not cursor and wrapped == {} and envelope is None and not data.get("error"):
+        try:
+            pending = (await income_overview(session, akun)).get("pending_amount")
+        except HTTPException:
+            pending = None
+        if pending is not None and Decimal(str(pending)) == 0:
+            return {"items": [], "next_cursor": "", "ada_lagi": False, "pagination_known": True,
+                    "warnings": [], "request_id": data.get("request_id")}
+
     def reject(reason):
         # Report fixed paths and schema-like wrapper field names only. Never
         # include field values, financial records, cursors or credentials.
