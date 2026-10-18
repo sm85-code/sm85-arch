@@ -239,6 +239,7 @@ async def test_every_report_endpoint_denies_non_admin_before_db_access(role):
             ("GET", "?periode=2026-10"),
             ("GET", "/sumber?tanggal=2026-10-06"),
             ("GET", "/pemasukan-shopee?periode=2026-10"),
+            ("GET", "/piutang-pengiriman-shopee?periode=2026-10"),
             ("GET", "/saldo-penjual-shopee?periode=2026-10"),
             ("GET", "/saldo-wallet-shopee/shop?tanggal=2026-10-04"),
             ("GET", "/riwayat"),
@@ -717,3 +718,68 @@ async def test_held_wallet_total_requires_three_complete_idr_balances_and_preser
     failed = await held_balance(session, date(2026, 10, 13))
     assert failed["saldo_toko"] is None
     assert all(r["keterangan"] for r in failed["rincian"])
+
+
+@pytest.mark.asyncio
+async def test_shipping_receivable_cohorts_old_carry_and_previous_week_cash(session):
+    from tenants.marketplace_erp.modules.marketplace_erp.application.financial_shopee import weekly_shipping_receivables
+    from tenants.marketplace_erp.modules.marketplace_erp.infrastructure.models import SettlementPesanan
+    session.add(AkunMarketplace(id='ship-main', platform='shopee', nama_toko='BUMI LESTARI INDONESIA'))
+    for sn, day, total, status, native in [
+        ('old-open', '2026-09-21', 40, 'shipped', 'SHIPPED'),
+        ('old-paid', '2026-09-24', 60, 'completed', 'COMPLETED'),
+        ('last-paid', '2026-09-28', 100, 'completed', 'COMPLETED'),
+        ('received', '2026-10-03', 200, 'shipped', 'TO_CONFIRM_RECEIVE'),
+        ('new', '2026-10-05', 300, 'shipped', 'SHIPPED'),
+        ('same-week', '2026-10-05', 80, 'shipped', 'SHIPPED'),
+        ('sunday', '2026-10-04', 999, 'shipped', 'SHIPPED'),
+        ('cancelled', '2026-09-29', 999, 'cancelled', 'CANCELLED'),
+        ('after-limit', '2026-10-14', 999, 'shipped', 'SHIPPED'),
+    ]:
+        session.add(Pesanan(platform='shopee', akun_id='ship-main', id_eksternal=sn,
+                            tanggal_kirim=datetime.fromisoformat(day+'T12:00:00+07:00'),
+                            total=total, status=status, status_marketplace=native))
+    for sn, amount in [('old-paid', 55), ('last-paid', 90), ('same-week', 70), ('sunday', 900)]:
+        session.add(SettlementPesanan(akun_id='ship-main', order_sn=sn, jumlah_cair=amount,
+                                     dirilis_at=datetime.fromisoformat('2026-10-06T12:00:00+07:00')))
+    await session.commit()
+    result = await weekly_shipping_receivables(session, '2026-10', 5, sampai=date(2026, 10, 13),
+                                               as_of=datetime.fromisoformat('2026-11-01T12:00:00+07:00'))
+    row = next(s for s in result['toko'] if s['nama'] == 'BUMI LESTARI INDONESIA')
+    assert [(w['piutang'], w['piutang_lama'], w['cair_minggu_lalu']) for w in row['minggu'][:3]] == [
+        ('300.00', '100.00', '0'), ('300.00', '240.00', '90.00'), ('0', '540.00', '0')]
+    assert result['minggu'][0]['mulai'] == '2026-09-28'
+    assert result['minggu'][2]['hingga'] == '2026-10-13'
+    assert row['minggu'][3]['piutang'] is None
+    assert result['toko'][0]['minggu'][0]['piutang'] is None  # Missing account is not a confirmed zero.
+    assert len(result['toko']) == 6 and result['toko'][-1]['nama'] == 'AZFA Furniture Official'
+
+
+@pytest.mark.asyncio
+async def test_shipping_receivable_incomplete_evidence_is_not_zero_and_accounts_are_isolated(session):
+    from tenants.marketplace_erp.modules.marketplace_erp.application.financial_shopee import weekly_shipping_receivables
+    from tenants.marketplace_erp.modules.marketplace_erp.infrastructure.models import SettlementPesanan
+    session.add_all([AkunMarketplace(id='sa', platform='shopee', nama_toko='BUMI TANI IND'),
+                     AkunMarketplace(id='sb', platform='shopee', nama_toko='AZFA Furniture Official')])
+    for account, sn, status in [('sa', 'same-sn', 'completed'), ('sb', 'sb-sn', 'shipped'),
+                                ('sa', 'unknown-release', 'completed')]:
+        session.add(Pesanan(platform='shopee', akun_id=account, id_eksternal=sn, status=status,
+                            tanggal_kirim=datetime.fromisoformat('2026-10-02T12:00:00+07:00'), total=100))
+    session.add_all([
+        SettlementPesanan(akun_id='sa', order_sn='same-sn', jumlah_cair=90,
+                          dirilis_at=datetime.fromisoformat('2026-10-06T12:00:00+07:00')),
+        SettlementPesanan(akun_id='sa', order_sn='unknown-release', jumlah_cair=90),
+        SettlementPesanan(akun_id='sa', order_sn='sb-sn', jumlah_cair=50,
+                          dirilis_at=datetime.fromisoformat('2026-10-07T12:00:00+07:00')),
+    ])
+    await session.commit()
+    result = await weekly_shipping_receivables(session, '2026-10', 5,
+                                               as_of=datetime.fromisoformat('2026-10-08T12:00:00+07:00'))
+    a, b = result['toko'][0], result['toko'][-1]
+    assert a['minggu'][0]['piutang'] is None and a['minggu'][0]['piutang_tidak_pasti'] == 1
+    assert a['minggu'][1]['piutang_lama'] is None
+    assert a['minggu'][1]['cair_minggu_lalu'] is None and a['minggu'][1]['cair_tidak_terpetakan'] == 2
+    assert b['minggu'][0]['piutang'] == '100.00'
+    assert b['minggu'][1]['piutang_lama'] == '100.00' and b['minggu'][1]['cair_minggu_lalu'] == '0'
+    assert result['minggu'][1]['hingga'] == '2026-10-08'
+    assert b['minggu'][2]['piutang'] is None
