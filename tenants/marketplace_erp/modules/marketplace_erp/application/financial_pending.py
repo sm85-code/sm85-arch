@@ -96,13 +96,20 @@ async def weekly_pending_receivables(session, akun_id, periode, jumlah_kolom=Non
         async with asyncio.timeout(48):
             pending, complete = await pending_pages(session, shop, now.date())
             releases = await erp_shopee.daftar_escrow(session, shop, int(start.timestamp()), int(now.timestamp())) if start < now else []
+            fast = shop_key(shop.nama_toko) == shop_key("BUMI TANI IND")
+            if fast:
+                from .financial_fast_escrow import wallet_income, fast_balances
+                events = await wallet_income(session, shop, start, now)
+            else:
+                events = []
             local = (await session.execute(select(Pesanan.id_eksternal, Pesanan.tanggal_kirim).where(
                 Pesanan.akun_id == akun_id, Pesanan.platform == "shopee",
             ))).all()
             shipping = {r.id_eksternal: r.tanggal_kirim for r in local if r.tanggal_kirim}
             # Pending income can exist before that order has ever been imported into the ERP.
             not_shipped = set()
-            missing = [sn for sn in pending.keys() | {r["order_sn"] for r in releases} if sn not in shipping]
+            wallet_orders = {sn for event in events for sn in event["orders"]}
+            missing = [sn for sn in pending.keys() | {r["order_sn"] for r in releases} | wallet_orders if sn not in shipping]
             for offset in range(0, len(missing), 30):
                 details = await commerce.income_orders(session, shop, missing[offset:offset+30])
                 for detail in details["items"]:
@@ -122,6 +129,9 @@ async def weekly_pending_receivables(session, akun_id, periode, jumlah_kolom=Non
                         shipping[detail["order_sn"]] = stamp
     except TimeoutError as exc:
         raise HTTPException(504, "Pembacaan dana Shopee toko ini belum selesai. Coba lagi.") from exc
+
+    if fast:
+        return fast_balances(shop, pending, complete, releases, shipping, not_shipped, events, periods, end, now)
 
     paid = {r["order_sn"]: r for r in releases}
     cutoffs = [min(end, datetime.combine(date.fromisoformat(w["akhir"]) + timedelta(days=1), time.min, WIB)) for w in periods]

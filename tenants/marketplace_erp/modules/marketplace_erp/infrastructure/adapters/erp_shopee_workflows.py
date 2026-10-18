@@ -348,11 +348,13 @@ async def dispute(session, akun, sn, payload):
     return {"ok": True, "request_id": data.get("request_id"), "warnings": []}
 
 
-async def wallet(session, akun, dari, sampai, offset=0):
+async def wallet(session, akun, dari, sampai, offset=0, *, page_size=40):
+    if not 1 <= page_size <= 100:
+        reject("Ukuran halaman mutasi harus 1 sampai 100")
     start, end = rentang_retur(dari, sampai)
     path = "/api/v2/payment/get_wallet_transaction_list"
     data = await read(
-        session, akun, path, {"page_no": offset, "page_size": 40, "create_time_from": start, "create_time_to": end}
+        session, akun, path, {"page_no": offset, "page_size": page_size, "create_time_from": start, "create_time_to": end}
     )
     rows = data.get("transaction_list")
     try:
@@ -384,9 +386,14 @@ async def wallet(session, akun, dari, sampai, offset=0):
                     "withdrawal_type",
                     "description",
                     "money_flow",
+                    "transaction_tab_type",
                     "reason",
                 )
             }
+            orders = row.get("pay_order_list") or []
+            if not isinstance(orders, list) or any(not isinstance(item, dict) or not isinstance(item.get("order_sn"), str) for item in orders):
+                raise ValueError("invalid linked orders")
+            entry["pay_order_list"] = [{"order_sn": item["order_sn"]} for item in orders]
             entry["transaction_type"] = str(row["transaction_type"])
             for k in ("withdrawal_id", "root_withdrawal_id"):
                 entry[k] = str(row[k]) if row.get(k) is not None else None
