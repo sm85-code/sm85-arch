@@ -82,6 +82,14 @@ def test_unmapped_movements_are_explained_with_nearest_releases():
     assert result['mutasi_diagnosa'][0]['rilis_terdekat'] == [dict(order_sn='R1', payout='75', selisih_menit=-60)]
 
 
+def test_advance_diagnosis_lists_orders_confirmed_in_the_16h_window():
+    result = balances([event(3, '30', 'advance', ()), event(6, '45', 'advance', ())],
+                      pending={'A': {'estimated_escrow_amount': '70'}, 'B': {'estimated_escrow_amount': '55'}},
+                      shipping={'A': stamp(5, 17), 'B': stamp(2)})
+    last = result['mutasi_diagnosa'][-1]['kandidat']
+    assert last['jumlah'] == 1 and last['estimasi_pending'] == '70.00' and last['rasio'] == '0.391'
+
+
 @pytest.mark.asyncio
 async def test_wallet_windows_offsets_statuses_and_boundaries(monkeypatch):
     def row(day, kind, amount, status='COMPLETED'):
