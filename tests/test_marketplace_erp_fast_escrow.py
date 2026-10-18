@@ -82,11 +82,19 @@ def test_unmapped_movements_are_explained_with_nearest_releases():
     assert result['mutasi_diagnosa'][0]['rilis_terdekat'] == [dict(order_sn='R1', payout='75', selisih_menit=-60)]
 
 
-def test_advance_matching_the_50_percent_rule_is_attributed_to_its_cohort():
+def test_advance_matching_the_candidates_is_attributed_to_its_cohort():
     result = balances([event(6, '10200', 'advance', ())], pending={'A': {'estimated_escrow_amount': '10000'}},
                       shipping={'A': stamp(5, 17)})
     assert result['mutasi_tidak_terpetakan'] == 0
     assert result['mutasi_diagnosa'] == []
+
+
+def test_advance_matching_one_of_several_candidates_or_a_released_payout_is_attributed():
+    releases = [{'order_sn': 'R', 'payout': '11457'}]
+    result = balances([event(6, '11748', 'advance', ()), event(7, '8874', 'advance', ())],
+                      pending={'A': {'estimated_escrow_amount': '8900'}, 'B': {'estimated_escrow_amount': '23700'}},
+                      releases=releases, shipping={'R': stamp(5, 17), 'A': stamp(6, 17), 'B': stamp(6, 18)})
+    assert result['mutasi_tidak_terpetakan'] == 0
 
 
 def test_advance_that_does_not_reconcile_stays_unmapped_with_expected_amount():

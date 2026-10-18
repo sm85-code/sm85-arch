@@ -103,22 +103,28 @@ def fast_balances(shop, pending, complete, releases, shipping, not_shipped, even
 
     def advance_window(event, days):
         # A Dana Cepat advance is paid at 17:00 WIB for orders whose waybill was confirmed within the 16:00 cutoff
-        # window (Shopee pays 50% of the estimated escrow up front). Longer windows cover days without a batch.
+        # window (about 50% of the estimated escrow). Longer windows cover days without a batch.
         window_end = datetime.combine(event['at'].date(), time(16), WIB)
         window_start = window_end - timedelta(days=days)
         candidates = [sn for sn, stamp in shipping.items() if window_start < aware(stamp) <= window_end and sn not in not_shipped]
-        # Pending estimates are what is still owed AFTER the advance (equal to it); released orders paid their final amount.
-        expected = sum((money(pending[sn].get('estimated_escrow_amount') or '0') if sn in pending else released.get(sn, ZERO) / 2
-                        for sn in candidates), ZERO)
+        # What is still owed after the first disbursement (pending estimate) or was paid out net of its repayment
+        # (released payout) is about what that disbursement was. Not every order in the window is advanced, so the
+        # amount is checked against any combination of candidates, not only their total.
+        values = [money(pending[sn].get('estimated_escrow_amount') or '0') if sn in pending else released.get(sn, ZERO) for sn in candidates]
+        expected = sum(values, ZERO)
         cohorts = {}
         for sn in candidates:
             key = (shipping_day(shipping[sn]) - first).days // 7
             cohorts[key] = cohorts.get(key, 0) + 1
-        fits = bool(candidates) and abs(event['amount'] - expected) <= max(Decimal(500), expected * Decimal('0.05'))
+        tolerance = max(Decimal(500), event['amount'] * Decimal('0.05'))
+        sums = [ZERO]
+        for value in values[:14]:
+            sums += [total + value for total in sums]
+        fits = any(total > ZERO and abs(event['amount'] - total) <= tolerance for total in sums)
         return dict(dari=window_start, sampai=window_end, candidates=candidates, expected=expected, cohorts=cohorts, fits=fits)
 
     def advance_match(event):
-        # Attribute only when the amount reconciles with the 50% rule AND every candidate order is in one weekly cohort.
+        # Attribute only when the amount reconciles with some combination of the candidates AND they share one weekly cohort.
         for days in (1, 2, 3):
             window = advance_window(event, days)
             if window['fits'] and len(window['cohorts']) == 1 and not any(
