@@ -26,7 +26,16 @@ def epoch(value):
         return None
 
 
-async def pending_total_matches(session, shop, rows):
+def explained_by_releases(difference, recent):
+    """Shopee's overview can lag after a release: the surplus then equals the payout of orders released in the last days."""
+    payouts = [Decimal(str(p)) for p in recent][:14]
+    sums = {Decimal(0)}
+    for payout in payouts:
+        sums |= {total + payout for total in sums}
+    return difference > 0 and difference in sums
+
+
+async def pending_total_matches(session, shop, rows, recent=(), info=None):
     """Missing pagination is resolved only by an independently returned pending total."""
     try:
         total = (await commerce.income_overview(session, shop)).get("pending_amount")
@@ -34,7 +43,12 @@ async def pending_total_matches(session, shop, rows):
         return False
     if total is None or any(row.get("estimated_escrow_amount") is None for row in rows.values()):
         return False
-    return Decimal(str(total)) == sum((Decimal(str(row["estimated_escrow_amount"])) for row in rows.values()), Decimal(0))
+    listed = sum((Decimal(str(row["estimated_escrow_amount"])) for row in rows.values()), Decimal(0))
+    if Decimal(str(total)) == listed or explained_by_releases(Decimal(str(total)) - listed, recent):
+        return True
+    if info is not None:
+        info["catatan"] = f"ringkasan Shopee Rp {int(Decimal(str(total))):,} vs daftar Rp {int(listed):,}".replace(",", ".")
+    return False
 
 
 def empty_income_response(exc):
@@ -45,7 +59,7 @@ def empty_income_response(exc):
             and diagnostic.get("top_types", {}).get("response") == "dict")
 
 
-async def pending_pages(session, shop, today):
+async def pending_pages(session, shop, today, recent=(), info=None):
     """Retry an empty envelope with the menu's page size; verify against its overview."""
     rows, seen, cursor, page_size = {}, set(), "", 100
     for _ in range(300):
@@ -60,7 +74,7 @@ async def pending_pages(session, shop, today):
                     raise
                 last_error = exc
         if page is None:
-            if await pending_total_matches(session, shop, rows):
+            if await pending_total_matches(session, shop, rows, recent, info):
                 return rows, True
             raise last_error
         for row in page["items"]:
@@ -71,7 +85,7 @@ async def pending_pages(session, shop, today):
         if len(rows) > 3000:
             raise HTTPException(424, "Daftar menunggu cair Shopee melebihi batas pesanan")
         if not page.get("pagination_known"):
-            return rows, await pending_total_matches(session, shop, rows)
+            return rows, await pending_total_matches(session, shop, rows, recent, info)
         following = page.get("next_cursor")
         if not following:
             return rows, True
@@ -94,8 +108,12 @@ async def weekly_pending_receivables(session, akun_id, periode, jumlah_kolom=Non
     # Token refresh uses this request's session; network calls stay sequential.
     try:
         async with asyncio.timeout(48):
-            pending, complete = await pending_pages(session, shop, now.date())
             releases = await erp_shopee.daftar_escrow(session, shop, int(start.timestamp()), int(now.timestamp())) if start < now else []
+            # Orders released in the last 3 days: they explain an overview total that has not caught up yet.
+            recent = [r["payout"] for r in releases if r.get("payout") is not None and r.get("dirilis")
+                      and now - timedelta(days=3) <= r["dirilis"].astimezone(WIB) <= now]
+            page_info = {}
+            pending, complete = await pending_pages(session, shop, now.date(), recent, page_info)
             fast = shop_key(shop.nama_toko) == shop_key("BUMI TANI IND")
             if fast:
                 from .financial_fast_escrow import LOOKBACK_DAYS, wallet_income
@@ -194,6 +212,8 @@ async def weekly_pending_receivables(session, akun_id, periode, jumlah_kolom=Non
             cell[field] = str(cell[field]) if available and not uncertain_zero else None
     result = dict(akun_id=akun_id, nama=shop.nama_toko, minggu=cells, halaman_lengkap=complete,
                   tanpa_tanggal_kirim=unmapped, sumber="shopee_menunggu_cair", dibaca_at=now.isoformat())
+    if page_info.get("catatan") and not complete:
+        result["catatan_halaman"] = page_info["catatan"]
     if fast:
         from .financial_fast_escrow import dana_cepat_cells
         for cell, extra in zip(cells, dana_cepat_cells(events, periods, end, start)):
