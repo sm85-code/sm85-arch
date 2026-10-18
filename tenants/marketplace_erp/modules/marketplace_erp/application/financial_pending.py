@@ -6,6 +6,7 @@ Current pending plus actual releases after the first cutoff reconstruct prior ba
 import asyncio
 import re
 from datetime import date, datetime, time, timedelta
+from decimal import Decimal
 
 from fastapi import HTTPException
 from sqlalchemy import select
@@ -25,18 +26,52 @@ def epoch(value):
         return None
 
 
+async def pending_total_matches(session, shop, rows):
+    """Missing pagination is resolved only by an independently returned pending total."""
+    try:
+        total = (await commerce.income_overview(session, shop)).get("pending_amount")
+    except HTTPException:
+        return False
+    if total is None or any(row.get("estimated_escrow_amount") is None for row in rows.values()):
+        return False
+    return Decimal(str(total)) == sum((Decimal(str(row["estimated_escrow_amount"])) for row in rows.values()), Decimal(0))
+
+
+def empty_income_response(exc):
+    detail = exc.detail if isinstance(exc.detail, dict) else {}
+    diagnostic = detail.get("diagnostic", {})
+    return (diagnostic.get("reason") == "income_envelope"
+            and diagnostic.get("response_field_count") == 0
+            and diagnostic.get("top_types", {}).get("response") == "dict")
+
+
 async def pending_pages(session, shop, today):
-    """Read all explicit cursors; retain known amounts when pagination is unavailable."""
-    rows, seen, cursor = {}, set(), ""
-    for _ in range(30):
-        page = await commerce.income(session, shop, today - timedelta(days=13), today, 2, cursor, 100)
+    """Retry an empty envelope with the menu's page size; verify against its overview."""
+    rows, seen, cursor, page_size = {}, set(), "", 100
+    for _ in range(300):
+        page, last_error = None, None
+        for size in (page_size, 10) if page_size != 10 else (10,):
+            try:
+                page = await commerce.income(session, shop, today - timedelta(days=13), today, 2, cursor, size)
+                page_size = size
+                break
+            except HTTPException as exc:
+                if not empty_income_response(exc):
+                    raise
+                last_error = exc
+        if page is None:
+            if await pending_total_matches(session, shop, rows):
+                return rows, True
+            raise last_error
         for row in page["items"]:
             sn = row.get("order_sn")
             if not isinstance(sn, str) or not re.fullmatch(r"[A-Za-z0-9]{1,50}", sn):
                 raise HTTPException(424, "Shopee tidak memberikan kode pesanan menunggu cair yang valid")
             rows[sn] = row
+        if len(rows) > 3000:
+            raise HTTPException(424, "Daftar menunggu cair Shopee melebihi batas pesanan")
         if not page.get("pagination_known"):
-            return rows, not rows  # Explicit empty first page is a successful empty pending list.
+            return rows, await pending_total_matches(session, shop, rows)
         following = page.get("next_cursor")
         if not following:
             return rows, True

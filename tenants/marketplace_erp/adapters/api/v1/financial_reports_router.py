@@ -59,7 +59,7 @@ async def shipping_receivables(
     return await weekly_shipping_receivables(session, periode, jumlah_kolom, sampai=sampai)
 
 
-@router.get("/piutang-pengiriman-shopee/{akun_id}")
+@router.get("/piutang-pengiriman-shopee/{akun_id}", summary="Piutang mingguan dengan verifikasi total menunggu cair")
 async def shipping_receivables_pending(
     akun_id: str,
     periode: str = Query(pattern=r"^\d{4}-\d{2}$"),

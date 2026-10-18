@@ -843,6 +843,7 @@ async def test_pending_partial_pages_and_missing_dates_are_explicit(session, mon
         'items': [{'order_sn': 'NODATE', 'estimated_escrow_amount': '100'}], 'pagination_known': False,
     }))
     monkeypatch.setattr(pending.commerce, 'income_orders', AsyncMock(return_value={'items': []}))
+    monkeypatch.setattr(pending.commerce, 'income_overview', AsyncMock(return_value={'pending_amount': None}))
     monkeypatch.setattr(pending.erp_shopee, 'daftar_escrow', AsyncMock(return_value=[]))
     result = await pending.weekly_pending_receivables(session, 'partial-pending', '2026-10', 2,
               as_of=datetime(2026, 10, 13, 12, tzinfo=f.WIB))
@@ -851,3 +852,38 @@ async def test_pending_partial_pages_and_missing_dates_are_explicit(session, mon
     with pytest.raises(HTTPException) as exc:
         await pending.weekly_pending_receivables(session, 'not-a-report-shop', '2026-10')
     assert exc.value.status_code == 404
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("pending_total,accepted", [("0", True), ("100", False), (None, False)])
+async def test_empty_pending_response_requires_independent_zero_confirmation(monkeypatch, pending_total, accepted):
+    from unittest.mock import AsyncMock
+    from tenants.marketplace_erp.modules.marketplace_erp.application import financial_pending as pending
+    from tenants.marketplace_erp.modules.marketplace_erp.application import management_schemas
+
+    monkeypatch.setattr(management_schemas, 'today', lambda: date(2026, 10, 18))
+    request = AsyncMock(return_value={'error': '', 'response': {}})
+    monkeypatch.setattr(pending.commerce.provider, 'signed_shop_request', request)
+    monkeypatch.setattr(pending.commerce, 'income_overview', AsyncMock(return_value={'pending_amount': pending_total}))
+    if accepted:
+        assert await pending.pending_pages(None, SimpleNamespace(id='shop'), date(2026, 10, 18)) == ({}, True)
+    else:
+        with pytest.raises(HTTPException):
+            await pending.pending_pages(None, SimpleNamespace(id='shop'), date(2026, 10, 18))
+    assert [call.kwargs['params']['page_size'] for call in request.call_args_list] == [100, 10]
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("total,complete", [("150", True), ("200", False), (None, False)])
+async def test_missing_pending_pagination_verified_by_total(monkeypatch, total, complete):
+    from unittest.mock import AsyncMock
+    from tenants.marketplace_erp.modules.marketplace_erp.application import financial_pending as pending
+
+    monkeypatch.setattr(pending.commerce, 'income', AsyncMock(return_value={
+        'items': [{'order_sn': 'A', 'estimated_escrow_amount': '100'},
+                  {'order_sn': 'B', 'estimated_escrow_amount': '50'}], 'pagination_known': False,
+    }))
+    monkeypatch.setattr(pending.commerce, 'income_overview', AsyncMock(return_value={'pending_amount': total}))
+    rows, verified = await pending.pending_pages(None, SimpleNamespace(id='shop'), date(2026, 10, 18))
+    assert set(rows) == {'A', 'B'}
+    assert verified is complete
