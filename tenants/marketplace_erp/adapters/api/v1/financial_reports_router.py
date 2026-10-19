@@ -1,7 +1,7 @@
 """Every report descendant is admin-only, including sources, history and exports."""
 
 import json
-from datetime import date, datetime, time, timedelta
+from datetime import date, datetime, timedelta
 from zoneinfo import ZoneInfo
 
 from fastapi import APIRouter, Depends, HTTPException, Query
@@ -20,9 +20,7 @@ from tenants.marketplace_erp.modules.marketplace_erp.infrastructure.models impor
     LaporanKeuanganTutup,
     LaporanKeuanganAudit,
     UserMarketplaceErp,
-    Pesanan,
     AkunMarketplace,
-    IklanHarianToko,
 )
 
 admin = require_roles_marketplace_erp("admin")
@@ -217,88 +215,3 @@ async def drive_import(
     actor: UserMarketplaceErp = Depends(admin),
 ):
     return await import_drive(session, payload, actor)
-
-
-@router.get("/{tanggal}/pembanding")
-async def comparison(tanggal: date, session: AsyncSession = Depends(get_db_marketplace_erp)):
-    record = await session.get(LaporanKeuanganTutup, tanggal)
-    if not record:
-        raise HTTPException(404, "Laporan tidak ditemukan")
-    report = json.loads(record.snapshot_json)
-    from tenants.marketplace_erp.modules.marketplace_erp.application.financial_shopee import (
-        REPORT_SHOPS, selected_shops, shipping_day, shop_key, unfinished_query,
-    )
-
-    month_start = tanggal.replace(day=1)
-    start = month_start - timedelta(days=month_start.weekday())
-    shops = await selected_shops(session)
-    names = {s.id: s.nama_toko for s in shops}
-    rows = (await session.execute(unfinished_query(list(names)).where(
-        Pesanan.tanggal_kirim >= datetime.combine(start, time.min, reports.WIB),
-        Pesanan.tanggal_kirim < datetime.combine(tanggal + timedelta(days=1), time.min, reports.WIB),
-    ))).all()
-    orders = [
-        {"id": o.id, "nomor": o.id_eksternal, "akun_id": o.akun_id, "toko": names[o.akun_id], "total_bruto": str(o.total),
-         "tanggal_kirim": shipping_day(o.tanggal).isoformat(), "status": o.status_marketplace or o.status}
-        for o in rows if shipping_day(o.tanggal).weekday() != 6
-    ]
-    orders.sort(key=lambda o: (o["tanggal_kirim"], o["toko"], o["nomor"]))
-    ads = (await session.scalars(select(IklanHarianToko.expense).where(
-        IklanHarianToko.akun_id.in_(list(names)),
-        IklanHarianToko.tanggal >= start, IklanHarianToko.tanggal <= tanggal,
-    ))).all()
-    snapshots = (await session.scalars(select(LaporanKeuanganTutup).where(
-        LaporanKeuanganTutup.tanggal >= month_start, LaporanKeuanganTutup.tanggal <= tanggal,
-    ))).all()
-    books = [json.loads(row.snapshot_json) for row in snapshots]
-    book_ads = sum((reports.money(b["hasil"]["biaya_iklan"]) for b in books), reports.ZERO)
-    book_start = min(b["mulai"] for b in books)
-    def breakdown(items):
-        return {"jumlah_pesanan": len(items), "nominal": str(sum(
-            (reports.money(o["total_bruto"]) for o in items), reports.ZERO))}
-    by_shop = []
-    for name in REPORT_SHOPS:
-        ids = {s.id for s in shops if shop_key(s.nama_toko) == shop_key(name)}
-        by_shop.append({"nama": name, "akun_ditemukan": bool(ids), "masuk_estimasi_drive": name != "BUMI TANI IND",
-                        **breakdown([o for o in orders if o["akun_id"] in ids])})
-    by_week = []
-    week = start
-    while week <= tanggal:
-        last = min(week + timedelta(days=5), tanggal)
-        by_week.append({"mulai": week.isoformat(), "akhir": last.isoformat(), **breakdown(
-            [o for o in orders if week.isoformat() <= o["tanggal_kirim"] <= last.isoformat()])})
-        week += timedelta(days=7)
-    from tenants.marketplace_erp.modules.marketplace_erp.application.financial_held_balance import held_balance
-
-    held = await held_balance(session, tanggal)
-    end = report["hasil"]["saldo_akhir"]
-    return {
-        "periode": {"mulai": start.isoformat(), "akhir": tanggal.isoformat(), "hari": "Senin–Sabtu"},
-        "periode_iklan_laporan": {"mulai": book_start, "akhir": tanggal.isoformat()},
-        "laporan": {
-            "piutang_pengiriman": end["piutang_pengiriman"],
-            "saldo_toko": end["saldo_toko"],
-            "piutang_total": str(reports.money(end["piutang_pengiriman"]) + reports.money(end["saldo_toko"])),
-            "biaya_iklan": str(book_ads),
-        },
-        "erp": {
-            "piutang_pengiriman_bruto": str(
-                sum((reports.money(o["total_bruto"]) for o in orders), reports.ZERO)
-            ),
-            "saldo_toko": held["saldo_toko"],
-            "saldo_tertahan_cutoff": held["cutoff"],
-            "saldo_tertahan_lengkap": held["lengkap"],
-            "rincian_saldo_tertahan": held["rincian"],
-            "piutang_belum_ditarik": None,
-            "biaya_iklan": str(sum(ads, reports.ZERO)),
-            "pesanan": orders,
-            "rincian_toko": by_shop,
-            "estimasi_bumi_tani": next(t["nominal"] for t in by_shop if t["nama"] == "BUMI TANI IND"),
-            "estimasi_cakupan_drive": str(sum(
-                (reports.money(t["nominal"]) for t in by_shop if t["masuk_estimasi_drive"]), reports.ZERO)),
-            "catatan_dana_cepat": "Estimasi BUMI TANI IND tidak masuk Google Drive. Dana Cepat: dikirim sebelum pukul 17.00 cair pukul 17.00 hari itu; setelah pukul 17.00 cair hari berikutnya. Jadwal ini keterangan, bukan pengganti tanggal/nilai pencairan riil.",
-            "rincian_minggu": by_week,
-        },
-        "dibaca_at": datetime.now(ZoneInfo("Asia/Jakarta")).isoformat(),
-        "catatan": "Pengiriman dibatasi enam toko laporan, tanggal kirim dari Senin pada minggu tanggal 1 sampai tanggal laporan terakhir, Senin–Sabtu, sama dengan tabel estimasi pada tab Pemasukan. Status pesanan memakai kondisi saat dibaca; nilai bruto bukan saldo bersih historis. Estimasi BUMI TANI IND (Dana Cepat) dipisahkan dari subtotal lima toko yang masuk cakupan estimasi Drive. Saldo tertahan berarti sisa wallet BUMI LESTARI INDONESIA, CAHAYA LANGIT IND, dan RESTU BUMI IND pada tanggal laporan pukul 23:59 WIB, berdasarkan mutasi historis. Total saldo hanya tersedia bila ketiga toko lengkap. Piutang gabungan tidak dihitung dari estimasi bruto.",
-    }
