@@ -1,4 +1,4 @@
-"""Admin-only connection to Siabumdes' read-only supplier catalog."""
+"""Admin-only connection to the read-only supplier catalog."""
 
 import os
 from decimal import Decimal, InvalidOperation
@@ -57,16 +57,16 @@ async def connect(payload: CatalogLogin, session: AsyncSession = Depends(get_db_
                 },
             )
             if login.status_code != 200:
-                raise HTTPException(422, "Login Siabumdes gagal. Gunakan akun admin Siabumdes.")
+                raise HTTPException(422, "Login katalog gagal. Gunakan akun admin sumber katalog.")
             result = await client.post(source_url() + CATALOG_PATH + "/access", json={})
             if result.status_code != 200:
-                raise HTTPException(409, "Akses katalog Siabumdes belum tersedia untuk akun ini")
+                raise HTTPException(409, "Akses katalog belum tersedia untuk akun ini")
             data = result.json()
             token = data["token"]
             if not isinstance(token, str) or not token:
                 raise ValueError("Invalid credential")
     except (httpx.HTTPError, ValueError, KeyError):
-        raise HTTPException(502, "Siabumdes belum dapat dihubungi")
+        raise HTTPException(502, "Sumber katalog belum dapat dihubungi")
     row = await session.get(ProcessingSupplierConnection, "siabumdes")
     if row is None:
         row = ProcessingSupplierConnection(id="siabumdes")
@@ -84,12 +84,12 @@ async def connect(payload: CatalogLogin, session: AsyncSession = Depends(get_db_
 async def fetch_supplier_catalog(session):
     row = await session.get(ProcessingSupplierConnection, "siabumdes")
     if not row:
-        raise HTTPException(409, "Hubungkan Siabumdes terlebih dahulu")
+        raise HTTPException(409, "Hubungkan katalog terlebih dahulu")
     try:
         async with catalog_http_client() as client:
             response = await client.get(source_url() + CATALOG_PATH, headers={"X-ERP-Catalog-Key": row.token})
         if response.status_code in [401, 403]:
-            raise HTTPException(409, "Koneksi Siabumdes berakhir. Hubungkan ulang.")
+            raise HTTPException(409, "Koneksi katalog berakhir. Hubungkan ulang.")
         response.raise_for_status()
         data = response.json()
         if data.get("unit_id") != row.unit_id or not isinstance(data.get("items"), list):
@@ -106,7 +106,7 @@ async def fetch_supplier_catalog(session):
                 raise ValueError("Invalid price/stock")
         return data
     except (httpx.HTTPError, ValueError, KeyError, TypeError, InvalidOperation):
-        raise HTTPException(502, "Katalog Siabumdes belum dapat dibaca. Harga dan stok tidak dianggap nol.")
+        raise HTTPException(502, "Katalog otomatis belum dapat dibaca. Harga dan stok tidak dianggap nol.")
 
 
 @router.get("/supplier-catalog")
