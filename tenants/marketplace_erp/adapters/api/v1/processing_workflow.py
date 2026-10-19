@@ -816,7 +816,7 @@ async def edit_job(
         if mode == "otomatis":
             product_id = payload.supplier_product_id or previous.get("supplier_product_id", "")
             if not product_id:
-                raise HTTPException(422, "Pilih produk dari katalog Siabumdes")
+                raise HTTPException(422, "Pilih produk dari katalog otomatis")
             if (
                 previous.get("catalog_mode") == mode
                 and previous.get("supplier_product_id") == product_id
@@ -831,7 +831,7 @@ async def edit_job(
                 catalog = await fetch_supplier_catalog(session)
                 chosen = next((p for p in catalog["items"] if p["id"] == product_id), None)
                 if not chosen:
-                    raise HTTPException(422, "Produk tidak ditemukan di katalog Siabumdes")
+                    raise HTTPException(422, "Produk tidak ditemukan di katalog otomatis")
                 reference = dict(chosen, read_at=catalog["read_at"])
                 data["production_price"] = str(chosen["sell_price"])
             data.update(

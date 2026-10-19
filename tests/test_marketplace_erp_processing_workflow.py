@@ -590,6 +590,7 @@ async def test_supplier_catalog_connection_prices_stock_snapshots_and_manual_cat
     )
     assert response.status_code == 200, response.text
     assert "token" not in response.json()
+    assert "unit_name" not in response.json()  # the source's name stays private
     async with factory() as db:
         stored = await db.scalar(text("SELECT token FROM mpe_processing_supplier_connection"))
         assert stored.startswith("fernet:v1:") and "remote-read-key" not in stored and "password" not in stored
