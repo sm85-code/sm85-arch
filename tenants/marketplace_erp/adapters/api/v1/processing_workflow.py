@@ -211,6 +211,14 @@ async def lock_prices(session):
         await session.execute(text("SELECT pg_advisory_xact_lock(8265071801)"))
 
 
+def product_name(price):
+    """Name sent to the supplier: the product plus its variants, e.g. "Pupuk (Ukuran: 5 kg, Jenis: Basah)"."""
+    varian = price.get("varian") or []
+    if not varian:
+        return price["produk"]
+    return f'{price["produk"]} ({", ".join(v["nama"] + ": " + v["nilai"] for v in varian)})'[:300]
+
+
 async def price_list(session, *, include_inactive=False, include_deleted=False):
     original = await session.get(ProcessingCatalog, "global")
     data = json.loads(original.payload_json) if original else {}
@@ -860,7 +868,7 @@ async def edit_job(
                 catalog_mode="manual",
                 supplier_product_id="",
                 supplier_reference=None,
-                supplier_product_name=price["produk"]
+                supplier_product_name=product_name(price)
                 if price
                 else payload.supplier_product_name or previous.get("supplier_product_name") or data["produk"],
                 supplier_sku=price.get("sku", "")

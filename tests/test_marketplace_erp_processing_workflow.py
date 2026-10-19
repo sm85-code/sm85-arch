@@ -975,3 +975,14 @@ async def test_manual_product_variants_are_validated(client, varian, kind):
     http, _, _ = client
     body = {"version": 0, "kind": kind, "produk": "Barang", "harga": "1", "varian": varian}
     assert (await http.put("/processing/prices/x1", json=body)).status_code == 422
+
+
+def test_supplier_product_name_carries_the_variants():
+    from tenants.marketplace_erp.adapters.api.v1.processing_workflow import product_name
+
+    assert product_name({"produk": "Pupuk"}) == "Pupuk"
+    assert product_name({"produk": "Pupuk", "varian": []}) == "Pupuk"
+    assert (
+        product_name({"produk": "Pupuk", "varian": [{"nama": "Ukuran", "nilai": "5 kg"}, {"nama": "Jenis", "nilai": "Basah"}]})
+        == "Pupuk (Ukuran: 5 kg, Jenis: Basah)"
+    )
