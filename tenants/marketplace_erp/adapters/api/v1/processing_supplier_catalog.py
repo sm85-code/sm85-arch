@@ -1,4 +1,4 @@
-"""Admin-only connection to the read-only supplier catalog (its name is never shown in the UI or error messages)."""
+"""Admin-only connection to the read-only supplier catalog."""
 
 import os
 from decimal import Decimal, InvalidOperation
@@ -36,6 +36,7 @@ async def connection_status(session: AsyncSession = Depends(get_db_marketplace_e
     row = await session.get(ProcessingSupplierConnection, "siabumdes")
     return {
         "connected": bool(row),
+        "unit_name": row.unit_name if row else None,
         "expires_at": row.expires_at if row else None,
     }
 
@@ -77,7 +78,7 @@ async def connect(payload: CatalogLogin, session: AsyncSession = Depends(get_db_
         data["expires_at"],
     )
     await session.commit()
-    return {"connected": True}
+    return {"connected": True, "unit_name": row.unit_name}
 
 
 async def fetch_supplier_catalog(session):
@@ -110,9 +111,7 @@ async def fetch_supplier_catalog(session):
 
 @router.get("/supplier-catalog")
 async def supplier_catalog(session: AsyncSession = Depends(get_db_marketplace_erp)):
-    data = await fetch_supplier_catalog(session)
-    # Who the source is stays private: only what the ERP needs (items, read time) goes to the browser.
-    return {k: v for k, v in data.items() if k not in ("unit_id", "unit_name")}
+    return await fetch_supplier_catalog(session)
 
 
 @router.delete("/supplier-catalog/connection")

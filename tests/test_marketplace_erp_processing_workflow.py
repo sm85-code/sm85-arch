@@ -590,13 +590,11 @@ async def test_supplier_catalog_connection_prices_stock_snapshots_and_manual_cat
     )
     assert response.status_code == 200, response.text
     assert "token" not in response.json()
-    assert "unit_name" not in response.json()  # the source's name stays private
     async with factory() as db:
         stored = await db.scalar(text("SELECT token FROM mpe_processing_supplier_connection"))
         assert stored.startswith("fernet:v1:") and "remote-read-key" not in stored and "password" not in stored
     data = (await http.get("/processing/supplier-catalog")).json()
     assert data["items"][0]["qty_on_hand"] == 7 and data["items"][0]["sell_price"] == "50000"
-    assert "unit_name" not in data and "unit_id" not in data
     await http.post("/processing/jobs/select", json={"route": "supplier", "item_ids": ["i1"]})
     job = await save(
         http,
