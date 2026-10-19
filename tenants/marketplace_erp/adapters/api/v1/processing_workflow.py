@@ -58,7 +58,8 @@ class PriceInput(Strict):
     ukuran: str = Field(default="", max_length=100)
     # Manual (non-wood) products: any number of variant attributes, e.g. Ukuran 10x20 and Jenis Basah.
     varian: list[VarianInput] | None = Field(default=None, max_length=8)
-    harga: Money
+    # Optional only for manual products ("harga menyusul"); every other kind still requires it.
+    harga: Money | None = None
     catatan: str = Field(default="", max_length=2000)
 
 
@@ -317,7 +318,11 @@ async def save_price(price_id: str, payload: PriceInput, session: AsyncSession =
         raise HTTPException(409, "Harga telah berubah. Muat ulang sebelum menyimpan.")
     if not current and payload.version != 0:
         raise HTTPException(409, "Harga tidak ditemukan; muat ulang")
+    if payload.harga is None and payload.kind != "non_kayu":
+        raise HTTPException(422, "Harga wajib diisi")
     value = dict(current or {}, **payload.model_dump(mode="json", exclude={"version"}, exclude_none=True), id=price_id)
+    if payload.harga is None:
+        value.pop("harga", None)
     if payload.varian is not None:
         if payload.kind != "non_kayu":
             raise HTTPException(422, "Varian hanya untuk produk manual")
@@ -855,6 +860,10 @@ async def edit_job(
             )
             if payload.price_id and not price:
                 raise HTTPException(422, "Pilih produk dari katalog manual non kayu")
+            if price and price.get("harga") is None and not (
+                previous.get("price_id") == price["id"] and previous.get("production_price") is not None
+            ):
+                raise HTTPException(422, "Isi harga produk ini dulu di Katalog Manual")
             if price:
                 data.update(
                     production_price=previous["production_price"]

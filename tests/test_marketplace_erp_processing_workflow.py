@@ -986,3 +986,29 @@ def test_supplier_product_name_carries_the_variants():
         product_name({"produk": "Pupuk", "varian": [{"nama": "Ukuran", "nilai": "5 kg"}, {"nama": "Jenis", "nilai": "Basah"}]})
         == "Pupuk (Ukuran: 5 kg, Jenis: Basah)"
     )
+
+
+@pytest.mark.asyncio
+async def test_manual_product_price_can_follow_later_but_not_be_used_without_one(client):
+    http, _, _ = client
+    put = lambda pid, **body: http.put(f"/processing/prices/{pid}", json=body)  # noqa: E731
+    assert (await put("later", version=0, kind="non_kayu", produk="Menyusul", sku="LT-1")).status_code == 200
+    row = next(p for p in (await http.get("/processing/prices")).json()["items"] if p["id"] == "later")
+    assert "harga" not in row or row["harga"] is None
+    # Other kinds still need a price.
+    assert (await put("pack", version=0, kind="packing", packing_type="biasa", produk="Kemasan")).status_code == 422
+    # A job cannot pick it until the price is filled.
+    await http.post("/processing/jobs/select", json={"route": "supplier", "item_ids": ["i1"]})
+    job = next(j for j in await rows(http) if j["route"] == "supplier")
+    blocked = await http.put("/processing/jobs/" + job["id"], json=dict(
+        version=job["version"], party_id="s1", price_id="later", catalog_mode="manual",
+        color="Putih", packing_type="biasa", packing_price="5000"))
+    assert blocked.status_code == 422 and "Isi harga" in blocked.text
+    # Filling the price later makes it a normal product again.
+    assert (await put("later", version=row["version"], kind="non_kayu", produk="Menyusul", harga="9000")).status_code == 200
+    row = next(p for p in (await http.get("/processing/prices")).json()["items"] if p["id"] == "later")
+    assert row["harga"] == "9000"
+    # Clearing it again removes the stored price instead of keeping the old one.
+    assert (await put("later", version=row["version"], kind="non_kayu", produk="Menyusul")).status_code == 200
+    row = next(p for p in (await http.get("/processing/prices")).json()["items"] if p["id"] == "later")
+    assert row.get("harga") is None
