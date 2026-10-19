@@ -936,3 +936,53 @@ async def test_bulk_structure_rolls_back_database_conflict(client):
     result = await http.post('/processing/prices/bulk-structure', json=payload)
     assert result.status_code == 409, result.text
     assert (await http.get('/processing/prices')).json() == before
+
+
+@pytest.mark.asyncio
+async def test_manual_product_takes_any_variants_and_keeps_a_one_line_summary(client):
+    http, _, _ = client
+    body = {
+        "version": 0, "kind": "non_kayu", "produk": "Pupuk", "harga": "15000", "sku": "PPK-1",
+        "varian": [{"nama": "Ukuran", "nilai": " 5  kg "}, {"nama": "Jenis", "nilai": "Basah"}, {"nama": "", "nilai": ""}],
+    }
+    assert (await http.put("/processing/prices/pupuk", json=body)).status_code == 200
+    row = next(p for p in (await http.get("/processing/prices")).json()["items"] if p["id"] == "pupuk")
+    assert row["varian"] == [{"nama": "Ukuran", "nilai": "5 kg"}, {"nama": "Jenis", "nilai": "Basah"}]
+    assert row["ukuran"] == "5 kg · Basah"
+    # Without variants the product is valid too, and the summary is cleared.
+    body = {**body, "version": row["version"], "varian": []}
+    assert (await http.put("/processing/prices/pupuk", json=body)).status_code == 200
+    row = next(p for p in (await http.get("/processing/prices")).json()["items"] if p["id"] == "pupuk")
+    assert row["varian"] == [] and row["ukuran"] == ""
+    # An older client that only sends `ukuran` drops the variant list instead of leaving it stale.
+    legacy = {"version": row["version"], "kind": "non_kayu", "produk": "Pupuk", "harga": "15000", "ukuran": "10 kg"}
+    assert (await http.put("/processing/prices/pupuk", json=legacy)).status_code == 200
+    row = next(p for p in (await http.get("/processing/prices")).json()["items"] if p["id"] == "pupuk")
+    assert row.get("varian") is None and row["ukuran"] == "10 kg"
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "varian,kind",
+    [
+        ([{"nama": "Ukuran", "nilai": ""}], "non_kayu"),
+        ([{"nama": "Jenis", "nilai": "Basah"}, {"nama": "jenis", "nilai": "Kering"}], "non_kayu"),
+        ([{"nama": "Jenis", "nilai": "x" * 100}, {"nama": "Ukuran", "nilai": "y"}], "non_kayu"),
+        ([{"nama": "Jenis", "nilai": "Basah"}], "packing"),
+    ],
+)
+async def test_manual_product_variants_are_validated(client, varian, kind):
+    http, _, _ = client
+    body = {"version": 0, "kind": kind, "produk": "Barang", "harga": "1", "varian": varian}
+    assert (await http.put("/processing/prices/x1", json=body)).status_code == 422
+
+
+def test_supplier_product_name_carries_the_variants():
+    from tenants.marketplace_erp.adapters.api.v1.processing_workflow import product_name
+
+    assert product_name({"produk": "Pupuk"}) == "Pupuk"
+    assert product_name({"produk": "Pupuk", "varian": []}) == "Pupuk"
+    assert (
+        product_name({"produk": "Pupuk", "varian": [{"nama": "Ukuran", "nilai": "5 kg"}, {"nama": "Jenis", "nilai": "Basah"}]})
+        == "Pupuk (Ukuran: 5 kg, Jenis: Basah)"
+    )
