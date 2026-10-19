@@ -110,7 +110,9 @@ async def fetch_supplier_catalog(session):
 
 @router.get("/supplier-catalog")
 async def supplier_catalog(session: AsyncSession = Depends(get_db_marketplace_erp)):
-    return await fetch_supplier_catalog(session)
+    data = await fetch_supplier_catalog(session)
+    # Who the source is stays private: only what the ERP needs (items, read time) goes to the browser.
+    return {k: v for k, v in data.items() if k not in ("unit_id", "unit_name")}
 
 
 @router.delete("/supplier-catalog/connection")
