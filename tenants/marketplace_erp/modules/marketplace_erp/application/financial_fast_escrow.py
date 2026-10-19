@@ -17,7 +17,8 @@ KINDS = {
 }
 
 
-async def wallet_income(session, shop, start, now):
+async def wallet_income(session, shop, start, now, ignored=None):
+    """`ignored`, when given, counts the movements that are not Dana Cepat by "type/tab", so a missing kind can be spotted."""
     events, seen_events = [], set()
     day = start.date()
     pages = 0
@@ -42,6 +43,9 @@ async def wallet_income(session, shop, start, now):
                 if row.get('transaction_tab_type') == 'fast_escrow_repayment' and kind not in ('refund', 'negative'):
                     kind = 'repayment'
                 if kind is None:
+                    if ignored is not None:
+                        label = f"{row['transaction_type']}/{row.get('transaction_tab_type') or '-'}"
+                        ignored[label] = ignored.get(label, 0) + 1
                     continue  # Withdrawals, ads and unrelated adjustments do not pay an order.
                 amount = money(row['amount'])
                 flow = row.get('money_flow')
@@ -88,8 +92,14 @@ def dana_cepat_cells(events, periods, end, start):
     for i, period in enumerate(periods):
         available = datetime.combine(datetime.fromisoformat(period['mulai']).date(), time.min, WIB) < end
         cash, owed, fee = ZERO, ZERO, ZERO
+        parts = dict(pencairan=ZERO, pencairan_lanjutan=ZERO, pelunasan=ZERO, retur=ZERO)
+        earliest = None
         for event in events:
             if event['at'] < cutoffs[i]:
+                part = {'advance': 'pencairan', 'remainder': 'pencairan_lanjutan', 'repayment': 'pelunasan', 'refund': 'retur'}.get(event['kind'])
+                if part:
+                    parts[part] += abs(event['amount'])
+                    earliest = min(earliest or event['at'], event['at'])
                 if event['kind'] in ('advance', 'remainder'):
                     owed += event['amount'] / (1 - FEE_RATE)
                 elif event['kind'] in ('repayment', 'refund'):
@@ -101,5 +111,10 @@ def dana_cepat_cells(events, periods, end, start):
                     fee += event['amount'] * FEE_RATE / (1 - FEE_RATE)
         cells.append(dict(dana_cair=str(money(cash)) if available else None,
                           utang_dana_cepat=str(money(max(ZERO, owed))) if available else None,
-                          biaya_dana_cepat=str(money(fee)) if available else None))
+                          biaya_dana_cepat=str(money(fee)) if available else None,
+                          rincian_dana_cepat=dict(
+                              {k: str(money(v)) for k, v in parts.items()},
+                              utang_sebelum_nol=str(money(owed)),
+                              paling_awal=earliest.date().isoformat() if earliest else None,
+                          ) if available else None))
     return cells

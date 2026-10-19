@@ -117,7 +117,8 @@ async def weekly_pending_receivables(session, akun_id, periode, jumlah_kolom=Non
             fast = shop_key(shop.nama_toko) == shop_key("BUMI TANI IND")
             if fast:
                 from .financial_fast_escrow import LOOKBACK_DAYS, wallet_income
-                events = await wallet_income(session, shop, start - timedelta(days=LOOKBACK_DAYS), now)
+                ignored = {}
+                events = await wallet_income(session, shop, start - timedelta(days=LOOKBACK_DAYS), now, ignored)
             else:
                 events = []
             local = (await session.execute(select(Pesanan.id_eksternal, Pesanan.tanggal_kirim).where(
@@ -219,4 +220,5 @@ async def weekly_pending_receivables(session, akun_id, periode, jumlah_kolom=Non
         for cell, extra in zip(cells, dana_cepat_cells(events, periods, end, start)):
             cell.update(extra)
         result["dana_cepat"] = True
+        result["mutasi_lain"] = ignored
     return result
