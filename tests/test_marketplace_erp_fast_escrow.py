@@ -43,8 +43,20 @@ def test_return_deduction_reduces_the_payable_and_loans_before_the_range_count()
     assert result[1]['utang_dana_cepat'] == '100.00'
 
 
+def test_breakdown_shows_what_makes_the_payable_zero():
+    # A repayment whose advance predates the events read: the payable is clamped to zero, the raw figure is negative.
+    first = cells([event(3, '-100', 'repayment')])[0]
+    assert first['utang_dana_cepat'] == '0.00'
+    assert first['rincian_dana_cepat'] == dict(
+        pencairan='0.00', pencairan_lanjutan='0.00', pelunasan='100.00', retur='0.00',
+        utang_sebelum_nol='-100.00', paling_awal='2026-10-03',
+    )
+    both = cells([event(3, '99.5', 'advance'), event(5, '-40', 'refund')])[1]['rincian_dana_cepat']
+    assert both['pencairan'] == '99.50' and both['retur'] == '40.00' and both['utang_sebelum_nol'] == '60.00'
+
+
 def test_future_weeks_have_no_figures():
-    assert cells([event(3, '99.5', 'advance')])[3] == dict(dana_cair=None, utang_dana_cepat=None, biaya_dana_cepat=None)
+    assert cells([event(3, '99.5', 'advance')])[3] == dict(dana_cair=None, utang_dana_cepat=None, biaya_dana_cepat=None, rincian_dana_cepat=None)
 
 
 @pytest.mark.asyncio
