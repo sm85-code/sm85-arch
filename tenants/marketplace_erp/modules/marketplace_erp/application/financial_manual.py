@@ -15,7 +15,8 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from tenants.marketplace_erp.modules.marketplace_erp.infrastructure.models import LaporanKeuanganManual
 
-TABEL = ("pemasukan", "pengeluaran", "arus_kas", "neraca")
+# "arus_rinci" holds the breakdown of the cash-flow page (renamed lines and split rows); it never feeds the report totals.
+TABEL = ("pemasukan", "pengeluaran", "arus_kas", "neraca", "arus_rinci")
 KUNCI_SEL = re.compile(r"^[^|\x00-\x1f]{1,120}\|\d{4}-\d{2}-\d{2}$")  # row keys include shop names, e.g. "shop:Pemasukan Toko [RISKA]"
 MAX_BARIS, MAX_SEL = 200, 5000
 

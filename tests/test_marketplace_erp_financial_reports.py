@@ -918,6 +918,7 @@ async def test_manual_sheet_round_trip_and_conflict(session):
         baris=[{"id": "c:abc", "tabel": "pemasukan", "grup": "Penjualan dan jasa", "label": "Penjualan lain"}],
         hapus=["jasa_cat"],
     )
+    sheet.baris.append(manual.Baris(id="c:nm-k_prod", tabel="arus_rinci", grup="k_prod", label="Penjualan kayu"))
     saved = await manual.simpan(session, "2026-10", manual.Simpan(version=0, lembar=sheet), actor)
     assert saved["version"] == 1
     assert (await manual.muat(session, "2026-10"))["lembar"]["sel"]["produk|2026-10-05"] == "125000.50"
