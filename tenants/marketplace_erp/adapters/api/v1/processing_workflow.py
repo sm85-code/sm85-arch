@@ -39,6 +39,11 @@ class Strict(BaseModel):
     model_config = ConfigDict(extra="forbid", allow_inf_nan=False, str_strip_whitespace=True)
 
 
+class VarianInput(Strict):
+    nama: str = Field(max_length=60)
+    nilai: str = Field(max_length=100)
+
+
 class PriceInput(Strict):
     version: int = Field(ge=0)
     kind: Literal["produksi", "pengecatan", "non_kayu", "packing"]
@@ -51,6 +56,8 @@ class PriceInput(Strict):
     production_price_id: str | None = Field(default=None, max_length=80)
     sku: str = Field(default="", max_length=200)
     ukuran: str = Field(default="", max_length=100)
+    # Manual (non-wood) products: any number of variant attributes, e.g. Ukuran 10x20 and Jenis Basah.
+    varian: list[VarianInput] | None = Field(default=None, max_length=8)
     harga: Money
     catatan: str = Field(default="", max_length=2000)
 
@@ -303,6 +310,27 @@ async def save_price(price_id: str, payload: PriceInput, session: AsyncSession =
     if not current and payload.version != 0:
         raise HTTPException(409, "Harga tidak ditemukan; muat ulang")
     value = dict(current or {}, **payload.model_dump(mode="json", exclude={"version"}, exclude_none=True), id=price_id)
+    if payload.varian is not None:
+        if payload.kind != "non_kayu":
+            raise HTTPException(422, "Varian hanya untuk produk manual")
+        cleaned, seen = [], set()
+        for item in payload.varian:
+            nama, nilai = " ".join(item.nama.split()), " ".join(item.nilai.split())
+            if not nama and not nilai:
+                continue
+            if not nama or not nilai:
+                raise HTTPException(422, "Isi nama dan nilai pada setiap varian")
+            if nama.casefold() in seen:
+                raise HTTPException(422, f"Nama varian {nama} dipakai dua kali")
+            seen.add(nama.casefold())
+            cleaned.append({"nama": nama, "nilai": nilai})
+        label = " · ".join(v["nilai"] for v in cleaned)
+        if len(label) > 100:
+            raise HTTPException(422, "Nilai varian terlalu panjang")
+        # `ukuran` stays the one-line summary of the variants, so search, lists and order mapping keep working.
+        value["varian"], value["ukuran"] = cleaned, label
+    elif payload.kind == "non_kayu":
+        value.pop("varian", None)
     if payload.kind == "pengecatan":
         if payload.production_price_id:
             source = next((p for p in await price_list(session, include_inactive=True)
