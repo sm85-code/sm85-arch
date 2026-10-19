@@ -51,8 +51,6 @@ Angka aktual 6 dan 13 Oktober disimpan menurut periode aslinya (1–6 dan 7–13
 
 Setelah impor, ERP hanya pembanding. Pemakaian iklan dan penarikan dari ERP tidak otomatis memengaruhi laba/kas. Penarikan dan pemakaian iklan buku utama harus dimasukkan sebagai transaksi bertanggal (pemakaian iklan termasuk angka 0 jika nihil). Perbedaan angka ERP tidak memperbarui snapshot Drive.
 
-Bagian pembanding menampilkan dua panel bersebelahan di desktop dan atas-bawah di ponsel, khususnya piutang pengiriman, saldo tertahan, dan total piutang. Saldo tertahan Drive tetap terpisah. ERP tidak mempunyai pemisahan itu; kolomnya disebut piutang belum ditarik (gabungan). Karena ERP saat ini tidak menyediakan saldo gabungan historis terverifikasi, tampilkan status belum tersedia, bukan nol atau saldo buatan. Nilai pesanan shipped di ERP adalah bruto dan posisi saat dibaca; tidak dihitung selisih terhadap piutang bersih Drive. Pemakaian iklan periode yang sama boleh ditampilkan dengan selisih, disertai kelengkapan sinkronisasi. Endpoint pembanding dan impor tetap admin-only.
-
 ### Pembanding pemasukan Shopee per toko
 
 GET /laporan-keuangan/pemasukan-shopee?periode=YYYY-MM&jumlah_kolom=5 khusus admin, baca saja. Tabel di bawah Pemasukan memakai minggu Senin–Sabtu, mulai Senin pada minggu tanggal 1; Oktober 2026 dimulai 28 September–3 Oktober. Minggu tidak masuk tabel ini. Filter memakai tanggal dikirim (tanggal_kirim) WIB; pesanan tanpa tanggal kirim tidak dimasukkan dan status terkini, bukan rekonstruksi status historis. Hanya pesanan dalam pengiriman atau diterima tetapi belum selesai (shipped; SHIPPED / TO_CONFIRM_RECEIVE) yang dihitung. Semua nilai memakai total bruto pesanan sebagai estimasi, sebelum potongan; pesanan selesai dan pencairan riil tidak masuk tabel ini. Hanya enam toko yang ditampilkan, sesuai urutan: BUMI TANI IND, BUMI LESTARI INDONESIA, RESTU BUMI IND, MAJAPAHIT STORE IND, CAHAYA LANGIT IND, AZFA Furniture Official. Pencocokan harus nama lengkap, mengabaikan kapitalisasi dan perbedaan spasi Unicode. AZFA Furniture Official tidak digabung dengan toko AZFA lain. Keenam baris selalu tampil; akun yang belum cocok ditandai belum ditemukan dan nilainya belum tersedia, bukan nol. Toko terpilih tanpa transaksi tetap tampil dengan nol. Toko lain dikeluarkan dari perhitungan. Tabel ini tidak mengubah kalender maupun angka buku utama/bulanan dan tidak memicu sinkronisasi marketplace.
@@ -79,7 +77,6 @@ Dana Cepat adalah pinjaman sementara (tenor 14 hari, biaya pencairan 0,5% dari j
 - **Utang Dana Cepat** per cut-off Sabtu = advance (dibagi 0,995 agar mencakup biaya) dikurangi pelunasan dan potongan retur, dari mutasi dompet. Pembacaan mundur 28 hari menangkap pinjaman yang masih terbuka di awal rentang.
 - **Biaya Dana Cepat** per minggu = 0,5% dari advance minggu itu (perkiraan).
 - **Dana cair** tetap mutasi saldo aktual (kas), sehingga pemasukan = perubahan saldo penjual + perubahan piutang - perubahan utang Dana Cepat.
-
 
 ### Saldo tertahan menurut cakupan Drive
 
