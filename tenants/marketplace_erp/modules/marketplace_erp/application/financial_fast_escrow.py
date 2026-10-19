@@ -78,12 +78,41 @@ FEE_RATE = Decimal('0.005')  # Shopee's disbursement fee: 0.5% of the eligible a
 LOOKBACK_DAYS = 28  # Advances have a 14-day tenor; reading two tenors back recovers the loan open at the first cutoff.
 
 
+def _open_loans(events):
+    """Loans still open after these movements, matched order by order.
+
+    An advance (grossed up for the fee) opens a loan on its order; repayments and deductions close it. A deduction whose
+    advance was not read (it predates the movements fetched) says nothing about the loans we can see, so it is set
+    aside instead of cancelling other loans. Returns (owed, owed before clamping each loan at zero, set-aside amount).
+    """
+    loans, paid, orphan = {}, {}, ZERO
+    for n, event in enumerate(events):
+        if event['kind'] in ('advance', 'remainder'):
+            orders = sorted(event['orders']) or [('?', n)]
+            for order in orders:
+                loans[order] = loans.get(order, ZERO) + event['amount'] / (1 - FEE_RATE) / len(orders)
+    for event in events:
+        if event['kind'] not in ('repayment', 'refund'):
+            continue
+        matched = [o for o in event['orders'] if o in loans]
+        if not matched:
+            orphan += abs(event['amount'])
+            continue
+        weight = sum(loans[o] for o in matched)
+        for order in matched:
+            paid[order] = paid.get(order, ZERO) + abs(event['amount']) * (loans[order] / weight if weight else Decimal(1) / len(matched))
+    raw = sum((loans[o] - paid.get(o, ZERO) for o in loans), ZERO)
+    owed = sum((max(ZERO, loans[o] - paid.get(o, ZERO)) for o in loans), ZERO)
+    return owed, raw, orphan
+
+
 def dana_cepat_cells(events, periods, end, start):
     """Dana Cepat is a loan, not income: cash in the wallet, a payable until repaid, and a 0.5% fee.
 
     Receivables stay gross (estimate until the final escrow release) and are NOT touched by advances. Per week:
     dana_cair   wallet cash received in the week (advances + releases - repayments), as shown by the wallet;
-    utang       total owed to Shopee at the Saturday cutoff = advances grossed up for the fee - repayments - deductions;
+    utang       total owed to Shopee at the Saturday cutoff = open loans, order by order (advance grossed up for the fee
+                minus its repayments and deductions); deductions of advances that were not read are set aside;
     biaya       fee on the advances of the week (estimated at 0.5%).
     """
     cutoffs = [min(end, datetime.combine(datetime.fromisoformat(w['akhir']).date() + timedelta(days=1), time.min, WIB)) for w in periods]
@@ -91,19 +120,17 @@ def dana_cepat_cells(events, periods, end, start):
     cells = []
     for i, period in enumerate(periods):
         available = datetime.combine(datetime.fromisoformat(period['mulai']).date(), time.min, WIB) < end
-        cash, owed, fee = ZERO, ZERO, ZERO
+        cash, fee = ZERO, ZERO
         parts = dict(pencairan=ZERO, pencairan_lanjutan=ZERO, pelunasan=ZERO, retur=ZERO)
         earliest = None
+        before = [e for e in events if e['at'] < cutoffs[i]]
+        owed, raw, orphan = _open_loans(before)
         for event in events:
             if event['at'] < cutoffs[i]:
                 part = {'advance': 'pencairan', 'remainder': 'pencairan_lanjutan', 'repayment': 'pelunasan', 'refund': 'retur'}.get(event['kind'])
                 if part:
                     parts[part] += abs(event['amount'])
                     earliest = min(earliest or event['at'], event['at'])
-                if event['kind'] in ('advance', 'remainder'):
-                    owed += event['amount'] / (1 - FEE_RATE)
-                elif event['kind'] in ('repayment', 'refund'):
-                    owed += event['amount']  # Already negative.
             day = event['at'].date()
             if event['at'] >= start and day.weekday() != 6 and (day - first).days // 7 == i and event['at'] < cutoffs[i]:
                 cash += event['amount']
@@ -114,7 +141,8 @@ def dana_cepat_cells(events, periods, end, start):
                           biaya_dana_cepat=str(money(fee)) if available else None,
                           rincian_dana_cepat=dict(
                               {k: str(money(v)) for k, v in parts.items()},
-                              utang_sebelum_nol=str(money(owed)),
+                              utang_sebelum_nol=str(money(raw)),
+                              tanpa_pencairan=str(money(orphan)),
                               paling_awal=earliest.date().isoformat() if earliest else None,
                           ) if available else None))
     return cells
