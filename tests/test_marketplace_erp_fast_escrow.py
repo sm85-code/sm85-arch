@@ -44,15 +44,27 @@ def test_return_deduction_reduces_the_payable_and_loans_before_the_range_count()
 
 
 def test_breakdown_shows_what_makes_the_payable_zero():
-    # A repayment whose advance predates the events read: the payable is clamped to zero, the raw figure is negative.
+    # A repayment whose advance predates the events read is set aside and shown, not netted against other loans.
     first = cells([event(3, '-100', 'repayment')])[0]
     assert first['utang_dana_cepat'] == '0.00'
     assert first['rincian_dana_cepat'] == dict(
         pencairan='0.00', pencairan_lanjutan='0.00', pelunasan='100.00', retur='0.00',
-        utang_sebelum_nol='-100.00', paling_awal='2026-10-03',
+        utang_sebelum_nol='0.00', tanpa_pencairan='100.00', paling_awal='2026-10-03',
     )
     both = cells([event(3, '99.5', 'advance'), event(5, '-40', 'refund')])[1]['rincian_dana_cepat']
     assert both['pencairan'] == '99.50' and both['retur'] == '40.00' and both['utang_sebelum_nol'] == '60.00'
+
+
+def test_deduction_of_an_unread_advance_does_not_cancel_other_open_loans():
+    first = cells([event(2, '99.5', 'advance', orders=('NEW',)), event(3, '-300', 'refund', orders=('OLD',))])[0]
+    assert first['utang_dana_cepat'] == '100.00'  # NEW is still owed; OLD's advance was never read.
+    assert first['rincian_dana_cepat']['tanpa_pencairan'] == '300.00'
+
+
+def test_overpaid_loan_does_not_go_negative_or_offset_another_loan():
+    first = cells([event(2, '99.5', 'advance', orders=('A',)), event(2, '199', 'advance', orders=('B',)), event(3, '-250', 'refund', orders=('A',))])[0]
+    assert first['utang_dana_cepat'] == '200.00'  # A closed (overpaid by 150), B untouched.
+    assert first['rincian_dana_cepat']['utang_sebelum_nol'] == '50.00'
 
 
 def test_future_weeks_have_no_figures():
