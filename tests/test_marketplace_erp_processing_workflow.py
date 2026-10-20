@@ -687,6 +687,32 @@ async def test_paint_color_master_and_structured_tariff(client):
 
 
 @pytest.mark.asyncio
+async def test_manual_paint_tariff_and_switching_from_a_production_product(client):
+    http, _, _ = client
+    for node_id, kind, parent, code in [("cat", "kategori", "", "AZF"), ("product", "produk", "cat", "1R.10"), ("model", "model", "product", "RPL")]:
+        assert (await http.put(f"/processing/production-structure/{node_id}", json={
+            "version": 0, "kind": kind, "parent_id": parent, "code": code, "name": node_id
+        })).status_code == 200
+    source = {"version": 0, "kind": "produksi", "produk": "product", "structure_model_id": "model", "ukuran": "150x200", "harga": "100000"}
+    assert (await http.put("/processing/prices/structured", json=source)).status_code == 200
+    manual = {"version": 0, "kind": "pengecatan", "produk": "Rak Custom", "ukuran": "40x60", "sku": "", "warna": "Putih", "production_price_id": "", "harga": "12000"}
+    assert (await http.put("/processing/prices/manual", json=manual)).status_code == 200
+    item = lambda items, pid: next(p for p in items if p["id"] == pid)  # noqa: E731
+    saved = item((await http.get("/processing/prices")).json()["items"], "manual")
+    assert (saved["produk"], saved["ukuran"], saved["warna"], saved["harga"]) == ("Rak Custom", "40x60", "Putih", "12000")
+    assert not saved.get("production_price_id") and not saved.get("model")
+    auto = {"version": 0, "kind": "pengecatan", "produk": "x", "warna": "Biru", "production_price_id": "structured", "harga": "30000"}
+    assert (await http.put("/processing/prices/auto", json=auto)).status_code == 200
+    saved = item((await http.get("/processing/prices")).json()["items"], "auto")
+    assert saved["model"] == "model" and saved["production_price_id"] == "structured"
+    switched = {"version": saved["version"], "kind": "pengecatan", "produk": "Model Sendiri", "ukuran": "30x30", "warna": "Biru", "production_price_id": "", "harga": "30000"}
+    assert (await http.put("/processing/prices/auto", json=switched)).status_code == 200
+    saved = item((await http.get("/processing/prices")).json()["items"], "auto")
+    assert (saved["produk"], saved["ukuran"]) == ("Model Sendiri", "30x30")
+    assert not saved.get("production_price_id") and not saved.get("model") and not saved.get("model_kode")
+
+
+@pytest.mark.asyncio
 async def test_document_templates_version_scope_and_validation(client):
     http, app, factory = client
     assert (await http.get('/processing/document-templates/INV')).json() == {'kind': 'INV', 'version': 0, 'orientation': 'portrait', 'blocks': None}
