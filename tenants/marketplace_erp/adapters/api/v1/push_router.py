@@ -72,4 +72,5 @@ async def unsubscribe(body: Endpoint, session: AsyncSession = DB, user: UserMark
 async def test_push(session: AsyncSession = DB, user: UserMarketplaceErp = STAFF):
     if not webpush.configured():
         raise HTTPException(409, "Notifikasi belum diaktifkan di server")
-    return {"terkirim": await push_notifications.kirim_uji(session, user.id)}
+    codes = await push_notifications.kirim_uji(session, user.id)
+    return {"terkirim": sum(1 for c in codes if c in (200, 201, 202)), "perangkat": len(codes), "status": codes}

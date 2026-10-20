@@ -172,17 +172,16 @@ async def putaran(session: AsyncSession) -> None:
     await _chats(session, recipients)
 
 
-async def kirim_uji(session: AsyncSession, user_id: str) -> int:
-    """A test notification to every device of one user; how many were accepted."""
-    accepted = 0
+async def kirim_uji(session: AsyncSession, user_id: str) -> list[int]:
+    """A test notification to every device of one user; the push service's status code per device."""
+    codes: list[int] = []
     for sub in (await session.scalars(select(PushSubscription).where(PushSubscription.user_id == user_id))).all():
         status = await webpush.send(_subscription(sub), {"title": "Notifikasi aktif", "body": "Notifikasi dari Ampel Kuning ERP System sudah berfungsi di perangkat ini.", "url": "/dashboard", "tag": "uji"}, ttl=300)
+        codes.append(status)
         if status in (404, 410):
             await session.execute(delete(PushSubscription).where(PushSubscription.id == sub.id))
-        elif status in (200, 201, 202):
-            accepted += 1
     await session.commit()
-    return accepted
+    return codes
 
 
 async def run_forever(session_factory) -> None:
