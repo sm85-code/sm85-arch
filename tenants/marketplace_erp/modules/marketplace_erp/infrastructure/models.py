@@ -754,6 +754,26 @@ class NotificationRead(MarketplaceErpBase):
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=_utcnow, index=True)
 
 
+class PushSubscription(MarketplaceErpBase):
+    """One browser/device that receives Web Push notifications for one user; its switches say what it receives."""
+    __tablename__ = "mpe_push_subscription"
+    id: Mapped[str] = mapped_column(String(64), primary_key=True, default=_uuid)
+    user_id: Mapped[str] = mapped_column(String(64), ForeignKey("mpe_users.id", ondelete="CASCADE"), nullable=False, index=True)
+    endpoint: Mapped[str] = mapped_column(String(1000), nullable=False, unique=True)
+    p256dh: Mapped[str] = mapped_column(String(200), nullable=False)
+    auth: Mapped[str] = mapped_column(String(100), nullable=False)
+    pesanan: Mapped[bool] = mapped_column(Boolean, nullable=False, default=True)
+    chat: Mapped[bool] = mapped_column(Boolean, nullable=False, default=True)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=_utcnow)
+
+
+class PushTerkirim(MarketplaceErpBase):
+    """Order/chat events already pushed (or skipped as backlog), so none is announced twice."""
+    __tablename__ = "mpe_push_terkirim"
+    key: Mapped[str] = mapped_column(String(255), primary_key=True)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=_utcnow, index=True)
+
+
 class AutoOrderPolicy(MarketplaceErpBase):
     __tablename__ = "mpe_auto_order_policy"
     akun_id: Mapped[str] = mapped_column(String(64), ForeignKey("mpe_akun_marketplace.id", ondelete="CASCADE"), primary_key=True)
