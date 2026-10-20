@@ -521,13 +521,26 @@ def order_item(item, order, shop):
     )
 
 
+PER_PAGE = 50
+# Same words as the Pesanan menu; "dipetakan" lists the items that already have a mapping (to release or re-map them).
+CANDIDATE_STATUS = {"menunggu": "to_ship", "dikirim": "shipped", "selesai": "completed"}
+
+
 @router.get("/candidates")
 async def candidates(
     q: str = Query("", max_length=200),
     page: int = Query(1, ge=1),
+    status: Literal["menunggu", "dikirim", "selesai", "semua", "dipetakan"] = "menunggu",
     session: AsyncSession = Depends(get_db_marketplace_erp),
 ):
-    filters = [*processed(), ~select(ProcessingJob.id).where(ProcessingJob.source_item_id == ItemPesanan.id).exists()]
+    has_job = select(ProcessingJob.id).where(ProcessingJob.source_item_id == ItemPesanan.id).exists()
+    if status == "dipetakan":
+        # Mapped items stay listed whatever the order became, so a cancelled one can be released too.
+        filters = [Pesanan.platform == "shopee", has_job]
+    else:
+        filters = [*processed(), ~has_job]
+        if status in CANDIDATE_STATUS:
+            filters.append(Pesanan.status == CANDIDATE_STATUS[status])
     if q.strip():
         text = "%" + q.strip() + "%"
         filters.append(
@@ -547,10 +560,29 @@ async def candidates(
     total = await session.scalar(select(func.count()).select_from(base.subquery()))
     rows = (
         await session.execute(
-            base.order_by(Pesanan.created_at.desc(), ItemPesanan.id).offset((page - 1) * 25).limit(25)
+            base.order_by(Pesanan.created_at.desc(), ItemPesanan.id).offset((page - 1) * PER_PAGE).limit(PER_PAGE)
         )
     ).all()
-    return {"items": [order_item(*row) for row in rows], "total": total, "page": page}
+    items = [dict(order_item(*row), status=row[1].status) for row in rows]
+    if status == "dipetakan" and items:
+        jobs = {
+            j.source_item_id: j
+            for j in await session.scalars(
+                select(ProcessingJob).where(ProcessingJob.source_item_id.in_([i["item_id"] for i in items]))
+            )
+        }
+        for item, row in zip(items, rows):
+            job = jobs.get(item["item_id"])
+            data = json.loads(job.payload_json) if job else {}
+            order = row[1]
+            item["job"] = job and {
+                "id": job.id,
+                "version": job.version,
+                "route": data.get("route"),
+                "stage": data.get("stage"),
+                "cancelled": order.status == "cancelled" or order.status_marketplace in ["CANCELLED", "IN_CANCEL"],
+            }
+    return {"items": items, "total": total, "page": page, "per_page": PER_PAGE}
 
 
 class SelectItems(Strict):
@@ -1027,6 +1059,23 @@ async def remove_draft(job_id: str, version: int, session: AsyncSession = Depend
         raise HTTPException(409, "Draf berubah; muat ulang")
     await session.commit()
     return {"terhapus": True}
+
+
+@router.post("/jobs/{job_id}/release")
+async def release_mapping(job_id: str, version: int, session: AsyncSession = Depends(get_db_marketplace_erp)):
+    """Take an order item out of its mapping at any stage (a cancelled order, or one to map again); the data entered for it is dropped."""
+    from sqlalchemy import delete
+
+    row, _ = await load_job(session, job_id, version)
+    if not row.source_item_id:
+        raise HTTPException(409, "Pesanan manual tidak bisa dilepas dari pemetaan")
+    result = await session.execute(
+        delete(ProcessingJob).where(ProcessingJob.id == row.id, ProcessingJob.version == version)
+    )
+    if result.rowcount != 1:
+        raise HTTPException(409, "Pemetaan berubah; muat ulang")
+    await session.commit()
+    return {"dilepas": True}
 
 
 class PackingEdit(Strict):
