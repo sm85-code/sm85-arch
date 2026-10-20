@@ -225,6 +225,39 @@ async def test_item_selection_supplier_packing_cancelled_order_and_isolation(cli
 
 
 @pytest.mark.asyncio
+async def test_candidate_status_filters_and_releasing_a_mapping_at_any_stage(client):
+    http, _, factory = client
+    count = lambda status: http.get(f"/processing/candidates?status={status}")  # noqa: E731
+    assert [(await count(s)).json()["total"] for s in ("menunggu", "dikirim", "selesai", "semua", "dipetakan")] == [3, 0, 0, 3, 0]
+    assert (await http.get("/processing/candidates")).json()["items"][0]["status"] == "to_ship"
+    assert (await http.post("/processing/jobs/select", json={"route": "tukang", "item_ids": ["i1", "i2"]})).status_code == 200
+    mapped = (await count("dipetakan")).json()
+    assert mapped["total"] == 2 and all(i["job"]["route"] == "tukang" and i["job"]["stage"] == "draft" for i in mapped["items"])
+    assert (await count("menunggu")).json()["total"] == 1
+    job = await save(http, (await rows(http))[0], party_id="t1", price_id="p1")
+    job = await advance(http, job, "produksi")
+    async with factory() as session:
+        order = await session.get(Pesanan, "order1")
+        order.status, order.status_marketplace = "cancelled", "CANCELLED"
+        await session.commit()
+    cancelled = (await count("dipetakan")).json()
+    assert cancelled["total"] == 2 and all(i["job"]["cancelled"] for i in cancelled["items"])
+    assert (await http.post(f"/processing/jobs/{job['id']}/release?version=1")).status_code == 409  # stale version
+    fresh = next(r for r in await rows(http) if r["id"] == job["id"])
+    assert (await http.post(f"/processing/jobs/{job['id']}/release?version={fresh['version']}")).status_code == 200
+    assert len(await rows(http)) == 1
+    async with factory() as session:
+        order = await session.get(Pesanan, "order1")
+        order.status, order.status_marketplace = "shipped", "SHIPPED"
+        await session.commit()
+    assert [(await count(s)).json()["total"] for s in ("menunggu", "dikirim", "dipetakan")] == [0, 2, 1]
+    manual = await http.post("/processing/jobs/manual", json={"source": "internal", "order_code": "INT-1", "route": "tukang", "customer": "X", "ordered_at": "2026-10-01T00:00:00Z", "deadline": "2026-10-09T00:00:00Z", "items": [{"produk": "Rak", "qty": 1}]})
+    assert manual.status_code == 200, manual.text
+    manual_job = next(r for r in await rows(http) if r["source"] == "internal")
+    assert (await http.post(f"/processing/jobs/{manual_job['id']}/release?version={manual_job['version']}")).status_code == 409
+
+
+@pytest.mark.asyncio
 @pytest.mark.parametrize("role", ["owner", "staff"])
 async def test_all_workflow_endpoints_are_admin_only(client, role):
     http, app, _ = client
@@ -257,6 +290,7 @@ async def test_all_workflow_endpoints_are_admin_only(client, role):
         ("PUT", "/jobs/job1"),
         ("POST", "/jobs/job1/transition"),
         ("DELETE", "/jobs/job1?version=1"),
+        ("POST", "/jobs/job1/release?version=1"),
         ("PUT", "/jobs/job1/packing"),
     ]:
         response = await http.request(method, "/processing" + path, json={} if method in ["PUT", "POST"] else None)
