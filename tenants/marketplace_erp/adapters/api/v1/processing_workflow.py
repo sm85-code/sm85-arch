@@ -354,6 +354,10 @@ async def save_price(price_id: str, payload: PriceInput, session: AsyncSession =
                 raise HTTPException(422, "Pilih produk produksi yang sudah disusun strukturnya")
             for field in ("produk", "sku", "ukuran", "jenis", "model", "model_kode"):
                 value[field] = source.get(field, "")
+        elif payload.production_price_id == "":
+            # Manual tariff: the model name (in `produk`) and the size are typed, not taken from a production product.
+            for field in ("production_price_id", "model", "model_kode", "jenis"):
+                value.pop(field, None)
         if payload.color_id:
             color = await session.get(ProcessingPaintColor, payload.color_id)
             if not color:
