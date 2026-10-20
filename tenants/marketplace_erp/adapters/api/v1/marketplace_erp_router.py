@@ -28,6 +28,7 @@ from .notification_router import router as notification_router
 from .assistant_router import router as assistant_router
 from .sync_router import router as sync_router
 from .chat_router import router as chat_router
+from .arus_kas_router import router as arus_kas_router
 from .financial_reports_router import router as financial_reports_router
 from .processing_router import router as processing_router
 
@@ -1838,5 +1839,6 @@ marketplace_erp_router.include_router(engagement_automation_router)
 
 # Isolated report projection; no new operational ERP mutations.
 marketplace_erp_router.include_router(financial_reports_router)
+marketplace_erp_router.include_router(arus_kas_router)
 
 marketplace_erp_router.include_router(processing_router)
