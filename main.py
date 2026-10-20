@@ -90,9 +90,15 @@ async def lifespan(_: FastAPI):
     if marketplace_erp_database.SessionLocal is not None:
         from tenants.marketplace_erp.modules.marketplace_erp.application.auto_engagement import run_forever as run_engagement
         engagement_task = asyncio.create_task(run_engagement(marketplace_erp_database.SessionLocal))
+    push_task = None
+    if marketplace_erp_database.SessionLocal is not None:
+        from tenants.marketplace_erp.modules.marketplace_erp.application.push_notifications import run_forever as run_push
+        push_task = asyncio.create_task(run_push(marketplace_erp_database.SessionLocal))
     try:
         yield
     finally:
+        if push_task is not None:
+            push_task.cancel()
         if engagement_task is not None:
             engagement_task.cancel()
         if auto_order_task is not None:
