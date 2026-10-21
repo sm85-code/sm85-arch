@@ -10,7 +10,7 @@ from zoneinfo import ZoneInfo
 
 from fastapi import APIRouter, Depends, HTTPException, Query
 from pydantic import BaseModel, ConfigDict, Field, model_validator
-from sqlalchemy import delete, func, or_, select, text, update
+from sqlalchemy import and_, delete, func, or_, select, text, update
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -18,6 +18,7 @@ from tenants.marketplace_erp.modules.marketplace_erp.infrastructure.auth import 
 from tenants.marketplace_erp.modules.marketplace_erp.infrastructure.database import get_db_marketplace_erp
 from tenants.marketplace_erp.modules.marketplace_erp.infrastructure.models import (
     AkunMarketplace,
+    PLATFORM_MANUAL,
     ItemPesanan,
     Pesanan,
     ProcessingCatalog,
@@ -497,6 +498,11 @@ def processed():
     )
 
 
+def siap():
+    """Orders whose items can be mapped: Shopee orders already processed, and manual orders still being worked on."""
+    return or_(and_(*processed()), and_(Pesanan.platform == PLATFORM_MANUAL, Pesanan.status.in_(["to_ship", "shipped", "completed"])))
+
+
 def order_item(item, order, shop):
     detail = json.loads(order.detail_json or "{}")
     deadline = detail.get("ship_by_date")
@@ -504,7 +510,7 @@ def order_item(item, order, shop):
         deadline = datetime.fromtimestamp(int(deadline), timezone.utc).isoformat() if deadline else None
     except (ValueError, TypeError, OverflowError, OSError):
         deadline = None
-    return dict(
+    base = dict(
         item_id=item.id,
         order_id=order.id,
         order_number=order.id_eksternal,
@@ -519,6 +525,20 @@ def order_item(item, order, shop):
         note=detail.get("message_to_seller") or "",
         source="erp",
     )
+    manual = detail.get("manual") if order.platform == PLATFORM_MANUAL else None
+    if manual:
+        reseller = manual.get("jenis") == "reseller"
+        base.update(
+            source="reseller" if reseller else "internal",
+            customer=order.nama_pembeli,
+            reference=manual.get("reference", ""),
+            shop=manual.get("toko_nama") or ("Reseller" if reseller else "Internal"),
+            seller_code=(manual.get("seller_code") or "").upper() if reseller else "",
+            manual_order_code=None if reseller else order.id_eksternal,
+            note=(manual.get("catatan_item") or {}).get(item.id, ""),
+            order_number="Menunggu SKU" if reseller else order.id_eksternal,
+        )
+    return base
 
 
 PER_PAGE = 50
@@ -536,9 +556,9 @@ async def candidates(
     has_job = select(ProcessingJob.id).where(ProcessingJob.source_item_id == ItemPesanan.id).exists()
     if status == "dipetakan":
         # Mapped items stay listed whatever the order became, so a cancelled one can be released too.
-        filters = [Pesanan.platform == "shopee", has_job]
+        filters = [Pesanan.platform.in_(["shopee", PLATFORM_MANUAL]), has_job]
     else:
-        filters = [*processed(), ~has_job]
+        filters = [siap(), ~has_job]
         if status in CANDIDATE_STATUS:
             filters.append(Pesanan.status == CANDIDATE_STATUS[status])
     if q.strip():
@@ -624,7 +644,7 @@ async def select_items(
             select(ItemPesanan, Pesanan, AkunMarketplace.nama_toko)
             .join(Pesanan, Pesanan.id == ItemPesanan.pesanan_id)
             .outerjoin(AkunMarketplace, AkunMarketplace.id == Pesanan.akun_id)
-            .where(ItemPesanan.id.in_(ids), *processed())
+            .where(ItemPesanan.id.in_(ids), siap())
         )
     ).all()
     if len(rows) != len(ids):

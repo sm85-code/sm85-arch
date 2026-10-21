@@ -38,7 +38,7 @@ from .roles_router import router as roles_router
 from .financial_reports_router import router as financial_reports_router
 from .processing_router import router as processing_router
 
-from tenants.marketplace_erp.modules.marketplace_erp.application import akses, services
+from tenants.marketplace_erp.modules.marketplace_erp.application import akses, pesanan_manual, services
 from tenants.marketplace_erp.modules.marketplace_erp.application.schemas import (
     KatalogKirimIn,
     KatalogMasterIn,
@@ -681,6 +681,18 @@ async def create_pesanan(
     _: UserMarketplaceErp = Depends(require_roles_marketplace_erp(*OWNER_ONLY)),
 ):
     return await services.create_pesanan(session, payload)
+
+
+@marketplace_erp_router.post("/pesanan/manual", response_model=PesananOut, status_code=201)
+async def create_pesanan_manual(
+    payload: pesanan_manual.PesananManualIn,
+    session: AsyncSession = Depends(get_db_marketplace_erp),
+    _: UserMarketplaceErp = Depends(require_roles_marketplace_erp(*OWNER_ONLY)),
+):
+    """A manual order for production (own shop or reseller); Pemetaan Order reads it like any other order."""
+    pesanan = await pesanan_manual.buat(session, payload)
+    await session.commit()
+    return await services.get_pesanan(session, pesanan.id)
 
 
 @marketplace_erp_router.get("/pesanan/{pesanan_id}", response_model=PesananOut)

@@ -32,6 +32,8 @@ def _utcnow() -> datetime:
 # Plain string enums (not Postgres ENUM) so adding a value later is a one-line
 # change with no ALTER TYPE migration -- same reasoning as tenants/toko ERP.
 PLATFORM_MARKETPLACE = ("shopee", "tiktokshop", "lazada", "blibli")
+# Orders typed in by hand for production (own shops and resellers): in the order list, not tied to a marketplace account.
+PLATFORM_MANUAL = "manual"
 
 STATUS_PESANAN = ("unpaid", "to_ship", "shipped", "completed", "cancelled")
 
