@@ -82,7 +82,7 @@ def test_bumi_lestari_two_weeks_and_monthly_reconciliation():
         saldo_toko=7207000,
         stok=3585000,
     )
-    first = f.calculate(b, p, D(0), D(1578000))
+    first = f.calculate(b, p, D(0), D(1578000), legacy=True)
     assert first["perubahan_piutang"] == D(4021462)
     assert first["laba"] == D(567462)
     assert first["saldo_akhir"]["kas_utama"] == D(2271000)
@@ -104,7 +104,7 @@ def test_bumi_lestari_two_weeks_and_monthly_reconciliation():
         saldo_toko=1992000,
         stok=3585000,
     )
-    second = f.calculate(f.Balances(**first["saldo_akhir"]), p, D(0), D(1365000))
+    second = f.calculate(f.Balances(**first["saldo_akhir"]), p, D(0), D(1365000), legacy=True)
     assert second["laba"] == D(1352818)
     assert first["laba"] + second["laba"] == D(1920280)
     assert second["saldo_akhir"]["kas_utama"] == D(4533000)
@@ -112,9 +112,9 @@ def test_bumi_lestari_two_weeks_and_monthly_reconciliation():
     assert second["neraca"]["selisih"] == 0
 
 
-def test_ads_exhausted_without_topup_and_internal_salary_transfer():
+def test_ads_exhausted_without_topup_and_internal_salary_transfer_legacy_rules():
     b = balances(kas_utama=3000000, iklan_prabayar=2000000, modal=5000000)
-    result = f.calculate(b, payload(gaji=1000000, transfer_kas_gaji=1000000), D(0), D(2000000))
+    result = f.calculate(b, payload(gaji=1000000, transfer_kas_gaji=1000000), D(0), D(2000000), legacy=True)
     assert result["kas_keluar"] == 0
     assert result["saldo_akhir"]["iklan_prabayar"] == 0
     assert result["saldo_akhir"]["kas_utama"] == 2000000
@@ -122,6 +122,38 @@ def test_ads_exhausted_without_topup_and_internal_salary_transfer():
     assert result["saldo_akhir"]["utang_gaji"] == 1000000
     assert result["laba"] == -3000000
     assert result["neraca"]["selisih"] == 0
+
+
+def test_salary_is_a_cash_out_and_the_main_cash_feeds_two_operational_cash_accounts():
+    b = balances(kas_utama=10000000, kas_operasional=1000000, modal=11000000)
+    result = f.calculate(
+        b,
+        payload(pendapatan_produk=5000000, gaji=1000000, operasional=500000, transfer_ke_ops_umum=2000000, transfer_ke_ops_packing=1500000),
+        D(0),
+        D(0),
+    )
+    assert result["kas_keluar"] == 1500000  # salary + operasional
+    assert result["kas_keluar_gaji"] == 1000000
+    assert result["transfer_antar_kas"] == -3500000
+    assert result["pengeluaran"] == 1500000 and result["laba"] == 3500000
+    after = result["saldo_akhir"]
+    assert after["kas_utama"] == 10000000 + 5000000 - 1500000 - 3500000
+    assert after["kas_operasional"] == 3000000
+    assert after["kas_operasional_packing"] == 1500000
+    assert after["kas_gaji"] == 0 and after["utang_gaji"] == 0
+    assert result["neraca"]["selisih"] == 0
+
+
+def test_old_balances_without_the_packing_account_still_read_as_zero():
+    b = balances(kas_utama=1000, modal=1000)
+    assert b.kas_operasional_packing == 0
+    assert f.totals(b.model_dump())["selisih"] == 0
+
+
+def test_the_old_salary_transfer_is_refused_for_new_reports():
+    with pytest.raises(HTTPException) as e:
+        f.normalize_transactions(payload(transfer_kas_gaji=100), date(2026, 10, 3))
+    assert e.value.status_code == 422
 
 
 def test_inventory_and_credit_purchase_do_not_distort_profit():
