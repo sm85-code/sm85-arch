@@ -774,6 +774,21 @@ class PushTerkirim(MarketplaceErpBase):
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=_utcnow, index=True)
 
 
+class TransaksiOperasional(MarketplaceErpBase):
+    """One operating-cost entry typed into the Operasional Umum / Operasional Packing pages (see application/operasional.py)."""
+    __tablename__ = "mpe_transaksi_operasional"
+    id: Mapped[str] = mapped_column(String(64), primary_key=True, default=_uuid)
+    jenis: Mapped[str] = mapped_column(String(16), nullable=False, index=True)
+    kategori: Mapped[str] = mapped_column(String(32), nullable=False)
+    tanggal: Mapped[date] = mapped_column(Date, nullable=False, index=True)
+    uraian: Mapped[str] = mapped_column(String(255), nullable=False, default="")
+    jumlah: Mapped[Decimal] = mapped_column(Numeric(20, 2), nullable=False, default=Decimal("0"))
+    dibuat_oleh: Mapped[Optional[str]] = mapped_column(String(64), ForeignKey("mpe_users.id", ondelete="SET NULL"), nullable=True)
+    diubah_oleh: Mapped[Optional[str]] = mapped_column(String(64), ForeignKey("mpe_users.id", ondelete="SET NULL"), nullable=True)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=_utcnow)
+    updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=_utcnow, onupdate=_utcnow)
+
+
 class AutoOrderPolicy(MarketplaceErpBase):
     __tablename__ = "mpe_auto_order_policy"
     akun_id: Mapped[str] = mapped_column(String(64), ForeignKey("mpe_akun_marketplace.id", ondelete="CASCADE"), primary_key=True)

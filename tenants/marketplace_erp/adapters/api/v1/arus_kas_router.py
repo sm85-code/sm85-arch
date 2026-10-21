@@ -13,7 +13,7 @@ from tenants.marketplace_erp.modules.marketplace_erp.infrastructure.auth import 
 from tenants.marketplace_erp.modules.marketplace_erp.infrastructure.database import get_db_marketplace_erp
 from tenants.marketplace_erp.modules.marketplace_erp.infrastructure.models import UserMarketplaceErp
 
-akses = require_roles_marketplace_erp("admin", "staff")
+akses = require_roles_marketplace_erp("admin", "staff", "staf_keuangan")
 router = APIRouter(prefix="/arus-kas", tags=["Arus Kas"], dependencies=[Depends(akses)])
 
 TANDA = "ok:"

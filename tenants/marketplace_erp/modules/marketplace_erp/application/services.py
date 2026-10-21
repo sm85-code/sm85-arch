@@ -182,7 +182,10 @@ async def create_user(session: AsyncSession, payload: UserCreateIn) -> UserMarke
 
 
 # Which roles an account of a given role may create (admin: anyone; owner: staff only).
-_PERAN_YANG_BOLEH_DIBUAT = {"admin": {"admin", "owner", "staff"}, "owner": {"staff"}}
+_PERAN_YANG_BOLEH_DIBUAT = {
+    "admin": {"admin", "owner", "staff", "staf_keuangan", "staf_operasional", "staf_produksi"},
+    "owner": {"staff"},
+}
 
 
 def pastikan_boleh_membuat_peran(pembuat_role: str | None, peran_baru: str) -> None:

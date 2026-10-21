@@ -17,8 +17,8 @@ PASSWORD_MIN_LENGTH = 8
 PASSWORD_MAX_BYTES = 72
 
 # admin (everything, incl. other users' usernames and roles) > owner (everything except that) > staff (scoped to
-# the shops it is assigned to).
-USER_ROLES = ("admin", "owner", "staff")
+# the shops it is assigned to). The staf_* roles each reach only their own finance pages (see operasional.py).
+USER_ROLES = ("admin", "owner", "staff", "staf_keuangan", "staf_operasional", "staf_produksi")
 
 
 def _validate_new_password(value: str) -> str:
