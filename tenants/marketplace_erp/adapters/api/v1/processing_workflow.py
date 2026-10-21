@@ -1050,7 +1050,9 @@ async def remove_draft(job_id: str, version: int, session: AsyncSession = Depend
     from sqlalchemy import delete
 
     row, data = await load_job(session, job_id, version)
-    if data["stage"] != "draft":
+    # A manual order is the work item itself (there is no order behind it), so it can be deleted at any stage;
+    # an order item from Shopee only while it is a draft, later it is released from its mapping instead.
+    if data["stage"] != "draft" and row.source_item_id is not None:
         raise HTTPException(409, "Hanya draf yang belum dipetakan bisa dihapus")
     result = await session.execute(
         delete(ProcessingJob).where(ProcessingJob.id == row.id, ProcessingJob.version == version)
@@ -1059,6 +1061,37 @@ async def remove_draft(job_id: str, version: int, session: AsyncSession = Depend
         raise HTTPException(409, "Draf berubah; muat ulang")
     await session.commit()
     return {"terhapus": True}
+
+
+# What a mapping fills in; cancelling it clears these and the order itself stays.
+MAPPING_KEYS = (
+    "production_reference", "painting_reference", "supplier_reference", "supplier_product_id", "supplier_product_name",
+    "supplier_sku", "catalog_mode", "production_sku", "numbering_base", "order_sequence",
+)
+
+
+@router.post("/jobs/{job_id}/reset")
+async def reset_manual_mapping(
+    job_id: str,
+    version: int = Query(ge=1),
+    session: AsyncSession = Depends(get_db_marketplace_erp),
+    actor: UserMarketplaceErp = Depends(admin),
+):
+    """Cancel the mapping of a manual order: who works on it, prices, colour, packing and progress go back to a draft.
+    The order itself (customer, dates, items, code) stays; a reseller code shows "Menunggu SKU" again until it is mapped."""
+    row, data = await load_job(session, job_id, version)
+    if row.source_item_id is not None:
+        raise HTTPException(409, "Item pesanan Shopee dilepas dari pemetaan, bukan dibatalkan")
+    if data["stage"] == "draft":
+        raise HTTPException(409, "Pesanan ini belum dipetakan")
+    events = data["events"]
+    data = draft(data, data["route"], actor)
+    data["events"] = events
+    for key in MAPPING_KEYS:
+        data.pop(key, None)
+    if data.get("source") == "reseller" and data.get("seller_code"):
+        data["order_number"] = "Menunggu SKU"
+    return await persist(session, row, data, "pemetaan_dibatalkan", actor)
 
 
 @router.post("/jobs/{job_id}/release")
