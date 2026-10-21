@@ -44,6 +44,7 @@ from tenants.marketplace_erp.modules.marketplace_erp.application.schemas import 
 )
 from tenants.marketplace_erp.modules.marketplace_erp.infrastructure.models import (
     DEFAULT_GUDANG_KODE,
+    PLATFORM_MANUAL,
     PLATFORM_MARKETPLACE,
     REASON_STOK_LEDGER,
     STATUS_IKLAN,
@@ -59,6 +60,7 @@ from tenants.marketplace_erp.modules.marketplace_erp.infrastructure.models impor
     ItemPesanan,
     KatalogShopee,
     Pesanan,
+    ProcessingJob,
     Produk,
     ProdukListing,
     ProdukKeluarga,
@@ -1697,6 +1699,11 @@ async def ubah_status_pesanan(
         )
 
     prev = pesanan.status
+    if pesanan.platform == PLATFORM_MANUAL:
+        # A manual production order has no stock reservation and no marketplace behind it: only the status moves.
+        pesanan.status = status_baru
+        await session.flush()
+        return await get_pesanan(session, pesanan.id)
     if status_baru == "to_ship":
         await _reserve_for_pesanan(session, pesanan)
         pesanan.status = status_baru
@@ -2279,11 +2286,28 @@ async def unduh_resi_pesanan(
 async def delete_pesanan(session: AsyncSession, pesanan_id: str) -> None:
     """Hard-delete only unpaid orders without reservations. Prefer cancel."""
     pesanan = await get_pesanan(session, pesanan_id)
-    if pesanan.status != "unpaid":
+    if pesanan.platform == PLATFORM_MANUAL:
+        # Typed in by hand, so it may go at any status, but not while its items are mapped for production.
+        dipetakan = await session.scalar(
+            select(func.count()).select_from(ProcessingJob).where(
+                ProcessingJob.source_item_id.in_(select(ItemPesanan.id).where(ItemPesanan.pesanan_id == pesanan.id))
+            )
+        )
+        if dipetakan:
+            raise HTTPException(
+                status_code=status.HTTP_409_CONFLICT,
+                detail="Pesanan ini sudah dipetakan di Pemetaan Order; lepas pemetaannya dulu",
+            )
+    elif pesanan.status != "unpaid":
         raise HTTPException(
             status_code=status.HTTP_409_CONFLICT,
             detail="Hanya pesanan unpaid yang boleh dihapus; batalkan (cancelled) untuk yang lain",
         )
+    if pesanan.platform == PLATFORM_MANUAL:
+        for item in list(pesanan.items):
+            await session.delete(item)
+        await session.flush()
+        session.expire(pesanan, ["items"])
     await session.delete(pesanan)
     await session.flush()
 
@@ -2495,7 +2519,8 @@ async def laporan_dashboard(
     tgl = _tgl_pesanan()
     tahap_expr = _ekspresi_tahap()
     scope = [Pesanan.akun_id.in_(akun_diizinkan)] if akun_diizinkan is not None else []
-    jendela = [tgl >= dari, tgl <= sampai, *scope]
+    # Manual production orders carry no sales figures: they stay out of the sales dashboard.
+    jendela = [tgl >= dari, tgl <= sampai, Pesanan.platform != PLATFORM_MANUAL, *scope]
     permintaan_pembatalan = (await session.execute(
         select(func.count(Pesanan.id)).where(
             *jendela, Pesanan.platform == "shopee", Pesanan.status_marketplace == "IN_CANCEL",

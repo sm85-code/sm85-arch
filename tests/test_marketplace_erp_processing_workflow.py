@@ -1120,3 +1120,72 @@ async def test_shopee_items_are_released_not_cancelled_or_deleted_after_mapping(
     job = await save(http, (await rows(http))[0])
     assert (await http.post(f"/processing/jobs/{job['id']}/reset?version={job['version']}")).status_code == 409
     assert (await http.delete(f"/processing/jobs/{job['id']}?version={job['version']}")).status_code == 409
+
+
+@pytest.mark.asyncio
+async def test_manual_orders_from_the_pesanan_menu_are_read_by_pemetaan_order(client):
+    from fastapi import HTTPException
+
+    from tenants.marketplace_erp.modules.marketplace_erp.application import pesanan_manual, services
+    from tenants.marketplace_erp.modules.marketplace_erp.infrastructure.models import TokoPenjualan
+
+    http, _, factory = client
+    async with factory() as session:
+        reseller = TokoPenjualan(nama="Reseller Budi", nama_key="reseller budi", jenis="reseller", platform="shopee", kode="AB")
+        own = TokoPenjualan(nama="Ampel Web", nama_key="ampel web", jenis="internal", platform="webapp", kode=None)
+        off = TokoPenjualan(nama="Mati", nama_key="mati", jenis="reseller", platform="lazada", kode="ZZ", aktif=False)
+        session.add_all([reseller, own, off])
+        await session.commit()
+        base = {
+            "ordered_at": "2026-10-16T09:00:00+07:00", "deadline": "2026-10-20T18:30:00+00:00", "reference": "REF-1",
+            "items": [{"produk": "Rak", "qty": 2, "note": "cat putih"}, {"produk": "Meja", "varian": "Besar", "qty": 1}],
+        }
+        order = await pesanan_manual.buat(session, pesanan_manual.PesananManualIn(toko_id=reseller.id, pemesan="Budi", **base))
+        internal = await pesanan_manual.buat(session, pesanan_manual.PesananManualIn(toko_id=own.id, kode_pesanan="INT-77", **base))
+        assert order.platform == "manual" and order.status == "to_ship" and order.id_eksternal.startswith("RSL-")
+        order_id, internal_id = order.id, internal.id
+        await session.commit()
+        # refused: an inactive shop, an own-shop order without its code, the same code twice
+        with pytest.raises(HTTPException) as e:
+            await pesanan_manual.buat(session, pesanan_manual.PesananManualIn(toko_id=off.id, **base))
+        assert e.value.status_code == 422
+        with pytest.raises(HTTPException) as e:
+            await pesanan_manual.buat(session, pesanan_manual.PesananManualIn(toko_id=own.id, **base))
+        assert e.value.status_code == 422
+        with pytest.raises(HTTPException) as e:
+            await pesanan_manual.buat(session, pesanan_manual.PesananManualIn(toko_id=own.id, kode_pesanan="INT-77", **base))
+        assert e.value.status_code == 409
+        await session.rollback()
+
+    cand = (await http.get("/processing/candidates?status=semua")).json()["items"]
+    manual = [c for c in cand if c["order_id"] in (order_id, internal_id)]
+    assert len(manual) == 4
+    rak = next(c for c in manual if c["order_id"] == order_id and c["produk"] == "Rak")
+    assert (rak["source"], rak["seller_code"], rak["customer"], rak["order_number"], rak["shop"], rak["note"]) == (
+        "reseller", "AB", "Budi", "Menunggu SKU", "Reseller Budi", "cat putih",
+    )
+    assert rak["deadline"].startswith("2026-10-20") and rak["reference"] == "REF-1"
+    own_row = next(c for c in manual if c["order_id"] == internal_id and c["produk"] == "Meja")
+    assert (own_row["source"], own_row["order_number"], own_row["customer"]) == ("internal", "INT-77", "Ampel Web")
+
+    ids = [c["item_id"] for c in manual if c["order_id"] == order_id]
+    assert (await http.post("/processing/jobs/select", json={"route": "tukang", "item_ids": ids})).status_code == 200
+    job = next(r for r in await rows(http) if r["produk"] == "Rak")
+    assert job["source"] == "reseller" and job["order_number"] == "Menunggu SKU" and job["item_id"]
+    mapped = await save(http, job)
+    assert mapped["order_number"] == "PROD.RAK-2110-AB-01"  # SKU, ship-by date (WIB), seller code, running number
+    # while mapped, the order cannot be deleted; released, it can
+    async with factory() as session:
+        with pytest.raises(HTTPException) as e:
+            await services.delete_pesanan(session, order_id)
+        assert e.value.status_code == 409
+        await session.rollback()
+    for j in [r for r in await rows(http) if r["order_id"] == order_id]:
+        assert (await http.post(f"/processing/jobs/{j['id']}/release?version={j['version']}")).status_code == 200
+    async with factory() as session:
+        await services.delete_pesanan(session, order_id)
+        await session.commit()
+        # status moves without any stock work
+        moved = await services.ubah_status_pesanan(session, internal_id, "shipped")
+        assert moved.status == "shipped"
+    assert (await http.get("/processing/candidates?status=semua")).json()["total"] >= 2
