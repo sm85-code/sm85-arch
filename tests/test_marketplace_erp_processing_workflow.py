@@ -1,6 +1,10 @@
 """Exercise the internal workflow, permissions, isolation and price snapshots through HTTP."""
 
 import json
+from datetime import datetime
+from zoneinfo import ZoneInfo
+
+from tenants.marketplace_erp.adapters.api.v1 import processing_workflow
 from types import SimpleNamespace
 
 import httpx
@@ -174,6 +178,14 @@ async def test_reseller_multiple_products_price_history_fees_and_stage_times(cli
     assert any(e["action"] == "selesai_packing" for e in first["events"])
     second = await advance(http, second, "produksi")
     assert second["stage"] == "packing" and second["painting_done_at"] is None
+    # Arus Kas gets the cost of the finished stages as a reference only (the reopened packing counts for nothing).
+    hari = datetime.now(ZoneInfo("Asia/Jakarta")).date()
+    async with factory() as session:
+        biaya = await processing_workflow.biaya_produksi(session, hari, hari)
+    jumlah = {(i["tahap"], i["pihak"]): i["jumlah"] for i in biaya}
+    assert jumlah == {("produksi", "Tukang 1"): "300000", ("pengecatan", ""): "80000", ("produksi", "Tukang 2"): "200000"}
+    async with factory() as session:
+        assert await processing_workflow.biaya_produksi(session, hari.replace(year=hari.year - 1), hari.replace(year=hari.year - 1)) == []
     async with factory() as session:
         assert (
             json.loads((await session.get(ProcessingCatalog, "global")).payload_json)["harga_produksi"][0]["harga"]
@@ -664,6 +676,20 @@ async def test_supplier_catalog_connection_prices_stock_snapshots_and_manual_cat
         refresh_catalog_price=True,
     )
     assert job["production_price"] == "60000" and job["supplier_reference"]["qty_on_hand"] == 3
+    # A product that sold out stays readable and keeps its mapping, but cannot be chosen for a new one.
+    remote["items"][0].update(qty_on_hand=0)
+    job = await save(
+        http, job, party_id="s1", price_id="", catalog_mode="otomatis", supplier_product_id="remote1",
+        refresh_catalog_price=True,
+    )
+    assert job["supplier_reference"]["qty_on_hand"] == 0
+    remote["items"].append(dict(remote["items"][0], id="remote2", sku="KRS.FUR-2", qty_on_hand=0))
+    response = await http.put(
+        "/processing/jobs/" + job["id"],
+        json=dict(version=job["version"], party_id="s1", price_id="", color="Putih", packing_type="biasa",
+                  packing_price="5000", catalog_mode="otomatis", supplier_product_id="remote2"),
+    )
+    assert response.status_code == 409 and "habis" in response.text
     response = await http.put(
         "/processing/prices/nonwood1",
         json={"version": 0, "kind": "non_kayu", "produk": "Produk manual", "harga": "12345", "sku": "MANUAL-1"},

@@ -33,6 +33,15 @@ async def operasional(periode: str = PERIODE, session: AsyncSession = Depends(ge
     return await ops.untuk_arus_kas(session, periode)
 
 
+@router.get("/biaya-produksi")
+async def biaya_produksi(periode: str = PERIODE, session: AsyncSession = Depends(get_db_marketplace_erp)):
+    """Cost of the production stages finished in the month, from Pemetaan Order. A reference only: never posted to the sheet."""
+    from .processing_workflow import biaya_produksi as hitung
+
+    awal, akhir = ops.rentang(periode)
+    return {"periode": periode, "items": await hitung(session, awal, akhir)}
+
+
 @router.get("/lembar")
 async def lembar(periode: str = PERIODE, session: AsyncSession = Depends(get_db_marketplace_erp)):
     return await manual.muat(session, periode)
