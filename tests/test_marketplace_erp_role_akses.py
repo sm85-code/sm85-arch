@@ -54,7 +54,7 @@ def body(nama="Staf Gudang", akses_toko="semua", halaman=None, keterangan=""):
     return {"nama": nama, "keterangan": keterangan, "akses_toko": akses_toko, "halaman": halaman or {}}
 
 
-ENTRI = {"kategori": "gaji", "tanggal": "2026-10-05", "jumlah": "1000", "uraian": "x"}
+ENTRI = {"kategori": "ongkir", "tanggal": "2026-10-05", "jumlah": "1000", "uraian": "x"}
 
 
 @pytest.mark.asyncio
