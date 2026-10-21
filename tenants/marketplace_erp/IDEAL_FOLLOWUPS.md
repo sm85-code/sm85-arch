@@ -54,8 +54,8 @@ Does **not** expand `tenants/toko`.
 Prinsip: teks hanya tampilan, identitas selalu ID. Kelompok transaksi sudah memakai ID (`mpe_kelompok_transaksi`); sisanya
 belum dikerjakan (hasil pemeriksaan kode, 2026-10-21; hanya area keuangan, kategori, role, dan Operasional yang diperiksa):
 
-1. **Baris toko di Pemasukan memakai nama toko sebagai kunci** (`shop:${nama}` di `sheetSections.ts` frontend). Mengganti nama
-   toko memutus angka manual di baris itu. Risiko data terbesar, perubahan kecil: pakai ID toko.
+1. ~~Baris toko di Pemasukan memakai nama toko sebagai kunci~~: bukan masalah. `rincian_toko` hanya terisi dari impor Drive
+   (`financial_drive_import.py`, nama dari spreadsheet), bukan dari tabel toko; namanya data, bukan teks tampilan.
 2. **Judul grup sheet jadi kunci**: `Kas masuk`, `Kas keluar`, `Transfer antar kas`, `Aset`, `Kewajiban`, `Ekuitas`, `Penjualan dan jasa`,
    `Penyesuaian piutang`, dan seterusnya. Dipakai di rumus total (`G('arus_kas', 'Kas keluar')`), di baris tambahan yang tersimpan
    (`grup: 'Kas keluar'` di lembar manual), di nama ganti grup (`keyGrup` = hash teks), dan untuk menentukan arah masuk/keluar
@@ -70,9 +70,7 @@ belum dikerjakan (hasil pemeriksaan kode, 2026-10-21; hanya area keuangan, kateg
 Sudah ada: halaman **Kelola Aplikasi** (`/pengaturan-ui`, teks per ID): nama menu, kelompok menu, judul halaman, nama role bawaan,
 tab/judul tabel/kelompok/baris tetap di Laporan Keuangan, dan nama halaman Operasional di Kategori Transaksi. Teks bawaan di kode
 tetap jadi identitas (kunci baris, judul grup), jadi data tersimpan tidak berubah; yang dipakai orang hanya tampilan.
-Butir 6 (nama halaman Operasional) selesai untuk tampilan. Butir 1 (kunci `shop:${nama}`) belum bisa: laporan tertutup dari backend
-hanya menyimpan nama toko, tanpa ID. Butir 2/3 diatasi lewat teks global (Kelola Aplikasi); ID grup terpisah dari teks belum dibuat.
-Masih menyusul: logo; butir 4 (pengelompokan halaman di RoleAkses).
+Butir 6 (nama halaman Operasional) selesai untuk tampilan. Butir 4 (kelompok halaman di RoleAkses) dan logo/nama/keterangan aplikasi selesai. Butir 2/3 diatasi lewat teks global (Kelola Aplikasi); ID grup terpisah dari teks belum dibuat.
 
 Belum ada: pencatatan **pembagian laba** (pengambilan laba dari kas utama).
 
