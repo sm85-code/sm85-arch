@@ -202,9 +202,25 @@ def test_user_create_schema_validation():
     with pytest.raises(ValidationError):
         UserCreateIn(nama="X", username="xxx", email="x@example.com", password="short")
     with pytest.raises(ValidationError):
-        UserCreateIn(nama="X", username="xxx", email="x@example.com", password="panjang1234", role="superadmin")
+        UserCreateIn(nama="X", username="xxx", email="x@example.com", password="panjang1234", role="Super Admin!")
     with pytest.raises(ValidationError):
         UserCreateIn(nama="X", username="xxx", email="x@example.com", password="a" * 73)
+
+
+@pytest.mark.asyncio
+async def test_create_user_role_must_exist(session):
+    from tenants.marketplace_erp.modules.marketplace_erp.application import akses
+
+    await akses.pastikan_bawaan(session)
+    with pytest.raises(HTTPException) as exc:
+        await services.create_user(
+            session, UserCreateIn(nama="X", username="xxx", email="x@example.com", password="panjang1234", role="superadmin")
+        )
+    assert exc.value.status_code == 422
+    user = await services.create_user(
+        session, UserCreateIn(nama="Y", username="yyy", email="y@example.com", password="panjang1234", role="staf_keuangan")
+    )
+    assert user.role == "staf_keuangan"
 
 
 @pytest.mark.asyncio

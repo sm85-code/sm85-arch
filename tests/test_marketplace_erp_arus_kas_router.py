@@ -42,15 +42,9 @@ def client_for(role, session):
 
 
 @pytest.mark.asyncio
-async def test_owner_is_denied_everywhere():
-    async def forbidden_db():
-        raise AssertionError("Owner reached the database")
-
-    app = FastAPI()
-    app.include_router(router)
-    app.dependency_overrides[get_current_user_marketplace_erp] = lambda: SimpleNamespace(id="user", role="owner")
-    app.dependency_overrides[get_db_marketplace_erp] = forbidden_db
-    async with httpx.AsyncClient(transport=httpx.ASGITransport(app=app), base_url="http://test") as client:
+async def test_owner_is_denied_everywhere(session):
+    # Owner has no Arus Kas access by default; an admin may grant it in the role settings.
+    async with client_for("owner", session) as client:
         for method, path in [
             ("GET", "/arus-kas/laporan?periode=2026-10"),
             ("GET", "/arus-kas/lembar?periode=2026-10"),

@@ -111,7 +111,10 @@ async def test_admin_changes_username_name_and_role_of_another_user(session):
         await services.update_user(session, "nope", UserUpdateIn(nama="x"))
     assert exc.value.status_code == 404
     with pytest.raises(ValidationError):
-        UserUpdateIn(role="superadmin")
+        UserUpdateIn(role="Super Admin!")  # not even shaped like a role id
+    with pytest.raises(HTTPException) as exc:  # well formed, but no such role is defined
+        await services.update_user(session, staff.id, UserUpdateIn(role="superadmin"))
+    assert exc.value.status_code == 422
     for jelek in ("ab", "a b c", "bud@i", "-budi", "x" * 40, ""):
         with pytest.raises(ValidationError):
             UserUpdateIn(username=jelek)

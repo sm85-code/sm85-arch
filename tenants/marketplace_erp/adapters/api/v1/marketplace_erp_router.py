@@ -31,6 +31,7 @@ from .chat_router import router as chat_router
 from .arus_kas_router import router as arus_kas_router
 from .operasional_router import router as operasional_router
 from .push_router import router as push_router
+from .roles_router import router as roles_router
 from .financial_reports_router import router as financial_reports_router
 from .processing_router import router as processing_router
 
@@ -1844,5 +1845,6 @@ marketplace_erp_router.include_router(financial_reports_router)
 marketplace_erp_router.include_router(arus_kas_router)
 marketplace_erp_router.include_router(operasional_router)
 marketplace_erp_router.include_router(push_router)
+marketplace_erp_router.include_router(roles_router)
 
 marketplace_erp_router.include_router(processing_router)

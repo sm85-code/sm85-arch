@@ -15,6 +15,7 @@ from sqlalchemy import or_, select, text
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from shared.security import hash_password, verify_password
+from tenants.marketplace_erp.modules.marketplace_erp.application import akses
 from tenants.marketplace_erp.modules.marketplace_erp.infrastructure import database as mpe_database
 from tenants.marketplace_erp.modules.marketplace_erp.infrastructure.database import MarketplaceErpBase
 from tenants.marketplace_erp.modules.marketplace_erp.infrastructure.models import (
@@ -230,6 +231,7 @@ async def ensure_marketplace_erp_schema() -> None:
     async with mpe_database.SessionLocal() as session:
         await _isi_username_kosong(session)
         await _ensure_admin(session)
+        await akses.pastikan_bawaan(session)
         if await _flag_default_password_owner(session):
             logger.warning(
                 "marketplace_erp: seeded owner %s still uses the default password -- "
@@ -247,6 +249,7 @@ async def seed_marketplace_erp(session: AsyncSession) -> dict[str, str]:
     owner = await _ensure_owner(session)
     await _isi_username_kosong(session)
     await _ensure_admin(session)
+    await akses.pastikan_bawaan(session)
     gudang = await _ensure_default_gudang(session)
     await session.commit()
     return {

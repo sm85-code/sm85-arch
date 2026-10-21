@@ -18,7 +18,8 @@ PASSWORD_MAX_BYTES = 72
 
 # admin (everything, incl. other users' usernames and roles) > owner (everything except that) > staff (scoped to
 # the shops it is assigned to). The staf_* roles each reach only their own finance pages (see operasional.py).
-USER_ROLES = ("admin", "owner", "staff", "staf_keuangan", "staf_operasional", "staf_produksi")
+USER_ROLES = ("admin", "owner", "staff")  # built-in roles; others are defined in Kelola Pengguna (mpe_role)
+ROLE_ID_RE = re.compile(r"^[a-z][a-z0-9_]{1,47}$")
 
 
 def _validate_new_password(value: str) -> str:
@@ -65,8 +66,8 @@ class UserCreateIn(BaseModel):
     @classmethod
     def _role_ok(cls, value: str) -> str:
         role = (value or "").strip().lower()
-        if role not in USER_ROLES:
-            raise ValueError(f"Role harus salah satu dari: {', '.join(USER_ROLES)}")
+        if not ROLE_ID_RE.match(role):
+            raise ValueError("Role tidak valid")
         return role
 
 
@@ -138,8 +139,8 @@ class UserUpdateIn(BaseModel):
         if value is None:
             return None
         role = value.strip().lower()
-        if role not in USER_ROLES:
-            raise ValueError(f"Role harus salah satu dari: {', '.join(USER_ROLES)}")
+        if not ROLE_ID_RE.match(role):
+            raise ValueError("Role tidak valid")
         return role
 
 

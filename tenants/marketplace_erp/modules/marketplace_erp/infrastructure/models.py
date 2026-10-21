@@ -774,6 +774,26 @@ class PushTerkirim(MarketplaceErpBase):
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=_utcnow, index=True)
 
 
+class Role(MarketplaceErpBase):
+    """A named bundle of access: which shops (akses_toko), which pages and read/write per page (RoleHalaman)."""
+    __tablename__ = "mpe_role"
+    id: Mapped[str] = mapped_column(String(48), primary_key=True)
+    nama: Mapped[str] = mapped_column(String(80), nullable=False, unique=True)
+    keterangan: Mapped[str] = mapped_column(String(255), nullable=False, default="")
+    # "semua" = every shop; "ditugaskan" = only the shops assigned to the user (StaffAkunMarketplace).
+    akses_toko: Mapped[str] = mapped_column(String(16), nullable=False, default="ditugaskan")
+    sistem: Mapped[bool] = mapped_column(Boolean, nullable=False, default=False, server_default=text("false"))
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=_utcnow)
+    updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=_utcnow, onupdate=_utcnow)
+
+
+class RoleHalaman(MarketplaceErpBase):
+    __tablename__ = "mpe_role_halaman"
+    role_id: Mapped[str] = mapped_column(String(48), ForeignKey("mpe_role.id", ondelete="CASCADE"), primary_key=True)
+    halaman: Mapped[str] = mapped_column(String(48), primary_key=True)
+    tingkat: Mapped[str] = mapped_column(String(8), nullable=False)  # "baca" | "tulis"
+
+
 class TransaksiOperasional(MarketplaceErpBase):
     """One operating-cost entry typed into the Operasional Umum / Operasional Packing pages (see application/operasional.py)."""
     __tablename__ = "mpe_transaksi_operasional"

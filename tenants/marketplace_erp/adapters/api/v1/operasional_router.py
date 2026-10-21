@@ -19,8 +19,8 @@ async def daftar(
     session: AsyncSession = Depends(get_db_marketplace_erp),
     user: UserMarketplaceErp = Depends(get_current_user_marketplace_erp),
 ):
-    ops.pastikan_baca(jenis, user.role)
-    return await ops.daftar(session, jenis, periode, user.role)
+    tingkat = await ops.pastikan_baca(session, jenis, user.role)
+    return await ops.daftar(session, jenis, periode, tingkat == "tulis")
 
 
 @router.post("/{jenis}", status_code=status.HTTP_201_CREATED)
@@ -30,7 +30,7 @@ async def tambah(
     session: AsyncSession = Depends(get_db_marketplace_erp),
     user: UserMarketplaceErp = Depends(get_current_user_marketplace_erp),
 ):
-    ops.pastikan_tulis(jenis, user.role)
+    await ops.pastikan_tulis(session, jenis, user.role)
     return await ops.tambah(session, jenis, isian, user.id)
 
 
@@ -42,7 +42,7 @@ async def ubah(
     session: AsyncSession = Depends(get_db_marketplace_erp),
     user: UserMarketplaceErp = Depends(get_current_user_marketplace_erp),
 ):
-    ops.pastikan_tulis(jenis, user.role)
+    await ops.pastikan_tulis(session, jenis, user.role)
     return await ops.ubah(session, jenis, id_, isian, user.id)
 
 
@@ -53,6 +53,6 @@ async def hapus(
     session: AsyncSession = Depends(get_db_marketplace_erp),
     user: UserMarketplaceErp = Depends(get_current_user_marketplace_erp),
 ):
-    ops.pastikan_tulis(jenis, user.role)
+    await ops.pastikan_tulis(session, jenis, user.role)
     await ops.hapus(session, jenis, id_)
     return Response(status_code=status.HTTP_204_NO_CONTENT)

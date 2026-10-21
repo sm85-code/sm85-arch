@@ -9,12 +9,13 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from tenants.marketplace_erp.modules.marketplace_erp.application import financial_manual as manual
 from tenants.marketplace_erp.modules.marketplace_erp.application import financial_reports as reports
-from tenants.marketplace_erp.modules.marketplace_erp.infrastructure.auth import require_roles_marketplace_erp
+from tenants.marketplace_erp.modules.marketplace_erp.application.akses import butuh_halaman
 from tenants.marketplace_erp.modules.marketplace_erp.infrastructure.database import get_db_marketplace_erp
 from tenants.marketplace_erp.modules.marketplace_erp.infrastructure.models import UserMarketplaceErp
 
-akses = require_roles_marketplace_erp("admin", "staff", "staf_keuangan")
-router = APIRouter(prefix="/arus-kas", tags=["Arus Kas"], dependencies=[Depends(akses)])
+baca = butuh_halaman("arus_kas", "baca")
+tulis = butuh_halaman("arus_kas", "tulis")  # ticking transactions; any other change is refused below
+router = APIRouter(prefix="/arus-kas", tags=["Arus Kas"], dependencies=[Depends(baca)])
 
 TANDA = "ok:"
 PERIODE = Query(pattern=r"^\d{4}-\d{2}$")
@@ -45,7 +46,7 @@ async def simpan_lembar(
     payload: manual.Simpan,
     periode: str = PERIODE,
     session: AsyncSession = Depends(get_db_marketplace_erp),
-    actor: UserMarketplaceErp = Depends(akses),
+    actor: UserMarketplaceErp = Depends(tulis),
 ):
     saved = await manual.muat(session, periode)
     if not hanya_tanda(saved["lembar"], payload.lembar):

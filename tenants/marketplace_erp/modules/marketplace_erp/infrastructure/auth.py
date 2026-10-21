@@ -94,11 +94,13 @@ async def akun_ids_diizinkan(user: UserMarketplaceErp, session: AsyncSession) ->
     empty) list of AkunMarketplace ids for `staff` -- the only shops that
     role may read/write, per StaffAkunMarketplace. Imported lazily to avoid
     a module-load-time cycle between auth.py and models.py's own imports."""
-    role = (user.role or "").strip().lower()
-    if role in FULL_ACCESS_ROLES:
+    from tenants.marketplace_erp.modules.marketplace_erp.application import akses
+
+    cakupan = await akses.akses_toko(session, user.role)
+    if cakupan == "semua":
         return None
-    if role != "staff":
-        return []  # the staf_* finance roles have no shop access at all
+    if cakupan != "ditugaskan":
+        return []  # a role that does not exist reaches no shop
     from sqlalchemy import select
 
     from tenants.marketplace_erp.modules.marketplace_erp.infrastructure.models import StaffAkunMarketplace

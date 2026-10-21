@@ -9,6 +9,7 @@ from fastapi import FastAPI
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker, create_async_engine
 
 from tenants.marketplace_erp.adapters.api.v1.operasional_router import router
+from tenants.marketplace_erp.modules.marketplace_erp.application import akses
 from tenants.marketplace_erp.modules.marketplace_erp.application import operasional as ops
 from tenants.marketplace_erp.modules.marketplace_erp.infrastructure.auth import (
     akun_ids_diizinkan,
@@ -26,6 +27,8 @@ async def session():
     async with engine.begin() as conn:
         await conn.run_sync(MarketplaceErpBase.metadata.create_all)
     async with async_sessionmaker(engine, class_=AsyncSession, expire_on_commit=False)() as s:
+        await akses.pastikan_bawaan(s)
+        await s.commit()
         yield s
     await engine.dispose()
 
@@ -57,6 +60,7 @@ AKSES = {
     ("staf_produksi", "umum"): (False, False), ("staf_produksi", "packing"): (True, True),
     ("owner", "umum"): (True, False), ("owner", "packing"): (True, False),
     ("staff", "umum"): (False, False), ("staff", "packing"): (False, False),
+    ("tidak_ada", "umum"): (False, False),  # a role that does not exist reaches nothing
 }
 
 
@@ -156,8 +160,8 @@ async def test_total_per_kategori_for_arus_kas(session):
 
 
 @pytest.mark.asyncio
-async def test_finance_roles_have_no_shop_access(session):
-    for role in ("staf_keuangan", "staf_operasional", "staf_produksi"):
-        assert await akun_ids_diizinkan(SimpleNamespace(id="u", role=role), session) == []
-    for role in ("admin", "owner"):
-        assert await akun_ids_diizinkan(SimpleNamespace(id="u", role=role), session) is None
+async def test_shop_access_follows_the_role(session):
+    for role in ("admin", "owner", "staf_keuangan", "staf_operasional", "staf_produksi"):
+        assert await akun_ids_diizinkan(SimpleNamespace(id="u", role=role), session) is None, role
+    assert await akun_ids_diizinkan(SimpleNamespace(id="u", role="staff"), session) == []  # nobody assigned yet
+    assert await akun_ids_diizinkan(SimpleNamespace(id="u", role="tidak_ada"), session) == []

@@ -4,8 +4,8 @@ Each entry has a date, a category, a description and an amount. The categories a
 (kategoriKeuangan on the frontend), so the totals line up with its rows:
   umum    -> bahan_cat, ongkir, gaji, iklan, langganan, lain_keluar
   packing -> perl_packing
-Who may do what is decided per page (jenis): admin and staf_keuangan write on both, staf_operasional only on umum,
-staf_produksi only on packing, owner reads both.
+Who may do what is decided per page (jenis) by the role settings (akses.py): halaman operasional_umum and
+operasional_packing, level baca or tulis.
 """
 from __future__ import annotations
 
@@ -18,6 +18,7 @@ from pydantic import BaseModel, Field, field_validator
 from sqlalchemy import func, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from tenants.marketplace_erp.modules.marketplace_erp.application import akses
 from tenants.marketplace_erp.modules.marketplace_erp.infrastructure.models import TransaksiOperasional
 
 KATEGORI: dict[str, dict[str, str]] = {
@@ -31,11 +32,7 @@ KATEGORI: dict[str, dict[str, str]] = {
     },
     "packing": {"perl_packing": "Bahan dan perlengkapan packing"},
 }
-TULIS = {
-    "umum": {"admin", "staf_keuangan", "staf_operasional"},
-    "packing": {"admin", "staf_keuangan", "staf_produksi"},
-}
-BACA_TAMBAHAN = {"owner"}
+HALAMAN = {"umum": "operasional_umum", "packing": "operasional_packing"}
 MAKS_JUMLAH = Decimal("9999999999999.99")
 
 
@@ -63,23 +60,17 @@ def pastikan_jenis(jenis: str) -> None:
         raise HTTPException(status.HTTP_404_NOT_FOUND, "Halaman tidak ditemukan")
 
 
-def boleh_tulis(jenis: str, role: str | None) -> bool:
-    return (role or "").strip().lower() in TULIS[jenis]
-
-
-def boleh_baca(jenis: str, role: str | None) -> bool:
-    return boleh_tulis(jenis, role) or (role or "").strip().lower() in BACA_TAMBAHAN
-
-
-def pastikan_baca(jenis: str, role: str | None) -> None:
+async def pastikan_baca(session: AsyncSession, jenis: str, role: str | None) -> str:
+    """Raises unless the role may open this page; returns its level ("baca" or "tulis")."""
     pastikan_jenis(jenis)
-    if not boleh_baca(jenis, role):
+    tingkat = await akses.tingkat_halaman(session, role, HALAMAN[jenis])
+    if tingkat is None:
         raise HTTPException(status.HTTP_403_FORBIDDEN, "Akses ditolak")
+    return tingkat
 
 
-def pastikan_tulis(jenis: str, role: str | None) -> None:
-    pastikan_jenis(jenis)
-    if not boleh_tulis(jenis, role):
+async def pastikan_tulis(session: AsyncSession, jenis: str, role: str | None) -> None:
+    if await pastikan_baca(session, jenis, role) != "tulis":
         raise HTTPException(status.HTTP_403_FORBIDDEN, "Akses ditolak")
 
 
@@ -109,7 +100,7 @@ def _baris(t: TransaksiOperasional) -> dict:
     }
 
 
-async def daftar(session: AsyncSession, jenis: str, periode: str, role: str | None) -> dict:
+async def daftar(session: AsyncSession, jenis: str, periode: str, bisa_tulis: bool) -> dict:
     awal, akhir = rentang(periode)
     rows = (
         await session.scalars(
@@ -127,7 +118,7 @@ async def daftar(session: AsyncSession, jenis: str, periode: str, role: str | No
         "kategori": [{"id": k, "label": v} for k, v in KATEGORI[jenis].items()],
         "items": [_baris(r) for r in rows],
         "ringkasan": {"per_kategori": {k: str(v) for k, v in per_kategori.items()}, "total": str(sum(per_kategori.values(), Decimal("0")))},
-        "bisa_tulis": boleh_tulis(jenis, role),
+        "bisa_tulis": bisa_tulis,
     }
 
 

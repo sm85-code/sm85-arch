@@ -12,6 +12,7 @@ from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import selectinload
 
+from . import akses
 from .stock_settings import get_settings, require_warehouse
 
 from shared.security import hash_password, verify_password
@@ -166,6 +167,7 @@ async def create_user(session: AsyncSession, payload: UserCreateIn) -> UserMarke
     """Owner-only account creation. The owner picks a temporary password, so
     the new account must change it on first login."""
     await _cek_username_belum_dipakai(session, payload.username)
+    await akses.pastikan_role_ada(session, payload.role)
     if payload.email:
         await _cek_email_belum_terdaftar(session, str(payload.email))
     user = UserMarketplaceErp(
@@ -182,13 +184,12 @@ async def create_user(session: AsyncSession, payload: UserCreateIn) -> UserMarke
 
 
 # Which roles an account of a given role may create (admin: anyone; owner: staff only).
-_PERAN_YANG_BOLEH_DIBUAT = {
-    "admin": {"admin", "owner", "staff", "staf_keuangan", "staf_operasional", "staf_produksi"},
-    "owner": {"staff"},
-}
+_PERAN_YANG_BOLEH_DIBUAT = {"owner": {"staff"}}
 
 
 def pastikan_boleh_membuat_peran(pembuat_role: str | None, peran_baru: str) -> None:
+    if (pembuat_role or "").strip().lower() == "admin":
+        return  # any role that exists (checked when the account is saved)
     boleh = _PERAN_YANG_BOLEH_DIBUAT.get((pembuat_role or "").strip().lower(), set())
     if peran_baru not in boleh:
         raise HTTPException(
@@ -209,6 +210,7 @@ async def update_user(session: AsyncSession, user_id: str, payload) -> UserMarke
     if "nama" in data:
         user.nama = data["nama"].strip()
     if "role" in data and data["role"] != user.role:
+        await akses.pastikan_role_ada(session, data["role"])
         if user.role == "admin":
             jumlah_admin = (
                 await session.execute(select(func.count()).select_from(UserMarketplaceErp).where(UserMarketplaceErp.role == "admin"))
@@ -3432,8 +3434,8 @@ async def konfirmasi_retur_marketplace(session: AsyncSession, akun_id: str, nomo
 async def assign_staff_banyak(session: AsyncSession, user_id: str, akun_ids: list[str]) -> list[StaffAkunMarketplace]:
     """Validate the entire additive assignment before changing anything; repeated requests are safe."""
     user = (await session.execute(select(UserMarketplaceErp).where(UserMarketplaceErp.id == user_id).with_for_update())).scalar_one_or_none()
-    if not user or user.role != "staff":
-        raise HTTPException(422, "Pilih pengguna dengan role staf")
+    if not user or await akses.akses_toko(session, user.role) != "ditugaskan":
+        raise HTTPException(422, "Pilih pengguna dengan role yang aksesnya dibatasi per toko")
     ids = list(dict.fromkeys(akun_ids))
     for akun_id in ids:
         await get_akun_marketplace(session, akun_id)
