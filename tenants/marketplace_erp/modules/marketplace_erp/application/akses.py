@@ -8,7 +8,7 @@ from __future__ import annotations
 
 import re
 import unicodedata
-from typing import Callable
+from typing import Callable, Iterable
 
 from fastapi import Depends, HTTPException, status
 from sqlalchemy import func, select
@@ -17,6 +17,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from tenants.marketplace_erp.modules.marketplace_erp.infrastructure.auth import get_current_user_marketplace_erp
 from tenants.marketplace_erp.modules.marketplace_erp.infrastructure.database import get_db_marketplace_erp
 from tenants.marketplace_erp.modules.marketplace_erp.infrastructure.models import (
+    PeranTambahan,
     Role,
     RoleHalaman,
     UserMarketplaceErp,
@@ -109,24 +110,45 @@ async def _role(session: AsyncSession, role_id: str) -> Role | None:
     return role
 
 
-async def tingkat_halaman(session: AsyncSession, role_id: str | None, halaman: str) -> str | None:
-    """"tulis", "baca" or None for this role on this page. Admin always has "tulis"."""
-    role_id = _norm(role_id)
-    if role_id == ADMIN:
-        return "tulis"
-    if await _role(session, role_id) is None:
-        return None
-    row = await session.get(RoleHalaman, (role_id, halaman))
-    return row.tingkat if row else None
+def _daftar_role(role_id: str | Iterable[str] | None) -> list[str]:
+    """One role id or several (an account may hold more than one), normalised and without repeats."""
+    ids = [role_id] if isinstance(role_id, str) or role_id is None else list(role_id)
+    return list(dict.fromkeys(r for r in (_norm(x) for x in ids) if r))
 
 
-async def akses_toko(session: AsyncSession, role_id: str | None) -> str | None:
-    """"semua", "ditugaskan", or None for a role that does not exist."""
-    role_id = _norm(role_id)
-    if role_id == ADMIN:
-        return "semua"
-    role = await _role(session, role_id)
-    return role.akses_toko if role else None
+async def peran_pengguna(session: AsyncSession, user: UserMarketplaceErp) -> list[str]:
+    """The main role first, then the extra ones the account holds."""
+    extra = (await session.scalars(select(PeranTambahan.role_id).where(PeranTambahan.user_id == user.id).order_by(PeranTambahan.role_id))).all()
+    return _daftar_role([user.role, *extra])
+
+
+async def tingkat_halaman(session: AsyncSession, role_id: str | Iterable[str] | None, halaman: str) -> str | None:
+    """"tulis", "baca" or None on this page. With several roles the most generous one counts. Admin always has "tulis"."""
+    terbaik: str | None = None
+    for rid in _daftar_role(role_id):
+        if rid == ADMIN:
+            return "tulis"
+        if await _role(session, rid) is None:
+            continue
+        row = await session.get(RoleHalaman, (rid, halaman))
+        if row and (terbaik is None or row.tingkat == "tulis"):
+            terbaik = row.tingkat
+    return terbaik
+
+
+async def akses_toko(session: AsyncSession, role_id: str | Iterable[str] | None) -> str | None:
+    """"semua", "ditugaskan", or None when no role exists. With several roles "semua" wins over "ditugaskan"."""
+    hasil: str | None = None
+    for rid in _daftar_role(role_id):
+        if rid == ADMIN:
+            return "semua"
+        role = await _role(session, rid)
+        if role is None:
+            continue
+        if role.akses_toko == "semua":
+            return "semua"
+        hasil = role.akses_toko
+    return hasil
 
 
 def butuh_halaman(halaman: str, perlu: str) -> Callable:
@@ -137,7 +159,7 @@ def butuh_halaman(halaman: str, perlu: str) -> Callable:
         user: UserMarketplaceErp = Depends(get_current_user_marketplace_erp),
         session: AsyncSession = Depends(get_db_marketplace_erp),
     ) -> UserMarketplaceErp:
-        punya = await tingkat_halaman(session, user.role, halaman)
+        punya = await tingkat_halaman(session, await peran_pengguna(session, user), halaman)
         if punya is None or (perlu == "tulis" and punya != "tulis"):
             raise HTTPException(status.HTTP_403_FORBIDDEN, "Akses ditolak")
         return user
@@ -168,7 +190,9 @@ def _bersih_halaman(halaman: dict[str, str]) -> dict[str, str]:
 
 
 async def _jumlah_pengguna(session: AsyncSession, role_id: str) -> int:
-    return (await session.execute(select(func.count()).select_from(UserMarketplaceErp).where(UserMarketplaceErp.role == role_id))).scalar_one()
+    utama = (await session.execute(select(func.count()).select_from(UserMarketplaceErp).where(UserMarketplaceErp.role == role_id))).scalar_one()
+    tambahan = (await session.execute(select(func.count()).select_from(PeranTambahan).where(PeranTambahan.role_id == role_id))).scalar_one()
+    return utama + tambahan
 
 
 async def daftar(session: AsyncSession) -> dict:
@@ -180,6 +204,8 @@ async def daftar(session: AsyncSession) -> dict:
     jumlah = dict(
         (await session.execute(select(UserMarketplaceErp.role, func.count()).group_by(UserMarketplaceErp.role))).all()
     )
+    for rid, n in (await session.execute(select(PeranTambahan.role_id, func.count()).group_by(PeranTambahan.role_id))).all():
+        jumlah[rid] = jumlah.get(rid, 0) + n
     return {
         "roles": [
             {
@@ -193,16 +219,24 @@ async def daftar(session: AsyncSession) -> dict:
     }
 
 
-async def akses_pengguna(session: AsyncSession, role_id: str | None) -> dict:
-    """What the signed-in user's role may do, for the app to show or hide menus and buttons."""
-    role_id = _norm(role_id)
-    role = await _role(session, role_id) if role_id != ADMIN else None
-    if role_id == ADMIN:
-        return {"role": ADMIN, "nama": "Admin", "akses_toko": "semua", "halaman": {k: lv[-1] for k, lv in TINGKAT_HALAMAN.items()}}
-    if role is None:
-        return {"role": role_id, "nama": role_id, "akses_toko": "ditugaskan", "halaman": {}}
-    izin = {h.halaman: h.tingkat for h in (await session.scalars(select(RoleHalaman).where(RoleHalaman.role_id == role.id))).all()}
-    return {"role": role.id, "nama": role.nama, "akses_toko": role.akses_toko, "halaman": izin}
+async def akses_pengguna(session: AsyncSession, role_id: str | Iterable[str] | None) -> dict:
+    """What the signed-in user's role(s) may do, for the app to show or hide menus and buttons. With several roles the
+    pages and levels are merged (write beats read), "semua" shops beats "ditugaskan"; `role` is the main one."""
+    ids = _daftar_role(role_id)
+    utama = ids[0] if ids else ""
+    if ADMIN in ids:
+        return {"role": ADMIN, "roles": ids, "nama": "Admin", "akses_toko": "semua", "halaman": {k: lv[-1] for k, lv in TINGKAT_HALAMAN.items()}}
+    roles = [r for r in [await _role(session, rid) for rid in ids] if r is not None]
+    if not roles:
+        return {"role": utama, "roles": ids, "nama": utama, "akses_toko": "ditugaskan", "halaman": {}}
+    izin: dict[str, str] = {}
+    for h in (await session.scalars(select(RoleHalaman).where(RoleHalaman.role_id.in_([r.id for r in roles])))).all():
+        if izin.get(h.halaman) != "tulis":
+            izin[h.halaman] = h.tingkat
+    return {
+        "role": roles[0].id, "roles": [r.id for r in roles], "nama": " + ".join(r.nama for r in roles),
+        "akses_toko": "semua" if any(r.akses_toko == "semua" for r in roles) else roles[0].akses_toko, "halaman": izin,
+    }
 
 
 async def buat(session: AsyncSession, nama: str, keterangan: str, akses: str, halaman: dict[str, str]) -> str:
@@ -272,3 +306,33 @@ async def hapus(session: AsyncSession, role_id: str) -> None:
 async def pastikan_role_ada(session: AsyncSession, role_id: str) -> None:
     if await _role(session, _norm(role_id)) is None:
         raise HTTPException(422, "Role tidak ditemukan")
+
+
+async def atur_peran_tambahan(session: AsyncSession, user: UserMarketplaceErp, role_ids: list[str]) -> list[str]:
+    """Replace the extra roles of an account. The main role is not repeated, and Admin is never an extra (it is all or nothing)."""
+    ids = [r for r in _daftar_role(role_ids) if r != _norm(user.role)]
+    for rid in ids:
+        if rid == ADMIN:
+            raise HTTPException(422, "Admin tidak bisa dirangkap; jadikan role utama")
+        await pastikan_role_ada(session, rid)
+    if _norm(user.role) == ADMIN and ids:
+        raise HTTPException(422, "Admin sudah punya semua akses; tidak perlu role tambahan")
+    lama = {p.role_id: p for p in (await session.scalars(select(PeranTambahan).where(PeranTambahan.user_id == user.id))).all()}
+    for rid, p in lama.items():
+        if rid not in ids:
+            await session.delete(p)
+    for rid in ids:
+        if rid not in lama:
+            session.add(PeranTambahan(user_id=user.id, role_id=rid))
+    await session.flush()
+    return ids
+
+
+async def muat_peran_tambahan(session: AsyncSession, users: list[UserMarketplaceErp]) -> None:
+    """Attach `peran_tambahan` (list of role ids) to each account, for the response."""
+    peta: dict[str, list[str]] = {}
+    if users:
+        for uid, rid in (await session.execute(select(PeranTambahan.user_id, PeranTambahan.role_id).where(PeranTambahan.user_id.in_([u.id for u in users])).order_by(PeranTambahan.role_id))).all():
+            peta.setdefault(uid, []).append(rid)
+    for u in users:
+        u.peran_tambahan = peta.get(u.id, [])  # type: ignore[attr-defined]

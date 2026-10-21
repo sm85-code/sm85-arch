@@ -91,14 +91,15 @@ def require_roles_marketplace_erp(*roles: str) -> Callable:
     ) -> UserMarketplaceErp:
         from tenants.marketplace_erp.modules.marketplace_erp.application import akses, peta_akses
 
-        role = (user.role or "").strip().lower()
+        # All roles the account holds (the guard may also be called directly, without a database session).
+        roles = await akses.peran_pengguna(session, user) if isinstance(session, AsyncSession) else [(user.role or "").strip().lower()]
         aturan = peta_akses.cari(request.url.path, request.method) if isinstance(request, Request) else None
         if aturan is None:
-            ok = role in allowed
+            ok = any(r in allowed for r in roles)
         elif aturan[0] == "*":
-            ok = role == "admin" or await akses.akses_toko(session, role) is not None
+            ok = "admin" in roles or await akses.akses_toko(session, roles) is not None
         else:
-            punya = await akses.tingkat_halaman(session, role, aturan[0])
+            punya = await akses.tingkat_halaman(session, roles, aturan[0])
             ok = punya is not None and (aturan[1] == "baca" or punya == "tulis")
         if not ok:
             raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="Akses ditolak")
@@ -114,7 +115,7 @@ async def akun_ids_diizinkan(user: UserMarketplaceErp, session: AsyncSession) ->
     a module-load-time cycle between auth.py and models.py's own imports."""
     from tenants.marketplace_erp.modules.marketplace_erp.application import akses
 
-    cakupan = await akses.akses_toko(session, user.role)
+    cakupan = await akses.akses_toko(session, await akses.peran_pengguna(session, user))
     if cakupan == "semua":
         return None
     if cakupan != "ditugaskan":

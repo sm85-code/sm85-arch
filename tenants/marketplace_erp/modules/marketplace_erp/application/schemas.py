@@ -51,6 +51,7 @@ class UserCreateIn(BaseModel):
     email: Optional[EmailStr] = None
     password: str
     role: str = "staff"
+    peran_tambahan: list[str] = []
 
     @field_validator("username")
     @classmethod
@@ -127,6 +128,7 @@ class UserUpdateIn(BaseModel):
     nama: Optional[str] = Field(None, min_length=1, max_length=255)
     username: Optional[str] = None
     role: Optional[str] = None
+    peran_tambahan: Optional[list[str]] = None
 
     @field_validator("username")
     @classmethod
@@ -167,6 +169,7 @@ class UserOut(BaseModel):
     username: Optional[str] = None
     email: Optional[str] = None
     role: str
+    peran_tambahan: list[str] = []
     # True for the seeded default-password owner (and accounts an owner
     # created with a temporary password) until they call
     # POST /auth/change-password. FE redirects to "Ganti Password" on it.

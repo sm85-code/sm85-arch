@@ -21,6 +21,7 @@ from tenants.marketplace_erp.modules.marketplace_erp.application import akses, s
 from tenants.marketplace_erp.modules.marketplace_erp.infrastructure.adapters import erp_shopee_chat
 from tenants.marketplace_erp.modules.marketplace_erp.infrastructure.models import (
     AkunMarketplace,
+    PeranTambahan,
     Pesanan,
     PushSubscription,
     PushTerkirim,
@@ -64,18 +65,23 @@ async def _recipients(session: AsyncSession) -> list[tuple[PushSubscription, set
     """Every subscription with the shops its user may see (None = every shop) and the pages its role may open; the role
     settings decide both, so a role without Pesanan or Chat gets none of those announcements."""
     rows = (await session.execute(select(PushSubscription, UserMarketplaceErp.role).join(UserMarketplaceErp, UserMarketplaceErp.id == PushSubscription.user_id))).all()
-    toko_role = {r: await akses.akses_toko(session, r) for r in {(role or "").strip().lower() for _, role in rows}}
-    assigned_ids = [sub.user_id for sub, role in rows if toko_role[(role or "").strip().lower()] == "ditugaskan"]
+    extra: dict[str, list[str]] = {}
+    for uid, rid in (await session.execute(select(PeranTambahan.user_id, PeranTambahan.role_id).where(PeranTambahan.user_id.in_({sub.user_id for sub, _ in rows})))).all():
+        extra.setdefault(uid, []).append(rid)
+    # Access follows all roles an account holds, so group by that set.
+    perans = {sub.user_id: tuple(akses._daftar_role([role, *extra.get(sub.user_id, [])])) for sub, role in rows}
+    toko_role = {r: await akses.akses_toko(session, list(r)) for r in set(perans.values())}
+    assigned_ids = [sub.user_id for sub, _ in rows if toko_role[perans[sub.user_id]] == "ditugaskan"]
     shops: dict[str, set[str]] = {}
     if assigned_ids:
         for user_id, akun_id in (await session.execute(select(StaffAkunMarketplace.user_id, StaffAkunMarketplace.akun_id).where(StaffAkunMarketplace.user_id.in_(assigned_ids)))).all():
             shops.setdefault(user_id, set()).add(akun_id)
-    halaman_role = {r: {h for h in ("pesanan", "chat") if await akses.tingkat_halaman(session, r, h)} for r in toko_role}
+    halaman_role = {r: {h for h in ("pesanan", "chat") if await akses.tingkat_halaman(session, list(r), h)} for r in toko_role}
     out = []
-    for sub, role in rows:
-        role = (role or "").strip().lower()
-        cakupan = toko_role[role]
-        out.append((sub, None if cakupan == "semua" else shops.get(sub.user_id, set()) if cakupan == "ditugaskan" else set(), halaman_role[role]))
+    for sub, _ in rows:
+        r = perans[sub.user_id]
+        cakupan = toko_role[r]
+        out.append((sub, None if cakupan == "semua" else shops.get(sub.user_id, set()) if cakupan == "ditugaskan" else set(), halaman_role[r]))
     return out
 
 

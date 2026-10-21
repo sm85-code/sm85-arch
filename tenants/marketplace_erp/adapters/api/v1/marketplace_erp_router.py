@@ -243,7 +243,7 @@ async def akses_saya(
     user: UserMarketplaceErp = Depends(get_current_user_marketplace_erp),
 ):
     """The signed-in user's role settings (shops, pages, read or write) for showing menus and buttons."""
-    return await akses.akses_pengguna(session, user.role)
+    return await akses.akses_pengguna(session, await akses.peran_pengguna(session, user))
 
 
 @marketplace_erp_router.patch("/auth/profil", response_model=UserOut)

@@ -3,6 +3,7 @@
 from fastapi import APIRouter, Depends, Query, Response, status
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from tenants.marketplace_erp.modules.marketplace_erp.application import akses
 from tenants.marketplace_erp.modules.marketplace_erp.application import operasional as ops
 from tenants.marketplace_erp.modules.marketplace_erp.infrastructure.auth import get_current_user_marketplace_erp
 from tenants.marketplace_erp.modules.marketplace_erp.infrastructure.database import get_db_marketplace_erp
@@ -19,7 +20,7 @@ async def daftar(
     session: AsyncSession = Depends(get_db_marketplace_erp),
     user: UserMarketplaceErp = Depends(get_current_user_marketplace_erp),
 ):
-    tingkat = await ops.pastikan_baca(session, jenis, user.role)
+    tingkat = await ops.pastikan_baca(session, jenis, await akses.peran_pengguna(session, user))
     return await ops.daftar(session, jenis, periode, tingkat == "tulis")
 
 
@@ -30,7 +31,7 @@ async def tambah(
     session: AsyncSession = Depends(get_db_marketplace_erp),
     user: UserMarketplaceErp = Depends(get_current_user_marketplace_erp),
 ):
-    await ops.pastikan_tulis(session, jenis, user.role)
+    await ops.pastikan_tulis(session, jenis, await akses.peran_pengguna(session, user))
     return await ops.tambah(session, jenis, isian, user.id)
 
 
@@ -42,7 +43,7 @@ async def ubah(
     session: AsyncSession = Depends(get_db_marketplace_erp),
     user: UserMarketplaceErp = Depends(get_current_user_marketplace_erp),
 ):
-    await ops.pastikan_tulis(session, jenis, user.role)
+    await ops.pastikan_tulis(session, jenis, await akses.peran_pengguna(session, user))
     return await ops.ubah(session, jenis, id_, isian, user.id)
 
 
@@ -53,6 +54,6 @@ async def hapus(
     session: AsyncSession = Depends(get_db_marketplace_erp),
     user: UserMarketplaceErp = Depends(get_current_user_marketplace_erp),
 ):
-    await ops.pastikan_tulis(session, jenis, user.role)
+    await ops.pastikan_tulis(session, jenis, await akses.peran_pengguna(session, user))
     await ops.hapus(session, jenis, id_)
     return Response(status_code=status.HTTP_204_NO_CONTENT)

@@ -794,6 +794,13 @@ class RoleHalaman(MarketplaceErpBase):
     tingkat: Mapped[str] = mapped_column(String(8), nullable=False)  # "baca" | "tulis"
 
 
+class PeranTambahan(MarketplaceErpBase):
+    """A role an account holds on top of its main one (`mpe_users.role`). Access is the union of all of them."""
+    __tablename__ = "mpe_user_peran_tambahan"
+    user_id: Mapped[str] = mapped_column(String(64), ForeignKey("mpe_users.id", ondelete="CASCADE"), primary_key=True)
+    role_id: Mapped[str] = mapped_column(String(48), ForeignKey("mpe_role.id", ondelete="CASCADE"), primary_key=True)
+
+
 class KategoriTransaksi(MarketplaceErpBase):
     """A category of money coming in or going out (Arus Kas rows, the Pemasukan / Pengeluaran tabs, Operasional entries).
 
