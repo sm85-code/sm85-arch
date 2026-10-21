@@ -58,6 +58,7 @@ HALAMAN: list[tuple[str, str, str, tuple[str, ...]]] = [
     ("push_shopee", "Pengaturan push Shopee", "Pengaturan", ("baca", "tulis")),
     ("asisten", "Asisten AI", "Pengaturan", ("baca", "tulis")),
     ("kelola_pengguna", "Kelola Pengguna dan Role", "Pengaturan", ("baca", "tulis")),
+    ("kelola_aplikasi", "Kelola Aplikasi (teks menu dan halaman)", "Pengaturan", ("baca", "tulis")),
 ]
 TINGKAT_HALAMAN = {k: lv for k, _, _, lv in HALAMAN}
 
