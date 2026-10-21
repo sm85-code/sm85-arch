@@ -893,6 +893,8 @@ async def edit_job(
                 chosen = next((p for p in catalog["items"] if p["id"] == product_id), None)
                 if not chosen:
                     raise HTTPException(422, "Produk tidak ditemukan di katalog otomatis")
+                if chosen["qty_on_hand"] <= 0 and product_id != previous.get("supplier_product_id"):
+                    raise HTTPException(409, "Stok produk di supplier habis; pilih produk lain")
                 reference = dict(chosen, read_at=catalog["read_at"])
                 data["production_price"] = str(chosen["sell_price"])
             data.update(

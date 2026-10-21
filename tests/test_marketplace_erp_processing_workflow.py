@@ -664,6 +664,20 @@ async def test_supplier_catalog_connection_prices_stock_snapshots_and_manual_cat
         refresh_catalog_price=True,
     )
     assert job["production_price"] == "60000" and job["supplier_reference"]["qty_on_hand"] == 3
+    # A product that sold out stays readable and keeps its mapping, but cannot be chosen for a new one.
+    remote["items"][0].update(qty_on_hand=0)
+    job = await save(
+        http, job, party_id="s1", price_id="", catalog_mode="otomatis", supplier_product_id="remote1",
+        refresh_catalog_price=True,
+    )
+    assert job["supplier_reference"]["qty_on_hand"] == 0
+    remote["items"].append(dict(remote["items"][0], id="remote2", sku="KRS.FUR-2", qty_on_hand=0))
+    response = await http.put(
+        "/processing/jobs/" + job["id"],
+        json=dict(version=job["version"], party_id="s1", price_id="", color="Putih", packing_type="biasa",
+                  packing_price="5000", catalog_mode="otomatis", supplier_product_id="remote2"),
+    )
+    assert response.status_code == 409 and "habis" in response.text
     response = await http.put(
         "/processing/prices/nonwood1",
         json={"version": 0, "kind": "non_kayu", "produk": "Produk manual", "harga": "12345", "sku": "MANUAL-1"},
