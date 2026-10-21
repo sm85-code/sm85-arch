@@ -14,7 +14,8 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from tenants.marketplace_erp.modules.marketplace_erp.infrastructure.models import PengaturanUi
 
-ID_POLA = re.compile(r"^[A-Za-z0-9_.:/\-]{1,96}$")
+# Ids are made by the app and may carry a group title (spaces, &, brackets); only control characters are refused.
+ID_POLA = re.compile(r"^[^\x00-\x1f\x7f]{1,96}$")
 MAKS_ENTRI = 2000
 
 

@@ -58,7 +58,13 @@ async def test_teks_dan_id_divalidasi(session):
     async with client_for(session) as c:
         assert (await c.put("/pengaturan-ui/x", json={"teks": "   "})).status_code == 422
         assert (await c.put("/pengaturan-ui/x", json={"teks": "a" * 121})).status_code == 422
-        assert (await c.put("/pengaturan-ui/ada spasi", json={"teks": "a"})).status_code == 422
+        assert (await c.put("/pengaturan-ui/" + "a" * 97, json={"teks": "a"})).status_code == 422
+        # ids built from a group title carry spaces and symbols
+        r = await c.put("/pengaturan-ui/grupsheet:arus_kas:Kas%20keluar", json={"teks": "Uang keluar"})
+        assert r.status_code == 200 and r.json()["id"] == "grupsheet:arus_kas:Kas keluar"
+        assert (await c.put("/pengaturan-ui/menu%3A%2Farus-kas", json={"teks": "Kas"})).json()["id"] == "menu:/arus-kas"
+        assert (await c.delete("/pengaturan-ui/menu%3A%2Farus-kas")).status_code == 204
+        assert (await c.put("/pengaturan-ui/grupsheet:neraca:Jumlah%20%26%20(x)", json={"teks": "a"})).status_code == 200
 
 
 @pytest.mark.asyncio
