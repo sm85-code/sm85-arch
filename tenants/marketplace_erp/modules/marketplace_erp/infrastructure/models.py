@@ -822,6 +822,20 @@ class KategoriTransaksi(MarketplaceErpBase):
     updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=_utcnow, onupdate=_utcnow)
 
 
+class KelompokTransaksi(MarketplaceErpBase):
+    """A group of the Pemasukan / Pengeluaran tabs (e.g. Harga pokok penjualan) that categories are placed in.
+
+    Categories point at the id, so the name can be changed (and groups added) without touching anything filed under it.
+    """
+    __tablename__ = "mpe_kelompok_transaksi"
+    id: Mapped[str] = mapped_column(String(48), primary_key=True)
+    arah: Mapped[str] = mapped_column(String(8), nullable=False, index=True)  # "masuk" | "keluar"
+    nama: Mapped[str] = mapped_column(String(80), nullable=False)
+    urut: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=_utcnow)
+    updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=_utcnow, onupdate=_utcnow)
+
+
 class TransaksiOperasional(MarketplaceErpBase):
     """One operating-cost entry typed into the Operasional Umum / Operasional Packing pages (see application/operasional.py)."""
     __tablename__ = "mpe_transaksi_operasional"
