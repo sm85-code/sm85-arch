@@ -67,6 +67,9 @@ belum dikerjakan (hasil pemeriksaan kode, 2026-10-21; hanya area keuangan, kateg
 6. **Nama halaman Operasional Umum / Packing** tertulis ganda (menu, judul halaman, tab Kategori Transaksi, panduan, `akses.HALAMAN`).
 7. Belum diperiksa: halaman di luar area di atas (pesanan, produk, katalog, dan seterusnya).
 
+Sudah ada: halaman **Kelola Aplikasi** (`/pengaturan-ui`, teks per ID) untuk nama menu, kelompok menu, dan judul halaman.
+Menyusul di sana: nama tab/baris Laporan Keuangan (mengikuti butir 2), nama role (butir 5), logo.
+
 Belum ada: pencatatan **pembagian laba** (pengambilan laba dari kas utama).
 
 ## Non-goals (unchanged)
