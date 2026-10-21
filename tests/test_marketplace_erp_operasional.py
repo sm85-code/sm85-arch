@@ -10,6 +10,7 @@ from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker, create_asyn
 
 from tenants.marketplace_erp.adapters.api.v1.operasional_router import router
 from tenants.marketplace_erp.modules.marketplace_erp.application import akses
+from tenants.marketplace_erp.modules.marketplace_erp.application import kategori as kat
 from tenants.marketplace_erp.modules.marketplace_erp.application import operasional as ops
 from tenants.marketplace_erp.modules.marketplace_erp.infrastructure.auth import (
     akun_ids_diizinkan,
@@ -28,6 +29,7 @@ async def session():
         await conn.run_sync(MarketplaceErpBase.metadata.create_all)
     async with async_sessionmaker(engine, class_=AsyncSession, expire_on_commit=False)() as s:
         await akses.pastikan_bawaan(s)
+        await kat.pastikan_bawaan(s)
         await s.commit()
         yield s
     await engine.dispose()

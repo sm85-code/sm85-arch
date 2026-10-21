@@ -47,6 +47,7 @@ HALAMAN: list[tuple[str, str, str, tuple[str, ...]]] = [
     ("operasional_umum", "Operasional Umum", "Keuangan", ("baca", "tulis")),
     ("operasional_packing", "Operasional Packing", "Keuangan", ("baca", "tulis")),
     ("arus_kas", "Arus Kas (tulis = centang)", "Keuangan", ("baca", "tulis")),
+    ("kategori_transaksi", "Kategori Transaksi", "Keuangan", ("baca", "tulis")),
     ("laporan_keuangan", "Laporan Keuangan", "Keuangan", ("baca", "tulis")),
     ("settlement", "Dana & Saldo Shopee", "Keuangan", ("baca", "tulis")),
     ("info_toko", "Performa dan Pengaturan Toko", "Info Toko", ("baca", "tulis")),

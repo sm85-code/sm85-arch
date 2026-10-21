@@ -24,6 +24,7 @@ ATURAN: list[tuple[re.Pattern, set[str] | None, str]] = [
         (r"^/akun/[^/]+$", GET, "*"),
         (r"^/notifikasi", None, "*"),
         (r"^/push/", None, "*"),
+        (r"^/kategori-transaksi", GET, "*"),  # everybody needs the names; changing them is the page below
         # Harian
         (r"^/laporan/dashboard$", GET, "dashboard"),
         (r"^/laporan/ringkas$", GET, "laporan_ringkas"),
@@ -50,6 +51,7 @@ ATURAN: list[tuple[re.Pattern, set[str] | None, str]] = [
         # Processing
         (r"^/processing", None, "processing"),
         # Keuangan
+        (r"^/kategori-transaksi", None, "kategori_transaksi"),
         (r"^/laporan-keuangan", None, "laporan_keuangan"),
         (r"^/akun/[^/]+/(sync/settlement|transaksi-dana|saldo-toko|pendapatan-shopee|rincian-pesanan-pendapatan|pelacakan-pendapatan|ringkasan-pendapatan-shopee)", None, "settlement"),
         (r"^/settlement", None, "settlement"),

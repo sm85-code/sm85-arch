@@ -1,9 +1,10 @@
 """Operating-cost entries typed into the Operasional Umum and Operasional Packing pages.
 
-Each entry has a date, a category, a description and an amount. The categories are the ones Arus Kas already knows
-(kategoriKeuangan on the frontend), so the totals line up with its rows:
-  umum    -> bahan_cat, ongkir, gaji, iklan, langganan, atk, lain_keluar
-  packing -> perl_packing, atk_eceran  (ATK bought piecemeal to cover what the general ATK shopping fell short of)
+Each entry has a date, a category, a description and an amount. The categories are the expense categories of the
+Kategori Transaksi page (kategori.py) that are offered on this page, so the totals line up with Arus Kas:
+  umum    -> by default bahan_cat, ongkir, gaji, iklan, langganan, atk, lain_keluar
+  packing -> by default perl_packing, atk_eceran  (ATK bought piecemeal to cover what the general ATK shopping fell short of)
+Which page offers a category, its name and its order are managed there.
 Who may do what is decided per page (jenis) by the role settings (akses.py): halaman operasional_umum and
 operasional_packing, level baca or tulis.
 """
@@ -19,20 +20,9 @@ from sqlalchemy import func, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from tenants.marketplace_erp.modules.marketplace_erp.application import akses
-from tenants.marketplace_erp.modules.marketplace_erp.infrastructure.models import TransaksiOperasional
+from tenants.marketplace_erp.modules.marketplace_erp.application import kategori as kat
+from tenants.marketplace_erp.modules.marketplace_erp.infrastructure.models import KategoriTransaksi, TransaksiOperasional
 
-KATEGORI: dict[str, dict[str, str]] = {
-    "umum": {
-        "bahan_cat": "Bahan dan perlengkapan cat",
-        "ongkir": "Ongkir manual",
-        "gaji": "Gaji",
-        "iklan": "Iklan",
-        "langganan": "Langganan",
-        "atk": "Belanja ATK",
-        "lain_keluar": "Operasional lainnya",
-    },
-    "packing": {"perl_packing": "Bahan dan perlengkapan packing", "atk_eceran": "Belanja ATK eceran"},
-}
 HALAMAN = {"umum": "operasional_umum", "packing": "operasional_packing"}
 MAKS_JUMLAH = Decimal("9999999999999.99")
 
@@ -57,7 +47,7 @@ class Isian(BaseModel):
 
 
 def pastikan_jenis(jenis: str) -> None:
-    if jenis not in KATEGORI:
+    if jenis not in HALAMAN:
         raise HTTPException(status.HTTP_404_NOT_FOUND, "Halaman tidak ditemukan")
 
 
@@ -75,8 +65,11 @@ async def pastikan_tulis(session: AsyncSession, jenis: str, role: str | None) ->
         raise HTTPException(status.HTTP_403_FORBIDDEN, "Akses ditolak")
 
 
-def pastikan_kategori(jenis: str, kategori: str) -> None:
-    if kategori not in KATEGORI[jenis]:
+async def pastikan_kategori(session: AsyncSession, jenis: str, kategori: str) -> None:
+    """New and changed entries may only use a category this page offers (and that is not hidden)."""
+    await kat.pastikan_bawaan(session)
+    k = await session.get(KategoriTransaksi, kategori)
+    if k is None or k.arah != "keluar" or k.operasional != jenis or not k.aktif:
         raise HTTPException(422, "Kategori tidak dikenal untuk halaman ini")
 
 
@@ -102,6 +95,7 @@ def _baris(t: TransaksiOperasional) -> dict:
 
 
 async def daftar(session: AsyncSession, jenis: str, periode: str, bisa_tulis: bool) -> dict:
+    await kat.pastikan_bawaan(session)
     awal, akhir = rentang(periode)
     rows = (
         await session.scalars(
@@ -110,13 +104,17 @@ async def daftar(session: AsyncSession, jenis: str, periode: str, bisa_tulis: bo
             .order_by(TransaksiOperasional.tanggal, TransaksiOperasional.created_at)
         )
     ).all()
-    per_kategori = {k: Decimal("0") for k in KATEGORI[jenis]}
+    # The categories this page offers, plus any that still hold entries here (hidden, or moved to the other page).
+    dipakai = {r.kategori for r in rows}
+    semua = (await session.scalars(select(KategoriTransaksi).where(KategoriTransaksi.arah == "keluar").order_by(KategoriTransaksi.urut, KategoriTransaksi.id))).all()
+    tampil = [k for k in semua if (k.operasional == jenis and k.aktif) or k.id in dipakai]
+    per_kategori = {k.id: Decimal("0") for k in tampil}
     for r in rows:
         per_kategori[r.kategori] = per_kategori.get(r.kategori, Decimal("0")) + r.jumlah
     return {
         "jenis": jenis,
         "periode": periode,
-        "kategori": [{"id": k, "label": v} for k, v in KATEGORI[jenis].items()],
+        "kategori": [{"id": k.id, "label": k.nama, "aktif": k.aktif and k.operasional == jenis} for k in tampil],
         "items": [_baris(r) for r in rows],
         "ringkasan": {"per_kategori": {k: str(v) for k, v in per_kategori.items()}, "total": str(sum(per_kategori.values(), Decimal("0")))},
         "bisa_tulis": bisa_tulis,
@@ -124,7 +122,7 @@ async def daftar(session: AsyncSession, jenis: str, periode: str, bisa_tulis: bo
 
 
 async def tambah(session: AsyncSession, jenis: str, isian: Isian, user_id: str | None) -> dict:
-    pastikan_kategori(jenis, isian.kategori)
+    await pastikan_kategori(session, jenis, isian.kategori)
     t = TransaksiOperasional(jenis=jenis, kategori=isian.kategori, tanggal=isian.tanggal, uraian=isian.uraian, jumlah=isian.jumlah, dibuat_oleh=user_id, diubah_oleh=user_id)
     session.add(t)
     await session.commit()
@@ -140,8 +138,10 @@ async def _ambil(session: AsyncSession, jenis: str, id_: str) -> TransaksiOperas
 
 
 async def ubah(session: AsyncSession, jenis: str, id_: str, isian: Isian, user_id: str | None) -> dict:
-    pastikan_kategori(jenis, isian.kategori)
     t = await _ambil(session, jenis, id_)
+    # An entry of a category that was hidden or moved can still be edited, but only to another category the page offers.
+    if isian.kategori != t.kategori:
+        await pastikan_kategori(session, jenis, isian.kategori)
     t.kategori, t.tanggal, t.uraian, t.jumlah, t.diubah_oleh = isian.kategori, isian.tanggal, isian.uraian, isian.jumlah, user_id
     await session.commit()
     await session.refresh(t)

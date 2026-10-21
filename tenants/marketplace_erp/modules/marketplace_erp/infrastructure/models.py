@@ -794,6 +794,27 @@ class RoleHalaman(MarketplaceErpBase):
     tingkat: Mapped[str] = mapped_column(String(8), nullable=False)  # "baca" | "tulis"
 
 
+class KategoriTransaksi(MarketplaceErpBase):
+    """A category of money coming in or going out (Arus Kas rows, the Pemasukan / Pengeluaran tabs, Operasional entries).
+
+    The id never changes (Arus Kas sheets and entries keep pointing at it); the name can be changed at any time. `kelompok`
+    is where the category lands in the Pemasukan / Pengeluaran tabs; `operasional` says which Operasional page offers it.
+    """
+    __tablename__ = "mpe_kategori_transaksi"
+    id: Mapped[str] = mapped_column(String(48), primary_key=True)
+    arah: Mapped[str] = mapped_column(String(8), nullable=False, index=True)  # "masuk" | "keluar"
+    nama: Mapped[str] = mapped_column(String(80), nullable=False)
+    kelompok: Mapped[str] = mapped_column(String(48), nullable=False, default="")
+    operasional: Mapped[Optional[str]] = mapped_column(String(16), nullable=True)  # "umum" | "packing" | None
+    urut: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
+    aktif: Mapped[bool] = mapped_column(Boolean, nullable=False, default=True, server_default=text("true"))
+    sistem: Mapped[bool] = mapped_column(Boolean, nullable=False, default=False, server_default=text("false"))
+    # The component in the summarized tabs stays hidden while all its figures are zero.
+    auto_sembunyi: Mapped[bool] = mapped_column(Boolean, nullable=False, default=True, server_default=text("true"))
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=_utcnow)
+    updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=_utcnow, onupdate=_utcnow)
+
+
 class TransaksiOperasional(MarketplaceErpBase):
     """One operating-cost entry typed into the Operasional Umum / Operasional Packing pages (see application/operasional.py)."""
     __tablename__ = "mpe_transaksi_operasional"
