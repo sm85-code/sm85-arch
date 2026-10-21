@@ -44,8 +44,6 @@ class Balances(StrictInput):
     kas_utama: Decimal = Field(ge=0, max_digits=20, decimal_places=2)
     stok: Decimal = Field(ge=0, max_digits=20, decimal_places=2)
     kas_operasional: Decimal = Field(ge=0, max_digits=20, decimal_places=2)
-    # Added later: reports saved before it existed read as zero.
-    kas_operasional_packing: Decimal = Field(default=0, ge=0, max_digits=20, decimal_places=2)
     iklan_prabayar: Decimal = Field(ge=0, max_digits=20, decimal_places=2)
     piutang_pengiriman: Decimal = Field(ge=0, max_digits=20, decimal_places=2)
     saldo_toko: Decimal = Field(ge=0, max_digits=20, decimal_places=2)
@@ -79,9 +77,7 @@ CASH_FIELDS = (
     "transfer_ke_ops_packing",
     "tambahan_modal",
 )
-# Replaced by the transfers to the two operational cash accounts (salary is paid out of the main cash instead of being set
-# aside); only reports saved before the change carry them, and the Drive import still uses the old rules.
-LEGACY_GAJI = ("transfer_kas_gaji", "bayar_gaji")
+
 
 
 class DatedTransaction(StrictInput):
@@ -173,10 +169,6 @@ def next_cutoff(day):
 
 
 def normalize_transactions(p, previous):
-    if any(getattr(p, k) for k in LEGACY_GAJI) or any(t.jenis in LEGACY_GAJI for t in p.transaksi):
-        raise HTTPException(
-            422, "Penyisihan ke kas gaji sudah diganti: gaji menjadi kas keluar, dan transfer ke kas operasional packing"
-        )
     sums = {k: ZERO for k in CASH_FIELDS}
     ad_override = None
     for t in p.transaksi:
@@ -206,7 +198,6 @@ def totals(b):
                 "kas_utama",
                 "stok",
                 "kas_operasional",
-                "kas_operasional_packing",
                 "iklan_prabayar",
                 "piutang_pengiriman",
                 "saldo_toko",
@@ -221,9 +212,10 @@ def totals(b):
 
 
 def calculate(before: Balances, p: CloseInput, payouts: Decimal, ads: Decimal, legacy: bool = False):
-    """One period's figures. Salary is paid out of the main cash (a cash-out) and the main cash feeds the two operational
-    cash accounts by transfer, so what stays in the main cash is profit. `legacy` keeps the older rules (salary set aside in
-    a salary cash account and owed until paid), which the Drive import still follows."""
+    """One period's figures. The salary set aside into the salary cash account leaves the main cash, so it is a cash-out
+    (`kas_keluar_gaji`); the packing funds are moved by transfer to the operational cash account (the packing one). The main
+    cash keeps the general operating funds and the profit. `legacy` keeps the older way of listing the
+    set-aside salary (a transfer between cash accounts, not a cash-out), which the Drive import still follows; balances are the same."""
     b = before.model_dump()
     withdrawals = payouts + p.penarikan_lain
     other_income = p.pendapatan_produk + p.jasa_proses + p.jasa_cat_packing + p.jasa_cat
@@ -235,23 +227,22 @@ def calculate(before: Balances, p: CloseInput, payouts: Decimal, ads: Decimal, l
     expense_ads = p.biaya_iklan if p.biaya_iklan is not None else ads
     income = withdrawals + other_income + delta
     expenses = hpp + p.operasional + p.langganan + p.gaji + expense_ads
-    cash_out = p.bayar_tukang + p.pembelian + p.operasional + p.langganan + p.topup_iklan
-    salary_cash = ZERO if legacy else p.gaji
-    cash_out += salary_cash
-    to_packing = ZERO if legacy else p.transfer_ke_ops_packing
-    salary_set_aside, salary_paid = (p.transfer_kas_gaji, p.bayar_gaji) if legacy else (ZERO, ZERO)
+    cash_out_other = p.bayar_tukang + p.pembelian + p.operasional + p.langganan + p.topup_iklan
+    set_aside = p.transfer_kas_gaji
+    salary_cash = ZERO if legacy else set_aside
+    cash_out = cash_out_other + salary_cash
+    to_packing = p.transfer_ke_ops_packing
     cash_in = withdrawals + other_income
     profit = income - expenses
     end = {
-        "kas_utama": b["kas_utama"] + cash_in - cash_out + p.transfer_kas_ops - salary_set_aside - to_packing + p.tambahan_modal,
+        "kas_utama": b["kas_utama"] + cash_in - cash_out_other - set_aside + p.transfer_kas_ops - to_packing + p.tambahan_modal,
         "stok": p.stok,
-        "kas_operasional": b["kas_operasional"] - p.transfer_kas_ops,
-        "kas_operasional_packing": b.get("kas_operasional_packing", ZERO) + to_packing,
+        "kas_operasional": b["kas_operasional"] - p.transfer_kas_ops + to_packing,
         "iklan_prabayar": b["iklan_prabayar"] + p.topup_iklan - expense_ads,
         "piutang_pengiriman": p.piutang_pengiriman,
         "saldo_toko": p.saldo_toko,
-        "kas_gaji": b["kas_gaji"] + salary_set_aside - salary_paid,
-        "utang_gaji": b["utang_gaji"] + (p.gaji if legacy else ZERO) - salary_paid,
+        "kas_gaji": b["kas_gaji"] + set_aside - p.bayar_gaji,
+        "utang_gaji": b["utang_gaji"] + p.gaji - p.bayar_gaji,
         "utang_usaha": p.utang_usaha,
         "modal": b["modal"] + p.tambahan_modal,
         "saldo_laba": b["saldo_laba"] + profit,
@@ -270,7 +261,7 @@ def calculate(before: Balances, p: CloseInput, payouts: Decimal, ads: Decimal, l
         "kas_masuk": cash_in,
         "kas_keluar": cash_out,
         "kas_keluar_gaji": salary_cash,
-        "transfer_antar_kas": p.transfer_kas_ops - salary_set_aside - to_packing,
+        "transfer_antar_kas": p.transfer_kas_ops - (set_aside - salary_cash) - to_packing,
         "saldo_awal": b,
         "saldo_akhir": end,
         "neraca": totals(end),

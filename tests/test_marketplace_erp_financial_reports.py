@@ -124,36 +124,23 @@ def test_ads_exhausted_without_topup_and_internal_salary_transfer_legacy_rules()
     assert result["neraca"]["selisih"] == 0
 
 
-def test_salary_is_a_cash_out_and_packing_funds_move_to_their_own_cash_account():
+def test_set_aside_salary_is_a_cash_out_and_packing_funds_move_to_the_operational_cash_account():
     b = balances(kas_utama=10000000, kas_operasional=1000000, modal=11000000)
-    result = f.calculate(
-        b,
-        payload(pendapatan_produk=5000000, gaji=1000000, operasional=500000, transfer_ke_ops_packing=1500000),
-        D(0),
-        D(0),
-    )
-    assert result["kas_keluar"] == 1500000  # salary + operasional
+    args = dict(pendapatan_produk=5000000, gaji=1000000, transfer_kas_gaji=1000000, operasional=500000, transfer_ke_ops_packing=1500000)
+    result = f.calculate(b, payload(**args), D(0), D(0))
+    assert result["kas_keluar"] == 1500000  # set-aside salary + operasional
     assert result["kas_keluar_gaji"] == 1000000
-    assert result["transfer_antar_kas"] == -1500000
+    assert result["transfer_antar_kas"] == -1500000  # packing only
     assert result["pengeluaran"] == 1500000 and result["laba"] == 3500000
     after = result["saldo_akhir"]
     assert after["kas_utama"] == 10000000 + 5000000 - 1500000 - 1500000
-    assert after["kas_operasional"] == 1000000
-    assert after["kas_operasional_packing"] == 1500000
-    assert after["kas_gaji"] == 0 and after["utang_gaji"] == 0
+    assert after["kas_operasional"] == 1000000 + 1500000
+    assert after["kas_gaji"] == 1000000 and after["utang_gaji"] == 1000000
     assert result["neraca"]["selisih"] == 0
-
-
-def test_old_balances_without_the_packing_account_still_read_as_zero():
-    b = balances(kas_utama=1000, modal=1000)
-    assert b.kas_operasional_packing == 0
-    assert f.totals(b.model_dump())["selisih"] == 0
-
-
-def test_the_old_salary_transfer_is_refused_for_new_reports():
-    with pytest.raises(HTTPException) as e:
-        f.normalize_transactions(payload(transfer_kas_gaji=100), date(2026, 10, 3))
-    assert e.value.status_code == 422
+    # Only the listing differs from the older rules; every balance is the same.
+    old = f.calculate(b, payload(**args), D(0), D(0), legacy=True)
+    assert old["saldo_akhir"] == after and old["kas_keluar"] == 500000 and old["kas_keluar_gaji"] == 0
+    assert old["transfer_antar_kas"] == -2500000
 
 
 def test_inventory_and_credit_purchase_do_not_distort_profit():

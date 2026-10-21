@@ -1,3 +1,4 @@
+from datetime import date
 from decimal import Decimal
 from types import SimpleNamespace
 
@@ -58,7 +59,7 @@ async def test_a_fresh_installation_starts_with_the_known_categories(session):
     items = by_id(data)
     assert len(data["items"]) == len(kat.BAWAAN) == 21
     assert [k["id"] for k in data["items"] if k["arah"] == "masuk"][:3] == ["saldo_toko", "produk", "cat"]
-    assert items["gaji"]["kelompok"] == "Beban operasional" and items["gaji"]["operasional"] == "umum"
+    assert items["gaji"]["kelompok"] == "Beban operasional" and items["gaji"]["operasional"] is None
     assert items["perl_packing"]["kelompok"] == "Harga pokok penjualan" and items["perl_packing"]["operasional"] == "packing"
     assert items["atk_eceran"]["operasional"] == "packing" and items["atk"]["operasional"] == "umum"
     assert items["bukan_masuk"]["kelompok"] == "" and items["bukan_keluar"]["sistem"] is True
@@ -192,3 +193,48 @@ async def test_seeding_does_not_bring_back_changes(session):
     await kat.pastikan_bawaan(session)  # what startup does after every deploy
     async with client_for("admin", session) as c:
         assert by_id((await c.get("/kategori-transaksi")).json())["gaji"]["nama"] == "Gaji karyawan"
+
+
+@pytest.mark.asyncio
+async def test_gaji_and_iklan_are_typed_in_arus_kas_not_on_the_operasional_pages(session):
+    async with client_for("admin", session) as c:
+        for id_ in ("gaji", "iklan"):
+            k = (await c.put(f"/kategori-transaksi/{id_}", json={"nama": id_.title(), "kelompok": "Beban operasional", "operasional": "umum", "aktif": True})).json()
+            assert k["operasional"] is None
+            entry = {"kategori": id_, "tanggal": "2026-10-05", "jumlah": "1000", "uraian": ""}
+            assert (await c.post("/operasional/umum", json=entry)).status_code == 422
+
+
+@pytest.mark.asyncio
+async def test_an_installation_that_still_offers_gaji_and_iklan_is_corrected_at_startup(session):
+    from tenants.marketplace_erp.modules.marketplace_erp.infrastructure.models import KategoriTransaksi
+
+    await kat.pastikan_bawaan(session)
+    for id_ in ("gaji", "iklan"):
+        (await session.get(KategoriTransaksi, id_)).operasional = "umum"
+    await session.commit()
+    await kat.pastikan_bawaan(session)
+    assert (await session.get(KategoriTransaksi, "gaji")).operasional is None
+    assert (await session.get(KategoriTransaksi, "iklan")).operasional is None
+
+
+@pytest.mark.asyncio
+async def test_arus_kas_gets_the_entries_per_date_and_category_without_gaji_and_iklan(session):
+    from tenants.marketplace_erp.modules.marketplace_erp.application import operasional as ops
+    from tenants.marketplace_erp.modules.marketplace_erp.infrastructure.models import TransaksiOperasional
+
+    await kat.pastikan_bawaan(session)
+    for jenis, kategori, tanggal, jumlah in (
+        ("umum", "atk", "2026-10-05", "100"), ("umum", "atk", "2026-10-05", "50"), ("umum", "ongkir", "2026-10-06", "75.50"),
+        ("packing", "perl_packing", "2026-10-06", "20"), ("umum", "gaji", "2026-10-07", "999"), ("umum", "iklan", "2026-10-07", "999"),
+        ("umum", "atk", "2026-11-01", "5"),
+    ):
+        session.add(TransaksiOperasional(jenis=jenis, kategori=kategori, tanggal=date.fromisoformat(tanggal), uraian="", jumlah=Decimal(jumlah)))
+    await session.commit()
+    data = await ops.untuk_arus_kas(session, "2026-10")
+    assert data["items"] == [
+        {"tanggal": "2026-10-05", "kategori": "atk", "jumlah": "150.00"},
+        {"tanggal": "2026-10-06", "kategori": "ongkir", "jumlah": "75.50"},
+        {"tanggal": "2026-10-06", "kategori": "perl_packing", "jumlah": "20.00"},
+    ]
+
