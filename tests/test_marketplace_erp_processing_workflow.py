@@ -291,6 +291,7 @@ async def test_all_workflow_endpoints_are_admin_only(client, role, sesi_peran):
         ("POST", "/jobs/job1/transition"),
         ("DELETE", "/jobs/job1?version=1"),
         ("POST", "/jobs/job1/release?version=1"),
+        ("POST", "/jobs/job1/reset?version=1"),
         ("PUT", "/jobs/job1/packing"),
     ]:
         response = await http.request(method, "/processing" + path, json={} if method in ["PUT", "POST"] else None)
@@ -1072,3 +1073,50 @@ async def test_manual_product_price_can_follow_later_but_not_be_used_without_one
     assert (await put("later", version=row["version"], kind="non_kayu", produk="Menyusul")).status_code == 200
     row = next(p for p in (await http.get("/processing/prices")).json()["items"] if p["id"] == "later")
     assert row.get("harga") is None
+
+
+@pytest.mark.asyncio
+async def test_manual_order_mapping_can_be_cancelled_and_the_order_deleted_at_any_stage(client):
+    http, _, _ = client
+    body = {
+        "source": "reseller", "seller_code": "ab", "customer": "Penjual A", "route": "tukang",
+        "ordered_at": "2026-10-16T09:00:00+07:00", "deadline": "2026-10-20T18:30:00+00:00",
+        "items": [{"produk": "Rak", "qty": 1}],
+    }
+    assert (await http.post("/processing/jobs/manual", json=body)).status_code == 200
+    job = await save(http, (await rows(http))[0])
+    assert job["order_number"] == "PROD.RAK-2110-AB-01" and job["stage"] == "produksi"
+    job = next(r for r in await rows(http) if r["id"] == job["id"])
+    await advance(http, job, "produksi")
+    job = next(r for r in await rows(http) if r["id"] == job["id"])
+    assert job["stage"] == "pengecatan"
+    # a draft cannot be "cancelled"; a mapped manual order goes back to a draft and keeps its order data
+    stale = await http.post(f"/processing/jobs/{job['id']}/reset?version={job['version'] + 5}")
+    assert stale.status_code == 409
+    done = await http.post(f"/processing/jobs/{job['id']}/reset?version={job['version']}")
+    assert done.status_code == 200, done.text
+    job = next(r for r in await rows(http) if r["id"] == job["id"])
+    assert job["stage"] == "draft" and job["order_number"] == "Menunggu SKU" and job["customer"] == "Penjual A"
+    assert not job.get("party_id") and not job.get("price_id") and job["id"]
+    assert (await http.post(f"/processing/jobs/{job['id']}/reset?version={job['version']}")).status_code == 409
+    # mapped again, the code is formed again (the number used before is not given out twice)
+    job = await save(http, job)
+    assert job["order_number"] == "PROD.RAK-2110-AB-02"
+    # a manual order is deleted at any stage
+    advance_job = next(r for r in await rows(http) if r["id"] == job["id"])
+    await advance(http, advance_job, "produksi")
+    job = next(r for r in await rows(http) if r["id"] == job["id"])
+    assert job["stage"] != "draft"
+    gone = await http.delete(f"/processing/jobs/{job['id']}?version={job['version']}")
+    assert gone.status_code == 200, gone.text
+    assert await rows(http) == []
+
+
+@pytest.mark.asyncio
+async def test_shopee_items_are_released_not_cancelled_or_deleted_after_mapping(client):
+    http, _, _ = client
+    cand = (await http.get("/processing/candidates")).json()["items"]
+    assert (await http.post("/processing/jobs/select", json={"route": "tukang", "item_ids": [cand[0]["item_id"]]})).status_code == 200
+    job = await save(http, (await rows(http))[0])
+    assert (await http.post(f"/processing/jobs/{job['id']}/reset?version={job['version']}")).status_code == 409
+    assert (await http.delete(f"/processing/jobs/{job['id']}?version={job['version']}")).status_code == 409
