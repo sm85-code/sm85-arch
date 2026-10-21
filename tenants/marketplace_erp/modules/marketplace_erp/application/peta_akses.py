@@ -25,6 +25,7 @@ ATURAN: list[tuple[re.Pattern, set[str] | None, str]] = [
         (r"^/notifikasi", None, "*"),
         (r"^/push/", None, "*"),
         (r"^/kategori-transaksi", GET, "*"),  # everybody needs the names; changing them is the page below
+        (r"^/pengaturan-ui$", GET, "*"),  # every screen shows these texts; changing them is Kelola Aplikasi
         # Harian
         (r"^/laporan/dashboard$", GET, "dashboard"),
         (r"^/laporan/ringkas$", GET, "laporan_ringkas"),
@@ -65,6 +66,7 @@ ATURAN: list[tuple[re.Pattern, set[str] | None, str]] = [
         (r"^/(akun|oauth|koneksi-toko)(/|$)", None, "kelola_toko"),
         (r"^/asisten", None, "asisten"),
         (r"^/(users|staff-akun|roles)", None, "kelola_pengguna"),
+        (r"^/pengaturan-ui", None, "kelola_aplikasi"),
     ]
 ]
 

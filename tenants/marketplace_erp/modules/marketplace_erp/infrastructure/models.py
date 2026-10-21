@@ -822,6 +822,15 @@ class KategoriTransaksi(MarketplaceErpBase):
     updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=_utcnow, onupdate=_utcnow)
 
 
+class PengaturanUi(MarketplaceErpBase):
+    """A text of the app the admin changed on the Kelola Aplikasi page: the id names the text (menu, page, tab, row...) and
+    `teks` replaces what the app shows. Nothing else depends on it, so changing a text never changes how the app works."""
+    __tablename__ = "mpe_pengaturan_ui"
+    id: Mapped[str] = mapped_column(String(96), primary_key=True)
+    teks: Mapped[str] = mapped_column(String(200), nullable=False)
+    updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=_utcnow, onupdate=_utcnow)
+
+
 class KelompokTransaksi(MarketplaceErpBase):
     """A group of the Pemasukan / Pengeluaran tabs (e.g. Harga pokok penjualan) that categories are placed in.
 
