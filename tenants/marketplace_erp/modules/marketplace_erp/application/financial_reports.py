@@ -74,8 +74,10 @@ CASH_FIELDS = (
     "transfer_kas_ops",
     "transfer_kas_gaji",
     "bayar_gaji",
+    "transfer_ke_ops_packing",
     "tambahan_modal",
 )
+
 
 
 class DatedTransaction(StrictInput):
@@ -95,6 +97,7 @@ class DatedTransaction(StrictInput):
         "transfer_kas_ops",
         "transfer_kas_gaji",
         "bayar_gaji",
+            "transfer_ke_ops_packing",
         "tambahan_modal",
         "biaya_iklan",
     ]
@@ -121,6 +124,7 @@ class CloseInput(StrictInput):
     transfer_kas_ops: Decimal = Field(default=0, ge=0, max_digits=20, decimal_places=2)
     transfer_kas_gaji: Decimal = Field(default=0, ge=0, max_digits=20, decimal_places=2)
     bayar_gaji: Decimal = Field(default=0, ge=0, max_digits=20, decimal_places=2)
+    transfer_ke_ops_packing: Decimal = Field(default=0, ge=0, max_digits=20, decimal_places=2)
     tambahan_modal: Decimal = Field(default=0, ge=0, max_digits=20, decimal_places=2)
     piutang_pengiriman: Decimal = Field(ge=0, max_digits=20, decimal_places=2)
     saldo_toko: Decimal = Field(ge=0, max_digits=20, decimal_places=2)
@@ -189,7 +193,7 @@ def normalize_transactions(p, previous):
 def totals(b):
     assets = sum(
         (
-            b[k]
+            b.get(k, ZERO)
             for k in (
                 "kas_utama",
                 "stok",
@@ -207,7 +211,11 @@ def totals(b):
     return {"aset": assets, "utang": debts, "ekuitas": equity, "selisih": assets - debts - equity}
 
 
-def calculate(before: Balances, p: CloseInput, payouts: Decimal, ads: Decimal):
+def calculate(before: Balances, p: CloseInput, payouts: Decimal, ads: Decimal, legacy: bool = False):
+    """One period's figures. The salary set aside into the salary cash account leaves the main cash, so it is a cash-out
+    (`kas_keluar_gaji`); the packing funds are moved by transfer to the operational cash account (the packing one). The main
+    cash keeps the general operating funds and the profit. `legacy` keeps the older way of listing the
+    set-aside salary (a transfer between cash accounts, not a cash-out), which the Drive import still follows; balances are the same."""
     b = before.model_dump()
     withdrawals = payouts + p.penarikan_lain
     other_income = p.pendapatan_produk + p.jasa_proses + p.jasa_cat_packing + p.jasa_cat
@@ -219,17 +227,21 @@ def calculate(before: Balances, p: CloseInput, payouts: Decimal, ads: Decimal):
     expense_ads = p.biaya_iklan if p.biaya_iklan is not None else ads
     income = withdrawals + other_income + delta
     expenses = hpp + p.operasional + p.langganan + p.gaji + expense_ads
-    cash_out = p.bayar_tukang + p.pembelian + p.operasional + p.langganan + p.topup_iklan
+    cash_out_other = p.bayar_tukang + p.pembelian + p.operasional + p.langganan + p.topup_iklan
+    set_aside = p.transfer_kas_gaji
+    salary_cash = ZERO if legacy else set_aside
+    cash_out = cash_out_other + salary_cash
+    to_packing = p.transfer_ke_ops_packing
     cash_in = withdrawals + other_income
     profit = income - expenses
     end = {
-        "kas_utama": b["kas_utama"] + cash_in - cash_out + p.transfer_kas_ops - p.transfer_kas_gaji + p.tambahan_modal,
+        "kas_utama": b["kas_utama"] + cash_in - cash_out_other - set_aside + p.transfer_kas_ops - to_packing + p.tambahan_modal,
         "stok": p.stok,
-        "kas_operasional": b["kas_operasional"] - p.transfer_kas_ops,
+        "kas_operasional": b["kas_operasional"] - p.transfer_kas_ops + to_packing,
         "iklan_prabayar": b["iklan_prabayar"] + p.topup_iklan - expense_ads,
         "piutang_pengiriman": p.piutang_pengiriman,
         "saldo_toko": p.saldo_toko,
-        "kas_gaji": b["kas_gaji"] + p.transfer_kas_gaji - p.bayar_gaji,
+        "kas_gaji": b["kas_gaji"] + set_aside - p.bayar_gaji,
         "utang_gaji": b["utang_gaji"] + p.gaji - p.bayar_gaji,
         "utang_usaha": p.utang_usaha,
         "modal": b["modal"] + p.tambahan_modal,
@@ -248,7 +260,8 @@ def calculate(before: Balances, p: CloseInput, payouts: Decimal, ads: Decimal):
         "laba": profit,
         "kas_masuk": cash_in,
         "kas_keluar": cash_out,
-        "transfer_antar_kas": p.transfer_kas_ops - p.transfer_kas_gaji,
+        "kas_keluar_gaji": salary_cash,
+        "transfer_antar_kas": p.transfer_kas_ops - (set_aside - salary_cash) - to_packing,
         "saldo_awal": b,
         "saldo_akhir": end,
         "neraca": totals(end),
@@ -454,8 +467,8 @@ def aggregate(parts, start, end):
         return None
     parts = sorted(parts, key=lambda r: r["mulai"])
     result = {
-        k: sum((money(p["hasil"][k]) for p in parts), ZERO)
-        for k in parts[0]["hasil"]
+        k: sum((money(p["hasil"].get(k, 0)) for p in parts), ZERO)
+        for k in {key for p in parts for key in p["hasil"]}
         if k not in ("saldo_awal", "saldo_akhir", "neraca")
     }
     result["saldo_awal"] = parts[0]["hasil"]["saldo_awal"]
@@ -463,7 +476,7 @@ def aggregate(parts, start, end):
     result["neraca"] = parts[-1]["hasil"]["neraca"]
     inputs = dict(parts[-1]["input"])
     for k in CASH_FIELDS:
-        inputs[k] = sum((money(p["input"][k]) for p in parts), ZERO)
+        inputs[k] = sum((money(p["input"].get(k, 0)) for p in parts), ZERO)
     inputs["tanggal"] = end.isoformat()
     inputs["settlement_ids"] = [sid for p in parts for sid in p["input"]["settlement_ids"]]
     inputs["tanggal_settlement"] = {

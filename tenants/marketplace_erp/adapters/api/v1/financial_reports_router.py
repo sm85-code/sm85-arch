@@ -11,6 +11,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from tenants.marketplace_erp.modules.marketplace_erp.application import financial_manual as manual
 from tenants.marketplace_erp.modules.marketplace_erp.application import financial_reports as reports
+from tenants.marketplace_erp.modules.marketplace_erp.application import operasional as ops
 from tenants.marketplace_erp.modules.marketplace_erp.application.financial_drive_import import DriveImport, import_drive
 from tenants.marketplace_erp.modules.marketplace_erp.infrastructure.auth import require_roles_marketplace_erp
 from tenants.marketplace_erp.modules.marketplace_erp.infrastructure.database import get_db_marketplace_erp
@@ -32,6 +33,14 @@ async def overview(
     periode: str = Query(pattern=r"^\d{4}-\d{2}$"), session: AsyncSession = Depends(get_db_marketplace_erp)
 ):
     return await reports.overview(session, periode)
+
+
+@router.get("/operasional")
+async def operasional(
+    periode: str = Query(pattern=r"^\d{4}-\d{2}$"), session: AsyncSession = Depends(get_db_marketplace_erp)
+):
+    """Operasional Umum / Packing entries per date and category, which Arus Kas shows in the matching rows."""
+    return await ops.untuk_arus_kas(session, periode)
 
 
 @router.get("/lembar-manual")

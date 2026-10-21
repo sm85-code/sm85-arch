@@ -12,7 +12,7 @@ from sqlalchemy import select
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from tenants.marketplace_erp.modules.marketplace_erp.application import services
+from tenants.marketplace_erp.modules.marketplace_erp.application import akses, services
 from tenants.marketplace_erp.modules.marketplace_erp.infrastructure.adapters import erp_shopee as provider
 from tenants.marketplace_erp.modules.marketplace_erp.infrastructure.auth import (
     akun_ids_diizinkan,
@@ -55,7 +55,7 @@ def output(job):
 async def create(
     body: SyncIn, session: AsyncSession = Depends(get_db_marketplace_erp), user: UserMarketplaceErp = Depends(actor)
 ):
-    if body.jenis != "pesanan" and user.role not in ("admin", "owner"):
+    if body.jenis != "pesanan" and not {"admin", "owner"} & set(await akses.peran_pengguna(session, user)):
         raise HTTPException(403, "Sinkronisasi produk hanya untuk owner/admin")
     allowed = await akun_ids_diizinkan(user, session)
     accounts = [

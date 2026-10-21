@@ -23,6 +23,8 @@ PEMASUKAN = "Pemasukan"
 # Where a category can land in the Pemasukan / Pengeluaran tabs.
 KELOMPOK = {"masuk": [PEMASUKAN], "keluar": [HPP, BEBAN]}
 OPERASIONAL = ("umum", "packing")
+# Typed into Arus Kas by an admin, never as entries of the Operasional pages.
+ARUS_KAS_SAJA = ("gaji", "iklan")
 
 # (id, arah, nama, kelompok, operasional, sistem, auto_sembunyi): what every installation starts with, in this order.
 BAWAAN: list[tuple[str, str, str, str, str | None, bool, bool]] = [
@@ -40,8 +42,8 @@ BAWAAN: list[tuple[str, str, str, str, str | None, bool, bool]] = [
     ("bahan_cat", "keluar", "Bahan dan perlengkapan cat", HPP, "umum", True, False),
     ("perl_packing", "keluar", "Bahan dan perlengkapan packing", HPP, "packing", True, False),
     ("ongkir", "keluar", "Ongkir manual", HPP, "umum", True, False),
-    ("gaji", "keluar", "Gaji", BEBAN, "umum", True, False),
-    ("iklan", "keluar", "Iklan", BEBAN, "umum", True, False),
+    ("gaji", "keluar", "Gaji", BEBAN, None, True, False),
+    ("iklan", "keluar", "Iklan", BEBAN, None, True, False),
     ("langganan", "keluar", "Langganan", BEBAN, "umum", True, False),
     ("atk", "keluar", "Belanja ATK", BEBAN, "umum", True, True),
     ("atk_eceran", "keluar", "Belanja ATK eceran", BEBAN, "packing", True, True),
@@ -52,6 +54,12 @@ BAWAAN: list[tuple[str, str, str, str, str | None, bool, bool]] = [
 async def pastikan_bawaan(session: AsyncSession) -> None:
     """Fill the table on a fresh installation. After that nothing is added or restored on its own."""
     if (await session.scalar(select(func.count()).select_from(KategoriTransaksi))) or 0:
+        # Installations seeded before gaji and iklan moved to Arus Kas still offer them on Operasional Umum.
+        lama = (await session.scalars(select(KategoriTransaksi).where(KategoriTransaksi.id.in_(ARUS_KAS_SAJA), KategoriTransaksi.operasional.is_not(None)))).all()
+        for k in lama:
+            k.operasional = None
+        if lama:
+            await session.commit()
         return
     for urut, (id_, arah, nama, kelompok, operasional, sistem, auto) in enumerate(BAWAAN, start=1):
         session.add(KategoriTransaksi(id=id_, arah=arah, nama=nama, kelompok=kelompok, operasional=operasional, urut=urut, aktif=True, sistem=sistem, auto_sembunyi=auto))
@@ -135,7 +143,7 @@ async def ubah(session: AsyncSession, id_: str, nama: str, kelompok: str, operas
         raise HTTPException(404, "Kategori tidak ditemukan")
     nama = _nama(nama)
     await _nama_bebas(session, k.arah, nama, kecuali=k.id)
-    kelompok, operasional = _periksa(k.arah, kelompok, operasional, sistem=k.sistem and k.kelompok == "")
+    kelompok, operasional = _periksa(k.arah, kelompok, None if id_ in ARUS_KAS_SAJA else operasional, sistem=k.sistem and k.kelompok == "")
     if k.kelompok == "" and k.sistem and not aktif:
         raise HTTPException(409, "Kategori ini tidak bisa disembunyikan")
     k.nama, k.kelompok, k.operasional, k.aktif = nama, kelompok, operasional, aktif

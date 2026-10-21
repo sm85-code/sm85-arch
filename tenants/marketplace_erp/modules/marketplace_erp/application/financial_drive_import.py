@@ -113,7 +113,7 @@ def parse(payload):
             catatan=f"Impor {payload.tab}, kolom {col + 2}",
             sumber_diperiksa=True,
         )
-        result = reports.calculate(b, p, Decimal(0), Decimal(0))
+        result = reports.calculate(b, p, Decimal(0), Decimal(0), legacy=True)
         checks = {
             "pemasukan": (19, result["pemasukan"]),
             "pengeluaran": (36, result["pengeluaran"]),

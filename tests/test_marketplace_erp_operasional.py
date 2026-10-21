@@ -50,7 +50,7 @@ def client_for(role, session):
     return httpx.AsyncClient(transport=httpx.ASGITransport(app=app), base_url="http://test")
 
 
-def isian(kategori="gaji", tanggal="2026-10-05", jumlah="1000000", uraian="Gaji admin"):
+def isian(kategori="ongkir", tanggal="2026-10-05", jumlah="1000000", uraian="Gaji admin"):
     return {"kategori": kategori, "tanggal": tanggal, "jumlah": jumlah, "uraian": uraian}
 
 
@@ -70,7 +70,7 @@ AKSES = {
 @pytest.mark.parametrize("role,jenis", list(AKSES))
 async def test_access_matrix(session, role, jenis):
     baca, tulis = AKSES[(role, jenis)]
-    kategori = "gaji" if jenis == "umum" else "perl_packing"
+    kategori = "ongkir" if jenis == "umum" else "perl_packing"
     async with client_for(role, session) as c:
         assert (await c.get(f"/operasional/{jenis}?periode=2026-10")).status_code == (200 if baca else 403)
         assert (await c.post(f"/operasional/{jenis}", json=isian(kategori))).status_code == (201 if tulis else 403)
@@ -88,15 +88,15 @@ async def test_list_reports_whether_the_caller_may_write(session):
 async def test_totals_are_exact_and_stay_within_the_month(session):
     async with client_for("admin", session) as c:
         for tanggal, kategori, jumlah in [
-            ("2026-10-01", "gaji", "0.10"), ("2026-10-31", "gaji", "0.20"),  # both ends of the month
-            ("2026-09-30", "gaji", "500"), ("2026-11-01", "gaji", "700"),  # outside
-            ("2026-10-15", "iklan", "1500000.50"),
+            ("2026-10-01", "ongkir", "0.10"), ("2026-10-31", "ongkir", "0.20"),  # both ends of the month
+            ("2026-09-30", "ongkir", "500"), ("2026-11-01", "ongkir", "700"),  # outside
+            ("2026-10-15", "bahan_cat", "1500000.50"),
         ]:
             assert (await c.post("/operasional/umum", json=isian(kategori, tanggal, jumlah))).status_code == 201
         data = (await c.get("/operasional/umum?periode=2026-10")).json()
     assert len(data["items"]) == 3
-    assert Decimal(data["ringkasan"]["per_kategori"]["gaji"]) == Decimal("0.30")
-    assert Decimal(data["ringkasan"]["per_kategori"]["iklan"]) == Decimal("1500000.50")
+    assert Decimal(data["ringkasan"]["per_kategori"]["ongkir"]) == Decimal("0.30")
+    assert Decimal(data["ringkasan"]["per_kategori"]["bahan_cat"]) == Decimal("1500000.50")
     assert Decimal(data["ringkasan"]["per_kategori"]["langganan"]) == 0
     assert Decimal(data["ringkasan"]["total"]) == Decimal("1500000.80")
     assert [i["tanggal"] for i in data["items"]] == ["2026-10-01", "2026-10-15", "2026-10-31"]
@@ -106,7 +106,7 @@ async def test_totals_are_exact_and_stay_within_the_month(session):
 async def test_pages_do_not_mix_and_categories_are_checked(session):
     async with client_for("admin", session) as c:
         assert (await c.post("/operasional/umum", json=isian("perl_packing"))).status_code == 422
-        assert (await c.post("/operasional/packing", json=isian("gaji"))).status_code == 422
+        assert (await c.post("/operasional/packing", json=isian("ongkir"))).status_code == 422
         assert (await c.post("/operasional/packing", json=isian("perl_packing"))).status_code == 201
         assert (await c.get("/operasional/umum?periode=2026-10")).json()["items"] == []
         assert (await c.get("/operasional/lain?periode=2026-10")).status_code == 404
@@ -132,8 +132,8 @@ async def test_bad_date_and_period_are_refused(session):
 async def test_edit_and_delete(session):
     async with client_for("staf_keuangan", session) as c:
         made = (await c.post("/operasional/umum", json=isian())).json()
-        edited = (await c.put(f"/operasional/umum/{made['id']}", json=isian("iklan", "2026-10-09", "250000", " Top up "))).json()
-        assert edited["kategori"] == "iklan" and edited["uraian"] == "Top up" and Decimal(edited["jumlah"]) == 250000
+        edited = (await c.put(f"/operasional/umum/{made['id']}", json=isian("bahan_cat", "2026-10-09", "250000", " Top up "))).json()
+        assert edited["kategori"] == "bahan_cat" and edited["uraian"] == "Top up" and Decimal(edited["jumlah"]) == 250000
         # an entry belongs to its page: it cannot be reached (or moved) through the other one
         assert (await c.put(f"/operasional/packing/{made['id']}", json=isian("perl_packing"))).status_code == 404
         assert (await c.delete(f"/operasional/packing/{made['id']}")).status_code == 404
@@ -154,11 +154,11 @@ async def test_read_only_roles_cannot_edit_or_delete(session):
 @pytest.mark.asyncio
 async def test_total_per_kategori_for_arus_kas(session):
     async with client_for("admin", session) as c:
-        await c.post("/operasional/umum", json=isian("gaji", "2026-10-05", "100"))
-        await c.post("/operasional/umum", json=isian("gaji", "2026-10-12", "50.5"))
-        await c.post("/operasional/umum", json=isian("iklan", "2026-10-13", "7"))
+        await c.post("/operasional/umum", json=isian("ongkir", "2026-10-05", "100"))
+        await c.post("/operasional/umum", json=isian("ongkir", "2026-10-12", "50.5"))
+        await c.post("/operasional/umum", json=isian("bahan_cat", "2026-10-13", "7"))
     totals = await ops.total_per_kategori(session, "umum", date(2026, 10, 5), date(2026, 10, 12))
-    assert totals == {"gaji": Decimal("150.5")}
+    assert totals == {"ongkir": Decimal("150.5")}
 
 
 @pytest.mark.asyncio

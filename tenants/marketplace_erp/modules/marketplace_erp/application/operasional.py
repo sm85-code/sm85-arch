@@ -2,7 +2,7 @@
 
 Each entry has a date, a category, a description and an amount. The categories are the expense categories of the
 Kategori Transaksi page (kategori.py) that are offered on this page, so the totals line up with Arus Kas:
-  umum    -> by default bahan_cat, ongkir, gaji, iklan, langganan, atk, lain_keluar
+  umum    -> by default bahan_cat, ongkir, langganan, atk, lain_keluar  (gaji and iklan are typed in Arus Kas)
   packing -> by default perl_packing, atk_eceran  (ATK bought piecemeal to cover what the general ATK shopping fell short of)
 Which page offers a category, its name and its order are managed there.
 Who may do what is decided per page (jenis) by the role settings (akses.py): halaman operasional_umum and
@@ -80,6 +80,21 @@ def rentang(periode: str) -> tuple[date, date]:
         return date(tahun, bulan, 1), date(tahun, bulan, monthrange(tahun, bulan)[1])
     except (ValueError, IndexError):
         raise HTTPException(422, "Periode harus berbentuk YYYY-MM") from None
+
+
+async def untuk_arus_kas(session: AsyncSession, periode: str) -> dict:
+    """What Arus Kas takes from both pages: the amount per date and category for a month. Gaji and iklan are left out,
+    an admin types them in Arus Kas itself."""
+    awal, akhir = rentang(periode)
+    rows = (
+        await session.execute(
+            select(TransaksiOperasional.tanggal, TransaksiOperasional.kategori, func.sum(TransaksiOperasional.jumlah))
+            .where(TransaksiOperasional.tanggal.between(awal, akhir), TransaksiOperasional.kategori.not_in(kat.ARUS_KAS_SAJA))
+            .group_by(TransaksiOperasional.tanggal, TransaksiOperasional.kategori)
+            .order_by(TransaksiOperasional.tanggal, TransaksiOperasional.kategori)
+        )
+    ).all()
+    return {"periode": periode, "items": [{"tanggal": t.isoformat(), "kategori": k, "jumlah": str(j)} for t, k, j in rows]}
 
 
 def _baris(t: TransaksiOperasional) -> dict:

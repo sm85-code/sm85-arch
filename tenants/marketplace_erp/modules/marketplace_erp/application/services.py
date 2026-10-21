@@ -180,6 +180,8 @@ async def create_user(session: AsyncSession, payload: UserCreateIn) -> UserMarke
     )
     session.add(user)
     await session.flush()
+    await akses.atur_peran_tambahan(session, user, payload.peran_tambahan)
+    await akses.muat_peran_tambahan(session, [user])
     return user
 
 
@@ -195,6 +197,11 @@ def pastikan_boleh_membuat_peran(pembuat_role: str | None, peran_baru: str) -> N
         raise HTTPException(
             status_code=status.HTTP_403_FORBIDDEN, detail=f"Peran Anda tidak boleh membuat akun dengan peran {peran_baru}"
         )
+
+
+async def akses_extras(session: AsyncSession, user: UserMarketplaceErp) -> list[str]:
+    await akses.muat_peran_tambahan(session, [user])
+    return list(user.peran_tambahan)  # type: ignore[attr-defined]
 
 
 async def update_user(session: AsyncSession, user_id: str, payload) -> UserMarketplaceErp:
@@ -221,6 +228,9 @@ async def update_user(session: AsyncSession, user_id: str, payload) -> UserMarke
                 )
         user.role = data["role"]
     await session.flush()
+    # The extra roles follow when sent; changing only the main role keeps them (minus a copy of the new main one).
+    await akses.atur_peran_tambahan(session, user, data["peran_tambahan"] if "peran_tambahan" in data else (await akses_extras(session, user)))
+    await akses.muat_peran_tambahan(session, [user])
     return user
 
 
@@ -263,7 +273,9 @@ async def update_profil(session: AsyncSession, user: UserMarketplaceErp, payload
 
 async def list_users(session: AsyncSession) -> list[UserMarketplaceErp]:
     rows = await session.execute(select(UserMarketplaceErp).order_by(UserMarketplaceErp.created_at))
-    return list(rows.scalars())
+    users = list(rows.scalars())
+    await akses.muat_peran_tambahan(session, users)
+    return users
 
 
 async def change_password(
@@ -3434,7 +3446,7 @@ async def konfirmasi_retur_marketplace(session: AsyncSession, akun_id: str, nomo
 async def assign_staff_banyak(session: AsyncSession, user_id: str, akun_ids: list[str]) -> list[StaffAkunMarketplace]:
     """Validate the entire additive assignment before changing anything; repeated requests are safe."""
     user = (await session.execute(select(UserMarketplaceErp).where(UserMarketplaceErp.id == user_id).with_for_update())).scalar_one_or_none()
-    if not user or await akses.akses_toko(session, user.role) != "ditugaskan":
+    if not user or await akses.akses_toko(session, await akses.peran_pengguna(session, user)) != "ditugaskan":
         raise HTTPException(422, "Pilih pengguna dengan role yang aksesnya dibatasi per toko")
     ids = list(dict.fromkeys(akun_ids))
     for akun_id in ids:
