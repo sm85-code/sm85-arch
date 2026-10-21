@@ -28,6 +28,17 @@ class KategoriUbah(BaseModel):
     aktif: bool = True
 
 
+class KelompokBaru(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+    arah: str
+    nama: str = Field(max_length=80)
+
+
+class KelompokUbah(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+    nama: str = Field(max_length=80)
+
+
 class Urutan(BaseModel):
     model_config = ConfigDict(extra="forbid")
     arah: str
@@ -42,6 +53,16 @@ async def daftar(session: AsyncSession = Depends(get_db_marketplace_erp)):
 @router.post("", status_code=201)
 async def buat(body: KategoriBaru, session: AsyncSession = Depends(get_db_marketplace_erp)):
     return await kat.buat(session, body.arah, body.nama, body.kelompok, body.operasional)
+
+
+@router.post("/kelompok", status_code=201)
+async def buat_kelompok(body: KelompokBaru, session: AsyncSession = Depends(get_db_marketplace_erp)):
+    return await kat.buat_kelompok(session, body.arah, body.nama)
+
+
+@router.put("/kelompok/{id_}")
+async def ubah_kelompok(id_: str, body: KelompokUbah, session: AsyncSession = Depends(get_db_marketplace_erp)):
+    return await kat.ubah_kelompok(session, id_, body.nama)
 
 
 @router.put("/urutan")

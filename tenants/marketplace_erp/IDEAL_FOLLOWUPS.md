@@ -49,6 +49,26 @@ Does **not** expand `tenants/toko`.
 | Revoke other sessions on password change | `/auth/change-password` re-issues the caller's cookie, but older JWTs stay valid until expiry (token `session_version` is always 0 for this tenant) -- add a `session_version` column + check in `get_current_user_marketplace_erp` |
 | Server-side enforcement of `must_change_password` | Currently FE-driven (redirect to Ganti Password); backend could 403 non-auth endpoints while the flag is set |
 
+## Tugas tertunda: teks dipakai sebagai identitas (hardcode)
+
+Prinsip: teks hanya tampilan, identitas selalu ID. Kelompok transaksi sudah memakai ID (`mpe_kelompok_transaksi`); sisanya
+belum dikerjakan (hasil pemeriksaan kode, 2026-10-21; hanya area keuangan, kategori, role, dan Operasional yang diperiksa):
+
+1. **Baris toko di Pemasukan memakai nama toko sebagai kunci** (`shop:${nama}` di `sheetSections.ts` frontend). Mengganti nama
+   toko memutus angka manual di baris itu. Risiko data terbesar, perubahan kecil: pakai ID toko.
+2. **Judul grup sheet jadi kunci**: `Kas masuk`, `Kas keluar`, `Transfer antar kas`, `Aset`, `Kewajiban`, `Ekuitas`, `Penjualan dan jasa`,
+   `Penyesuaian piutang`, dan seterusnya. Dipakai di rumus total (`G('arus_kas', 'Kas keluar')`), di baris tambahan yang tersimpan
+   (`grup: 'Kas keluar'` di lembar manual), di nama ganti grup (`keyGrup` = hash teks), dan untuk menentukan arah masuk/keluar
+   (`GRUP_MASUK` / `GRUP_KELUAR`). Tampilan aman karena memakai `tampil`, tapi mengubah teks di kode memutus data tersimpan.
+   Perlu ID grup tetap plus pemetaan data lama.
+3. **Nama baris dan grup yang diubah hanya berlaku per bulan** (disimpan di lembar manual bulanan). Seharusnya global.
+4. **`RoleAkses.tsx` mengelompokkan halaman dengan mencocokkan teks** (`x.nama === h.grup`), teks dari `akses.HALAMAN` (`Keuangan`, `Harian`, ...). Beri ID grup halaman.
+5. **Role bawaan `staff` / `owner` / `admin`**: perilaku per ID di kode, label tetap (`ROLE_LABELS`); nama role bawaan tidak bisa diubah.
+6. **Nama halaman Operasional Umum / Packing** tertulis ganda (menu, judul halaman, tab Kategori Transaksi, panduan, `akses.HALAMAN`).
+7. Belum diperiksa: halaman di luar area di atas (pesanan, produk, katalog, dan seterusnya).
+
+Belum ada: pencatatan **pembagian laba** (pengambilan laba dari kas utama).
+
 ## Non-goals (unchanged)
 
 - Do not merge with `tenants/toko` storefront or `tenants/toko/modules/erp` as SSOT.

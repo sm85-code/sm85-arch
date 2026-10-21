@@ -238,3 +238,40 @@ async def test_arus_kas_gets_the_entries_per_date_and_category_without_gaji_and_
         {"tanggal": "2026-10-06", "kategori": "perl_packing", "jumlah": "20.00"},
     ]
 
+
+@pytest.mark.asyncio
+async def test_groups_have_ids_names_can_change_and_groups_can_be_added(session):
+    async with client_for("admin", session) as c:
+        data = (await c.get("/kategori-transaksi")).json()
+        assert data["kelompok_daftar"]["keluar"] == [{"id": "hpp", "nama": "Harga pokok penjualan"}, {"id": "beban", "nama": "Beban operasional"}]
+        assert by_id(data)["tukang"]["kelompok_id"] == "hpp" and by_id(data)["tukang"]["kelompok"] == "Harga pokok penjualan"
+        # the name changes, the id (and everything filed under it) stays
+        assert (await c.put("/kategori-transaksi/kelompok/hpp", json={"nama": "Biaya langsung"})).json()["nama"] == "Biaya langsung"
+        after = (await c.get("/kategori-transaksi")).json()
+        assert by_id(after)["tukang"]["kelompok_id"] == "hpp" and by_id(after)["tukang"]["kelompok"] == "Biaya langsung"
+        assert after["kelompok"]["keluar"][0] == "Biaya langsung"
+        # a new group takes categories by id; the old name text is still understood
+        new = (await c.post("/kategori-transaksi/kelompok", json={"arah": "keluar", "nama": "Biaya lain"})).json()
+        assert new["id"].startswith("kel_")
+        put = {"nama": "Tukang", "kelompok": new["id"], "operasional": None, "aktif": True}
+        assert (await c.put("/kategori-transaksi/tukang", json=put)).json()["kelompok_id"] == new["id"]
+        put["kelompok"] = "Beban operasional"
+        assert (await c.put("/kategori-transaksi/tukang", json=put)).json()["kelompok_id"] == "beban"
+        # names stay unique within a kind, and a group of the other kind is not accepted
+        assert (await c.post("/kategori-transaksi/kelompok", json={"arah": "keluar", "nama": "biaya lain"})).status_code == 409
+        assert (await c.put("/kategori-transaksi/kelompok/beban", json={"nama": "Biaya langsung"})).status_code == 409
+        put["kelompok"] = "pemasukan"
+        assert (await c.put("/kategori-transaksi/tukang", json=put)).status_code == 422
+        assert (await c.put("/kategori-transaksi/kelompok/tidak_ada", json={"nama": "X Y"})).status_code == 404
+
+
+@pytest.mark.asyncio
+async def test_categories_saved_with_a_group_name_are_pointed_at_its_id(session):
+    from tenants.marketplace_erp.modules.marketplace_erp.infrastructure.models import KategoriTransaksi
+
+    await kat.pastikan_bawaan(session)
+    (await session.get(KategoriTransaksi, "tukang")).kelompok = "Harga pokok penjualan"
+    await session.commit()
+    await kat.pastikan_bawaan(session)
+    assert (await session.get(KategoriTransaksi, "tukang")).kelompok == "hpp"
+
