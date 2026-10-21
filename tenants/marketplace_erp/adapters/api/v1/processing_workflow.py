@@ -3,7 +3,7 @@
 import json
 import re
 import uuid
-from datetime import datetime, timezone
+from datetime import date, datetime, timezone
 from decimal import Decimal
 from typing import Annotated, Literal
 from zoneinfo import ZoneInfo
@@ -757,6 +757,38 @@ def computed(row, data, order=None):
             order and (order.status == "cancelled" or order.status_marketplace in ["CANCELLED", "IN_CANCEL"])
         ),
     )
+
+
+WIB = ZoneInfo("Asia/Jakarta")
+# Which stage's completion date a cost is counted on, and the amount that stage costs per unit.
+BIAYA_TAHAP = (
+    ("produksi", "production_done_at", "production_price"),
+    ("supplier", "received_at", "production_price"),
+    ("pengecatan", "painting_done_at", "paint_price"),
+    ("packing", "packing_done_at", "packing_price"),
+)
+
+
+async def biaya_produksi(session, awal: date, akhir: date) -> list[dict]:
+    """Cost of the stages finished in a date range (WIB), per date, stage and party. Read only: nothing is posted anywhere."""
+    out: dict[tuple[str, str, str], Decimal] = {}
+    for row in (await session.scalars(select(ProcessingJob))).all():
+        data = json.loads(row.payload_json)
+        for tahap, waktu, harga in BIAYA_TAHAP:
+            selesai = data.get(waktu)
+            if not selesai:
+                continue
+            hari = datetime.fromisoformat(selesai).astimezone(WIB).date()
+            if not awal <= hari <= akhir:
+                continue
+            if tahap == "pengecatan" and (data["route"] != "tukang" or data.get("color") == "Polos / Tanpa Cat"):
+                continue
+            jumlah = Decimal(data.get(harga) or "0") * data["qty"]
+            if jumlah:
+                pihak = data.get("party_name") or "-" if tahap in ("produksi", "supplier") else ""
+                key = (hari.isoformat(), tahap, pihak)
+                out[key] = out.get(key, Decimal(0)) + jumlah
+    return [{"tanggal": t, "tahap": h, "pihak": p, "jumlah": str(v)} for (t, h, p), v in sorted(out.items())]
 
 
 @router.get("/jobs")

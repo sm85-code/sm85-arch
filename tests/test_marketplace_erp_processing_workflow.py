@@ -1,6 +1,10 @@
 """Exercise the internal workflow, permissions, isolation and price snapshots through HTTP."""
 
 import json
+from datetime import datetime
+from zoneinfo import ZoneInfo
+
+from tenants.marketplace_erp.adapters.api.v1 import processing_workflow
 from types import SimpleNamespace
 
 import httpx
@@ -174,6 +178,14 @@ async def test_reseller_multiple_products_price_history_fees_and_stage_times(cli
     assert any(e["action"] == "selesai_packing" for e in first["events"])
     second = await advance(http, second, "produksi")
     assert second["stage"] == "packing" and second["painting_done_at"] is None
+    # Arus Kas gets the cost of the finished stages as a reference only (the reopened packing counts for nothing).
+    hari = datetime.now(ZoneInfo("Asia/Jakarta")).date()
+    async with factory() as session:
+        biaya = await processing_workflow.biaya_produksi(session, hari, hari)
+    jumlah = {(i["tahap"], i["pihak"]): i["jumlah"] for i in biaya}
+    assert jumlah == {("produksi", "Tukang 1"): "300000", ("pengecatan", ""): "80000", ("produksi", "Tukang 2"): "200000"}
+    async with factory() as session:
+        assert await processing_workflow.biaya_produksi(session, hari.replace(year=hari.year - 1), hari.replace(year=hari.year - 1)) == []
     async with factory() as session:
         assert (
             json.loads((await session.get(ProcessingCatalog, "global")).payload_json)["harga_produksi"][0]["harga"]
