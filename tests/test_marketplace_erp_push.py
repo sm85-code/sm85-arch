@@ -280,3 +280,28 @@ async def test_nothing_runs_without_keys_or_subscribers(session, monkeypatch):
     assert push.interval_seconds() == 30.0
     monkeypatch.setenv("PUSH_INTERVAL_DETIK", "0")
     assert push.interval_seconds() == 0.0
+
+
+@pytest.mark.asyncio
+async def test_recipients_follow_the_role_settings(session):
+    from tenants.marketplace_erp.modules.marketplace_erp.application import akses, push_notifications
+    from tenants.marketplace_erp.modules.marketplace_erp.infrastructure.models import (
+        PushSubscription,
+        RoleHalaman,
+        UserMarketplaceErp,
+    )
+
+    await akses.pastikan_bawaan(session)
+    for uid, role in (("a", "admin"), ("o", "owner"), ("s", "staff"), ("k", "staf_keuangan")):
+        session.add(UserMarketplaceErp(id=uid, nama=uid, username=f"user{uid}", password_hash="x", role=role))
+        session.add(PushSubscription(id=f"sub-{uid}", user_id=uid, endpoint=f"https://fcm.googleapis.com/{uid}", p256dh="p", auth="a"))
+    await session.commit()
+    got = {sub.user_id: (allowed, halaman) for sub, allowed, halaman in await push_notifications._recipients(session)}
+    assert got["a"] == (None, {"pesanan", "chat"})
+    assert got["o"] == (None, {"pesanan", "chat"})
+    assert got["s"] == (set(), {"pesanan", "chat"})  # assigned to no shop yet
+    assert got["k"] == (None, set())  # finance staff: every shop, but no orders and no chats
+    await session.delete(await session.get(RoleHalaman, ("owner", "chat")))  # an admin unticks Chat for owner
+    await session.commit()
+    got = {sub.user_id: halaman for sub, _, halaman in await push_notifications._recipients(session)}
+    assert got["o"] == {"pesanan"}

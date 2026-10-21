@@ -17,7 +17,7 @@ from sqlalchemy.dialects.postgresql import insert as pg_insert
 from sqlalchemy.dialects.sqlite import insert as sqlite_insert
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from tenants.marketplace_erp.modules.marketplace_erp.application import services, webpush
+from tenants.marketplace_erp.modules.marketplace_erp.application import akses, services, webpush
 from tenants.marketplace_erp.modules.marketplace_erp.infrastructure.adapters import erp_shopee_chat
 from tenants.marketplace_erp.modules.marketplace_erp.infrastructure.models import (
     AkunMarketplace,
@@ -60,18 +60,22 @@ async def _unseen(session: AsyncSession, keys: list[str]) -> list[str]:
     return [k for k in keys if k not in seen]
 
 
-async def _recipients(session: AsyncSession) -> list[tuple[PushSubscription, set[str] | None]]:
-    """Every subscription with the shops its user may see; None = every shop (admin and owner)."""
+async def _recipients(session: AsyncSession) -> list[tuple[PushSubscription, set[str] | None, set[str]]]:
+    """Every subscription with the shops its user may see (None = every shop) and the pages its role may open; the role
+    settings decide both, so a role without Pesanan or Chat gets none of those announcements."""
     rows = (await session.execute(select(PushSubscription, UserMarketplaceErp.role).join(UserMarketplaceErp, UserMarketplaceErp.id == PushSubscription.user_id))).all()
-    staff_ids = [sub.user_id for sub, role in rows if (role or "").strip().lower() == "staff"]
+    toko_role = {r: await akses.akses_toko(session, r) for r in {(role or "").strip().lower() for _, role in rows}}
+    assigned_ids = [sub.user_id for sub, role in rows if toko_role[(role or "").strip().lower()] == "ditugaskan"]
     shops: dict[str, set[str]] = {}
-    if staff_ids:
-        for user_id, akun_id in (await session.execute(select(StaffAkunMarketplace.user_id, StaffAkunMarketplace.akun_id).where(StaffAkunMarketplace.user_id.in_(staff_ids)))).all():
+    if assigned_ids:
+        for user_id, akun_id in (await session.execute(select(StaffAkunMarketplace.user_id, StaffAkunMarketplace.akun_id).where(StaffAkunMarketplace.user_id.in_(assigned_ids)))).all():
             shops.setdefault(user_id, set()).add(akun_id)
+    halaman_role = {r: {h for h in ("pesanan", "chat") if await akses.tingkat_halaman(session, r, h)} for r in toko_role}
     out = []
     for sub, role in rows:
         role = (role or "").strip().lower()
-        out.append((sub, shops.get(sub.user_id, set()) if role == "staff" else None if role in ("admin", "owner") else set()))
+        cakupan = toko_role[role]
+        out.append((sub, None if cakupan == "semua" else shops.get(sub.user_id, set()) if cakupan == "ditugaskan" else set(), halaman_role[role]))
     return out
 
 
@@ -117,8 +121,8 @@ async def _orders(session: AsyncSession, recipients) -> None:
     if not fresh:
         return
     await _remember(session, fresh)
-    for sub, allowed in recipients:
-        if not sub.pesanan:
+    for sub, allowed, halaman in recipients:
+        if not sub.pesanan or "pesanan" not in halaman:
             continue
         for kind, single, many in (("process", "Pesanan perlu diproses", "pesanan baru perlu diproses"), ("cancel", "Permintaan pembatalan", "permintaan pembatalan")):
             mine = [
@@ -131,7 +135,7 @@ async def _orders(session: AsyncSession, recipients) -> None:
 
 
 async def _chats(session: AsyncSession, recipients) -> None:
-    wanting = [(sub, allowed) for sub, allowed in recipients if sub.chat]
+    wanting = [(sub, allowed) for sub, allowed, halaman in recipients if sub.chat and "chat" in halaman]
     if not wanting:
         return
     for akun in await services.list_akun_marketplace(session, platform="shopee"):

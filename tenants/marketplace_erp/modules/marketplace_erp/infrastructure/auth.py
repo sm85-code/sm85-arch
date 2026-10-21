@@ -79,10 +79,28 @@ async def get_current_user_marketplace_erp(
 
 
 def require_roles_marketplace_erp(*roles: str) -> Callable:
+    """Dependency that guards an endpoint. If the request belongs to a page covered by the role settings
+    (application/peta_akses.py), the signed-in user's role decides: it must reach that page at the level the request
+    needs. Anything else keeps the fixed role list given here."""
     allowed = {r.strip().lower() for r in roles}
 
-    async def _inner(user: UserMarketplaceErp = Depends(get_current_user_marketplace_erp)) -> UserMarketplaceErp:
-        if (user.role or "").strip().lower() not in allowed:
+    async def _inner(
+        user: UserMarketplaceErp = Depends(get_current_user_marketplace_erp),
+        request: Request = None,  # type: ignore[assignment]  (None when the guard is called directly, outside a request)
+        session: AsyncSession = Depends(get_db_marketplace_erp),
+    ) -> UserMarketplaceErp:
+        from tenants.marketplace_erp.modules.marketplace_erp.application import akses, peta_akses
+
+        role = (user.role or "").strip().lower()
+        aturan = peta_akses.cari(request.url.path, request.method) if isinstance(request, Request) else None
+        if aturan is None:
+            ok = role in allowed
+        elif aturan[0] == "*":
+            ok = role == "admin" or await akses.akses_toko(session, role) is not None
+        else:
+            punya = await akses.tingkat_halaman(session, role, aturan[0])
+            ok = punya is not None and (aturan[1] == "baca" or punya == "tulis")
+        if not ok:
             raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="Akses ditolak")
         return user
 
@@ -94,8 +112,13 @@ async def akun_ids_diizinkan(user: UserMarketplaceErp, session: AsyncSession) ->
     empty) list of AkunMarketplace ids for `staff` -- the only shops that
     role may read/write, per StaffAkunMarketplace. Imported lazily to avoid
     a module-load-time cycle between auth.py and models.py's own imports."""
-    if (user.role or "").strip().lower() != "staff":
+    from tenants.marketplace_erp.modules.marketplace_erp.application import akses
+
+    cakupan = await akses.akses_toko(session, user.role)
+    if cakupan == "semua":
         return None
+    if cakupan != "ditugaskan":
+        return []  # a role that does not exist reaches no shop
     from sqlalchemy import select
 
     from tenants.marketplace_erp.modules.marketplace_erp.infrastructure.models import StaffAkunMarketplace

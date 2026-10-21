@@ -222,7 +222,7 @@ async def test_close_validation_and_read_only_preview(session):
 
 @pytest.mark.asyncio
 @pytest.mark.parametrize("role", ["owner", "staff"])
-async def test_every_report_endpoint_denies_non_admin_before_db_access(role):
+async def test_every_report_endpoint_denies_non_admin_before_db_access(role, sesi_peran):
     app = FastAPI()
     app.include_router(router)
 
@@ -230,7 +230,7 @@ async def test_every_report_endpoint_denies_non_admin_before_db_access(role):
         return SimpleNamespace(id="user", role=role)
 
     async def forbidden_db():
-        raise AssertionError("Non-admin reached report database")
+        yield sesi_peran  # only the role tables hold anything; see tests/conftest.py
 
     app.dependency_overrides[get_current_user_marketplace_erp] = current
     app.dependency_overrides[get_db_marketplace_erp] = forbidden_db

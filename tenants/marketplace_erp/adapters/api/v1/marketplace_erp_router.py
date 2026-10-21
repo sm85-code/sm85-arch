@@ -29,11 +29,13 @@ from .assistant_router import router as assistant_router
 from .sync_router import router as sync_router
 from .chat_router import router as chat_router
 from .arus_kas_router import router as arus_kas_router
+from .operasional_router import router as operasional_router
 from .push_router import router as push_router
+from .roles_router import router as roles_router
 from .financial_reports_router import router as financial_reports_router
 from .processing_router import router as processing_router
 
-from tenants.marketplace_erp.modules.marketplace_erp.application import services
+from tenants.marketplace_erp.modules.marketplace_erp.application import akses, services
 from tenants.marketplace_erp.modules.marketplace_erp.application.schemas import (
     KatalogKirimIn,
     KatalogMasterIn,
@@ -232,6 +234,15 @@ async def logout(response: Response):
 @marketplace_erp_router.get("/auth/me", response_model=UserOut)
 async def me(user: UserMarketplaceErp = Depends(get_current_user_marketplace_erp)):
     return user
+
+
+@marketplace_erp_router.get("/auth/akses")
+async def akses_saya(
+    session: AsyncSession = Depends(get_db_marketplace_erp),
+    user: UserMarketplaceErp = Depends(get_current_user_marketplace_erp),
+):
+    """The signed-in user's role settings (shops, pages, read or write) for showing menus and buttons."""
+    return await akses.akses_pengguna(session, user.role)
 
 
 @marketplace_erp_router.patch("/auth/profil", response_model=UserOut)
@@ -1841,6 +1852,8 @@ marketplace_erp_router.include_router(engagement_automation_router)
 # Isolated report projection; no new operational ERP mutations.
 marketplace_erp_router.include_router(financial_reports_router)
 marketplace_erp_router.include_router(arus_kas_router)
+marketplace_erp_router.include_router(operasional_router)
 marketplace_erp_router.include_router(push_router)
+marketplace_erp_router.include_router(roles_router)
 
 marketplace_erp_router.include_router(processing_router)

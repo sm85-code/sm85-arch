@@ -1,0 +1,1750 @@
+[
+{
+"path": "/akun",
+"method": "GET",
+"legacy": [
+"admin",
+"owner",
+"staff"
+]
+},
+{
+"path": "/akun",
+"method": "POST",
+"legacy": [
+"admin"
+]
+},
+{
+"path": "/akun/ID",
+"method": "DELETE",
+"legacy": [
+"admin"
+]
+},
+{
+"path": "/akun/ID",
+"method": "GET",
+"legacy": [
+"admin",
+"owner",
+"staff"
+]
+},
+{
+"path": "/akun/ID",
+"method": "PATCH",
+"legacy": [
+"admin"
+]
+},
+{
+"path": "/akun/ID/chat",
+"method": "GET",
+"legacy": [
+"admin",
+"owner",
+"staff"
+]
+},
+{
+"path": "/akun/ID/chat/ID/dibaca",
+"method": "POST",
+"legacy": [
+"admin",
+"owner",
+"staff"
+]
+},
+{
+"path": "/akun/ID/chat/ID/konteks",
+"method": "GET",
+"legacy": [
+"admin",
+"owner",
+"staff"
+]
+},
+{
+"path": "/akun/ID/chat/ID/pesan",
+"method": "GET",
+"legacy": [
+"admin",
+"owner",
+"staff"
+]
+},
+{
+"path": "/akun/ID/chat/ID/pesan",
+"method": "POST",
+"legacy": [
+"admin",
+"owner",
+"staff"
+]
+},
+{
+"path": "/akun/ID/chat/foto",
+"method": "POST",
+"legacy": [
+"admin",
+"owner",
+"staff"
+]
+},
+{
+"path": "/akun/ID/gmv-max",
+"method": "PATCH",
+"legacy": [
+"admin"
+]
+},
+{
+"path": "/akun/ID/gmv-max",
+"method": "POST",
+"legacy": [
+"admin"
+]
+},
+{
+"path": "/akun/ID/gmv-max/kelayakan",
+"method": "GET",
+"legacy": [
+"admin"
+]
+},
+{
+"path": "/akun/ID/gmv-max/performa",
+"method": "GET",
+"legacy": [
+"admin"
+]
+},
+{
+"path": "/akun/ID/gmv-max/produk",
+"method": "POST",
+"legacy": [
+"admin"
+]
+},
+{
+"path": "/akun/ID/iklan/kampanye",
+"method": "GET",
+"legacy": [
+"admin"
+]
+},
+{
+"path": "/akun/ID/iklan/kampanye",
+"method": "POST",
+"legacy": [
+"admin"
+]
+},
+{
+"path": "/akun/ID/iklan/kampanye/ID/aksi",
+"method": "POST",
+"legacy": [
+"admin"
+]
+},
+{
+"path": "/akun/ID/iklan/kampanye/ID/kata-kunci",
+"method": "POST",
+"legacy": [
+"admin"
+]
+},
+{
+"path": "/akun/ID/iklan/modal/ID",
+"method": "PUT",
+"legacy": [
+"admin"
+]
+},
+{
+"path": "/akun/ID/iklan/performa-jam",
+"method": "GET",
+"legacy": [
+"admin"
+]
+},
+{
+"path": "/akun/ID/iklan/saran",
+"method": "GET",
+"legacy": [
+"admin"
+]
+},
+{
+"path": "/akun/ID/iklan/saran-ai",
+"method": "POST",
+"legacy": [
+"admin"
+]
+},
+{
+"path": "/akun/ID/iklan/shopee/ID",
+"method": "POST",
+"legacy": [
+"admin"
+]
+},
+{
+"path": "/akun/ID/otomasi-produk/akun/ID/otomasi-produk",
+"method": "GET",
+"legacy": [
+"admin"
+]
+},
+{
+"path": "/akun/ID/otomasi-produk/akun/ID/otomasi-produk",
+"method": "PUT",
+"legacy": [
+"admin"
+]
+},
+{
+"path": "/akun/ID/otomasi-produk/akun/ID/otomasi-produk/sudah-diperiksa",
+"method": "POST",
+"legacy": [
+"admin"
+]
+},
+{
+"path": "/akun/ID/pelacakan-pendapatan/ID",
+"method": "GET",
+"legacy": [
+"admin"
+]
+},
+{
+"path": "/akun/ID/penalti",
+"method": "GET",
+"legacy": [
+"admin"
+]
+},
+{
+"path": "/akun/ID/pendapatan-shopee",
+"method": "GET",
+"legacy": [
+"admin"
+]
+},
+{
+"path": "/akun/ID/pengaturan-shopee/ID",
+"method": "GET",
+"legacy": [
+"admin"
+]
+},
+{
+"path": "/akun/ID/pengaturan-shopee/alamat",
+"method": "PUT",
+"legacy": [
+"admin"
+]
+},
+{
+"path": "/akun/ID/pengaturan-shopee/jasa-kirim/ID",
+"method": "PATCH",
+"legacy": [
+"admin"
+]
+},
+{
+"path": "/akun/ID/pengaturan-shopee/libur",
+"method": "PUT",
+"legacy": [
+"admin"
+]
+},
+{
+"path": "/akun/ID/pengaturan-shopee/profil",
+"method": "PATCH",
+"legacy": [
+"admin"
+]
+},
+{
+"path": "/akun/ID/performa-toko",
+"method": "GET",
+"legacy": [
+"admin"
+]
+},
+{
+"path": "/akun/ID/produk-boost",
+"method": "GET",
+"legacy": [
+"admin"
+]
+},
+{
+"path": "/akun/ID/produk-boost",
+"method": "POST",
+"legacy": [
+"admin"
+]
+},
+{
+"path": "/akun/ID/promosi",
+"method": "GET",
+"legacy": [
+"admin",
+"owner"
+]
+},
+{
+"path": "/akun/ID/promosi",
+"method": "POST",
+"legacy": [
+"admin",
+"owner"
+]
+},
+{
+"path": "/akun/ID/promosi/ID",
+"method": "GET",
+"legacy": [
+"admin",
+"owner"
+]
+},
+{
+"path": "/akun/ID/promosi/ID",
+"method": "PATCH",
+"legacy": [
+"admin",
+"owner"
+]
+},
+{
+"path": "/akun/ID/promosi/ID/akhiri",
+"method": "POST",
+"legacy": [
+"admin",
+"owner"
+]
+},
+{
+"path": "/akun/ID/promosi/ID/barang",
+"method": "POST",
+"legacy": [
+"admin",
+"owner"
+]
+},
+{
+"path": "/akun/ID/publikasi",
+"method": "POST",
+"legacy": [
+"admin",
+"owner"
+]
+},
+{
+"path": "/akun/ID/publikasi/foto",
+"method": "POST",
+"legacy": [
+"admin",
+"owner"
+]
+},
+{
+"path": "/akun/ID/publikasi/hasil/ID",
+"method": "GET",
+"legacy": [
+"admin",
+"owner"
+]
+},
+{
+"path": "/akun/ID/publikasi/merek",
+"method": "GET",
+"legacy": [
+"admin",
+"owner"
+]
+},
+{
+"path": "/akun/ID/publikasi/metadata",
+"method": "GET",
+"legacy": [
+"admin",
+"owner"
+]
+},
+{
+"path": "/akun/ID/publikasi/sumber/ID",
+"method": "GET",
+"legacy": [
+"admin",
+"owner"
+]
+},
+{
+"path": "/akun/ID/push/stok-harga",
+"method": "POST",
+"legacy": [
+"admin",
+"owner"
+]
+},
+{
+"path": "/akun/ID/retur",
+"method": "GET",
+"legacy": [
+"admin",
+"owner",
+"staff"
+]
+},
+{
+"path": "/akun/ID/retur/ID",
+"method": "GET",
+"legacy": [
+"admin",
+"owner",
+"staff"
+]
+},
+{
+"path": "/akun/ID/retur/ID/alasan-sengketa",
+"method": "GET",
+"legacy": [
+"admin",
+"owner",
+"staff"
+]
+},
+{
+"path": "/akun/ID/retur/ID/bukti",
+"method": "POST",
+"legacy": [
+"admin",
+"owner",
+"staff"
+]
+},
+{
+"path": "/akun/ID/retur/ID/konfirmasi",
+"method": "POST",
+"legacy": [
+"admin",
+"owner",
+"staff"
+]
+},
+{
+"path": "/akun/ID/retur/ID/sengketa",
+"method": "POST",
+"legacy": [
+"admin",
+"owner",
+"staff"
+]
+},
+{
+"path": "/akun/ID/rincian-pesanan-pendapatan",
+"method": "GET",
+"legacy": [
+"admin"
+]
+},
+{
+"path": "/akun/ID/ringkasan-pendapatan-shopee",
+"method": "GET",
+"legacy": [
+"admin"
+]
+},
+{
+"path": "/akun/ID/saldo-toko",
+"method": "GET",
+"legacy": [
+"admin"
+]
+},
+{
+"path": "/akun/ID/sync/iklan",
+"method": "POST",
+"legacy": [
+"admin"
+]
+},
+{
+"path": "/akun/ID/sync/pesanan",
+"method": "POST",
+"legacy": [
+"admin",
+"owner"
+]
+},
+{
+"path": "/akun/ID/sync/produk",
+"method": "POST",
+"legacy": [
+"admin",
+"owner"
+]
+},
+{
+"path": "/akun/ID/sync/settlement",
+"method": "POST",
+"legacy": [
+"admin"
+]
+},
+{
+"path": "/akun/ID/transaksi-dana",
+"method": "GET",
+"legacy": [
+"admin"
+]
+},
+{
+"path": "/asisten/asisten/percakapan",
+"method": "GET",
+"legacy": [
+"admin"
+]
+},
+{
+"path": "/asisten/asisten/percakapan/ID",
+"method": "GET",
+"legacy": [
+"admin"
+]
+},
+{
+"path": "/asisten/asisten/pesan",
+"method": "POST",
+"legacy": [
+"admin"
+]
+},
+{
+"path": "/asisten/asisten/status",
+"method": "GET",
+"legacy": [
+"admin"
+]
+},
+{
+"path": "/asisten/asisten/tindakan/ID/keputusan",
+"method": "POST",
+"legacy": [
+"admin"
+]
+},
+{
+"path": "/asisten/asisten/tindakan/ID/selesai-periksa",
+"method": "POST",
+"legacy": [
+"admin"
+]
+},
+{
+"path": "/gudang",
+"method": "GET",
+"legacy": [
+"admin",
+"owner"
+]
+},
+{
+"path": "/gudang",
+"method": "POST",
+"legacy": [
+"admin",
+"owner"
+]
+},
+{
+"path": "/iklan",
+"method": "GET",
+"legacy": [
+"admin"
+]
+},
+{
+"path": "/iklan",
+"method": "POST",
+"legacy": [
+"admin"
+]
+},
+{
+"path": "/iklan-toko/harian",
+"method": "GET",
+"legacy": [
+"admin"
+]
+},
+{
+"path": "/iklan-toko/ringkasan",
+"method": "GET",
+"legacy": [
+"admin"
+]
+},
+{
+"path": "/iklan/ID",
+"method": "DELETE",
+"legacy": [
+"admin"
+]
+},
+{
+"path": "/iklan/ID",
+"method": "GET",
+"legacy": [
+"admin"
+]
+},
+{
+"path": "/iklan/ID",
+"method": "PATCH",
+"legacy": [
+"admin"
+]
+},
+{
+"path": "/iklan/ID/laporan",
+"method": "GET",
+"legacy": [
+"admin"
+]
+},
+{
+"path": "/iklan/ID/metrik",
+"method": "GET",
+"legacy": [
+"admin"
+]
+},
+{
+"path": "/iklan/ID/metrik",
+"method": "POST",
+"legacy": [
+"admin"
+]
+},
+{
+"path": "/iklan/shopee/aksi",
+"method": "GET",
+"legacy": [
+"admin"
+]
+},
+{
+"path": "/katalog-shopee",
+"method": "GET",
+"legacy": [
+"admin",
+"owner",
+"staff"
+]
+},
+{
+"path": "/katalog-shopee/ID",
+"method": "GET",
+"legacy": [
+"admin",
+"owner",
+"staff"
+]
+},
+{
+"path": "/katalog-shopee/ID/diagnosis",
+"method": "GET",
+"legacy": [
+"admin"
+]
+},
+{
+"path": "/katalog-shopee/ID/informasi",
+"method": "PATCH",
+"legacy": [
+"admin"
+]
+},
+{
+"path": "/katalog-shopee/ID/informasi-shopee/ID",
+"method": "GET",
+"legacy": [
+"admin"
+]
+},
+{
+"path": "/katalog-shopee/ID/inisialisasi-varian",
+"method": "POST",
+"legacy": [
+"admin"
+]
+},
+{
+"path": "/katalog-shopee/ID/model",
+"method": "PATCH",
+"legacy": [
+"admin"
+]
+},
+{
+"path": "/katalog-shopee/ID/pengaturan",
+"method": "GET",
+"legacy": [
+"admin"
+]
+},
+{
+"path": "/katalog-shopee/ID/pilihan-varian",
+"method": "PATCH",
+"legacy": [
+"admin"
+]
+},
+{
+"path": "/katalog-shopee/ID/produk",
+"method": "PATCH",
+"legacy": [
+"admin",
+"owner"
+]
+},
+{
+"path": "/katalog-shopee/ID/shopee",
+"method": "DELETE",
+"legacy": [
+"admin"
+]
+},
+{
+"path": "/katalog-shopee/ID/statistik",
+"method": "GET",
+"legacy": [
+"admin"
+]
+},
+{
+"path": "/katalog-shopee/ID/status",
+"method": "POST",
+"legacy": [
+"admin",
+"owner"
+]
+},
+{
+"path": "/katalog-shopee/ID/ulasan",
+"method": "GET",
+"legacy": [
+"admin"
+]
+},
+{
+"path": "/katalog-shopee/ID/ulasan/balas",
+"method": "POST",
+"legacy": [
+"admin"
+]
+},
+{
+"path": "/katalog-shopee/ID/varian",
+"method": "POST",
+"legacy": [
+"admin"
+]
+},
+{
+"path": "/katalog-shopee/ID/varian/ID",
+"method": "DELETE",
+"legacy": [
+"admin"
+]
+},
+{
+"path": "/katalog-shopee/kirim-toko",
+"method": "POST",
+"legacy": [
+"admin",
+"owner"
+]
+},
+{
+"path": "/katalog-shopee/ringkasan",
+"method": "GET",
+"legacy": [
+"admin",
+"owner",
+"staff"
+]
+},
+{
+"path": "/katalog-shopee/salin-master",
+"method": "POST",
+"legacy": [
+"admin",
+"owner"
+]
+},
+{
+"path": "/koneksi-toko",
+"method": "GET",
+"legacy": [
+"admin"
+]
+},
+{
+"path": "/laporan-keuangan/laporan-keuangan",
+"method": "GET",
+"legacy": [
+"admin"
+]
+},
+{
+"path": "/laporan-keuangan/laporan-keuangan/ID/buka-kembali",
+"method": "POST",
+"legacy": [
+"admin"
+]
+},
+{
+"path": "/laporan-keuangan/laporan-keuangan/impor-drive",
+"method": "POST",
+"legacy": [
+"admin"
+]
+},
+{
+"path": "/laporan-keuangan/laporan-keuangan/lembar-manual",
+"method": "GET",
+"legacy": [
+"admin"
+]
+},
+{
+"path": "/laporan-keuangan/laporan-keuangan/lembar-manual",
+"method": "PUT",
+"legacy": [
+"admin"
+]
+},
+{
+"path": "/laporan-keuangan/laporan-keuangan/pemasukan-shopee",
+"method": "GET",
+"legacy": [
+"admin"
+]
+},
+{
+"path": "/laporan-keuangan/laporan-keuangan/piutang-pengiriman-shopee",
+"method": "GET",
+"legacy": [
+"admin"
+]
+},
+{
+"path": "/laporan-keuangan/laporan-keuangan/piutang-pengiriman-shopee/ID",
+"method": "GET",
+"legacy": [
+"admin"
+]
+},
+{
+"path": "/laporan-keuangan/laporan-keuangan/pratinjau",
+"method": "POST",
+"legacy": [
+"admin"
+]
+},
+{
+"path": "/laporan-keuangan/laporan-keuangan/riwayat",
+"method": "GET",
+"legacy": [
+"admin"
+]
+},
+{
+"path": "/laporan-keuangan/laporan-keuangan/saldo-awal",
+"method": "POST",
+"legacy": [
+"admin"
+]
+},
+{
+"path": "/laporan-keuangan/laporan-keuangan/saldo-penjual-shopee",
+"method": "GET",
+"legacy": [
+"admin"
+]
+},
+{
+"path": "/laporan-keuangan/laporan-keuangan/saldo-wallet-shopee/ID",
+"method": "GET",
+"legacy": [
+"admin"
+]
+},
+{
+"path": "/laporan-keuangan/laporan-keuangan/sumber",
+"method": "GET",
+"legacy": [
+"admin"
+]
+},
+{
+"path": "/laporan-keuangan/laporan-keuangan/tutup",
+"method": "POST",
+"legacy": [
+"admin"
+]
+},
+{
+"path": "/laporan/dashboard",
+"method": "GET",
+"legacy": [
+"admin",
+"owner",
+"staff"
+]
+},
+{
+"path": "/laporan/ringkas",
+"method": "GET",
+"legacy": [
+"admin",
+"owner"
+]
+},
+{
+"path": "/listing",
+"method": "GET",
+"legacy": [
+"admin",
+"owner"
+]
+},
+{
+"path": "/listing",
+"method": "POST",
+"legacy": [
+"admin",
+"owner"
+]
+},
+{
+"path": "/listing/ID",
+"method": "DELETE",
+"legacy": [
+"admin",
+"owner"
+]
+},
+{
+"path": "/listing/ID",
+"method": "PATCH",
+"legacy": [
+"admin",
+"owner"
+]
+},
+{
+"path": "/notifikasi/notifikasi",
+"method": "GET",
+"legacy": [
+"admin",
+"owner",
+"staff"
+]
+},
+{
+"path": "/notifikasi/notifikasi/dibaca",
+"method": "POST",
+"legacy": [
+"admin",
+"owner",
+"staff"
+]
+},
+{
+"path": "/notifikasi/notifikasi/status-dibaca",
+"method": "POST",
+"legacy": [
+"admin",
+"owner",
+"staff"
+]
+},
+{
+"path": "/oauth/blibli/start",
+"method": "GET",
+"legacy": [
+"admin"
+]
+},
+{
+"path": "/oauth/lazada/start",
+"method": "GET",
+"legacy": [
+"admin"
+]
+},
+{
+"path": "/oauth/shopee/callback/ID",
+"method": "GET",
+"legacy": [
+"admin"
+]
+},
+{
+"path": "/oauth/shopee/callback/ID/ID",
+"method": "GET",
+"legacy": [
+"admin"
+]
+},
+{
+"path": "/oauth/shopee/start",
+"method": "GET",
+"legacy": [
+"admin"
+]
+},
+{
+"path": "/oauth/tiktokshop/start",
+"method": "GET",
+"legacy": [
+"admin"
+]
+},
+{
+"path": "/pengaturan-stok",
+"method": "GET",
+"legacy": [
+"admin",
+"owner"
+]
+},
+{
+"path": "/pesanan",
+"method": "GET",
+"legacy": [
+"admin",
+"owner",
+"staff"
+]
+},
+{
+"path": "/pesanan",
+"method": "POST",
+"legacy": [
+"admin",
+"owner"
+]
+},
+{
+"path": "/pesanan-otomatis/pesanan-otomatis",
+"method": "GET",
+"legacy": [
+"admin"
+]
+},
+{
+"path": "/pesanan-otomatis/pesanan-otomatis",
+"method": "PATCH",
+"legacy": [
+"admin"
+]
+},
+{
+"path": "/pesanan-otomatis/pesanan-otomatis/ID/sudah-diperiksa",
+"method": "POST",
+"legacy": [
+"admin"
+]
+},
+{
+"path": "/pesanan/ID",
+"method": "DELETE",
+"legacy": [
+"admin",
+"owner"
+]
+},
+{
+"path": "/pesanan/ID",
+"method": "GET",
+"legacy": [
+"admin",
+"owner",
+"staff"
+]
+},
+{
+"path": "/pesanan/ID/batalkan",
+"method": "POST",
+"legacy": [
+"admin",
+"owner",
+"staff"
+]
+},
+{
+"path": "/pesanan/ID/catatan-shopee",
+"method": "PATCH",
+"legacy": [
+"admin",
+"owner",
+"staff"
+]
+},
+{
+"path": "/pesanan/ID/chat",
+"method": "GET",
+"legacy": [
+"admin",
+"owner",
+"staff"
+]
+},
+{
+"path": "/pesanan/ID/chat/pesan",
+"method": "POST",
+"legacy": [
+"admin",
+"owner",
+"staff"
+]
+},
+{
+"path": "/pesanan/ID/opsi-pengiriman",
+"method": "GET",
+"legacy": [
+"admin",
+"owner",
+"staff"
+]
+},
+{
+"path": "/pesanan/ID/pelacakan",
+"method": "GET",
+"legacy": [
+"admin",
+"owner",
+"staff"
+]
+},
+{
+"path": "/pesanan/ID/pembatalan-pembeli",
+"method": "POST",
+"legacy": [
+"admin",
+"owner",
+"staff"
+]
+},
+{
+"path": "/pesanan/ID/pendapatan-shopee",
+"method": "GET",
+"legacy": [
+"admin"
+]
+},
+{
+"path": "/pesanan/ID/pengiriman",
+"method": "POST",
+"legacy": [
+"admin",
+"owner",
+"staff"
+]
+},
+{
+"path": "/pesanan/ID/proses",
+"method": "POST",
+"legacy": [
+"admin",
+"owner",
+"staff"
+]
+},
+{
+"path": "/pesanan/ID/resi",
+"method": "GET",
+"legacy": [
+"admin",
+"owner",
+"staff"
+]
+},
+{
+"path": "/pesanan/ID/resi/tandai",
+"method": "POST",
+"legacy": [
+"admin",
+"owner",
+"staff"
+]
+},
+{
+"path": "/pesanan/ID/status",
+"method": "POST",
+"legacy": [
+"admin",
+"owner",
+"staff"
+]
+},
+{
+"path": "/pesanan/daftar",
+"method": "GET",
+"legacy": [
+"admin",
+"owner",
+"staff"
+]
+},
+{
+"path": "/pesanan/proses-massal",
+"method": "POST",
+"legacy": [
+"admin",
+"owner",
+"staff"
+]
+},
+{
+"path": "/pesanan/resi-gabungan",
+"method": "POST",
+"legacy": [
+"admin",
+"owner",
+"staff"
+]
+},
+{
+"path": "/pesanan/resi-massal",
+"method": "POST",
+"legacy": [
+"admin",
+"owner",
+"staff"
+]
+},
+{
+"path": "/pesanan/ringkasan",
+"method": "GET",
+"legacy": [
+"admin",
+"owner",
+"staff"
+]
+},
+{
+"path": "/pesanan/sinkron",
+"method": "POST",
+"legacy": [
+"admin",
+"owner",
+"staff"
+]
+},
+{
+"path": "/processing/candidates",
+"method": "GET",
+"legacy": [
+"admin"
+]
+},
+{
+"path": "/processing/document-templates/ID",
+"method": "GET",
+"legacy": [
+"admin"
+]
+},
+{
+"path": "/processing/document-templates/ID",
+"method": "PUT",
+"legacy": [
+"admin"
+]
+},
+{
+"path": "/processing/jobs",
+"method": "GET",
+"legacy": [
+"admin"
+]
+},
+{
+"path": "/processing/jobs/ID",
+"method": "DELETE",
+"legacy": [
+"admin"
+]
+},
+{
+"path": "/processing/jobs/ID",
+"method": "PUT",
+"legacy": [
+"admin"
+]
+},
+{
+"path": "/processing/jobs/ID/packing",
+"method": "PUT",
+"legacy": [
+"admin"
+]
+},
+{
+"path": "/processing/jobs/ID/release",
+"method": "POST",
+"legacy": [
+"admin"
+]
+},
+{
+"path": "/processing/jobs/ID/transition",
+"method": "POST",
+"legacy": [
+"admin"
+]
+},
+{
+"path": "/processing/jobs/manual",
+"method": "POST",
+"legacy": [
+"admin"
+]
+},
+{
+"path": "/processing/jobs/select",
+"method": "POST",
+"legacy": [
+"admin"
+]
+},
+{
+"path": "/processing/paint-colors",
+"method": "GET",
+"legacy": [
+"admin"
+]
+},
+{
+"path": "/processing/paint-colors/ID",
+"method": "PUT",
+"legacy": [
+"admin"
+]
+},
+{
+"path": "/processing/parties/ID/ID",
+"method": "PUT",
+"legacy": [
+"admin"
+]
+},
+{
+"path": "/processing/prices",
+"method": "GET",
+"legacy": [
+"admin"
+]
+},
+{
+"path": "/processing/prices/ID",
+"method": "DELETE",
+"legacy": [
+"admin"
+]
+},
+{
+"path": "/processing/prices/ID",
+"method": "PUT",
+"legacy": [
+"admin"
+]
+},
+{
+"path": "/processing/prices/ID/activate",
+"method": "POST",
+"legacy": [
+"admin"
+]
+},
+{
+"path": "/processing/prices/bulk-structure",
+"method": "POST",
+"legacy": [
+"admin"
+]
+},
+{
+"path": "/processing/processing/data",
+"method": "GET",
+"legacy": [
+"admin"
+]
+},
+{
+"path": "/processing/processing/import",
+"method": "POST",
+"legacy": [
+"admin"
+]
+},
+{
+"path": "/processing/production-structure",
+"method": "GET",
+"legacy": [
+"admin"
+]
+},
+{
+"path": "/processing/production-structure/ID",
+"method": "PUT",
+"legacy": [
+"admin"
+]
+},
+{
+"path": "/processing/supplier-catalog",
+"method": "GET",
+"legacy": [
+"admin"
+]
+},
+{
+"path": "/processing/supplier-catalog/connect",
+"method": "POST",
+"legacy": [
+"admin"
+]
+},
+{
+"path": "/processing/supplier-catalog/connection",
+"method": "DELETE",
+"legacy": [
+"admin"
+]
+},
+{
+"path": "/processing/supplier-catalog/connection",
+"method": "GET",
+"legacy": [
+"admin"
+]
+},
+{
+"path": "/produk",
+"method": "GET",
+"legacy": [
+"admin",
+"owner"
+]
+},
+{
+"path": "/produk",
+"method": "POST",
+"legacy": [
+"admin",
+"owner"
+]
+},
+{
+"path": "/produk-keluarga",
+"method": "GET",
+"legacy": [
+"admin",
+"owner"
+]
+},
+{
+"path": "/produk-keluarga",
+"method": "POST",
+"legacy": [
+"admin",
+"owner"
+]
+},
+{
+"path": "/produk-keluarga/ID",
+"method": "DELETE",
+"legacy": [
+"admin",
+"owner"
+]
+},
+{
+"path": "/produk-keluarga/ID",
+"method": "PATCH",
+"legacy": [
+"admin",
+"owner"
+]
+},
+{
+"path": "/produk/ID",
+"method": "DELETE",
+"legacy": [
+"admin",
+"owner"
+]
+},
+{
+"path": "/produk/ID",
+"method": "GET",
+"legacy": [
+"admin",
+"owner"
+]
+},
+{
+"path": "/produk/ID",
+"method": "PATCH",
+"legacy": [
+"admin",
+"owner"
+]
+},
+{
+"path": "/produk/ID/publish-toko",
+"method": "POST",
+"legacy": [
+"admin",
+"owner"
+]
+},
+{
+"path": "/push/push/berhenti",
+"method": "POST",
+"legacy": [
+"admin",
+"owner",
+"staff"
+]
+},
+{
+"path": "/push/push/konfigurasi",
+"method": "GET",
+"legacy": [
+"admin",
+"owner",
+"staff"
+]
+},
+{
+"path": "/push/push/langganan",
+"method": "POST",
+"legacy": [
+"admin",
+"owner",
+"staff"
+]
+},
+{
+"path": "/push/push/status",
+"method": "POST",
+"legacy": [
+"admin",
+"owner",
+"staff"
+]
+},
+{
+"path": "/push/push/uji",
+"method": "POST",
+"legacy": [
+"admin",
+"owner",
+"staff"
+]
+},
+{
+"path": "/settlement",
+"method": "GET",
+"legacy": [
+"admin"
+]
+},
+{
+"path": "/settlement",
+"method": "POST",
+"legacy": [
+"admin"
+]
+},
+{
+"path": "/settlement-pesanan",
+"method": "GET",
+"legacy": [
+"admin"
+]
+},
+{
+"path": "/settlement-pesanan/ringkasan",
+"method": "GET",
+"legacy": [
+"admin"
+]
+},
+{
+"path": "/settlement/ID",
+"method": "GET",
+"legacy": [
+"admin"
+]
+},
+{
+"path": "/settlement/ID",
+"method": "PATCH",
+"legacy": [
+"admin"
+]
+},
+{
+"path": "/shopee/push/log",
+"method": "GET",
+"legacy": [
+"admin",
+"owner"
+]
+},
+{
+"path": "/shopee/push/pengaturan",
+"method": "GET",
+"legacy": [
+"admin",
+"owner"
+]
+},
+{
+"path": "/shopee/push/pengaturan",
+"method": "POST",
+"legacy": [
+"admin",
+"owner"
+]
+},
+{
+"path": "/sinkronisasi",
+"method": "POST",
+"legacy": [
+"admin",
+"owner",
+"staff"
+]
+},
+{
+"path": "/sinkronisasi/ID",
+"method": "GET",
+"legacy": [
+"admin",
+"owner",
+"staff"
+]
+},
+{
+"path": "/sinkronisasi/ID/lanjut",
+"method": "POST",
+"legacy": [
+"admin",
+"owner",
+"staff"
+]
+},
+{
+"path": "/sinkronisasi/ID/ulangi-gagal",
+"method": "POST",
+"legacy": [
+"admin",
+"owner",
+"staff"
+]
+},
+{
+"path": "/staff-akun",
+"method": "GET",
+"legacy": [
+"admin"
+]
+},
+{
+"path": "/staff-akun",
+"method": "POST",
+"legacy": [
+"admin"
+]
+},
+{
+"path": "/staff-akun/ID",
+"method": "DELETE",
+"legacy": [
+"admin"
+]
+},
+{
+"path": "/staff-akun/banyak",
+"method": "POST",
+"legacy": [
+"admin"
+]
+},
+{
+"path": "/stok/adjust",
+"method": "POST",
+"legacy": [
+"admin",
+"owner"
+]
+},
+{
+"path": "/stok/ledger",
+"method": "GET",
+"legacy": [
+"admin",
+"owner"
+]
+},
+{
+"path": "/stok/transfer",
+"method": "POST",
+"legacy": [
+"admin",
+"owner"
+]
+},
+{
+"path": "/users",
+"method": "GET",
+"legacy": [
+"admin"
+]
+},
+{
+"path": "/users",
+"method": "POST",
+"legacy": [
+"admin"
+]
+},
+{
+"path": "/users/ID",
+"method": "DELETE",
+"legacy": [
+"admin"
+]
+},
+{
+"path": "/users/ID",
+"method": "PATCH",
+"legacy": [
+"admin"
+]
+}
+]
