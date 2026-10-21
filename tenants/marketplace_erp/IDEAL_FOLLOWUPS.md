@@ -67,8 +67,12 @@ belum dikerjakan (hasil pemeriksaan kode, 2026-10-21; hanya area keuangan, kateg
 6. **Nama halaman Operasional Umum / Packing** tertulis ganda (menu, judul halaman, tab Kategori Transaksi, panduan, `akses.HALAMAN`).
 7. Belum diperiksa: halaman di luar area di atas (pesanan, produk, katalog, dan seterusnya).
 
-Sudah ada: halaman **Kelola Aplikasi** (`/pengaturan-ui`, teks per ID) untuk nama menu, kelompok menu, dan judul halaman.
-Menyusul di sana: nama tab/baris Laporan Keuangan (mengikuti butir 2), nama role (butir 5), logo.
+Sudah ada: halaman **Kelola Aplikasi** (`/pengaturan-ui`, teks per ID): nama menu, kelompok menu, judul halaman, nama role bawaan,
+tab/judul tabel/kelompok/baris tetap di Laporan Keuangan, dan nama halaman Operasional di Kategori Transaksi. Teks bawaan di kode
+tetap jadi identitas (kunci baris, judul grup), jadi data tersimpan tidak berubah; yang dipakai orang hanya tampilan.
+Butir 6 (nama halaman Operasional) selesai untuk tampilan. Butir 1 (kunci `shop:${nama}`) belum bisa: laporan tertutup dari backend
+hanya menyimpan nama toko, tanpa ID. Butir 2/3 diatasi lewat teks global (Kelola Aplikasi); ID grup terpisah dari teks belum dibuat.
+Masih menyusul: logo; butir 4 (pengelompokan halaman di RoleAkses).
 
 Belum ada: pencatatan **pembagian laba** (pengambilan laba dari kas utama).
 
