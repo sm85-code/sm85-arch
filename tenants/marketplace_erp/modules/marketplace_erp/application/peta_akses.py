@@ -63,7 +63,7 @@ ATURAN: list[tuple[re.Pattern, set[str] | None, str]] = [
         (r"^/iklan", None, "iklan"),
         # Pengaturan
         (r"^/shopee/push/", None, "push_shopee"),
-        (r"^/(akun|oauth|koneksi-toko)(/|$)", None, "kelola_toko"),
+        (r"^/(akun|oauth|koneksi-toko|toko-penjualan)(/|$)", None, "kelola_toko"),
         (r"^/asisten", None, "asisten"),
         (r"^/(users|staff-akun|roles)", None, "kelola_pengguna"),
         (r"^/pengaturan-ui", None, "kelola_aplikasi"),
