@@ -124,21 +124,21 @@ def test_ads_exhausted_without_topup_and_internal_salary_transfer_legacy_rules()
     assert result["neraca"]["selisih"] == 0
 
 
-def test_salary_is_a_cash_out_and_the_main_cash_feeds_two_operational_cash_accounts():
+def test_salary_is_a_cash_out_and_packing_funds_move_to_their_own_cash_account():
     b = balances(kas_utama=10000000, kas_operasional=1000000, modal=11000000)
     result = f.calculate(
         b,
-        payload(pendapatan_produk=5000000, gaji=1000000, operasional=500000, transfer_ke_ops_umum=2000000, transfer_ke_ops_packing=1500000),
+        payload(pendapatan_produk=5000000, gaji=1000000, operasional=500000, transfer_ke_ops_packing=1500000),
         D(0),
         D(0),
     )
     assert result["kas_keluar"] == 1500000  # salary + operasional
     assert result["kas_keluar_gaji"] == 1000000
-    assert result["transfer_antar_kas"] == -3500000
+    assert result["transfer_antar_kas"] == -1500000
     assert result["pengeluaran"] == 1500000 and result["laba"] == 3500000
     after = result["saldo_akhir"]
-    assert after["kas_utama"] == 10000000 + 5000000 - 1500000 - 3500000
-    assert after["kas_operasional"] == 3000000
+    assert after["kas_utama"] == 10000000 + 5000000 - 1500000 - 1500000
+    assert after["kas_operasional"] == 1000000
     assert after["kas_operasional_packing"] == 1500000
     assert after["kas_gaji"] == 0 and after["utang_gaji"] == 0
     assert result["neraca"]["selisih"] == 0

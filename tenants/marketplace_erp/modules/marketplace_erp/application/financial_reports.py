@@ -76,7 +76,6 @@ CASH_FIELDS = (
     "transfer_kas_ops",
     "transfer_kas_gaji",
     "bayar_gaji",
-    "transfer_ke_ops_umum",
     "transfer_ke_ops_packing",
     "tambahan_modal",
 )
@@ -102,8 +101,7 @@ class DatedTransaction(StrictInput):
         "transfer_kas_ops",
         "transfer_kas_gaji",
         "bayar_gaji",
-        "transfer_ke_ops_umum",
-        "transfer_ke_ops_packing",
+            "transfer_ke_ops_packing",
         "tambahan_modal",
         "biaya_iklan",
     ]
@@ -130,7 +128,6 @@ class CloseInput(StrictInput):
     transfer_kas_ops: Decimal = Field(default=0, ge=0, max_digits=20, decimal_places=2)
     transfer_kas_gaji: Decimal = Field(default=0, ge=0, max_digits=20, decimal_places=2)
     bayar_gaji: Decimal = Field(default=0, ge=0, max_digits=20, decimal_places=2)
-    transfer_ke_ops_umum: Decimal = Field(default=0, ge=0, max_digits=20, decimal_places=2)
     transfer_ke_ops_packing: Decimal = Field(default=0, ge=0, max_digits=20, decimal_places=2)
     tambahan_modal: Decimal = Field(default=0, ge=0, max_digits=20, decimal_places=2)
     piutang_pengiriman: Decimal = Field(ge=0, max_digits=20, decimal_places=2)
@@ -178,7 +175,7 @@ def next_cutoff(day):
 def normalize_transactions(p, previous):
     if any(getattr(p, k) for k in LEGACY_GAJI) or any(t.jenis in LEGACY_GAJI for t in p.transaksi):
         raise HTTPException(
-            422, "Penyisihan ke kas gaji sudah diganti: gaji menjadi kas keluar, dan transfer ke kas operasional umum / packing"
+            422, "Penyisihan ke kas gaji sudah diganti: gaji menjadi kas keluar, dan transfer ke kas operasional packing"
         )
     sums = {k: ZERO for k in CASH_FIELDS}
     ad_override = None
@@ -241,14 +238,14 @@ def calculate(before: Balances, p: CloseInput, payouts: Decimal, ads: Decimal, l
     cash_out = p.bayar_tukang + p.pembelian + p.operasional + p.langganan + p.topup_iklan
     salary_cash = ZERO if legacy else p.gaji
     cash_out += salary_cash
-    to_umum, to_packing = (ZERO, ZERO) if legacy else (p.transfer_ke_ops_umum, p.transfer_ke_ops_packing)
+    to_packing = ZERO if legacy else p.transfer_ke_ops_packing
     salary_set_aside, salary_paid = (p.transfer_kas_gaji, p.bayar_gaji) if legacy else (ZERO, ZERO)
     cash_in = withdrawals + other_income
     profit = income - expenses
     end = {
-        "kas_utama": b["kas_utama"] + cash_in - cash_out + p.transfer_kas_ops - salary_set_aside - to_umum - to_packing + p.tambahan_modal,
+        "kas_utama": b["kas_utama"] + cash_in - cash_out + p.transfer_kas_ops - salary_set_aside - to_packing + p.tambahan_modal,
         "stok": p.stok,
-        "kas_operasional": b["kas_operasional"] - p.transfer_kas_ops + to_umum,
+        "kas_operasional": b["kas_operasional"] - p.transfer_kas_ops,
         "kas_operasional_packing": b.get("kas_operasional_packing", ZERO) + to_packing,
         "iklan_prabayar": b["iklan_prabayar"] + p.topup_iklan - expense_ads,
         "piutang_pengiriman": p.piutang_pengiriman,
@@ -273,7 +270,7 @@ def calculate(before: Balances, p: CloseInput, payouts: Decimal, ads: Decimal, l
         "kas_masuk": cash_in,
         "kas_keluar": cash_out,
         "kas_keluar_gaji": salary_cash,
-        "transfer_antar_kas": p.transfer_kas_ops - salary_set_aside - to_umum - to_packing,
+        "transfer_antar_kas": p.transfer_kas_ops - salary_set_aside - to_packing,
         "saldo_awal": b,
         "saldo_akhir": end,
         "neraca": totals(end),
