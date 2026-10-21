@@ -259,14 +259,14 @@ async def test_candidate_status_filters_and_releasing_a_mapping_at_any_stage(cli
 
 @pytest.mark.asyncio
 @pytest.mark.parametrize("role", ["owner", "staff"])
-async def test_all_workflow_endpoints_are_admin_only(client, role):
+async def test_all_workflow_endpoints_are_admin_only(client, role, sesi_peran):
     http, app, _ = client
 
     async def user():
         return SimpleNamespace(id="other", role=role)
 
     async def forbidden_db():
-        raise AssertionError("Non-admin reached DB")
+        yield sesi_peran  # only the role tables hold anything; see tests/conftest.py
 
     app.dependency_overrides[get_current_user_marketplace_erp] = user
     app.dependency_overrides[get_db_marketplace_erp] = forbidden_db

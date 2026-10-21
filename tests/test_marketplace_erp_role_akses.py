@@ -63,13 +63,16 @@ async def test_list_has_builtin_roles_and_the_pages(session):
         data = (await c.get("/roles")).json()
     by_id = {r["id"]: r for r in data["roles"]}
     assert {"admin", "owner", "staff", "staf_keuangan", "staf_operasional", "staf_produksi"} <= set(by_id)
-    assert by_id["admin"]["terkunci"] is True and set(by_id["admin"]["halaman"].values()) == {"tulis"}
+    assert by_id["admin"]["terkunci"] is True
+    assert by_id["admin"]["halaman"] == {k: lv[-1] for k, lv in akses.TINGKAT_HALAMAN.items()}  # the highest level of every page
     assert by_id["staf_keuangan"]["halaman"] == {"operasional_umum": "tulis", "operasional_packing": "tulis", "arus_kas": "tulis"}
-    assert by_id["owner"]["halaman"] == {"operasional_umum": "baca", "operasional_packing": "baca"}
+    assert by_id["owner"]["halaman"] == akses._OWNER
+    assert by_id["staff"]["halaman"] == akses._STAFF
     assert by_id["staff"]["akses_toko"] == "ditugaskan" and by_id["owner"]["akses_toko"] == "semua"
-    diatur = {h["id"] for h in data["halaman"] if h["diatur"]}
-    assert diatur == {"operasional_umum", "operasional_packing", "arus_kas"}
-    assert all(h["aturan_lama"] for h in data["halaman"] if not h["diatur"])
+    pages = {h["id"]: h for h in data["halaman"]}
+    assert {"pesanan", "produk", "iklan", "operasional_umum", "arus_kas", "kelola_pengguna"} <= set(pages)
+    assert pages["dashboard"]["tingkat"] == ["baca"] and pages["sinkron_shopee"]["tingkat"] == ["tulis"]
+    assert pages["pesanan"]["tingkat"] == ["baca", "tulis"] and pages["pesanan"]["grup"] == "Harian"
 
 
 @pytest.mark.asyncio
@@ -99,8 +102,10 @@ async def test_validation(session):
     async with client_for("admin", session) as c:
         assert (await c.post("/roles", json=body("A"))).status_code == 422
         assert (await c.post("/roles", json=body("Baru", akses_toko="sebagian"))).status_code == 422
-        assert (await c.post("/roles", json=body("Baru", halaman={"produk": "tulis"}))).status_code == 422  # not settable yet
+        assert (await c.post("/roles", json=body("Baru", halaman={"halaman_palsu": "tulis"}))).status_code == 422
         assert (await c.post("/roles", json=body("Baru", halaman={"arus_kas": "hapus"}))).status_code == 422
+        assert (await c.post("/roles", json=body("Baru", halaman={"dashboard": "tulis"}))).status_code == 422  # only has "baca"
+        assert (await c.post("/roles", json=body("Baru", halaman={"sinkron_shopee": "baca"}))).status_code == 422  # only has "tulis"
         assert (await c.post("/roles", json=body("Baru", halaman={"arus_kas": "tidak"}))).status_code == 201
 
 
@@ -174,3 +179,13 @@ async def test_a_deleted_starter_role_stays_deleted(session):
     await akses.pastikan_bawaan(session)
     assert await session.get(akses.Role, "staf_produksi") is None
     assert await session.get(akses.Role, "owner") is not None
+
+
+@pytest.mark.asyncio
+async def test_akses_pengguna_reports_what_the_app_needs(session):
+    assert (await akses.akses_pengguna(session, "admin"))["halaman"]["kelola_pengguna"] == "tulis"
+    assert (await akses.akses_pengguna(session, "admin"))["halaman"]["dashboard"] == "baca"
+    staff = await akses.akses_pengguna(session, "staff")
+    assert staff["akses_toko"] == "ditugaskan" and staff["halaman"]["pesanan"] == "tulis" and "produk" not in staff["halaman"]
+    gone = await akses.akses_pengguna(session, "tidak_ada")
+    assert gone["halaman"] == {} and gone["akses_toko"] == "ditugaskan"

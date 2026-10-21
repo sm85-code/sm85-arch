@@ -2,8 +2,7 @@
 
 A role (mpe_role) has `akses_toko` ("semua" or "ditugaskan") and a level ("baca" or "tulis") for each page it may open
 (mpe_role_halaman). `admin` is built in and always has everything; `owner` and `staff` are built in too but an admin
-can edit what they may do. Only the pages marked `diatur` follow these settings so far; every other page keeps its
-fixed rule (shown read-only in the editor) until it is moved over, one at a time.
+can edit what they may do. Every page follows these settings (see peta_akses.py for which routes belong to which page).
 """
 from __future__ import annotations
 
@@ -27,36 +26,54 @@ TINGKAT = ("baca", "tulis")
 AKSES_TOKO = ("semua", "ditugaskan")
 ADMIN = "admin"
 
-# (key, label, group, diatur, rule that applies while the page is not `diatur`)
-HALAMAN: list[tuple[str, str, str, bool, str]] = [
-    ("dashboard", "Dashboard", "Harian", False, "Semua pengguna"),
-    ("pesanan", "Pesanan", "Harian", False, "Admin, Owner, Staff"),
-    ("chat", "Chat", "Harian", False, "Admin, Owner, Staff"),
-    ("katalog", "Katalog Shopee", "Produk", False, "Admin, Owner, Staff (sebagian Admin saja)"),
-    ("produk", "Produk (SKU)", "Produk", False, "Admin dan Owner"),
-    ("listing", "Pemetaan Produk Toko", "Produk", False, "Admin dan Owner"),
-    ("gudang", "Gudang & Stok", "Produk", False, "Admin dan Owner"),
-    ("processing", "Pemetaan Order dan Data Produksi", "Processing", False, "Admin saja"),
-    ("operasional_umum", "Operasional Umum", "Keuangan", True, ""),
-    ("operasional_packing", "Operasional Packing", "Keuangan", True, ""),
-    ("arus_kas", "Arus Kas (baca = lihat, tulis = centang)", "Keuangan", True, ""),
-    ("laporan_keuangan", "Laporan Keuangan", "Keuangan", False, "Admin saja"),
-    ("settlement", "Dana & Saldo Shopee", "Keuangan", False, "Admin saja"),
-    ("info_toko", "Performa dan Pengaturan Toko", "Info Toko", False, "Admin saja"),
-    ("iklan", "Iklan", "Iklan", False, "Admin saja"),
-    ("kelola_toko", "Kelola Toko", "Pengaturan", False, "Admin saja"),
-    ("asisten", "Asisten AI", "Pengaturan", False, "Admin saja"),
-    ("kelola_pengguna", "Kelola Pengguna dan Role", "Pengaturan", False, "Admin saja"),
+# (key, label, group, levels). levels: which of baca/tulis exist for the page (a page that is only read, or only an
+# action, has a single level).
+HALAMAN: list[tuple[str, str, str, tuple[str, ...]]] = [
+    ("dashboard", "Dashboard", "Harian", ("baca",)),
+    ("pesanan", "Pesanan", "Harian", ("baca", "tulis")),
+    ("pesanan_manual", "Buat dan hapus pesanan manual", "Harian", ("tulis",)),
+    ("chat", "Chat", "Harian", ("baca", "tulis")),
+    ("retur", "Retur & Refund", "Harian", ("baca", "tulis")),
+    ("katalog", "Katalog Shopee", "Produk", ("baca", "tulis")),
+    ("katalog_lanjutan", "Katalog: pengaturan lanjutan Shopee", "Produk", ("baca", "tulis")),
+    ("produk", "Produk (SKU)", "Produk", ("baca", "tulis")),
+    ("listing", "Pemetaan Produk Toko", "Produk", ("baca", "tulis")),
+    ("gudang", "Gudang & Stok", "Produk", ("baca", "tulis")),
+    ("promosi", "Promosi Diskon", "Produk", ("baca", "tulis")),
+    ("publikasi", "Buat / Salin Produk", "Produk", ("baca", "tulis")),
+    ("sinkron_shopee", "Sinkronisasi dan kirim stok/harga ke Shopee", "Produk", ("tulis",)),
+    ("laporan_ringkas", "Ringkasan laporan (stok kritis)", "Produk", ("baca",)),
+    ("processing", "Pemetaan Order dan Data Produksi", "Processing", ("baca", "tulis")),
+    ("operasional_umum", "Operasional Umum", "Keuangan", ("baca", "tulis")),
+    ("operasional_packing", "Operasional Packing", "Keuangan", ("baca", "tulis")),
+    ("arus_kas", "Arus Kas (tulis = centang)", "Keuangan", ("baca", "tulis")),
+    ("laporan_keuangan", "Laporan Keuangan", "Keuangan", ("baca", "tulis")),
+    ("settlement", "Dana & Saldo Shopee", "Keuangan", ("baca", "tulis")),
+    ("info_toko", "Performa dan Pengaturan Toko", "Info Toko", ("baca", "tulis")),
+    ("otomasi", "Otomasi produk dan pesanan", "Info Toko", ("baca", "tulis")),
+    ("iklan", "Iklan", "Iklan", ("baca", "tulis")),
+    ("kelola_toko", "Kelola Toko", "Pengaturan", ("baca", "tulis")),
+    ("push_shopee", "Pengaturan push Shopee", "Pengaturan", ("baca", "tulis")),
+    ("asisten", "Asisten AI", "Pengaturan", ("baca", "tulis")),
+    ("kelola_pengguna", "Kelola Pengguna dan Role", "Pengaturan", ("baca", "tulis")),
 ]
-HALAMAN_DIATUR = {k for k, _, _, diatur, _ in HALAMAN if diatur}
+TINGKAT_HALAMAN = {k: lv for k, _, _, lv in HALAMAN}
+
+# What the built-in roles could reach before roles were editable; seeded as the starting checkmarks. The test
+# tests/test_marketplace_erp_peta_akses.py checks these against a snapshot of the old fixed rules.
+_OWNER = {
+    "dashboard": "baca", "pesanan": "tulis", "pesanan_manual": "tulis", "chat": "tulis", "retur": "tulis", "katalog": "tulis",
+    "produk": "tulis", "listing": "tulis", "gudang": "tulis", "promosi": "tulis", "publikasi": "tulis",
+    "sinkron_shopee": "tulis", "laporan_ringkas": "baca", "push_shopee": "tulis",
+    "operasional_umum": "baca", "operasional_packing": "baca",
+}
+_STAFF = {"dashboard": "baca", "pesanan": "tulis", "chat": "tulis", "retur": "tulis", "katalog": "baca", "arus_kas": "tulis"}
 
 # Built-in roles and the ones every installation starts with. Seeded only when missing, never overwritten.
 BAWAAN: list[dict] = [
     {"id": "admin", "nama": "Admin", "keterangan": "Semua akses; tidak bisa diubah", "akses_toko": "semua", "sistem": True, "halaman": {}},
-    {"id": "owner", "nama": "Owner", "keterangan": "Pemilik usaha", "akses_toko": "semua", "sistem": True,
-     "halaman": {"operasional_umum": "baca", "operasional_packing": "baca"}},
-    {"id": "staff", "nama": "Staff", "keterangan": "Staf toko", "akses_toko": "ditugaskan", "sistem": True,
-     "halaman": {"arus_kas": "tulis"}},
+    {"id": "owner", "nama": "Owner", "keterangan": "Pemilik usaha", "akses_toko": "semua", "sistem": True, "halaman": _OWNER},
+    {"id": "staff", "nama": "Staff", "keterangan": "Staf toko", "akses_toko": "ditugaskan", "sistem": True, "halaman": _STAFF},
     {"id": "staf_keuangan", "nama": "Staf Keuangan", "keterangan": "Mencatat dan memeriksa transaksi keuangan", "akses_toko": "semua", "sistem": False,
      "halaman": {"operasional_umum": "tulis", "operasional_packing": "tulis", "arus_kas": "tulis"}},
     {"id": "staf_operasional", "nama": "Staf Operasional", "keterangan": "Mencatat operasional umum", "akses_toko": "semua", "sistem": False,
@@ -113,7 +130,7 @@ async def akses_toko(session: AsyncSession, role_id: str | None) -> str | None:
 
 def butuh_halaman(halaman: str, perlu: str) -> Callable:
     """FastAPI dependency: the signed-in user's role must reach `halaman` at level `perlu` ("baca" or "tulis")."""
-    assert halaman in HALAMAN_DIATUR and perlu in TINGKAT
+    assert halaman in TINGKAT_HALAMAN and perlu in TINGKAT
 
     async def _inner(
         user: UserMarketplaceErp = Depends(get_current_user_marketplace_erp),
@@ -139,12 +156,12 @@ def _slug(nama: str) -> str:
 def _bersih_halaman(halaman: dict[str, str]) -> dict[str, str]:
     out: dict[str, str] = {}
     for key, tingkat in (halaman or {}).items():
-        if key not in HALAMAN_DIATUR:
-            raise HTTPException(422, f"Halaman '{key}' belum bisa diatur per role")
+        if key not in TINGKAT_HALAMAN:
+            raise HTTPException(422, f"Halaman '{key}' tidak dikenal")
         if tingkat == "tidak":
             continue
-        if tingkat not in TINGKAT:
-            raise HTTPException(422, "Tingkat akses harus baca atau tulis")
+        if tingkat not in TINGKAT_HALAMAN[key]:
+            raise HTTPException(422, f"Halaman '{key}' hanya punya tingkat: {', '.join(TINGKAT_HALAMAN[key])}")
         out[key] = tingkat
     return out
 
@@ -167,12 +184,24 @@ async def daftar(session: AsyncSession) -> dict:
             {
                 "id": r.id, "nama": r.nama, "keterangan": r.keterangan, "akses_toko": r.akses_toko, "sistem": r.sistem,
                 "terkunci": r.id == ADMIN, "jumlah_pengguna": jumlah.get(r.id, 0),
-                "halaman": {k: "tulis" for k in HALAMAN_DIATUR} if r.id == ADMIN else izin.get(r.id, {}),
+                "halaman": {k: lv[-1] for k, lv in TINGKAT_HALAMAN.items()} if r.id == ADMIN else izin.get(r.id, {}),
             }
             for r in roles
         ],
-        "halaman": [{"id": k, "label": lbl, "grup": g, "diatur": d, "aturan_lama": aturan} for k, lbl, g, d, aturan in HALAMAN],
+        "halaman": [{"id": k, "label": lbl, "grup": g, "tingkat": list(lv)} for k, lbl, g, lv in HALAMAN],
     }
+
+
+async def akses_pengguna(session: AsyncSession, role_id: str | None) -> dict:
+    """What the signed-in user's role may do, for the app to show or hide menus and buttons."""
+    role_id = _norm(role_id)
+    role = await _role(session, role_id) if role_id != ADMIN else None
+    if role_id == ADMIN:
+        return {"role": ADMIN, "nama": "Admin", "akses_toko": "semua", "halaman": {k: lv[-1] for k, lv in TINGKAT_HALAMAN.items()}}
+    if role is None:
+        return {"role": role_id, "nama": role_id, "akses_toko": "ditugaskan", "halaman": {}}
+    izin = {h.halaman: h.tingkat for h in (await session.scalars(select(RoleHalaman).where(RoleHalaman.role_id == role.id))).all()}
+    return {"role": role.id, "nama": role.nama, "akses_toko": role.akses_toko, "halaman": izin}
 
 
 async def buat(session: AsyncSession, nama: str, keterangan: str, akses: str, halaman: dict[str, str]) -> str:
@@ -215,7 +244,7 @@ async def ubah(session: AsyncSession, role_id: str, nama: str, keterangan: str, 
     role.akses_toko = akses
     lama = {h.halaman: h for h in (await session.scalars(select(RoleHalaman).where(RoleHalaman.role_id == role.id))).all()}
     for k, h in lama.items():
-        if k in HALAMAN_DIATUR and k not in bersih:
+        if k not in bersih:
             await session.delete(h)
     for k, t in bersih.items():
         if k in lama:

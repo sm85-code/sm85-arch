@@ -12,7 +12,7 @@ from tenants.marketplace_erp.modules.marketplace_erp.infrastructure.database imp
 
 @pytest.mark.asyncio
 @pytest.mark.parametrize("role", ["owner", "staff"])
-async def test_processing_reads_and_import_deny_non_admin_before_database_access(role):
+async def test_processing_reads_and_import_deny_non_admin_before_database_access(role, sesi_peran):
     app = FastAPI()
     app.include_router(router)
 
@@ -20,7 +20,7 @@ async def test_processing_reads_and_import_deny_non_admin_before_database_access
         return SimpleNamespace(id="other", role=role)
 
     async def forbidden_db():
-        raise AssertionError("Non-admin accessed Processing data")
+        yield sesi_peran  # only the role tables hold anything; see tests/conftest.py
 
     app.dependency_overrides[get_current_user_marketplace_erp] = current
     app.dependency_overrides[get_db_marketplace_erp] = forbidden_db
