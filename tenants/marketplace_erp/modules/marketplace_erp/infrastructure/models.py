@@ -822,6 +822,25 @@ class KategoriTransaksi(MarketplaceErpBase):
     updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=_utcnow, onupdate=_utcnow)
 
 
+class TokoPenjualan(MarketplaceErpBase):
+    """A shop the business sells through that is not connected to a marketplace (no token, no sync): its own shops
+    and its resellers, on any platform. `kode` is the two-letter code that goes into production order codes."""
+
+    __tablename__ = "mpe_toko_penjualan"
+    __table_args__ = (UniqueConstraint("platform", "nama_key", name="uq_mpe_toko_penjualan_platform_nama"),)
+
+    id: Mapped[str] = mapped_column(String(64), primary_key=True, default=_uuid)
+    nama: Mapped[str] = mapped_column(String(120), nullable=False)
+    nama_key: Mapped[str] = mapped_column(String(120), nullable=False)  # casefolded name, for the uniqueness check
+    jenis: Mapped[str] = mapped_column(String(16), nullable=False)  # internal | reseller
+    platform: Mapped[str] = mapped_column(String(16), nullable=False)
+    kode: Mapped[Optional[str]] = mapped_column(String(2), nullable=True, unique=True)
+    keterangan: Mapped[str] = mapped_column(String(500), nullable=False, default="")
+    aktif: Mapped[bool] = mapped_column(Boolean, nullable=False, default=True)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=_utcnow)
+    updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=_utcnow, onupdate=_utcnow)
+
+
 class PengaturanUi(MarketplaceErpBase):
     """A text of the app the admin changed on the Kelola Aplikasi page: the id names the text (menu, page, tab, row...) and
     `teks` replaces what the app shows. Nothing else depends on it, so changing a text never changes how the app works."""
