@@ -2,8 +2,8 @@
 
 Each entry has a date, a category, a description and an amount. The categories are the ones Arus Kas already knows
 (kategoriKeuangan on the frontend), so the totals line up with its rows:
-  umum    -> bahan_cat, ongkir, gaji, iklan, langganan, lain_keluar
-  packing -> perl_packing
+  umum    -> bahan_cat, ongkir, gaji, iklan, langganan, atk, lain_keluar
+  packing -> perl_packing, atk_eceran  (ATK bought piecemeal to cover what the general ATK shopping fell short of)
 Who may do what is decided per page (jenis) by the role settings (akses.py): halaman operasional_umum and
 operasional_packing, level baca or tulis.
 """
@@ -28,9 +28,10 @@ KATEGORI: dict[str, dict[str, str]] = {
         "gaji": "Gaji",
         "iklan": "Iklan",
         "langganan": "Langganan",
+        "atk": "Belanja ATK",
         "lain_keluar": "Operasional lainnya",
     },
-    "packing": {"perl_packing": "Bahan dan perlengkapan packing"},
+    "packing": {"perl_packing": "Bahan dan perlengkapan packing", "atk_eceran": "Belanja ATK eceran"},
 }
 HALAMAN = {"umum": "operasional_umum", "packing": "operasional_packing"}
 MAKS_JUMLAH = Decimal("9999999999999.99")
