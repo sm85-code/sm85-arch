@@ -165,3 +165,18 @@ async def test_shop_access_follows_the_role(session):
         assert await akun_ids_diizinkan(SimpleNamespace(id="u", role=role), session) is None, role
     assert await akun_ids_diizinkan(SimpleNamespace(id="u", role="staff"), session) == []  # nobody assigned yet
     assert await akun_ids_diizinkan(SimpleNamespace(id="u", role="tidak_ada"), session) == []
+
+
+@pytest.mark.asyncio
+async def test_atk_has_a_category_on_both_pages(session):
+    async with client_for("admin", session) as c:
+        assert (await c.post("/operasional/umum", json=isian("atk", jumlah="120000"))).status_code == 201
+        assert (await c.post("/operasional/packing", json=isian("atk_eceran", jumlah="35000"))).status_code == 201
+        # each page has its own ATK category
+        assert (await c.post("/operasional/umum", json=isian("atk_eceran"))).status_code == 422
+        assert (await c.post("/operasional/packing", json=isian("atk"))).status_code == 422
+        umum = (await c.get("/operasional/umum?periode=2026-10")).json()
+        packing = (await c.get("/operasional/packing?periode=2026-10")).json()
+    assert Decimal(umum["ringkasan"]["per_kategori"]["atk"]) == 120000
+    assert Decimal(packing["ringkasan"]["per_kategori"]["atk_eceran"]) == 35000
+    assert [k["label"] for k in packing["kategori"]] == ["Bahan dan perlengkapan packing", "Belanja ATK eceran"]
