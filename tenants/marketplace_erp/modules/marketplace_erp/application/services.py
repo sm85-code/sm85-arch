@@ -6,6 +6,7 @@ import time
 from datetime import date, datetime, timedelta, timezone
 from decimal import Decimal
 
+import json
 from fastapi import HTTPException, status
 from sqlalchemy import and_, case, delete, exists, func, literal, or_, select, tuple_, update
 from sqlalchemy.exc import IntegrityError
@@ -2283,31 +2284,49 @@ async def unduh_resi_pesanan(
     return pdf, f"resi-{pesanan.id_eksternal}.{ekstensi}"
 
 
-async def delete_pesanan(session: AsyncSession, pesanan_id: str) -> None:
-    """Hard-delete only unpaid orders without reservations. Prefer cancel."""
+async def delete_pesanan(session: AsyncSession, pesanan_id: str, oleh: str | None = None) -> None:
+    """Hard-delete a MANUAL order (Pesanan Manual: own shop / reseller) in the caller's transaction, with an audit row.
+
+    Marketplace orders (Shopee/TikTok) are never deleted: they come back on the next sync and feed settlement.
+    Refused, with the reason, while anything else still points at the order, so nothing is orphaned or counted twice."""
+    from tenants.marketplace_erp.modules.marketplace_erp.infrastructure.models import (
+        PesananHapusLog, SettlementPesanan, StokLedger, StokReservasi, TransaksiOperasional,
+    )
+
     pesanan = await get_pesanan(session, pesanan_id)
-    if pesanan.platform == PLATFORM_MANUAL:
-        # Typed in by hand, so it may go at any status, but not while its items are mapped for production.
-        dipetakan = await session.scalar(
-            select(func.count()).select_from(ProcessingJob).where(
-                ProcessingJob.source_item_id.in_(select(ItemPesanan.id).where(ItemPesanan.pesanan_id == pesanan.id))
-            )
-        )
-        if dipetakan:
-            raise HTTPException(
-                status_code=status.HTTP_409_CONFLICT,
-                detail="Pesanan ini sudah dipetakan di Pemetaan Order; lepas pemetaannya dulu",
-            )
-    elif pesanan.status != "unpaid":
-        raise HTTPException(
-            status_code=status.HTTP_409_CONFLICT,
-            detail="Hanya pesanan unpaid yang boleh dihapus; batalkan (cancelled) untuk yang lain",
-        )
-    if pesanan.platform == PLATFORM_MANUAL:
-        for item in list(pesanan.items):
-            await session.delete(item)
-        await session.flush()
-        session.expire(pesanan, ["items"])
+    if pesanan.platform != PLATFORM_MANUAL:
+        raise HTTPException(status.HTTP_409_CONFLICT, "Hanya pesanan manual yang bisa dihapus. Pesanan marketplace dibatalkan di marketplace-nya.")
+    if pesanan.status != "cancelled" and (pesanan.status in ("shipped", "completed") or pesanan.nomor_resi or pesanan.resi_dicetak_at or pesanan.tanggal_kirim):
+        raise HTTPException(status.HTTP_409_CONFLICT, "Pesanan sudah dikirim atau resinya sudah ada/dicetak. Batalkan dulu bila memang tidak jadi.")
+    alasan = []
+    item_ids = select(ItemPesanan.id).where(ItemPesanan.pesanan_id == pesanan.id)
+    if await session.scalar(select(func.count()).select_from(ProcessingJob).where(ProcessingJob.source_item_id.in_(item_ids))):
+        alasan.append("sudah dipetakan di Pemetaan Order (lepas pemetaannya dulu)")
+    if await session.scalar(select(func.count()).select_from(StokReservasi).where(StokReservasi.pesanan_id == pesanan.id)):
+        alasan.append("punya reservasi stok")
+    if await session.scalar(select(func.count()).select_from(StokLedger).where(StokLedger.ref_id == pesanan.id)):
+        alasan.append("sudah menggerakkan stok (mutasi stok)")
+    if await session.scalar(select(func.count()).select_from(SettlementPesanan).where(SettlementPesanan.order_sn == pesanan.id_eksternal)):
+        alasan.append("sudah tercatat di settlement")
+    if await session.scalar(select(func.count()).select_from(TransaksiOperasional).where(TransaksiOperasional.uraian.contains(pesanan.id_eksternal))):
+        alasan.append("disebut di transaksi Operasional / arus kas")
+    detail = json.loads(pesanan.detail_json or "{}")
+    if any(k in detail for k in ("invoice", "invoice_url", "dokumen", "resi")):
+        alasan.append("sudah punya invoice/dokumen")
+    if alasan:
+        raise HTTPException(status.HTTP_409_CONFLICT, "Pesanan tidak bisa dihapus karena " + "; ".join(alasan) + ".")
+    snapshot = {
+        "id": pesanan.id, "id_eksternal": pesanan.id_eksternal, "status": pesanan.status, "nama_pembeli": pesanan.nama_pembeli,
+        "total": str(pesanan.total), "dipesan_at": pesanan.dipesan_at.isoformat() if pesanan.dipesan_at else None,
+        "created_at": pesanan.created_at.isoformat() if pesanan.created_at else None, "detail": detail,
+        "items": [{"nama_produk": i.nama_produk, "model_name": i.model_name, "qty": i.qty} for i in pesanan.items],
+    }
+    session.add(PesananHapusLog(pesanan_id=pesanan.id, id_eksternal=pesanan.id_eksternal, platform=pesanan.platform,
+                                snapshot_json=json.dumps(snapshot, default=str), dihapus_oleh=oleh))
+    for item in list(pesanan.items):
+        await session.delete(item)
+    await session.flush()
+    session.expire(pesanan, ["items"])
     await session.delete(pesanan)
     await session.flush()
 

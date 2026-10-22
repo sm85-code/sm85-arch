@@ -935,9 +935,13 @@ async def set_pengiriman(
 async def delete_pesanan(
     pesanan_id: str,
     session: AsyncSession = Depends(get_db_marketplace_erp),
-    _: UserMarketplaceErp = Depends(require_roles_marketplace_erp(*OWNER_ONLY)),
+    konfirmasi: str = Query(..., max_length=255),
+    user: UserMarketplaceErp = Depends(require_roles_marketplace_erp(*OWNER_ONLY)),
 ):
-    await services.delete_pesanan(session, pesanan_id)
+    pesanan = await services.get_pesanan(session, pesanan_id)
+    if konfirmasi.strip() != pesanan.id_eksternal:
+        raise HTTPException(422, "Ketik nomor pesanan persis untuk mengonfirmasi penghapusan")
+    await services.delete_pesanan(session, pesanan_id, oleh=getattr(user, "email", None) or getattr(user, "id", None))
     return {"ok": True}
 
 
