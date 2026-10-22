@@ -90,6 +90,9 @@ async def product_details(session, akun, item_id, kind):
     }[kind]
     result = await workflows.read(session, akun, path, {"item_id_list": str(item_id)})
     rows = result.get(field)
+    failed = next((f for f in result.get("failure_list") or [] if isinstance(f, dict) and str(f.get("item_id")) == str(item_id)), None)
+    if failed and not any(isinstance(r, dict) and str(r.get("item_id")) == str(item_id) for r in rows or []):
+        raise provider.ShopeeAPIError(path, "item_failed", f"Shopee menolak item ini: {failed.get('failed_reason') or 'tanpa alasan'}.", result.get("request_id"))
     if not isinstance(rows, list) or any(not isinstance(r, dict) for r in rows):
         management.incomplete(path, result)
     row = next((r for r in rows if str(r.get("item_id")) == str(item_id)), None)

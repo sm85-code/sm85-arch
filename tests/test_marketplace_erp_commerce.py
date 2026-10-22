@@ -469,3 +469,11 @@ async def test_item_without_promotion_key_is_empty_not_a_bad_gateway(monkeypatch
     monkeypatch.setattr(adapter.workflows, "read", AsyncMock(return_value={"success_list": []}))
     with pytest.raises(HTTPException):
         await adapter.product_details(None, None, 5, "promosi")
+
+
+@pytest.mark.asyncio
+async def test_promotion_failure_list_reason_is_shown(monkeypatch):
+    monkeypatch.setattr(adapter.workflows, "read", AsyncMock(return_value={"failure_list": [{"item_id": 5, "failed_reason": "Product not found"}]}))
+    with pytest.raises(HTTPException) as e:
+        await adapter.product_details(None, None, 5, "promosi")
+    assert "Product not found" in e.value.detail
