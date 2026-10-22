@@ -69,7 +69,7 @@ async def test_research_anthropic_returns_sources_and_cost(session, monkeypatch)
     body = json.loads(seen[0].content)
     assert body["model"] == config.MODEL and body["tools"][0]["name"] == "web_search"
     assert "test-only" not in json.dumps(out)
-    assert t.cost_usd > Decimal("0.02")
+    assert t.cost_usd > Decimal("0.02") and Decimal(out["biaya_usd"]) == t.cost_usd.quantize(Decimal("0.0001"))
 
 
 @pytest.mark.asyncio
@@ -106,6 +106,7 @@ async def test_images_stored_and_draft_saved_without_publishing(session, monkeyp
     mock_http(monkeypatch, handler)
     t = turn()
     photos = await designer.execute(session, USER, t, "buat_gambar_produk", designer.ImageBrief(brief="Tas rajut krem di meja kayu, cahaya pagi", jumlah=2))
+    assert photos["biaya_usd"] == "0.1000" and t.cost_usd == Decimal("0.10")
     assert len(photos["gambar_ids"]) == 2 and photos["url"][0].startswith("/asisten/gambar/")
     stored = await session.get(AiGambarProduk, photos["gambar_ids"][0])
     assert stored.data == JPEG and stored.mime == "image/jpeg"
