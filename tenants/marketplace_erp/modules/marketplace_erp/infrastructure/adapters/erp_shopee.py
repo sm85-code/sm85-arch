@@ -272,22 +272,26 @@ def apply_token_payload(akun: Any, payload: dict[str, Any], *, shop_id: str | No
     sid = shop_id or payload.get("shop_id") or payload.get("shopid")
     if sid is not None:
         akun.id_toko_eksternal = str(sid)
-    if expire_in is not None:
-        try:
-            akun.token_kedaluwarsa = datetime.now(timezone.utc) + timedelta(seconds=int(expire_in))
-        except (TypeError, ValueError):
-            pass
+    try:
+        detik = int(expire_in)
+    except (TypeError, ValueError):
+        # Shopee normally sends expire_in (~4h). If it is missing/invalid, assume the documented
+        # 4h lifetime so token_kedaluwarsa never stays None (which would block auto-refresh).
+        detik = int(TOKEN_DEFAULT_UMUR.total_seconds())
+    akun.token_kedaluwarsa = datetime.now(timezone.utc) + timedelta(seconds=detik)
     akun.status = "terhubung"
 
 
 # Access token lives 4h; refresh a bit early so a call never starts with a token about to die.
 TOKEN_REFRESH_MARGIN = timedelta(minutes=10)
+# Fallback lifetime when Shopee omits expire_in (access token is documented as 4h).
+TOKEN_DEFAULT_UMUR = timedelta(hours=4)
 
 
 def token_perlu_refresh(akun: Any, *, now: datetime | None = None) -> bool:
     expiry = getattr(akun, "token_kedaluwarsa", None)
     if expiry is None:
-        return False
+        return True  # unknown expiry: refresh to be safe instead of never refreshing
     if expiry.tzinfo is None:
         expiry = expiry.replace(tzinfo=timezone.utc)
     return expiry - (now or datetime.now(timezone.utc)) <= TOKEN_REFRESH_MARGIN

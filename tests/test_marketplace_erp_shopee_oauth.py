@@ -4,6 +4,7 @@ from __future__ import annotations
 import hashlib
 import hmac
 import re
+from datetime import datetime, timedelta, timezone
 from types import SimpleNamespace
 from urllib.parse import parse_qs, urlparse
 
@@ -129,7 +130,32 @@ def test_token_perlu_refresh_uses_margin():
     assert erp_shopee.token_perlu_refresh(_akun(5)) is True
     assert erp_shopee.token_perlu_refresh(_akun(-1)) is True
     assert erp_shopee.token_perlu_refresh(_akun(120)) is False
-    assert erp_shopee.token_perlu_refresh(SimpleNamespace(token_kedaluwarsa=None)) is False
+    assert erp_shopee.token_perlu_refresh(SimpleNamespace(token_kedaluwarsa=None)) is True
+
+
+def test_apply_token_payload_without_expire_in_sets_default_expiry():
+    akun = SimpleNamespace(
+        access_token=None, refresh_token=None, id_toko_eksternal=None,
+        token_kedaluwarsa=None, status="belum_terhubung",
+    )
+    erp_shopee.apply_token_payload(akun, {"access_token": "at", "refresh_token": "rt", "shop_id": 1})
+    sisa = akun.token_kedaluwarsa - datetime.now(timezone.utc)
+    assert timedelta(hours=3, minutes=59) < sisa <= timedelta(hours=4)
+    assert erp_shopee.token_perlu_refresh(akun) is False
+
+
+@pytest.mark.asyncio
+async def test_pastikan_token_segar_refreshes_when_expiry_unknown(monkeypatch):
+    async def fake_refresh(*, refresh_token, shop_id):
+        return {"access_token": "at-new", "refresh_token": "rt-new", "expire_in": 14400}
+
+    monkeypatch.setattr(erp_shopee, "refresh_access_token", fake_refresh)
+    session, akun = _FakeSession(), _akun(120)
+    akun.token_kedaluwarsa = None
+    await erp_shopee.pastikan_token_segar(session, akun)
+    assert (akun.access_token, akun.refresh_token) == ("at-new", "rt-new")
+    assert akun.token_kedaluwarsa is not None
+    assert session.locked == 1 and session.commits == 1
 
 
 @pytest.mark.asyncio
