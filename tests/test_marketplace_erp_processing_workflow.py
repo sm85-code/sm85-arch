@@ -139,7 +139,13 @@ async def test_reseller_multiple_products_price_history_fees_and_stage_times(cli
     first = next(r for r in jobs if r["produk"] == "Rak")
     first = await save(http, first, paint_price="40000")
     assert first["production_total"] == "300000" and first["process_fee"] == "20000"
-    assert first["reseller_total"] == "410000"  # Includes packing 2 x 5,000.
+    # Painted wood for a reseller: ordinary packing is inside the paint price, so one product price plus the process fee.
+    assert first["packing_termasuk_cat"] and first["packing_total"] == "0"
+    assert first["harga_produk_total"] == "380000" and first["packing_kayu_total"] == "0"
+    assert first["reseller_total"] == "400000"
+    kayu = await save(http, first, paint_price="40000", packing_type="kayu")
+    assert not kayu["packing_termasuk_cat"] and kayu["packing_kayu_total"] == "10000" and kayu["reseller_total"] == "410000"
+    first = await save(http, kayu, paint_price="40000")
     second = await save(
         http,
         next(r for r in jobs if r["produk"] == "Meja custom"),

@@ -734,6 +734,17 @@ async def manual_order(
     return {"order_id": number, "order_number": display_number}
 
 
+def packing_termasuk_cat(data) -> bool:
+    """A reseller's wood product that is painted already has ordinary packing in the paint price: it is neither paid nor billed apart."""
+    return (
+        data["source"] == "reseller"
+        and data["route"] == "tukang"
+        and data.get("color") != "Polos / Tanpa Cat"
+        and data.get("packing_type", "biasa") == "biasa"
+        and data.get("packing_by") != "supplier"
+    )
+
+
 def computed(row, data, order=None):
     qty = data["qty"]
     production = Decimal(data["production_price"] or "0")
@@ -742,8 +753,10 @@ def computed(row, data, order=None):
         if data["route"] == "tukang" and data.get("color") != "Polos / Tanpa Cat"
         else Decimal(0)
     )
-    packing = Decimal(data.get("packing_price") or "0")
+    termasuk = packing_termasuk_cat(data)
+    packing = Decimal(0) if termasuk else Decimal(data.get("packing_price") or "0")
     fee = Decimal(10000) if data["source"] == "reseller" and data["route"] == "tukang" else Decimal(0)
+    reseller = data["source"] == "reseller"
     return dict(
         data,
         id=row.id,
@@ -752,7 +765,11 @@ def computed(row, data, order=None):
         paint_total=str(paint * qty),
         packing_total=str(packing * qty),
         process_fee=str(fee * qty),
-        reseller_total=str((production + paint + packing + fee) * qty) if data["source"] == "reseller" else None,
+        packing_termasuk_cat=termasuk,
+        # What a reseller is billed: one price for the product (production and paint), wood packing apart, then the process fee.
+        harga_produk_total=str((production + paint) * qty) if reseller else None,
+        packing_kayu_total=str(packing * qty) if reseller and data.get("packing_type") == "kayu" else "0",
+        reseller_total=str((production + paint + packing + fee) * qty) if reseller else None,
         order_cancelled=bool(
             order and (order.status == "cancelled" or order.status_marketplace in ["CANCELLED", "IN_CANCEL"])
         ),
@@ -782,6 +799,8 @@ async def biaya_produksi(session, awal: date, akhir: date) -> list[dict]:
             if not awal <= hari <= akhir:
                 continue
             if tahap == "pengecatan" and (data["route"] != "tukang" or data.get("color") == "Polos / Tanpa Cat"):
+                continue
+            if tahap == "packing" and packing_termasuk_cat(data):
                 continue
             jumlah = Decimal(data.get(harga) or "0") * data["qty"]
             if jumlah:
