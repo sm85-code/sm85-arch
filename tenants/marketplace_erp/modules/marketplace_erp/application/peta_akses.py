@@ -15,7 +15,8 @@ import re
 GET = {"GET", "HEAD"}
 # Pages of Data Produksi that hold prices, and every page that may read the data for production.
 HARGA = "data_produk_kayu|data_katalog_manual|data_tarif_pengecatan|data_tarif_packing"
-LIHAT = "processing|data_tukang|data_supplier|" + HARGA + "|data_katalog_otomatis"
+PROSES = "processing_tukang|processing_supplier|processing_pengecatan|processing_packing"
+LIHAT = PROSES + "|data_tukang|data_supplier|" + HARGA + "|data_katalog_otomatis"
 PREFIX_API = "/api/marketplace-erp"
 
 # (regex on the path, methods or None for all, halaman)
@@ -56,7 +57,7 @@ ATURAN: list[tuple[re.Pattern, set[str] | None, str]] = [
         # what it needs to map (prices, parties, the supplier catalog), only the page of that data changes it. A change to
         # a price names the page by its kind of price, which only the request body tells: the route checks that itself
         # (processing_workflow.izin_harga). /processing/import has no page and stays admin only.
-        (r"^/processing/(candidates|jobs)", None, "processing"),
+        (r"^/processing/(candidates|jobs)", None, PROSES),  # which tab a change belongs to: processing_workflow.izin_tab
         (r"^/processing/document-templates", None, "data_template"),
         (r"^/processing/parties/tukang", {"PUT"}, "data_tukang"),
         (r"^/processing/parties/supplier", {"PUT"}, "data_supplier"),

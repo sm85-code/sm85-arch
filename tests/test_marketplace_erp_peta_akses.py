@@ -106,7 +106,7 @@ async def test_a_role_with_no_ticks_still_gets_the_shop_list_but_nothing_else(se
 async def test_pemetaan_order_and_each_data_produksi_menu_are_separate_pages(sesi_peran):
     from tenants.marketplace_erp.modules.marketplace_erp.infrastructure.models import Role, RoleHalaman
 
-    for rid, halaman in (("pemetaan", "processing"), ("tukang", "data_tukang"), ("tarif", "data_tarif_packing"), ("tpl", "data_template")):
+    for rid, halaman in (("pemetaan", "processing_tukang"), ("tukang", "data_tukang"), ("tarif", "data_tarif_packing"), ("tpl", "data_template")):
         sesi_peran.add(Role(id=rid, nama=rid, akses_toko="semua"))
         sesi_peran.add(RoleHalaman(role_id=rid, halaman=halaman, tingkat="tulis"))
     await sesi_peran.commit()
@@ -132,6 +132,28 @@ async def test_pemetaan_order_and_each_data_produksi_menu_are_separate_pages(ses
         assert (await c.put("/processing/document-templates/INV")).status_code == 200
         assert (await c.put("/processing/prices/P")).status_code == 403
         assert (await c.post("/processing/import")).status_code == 403  # no page: admin only
+
+
+@pytest.mark.asyncio
+async def test_a_job_is_changed_only_with_the_pemetaan_tab_it_belongs_to(sesi_peran):
+    from fastapi import HTTPException
+
+    from tenants.marketplace_erp.adapters.api.v1.processing_workflow import izin_tab
+    from tenants.marketplace_erp.modules.marketplace_erp.infrastructure.models import Role, RoleHalaman
+
+    sesi_peran.add(Role(id="pack", nama="Pack", akses_toko="semua"))
+    sesi_peran.add(RoleHalaman(role_id="pack", halaman="processing_packing", tingkat="tulis"))
+    sesi_peran.add(RoleHalaman(role_id="pack", halaman="processing_tukang", tingkat="baca"))
+    await sesi_peran.commit()
+    user = SimpleNamespace(id="u", role="pack")
+    await izin_tab(sesi_peran, user, "packing")
+    for tab in ("tukang", "supplier", "pengecatan"):  # reading a tab is not changing it
+        with pytest.raises(HTTPException) as e:
+            await izin_tab(sesi_peran, user, tab)
+        assert e.value.status_code == 403
+    async with app_for("pack", sesi_peran, "admin") as c:
+        assert (await c.get("/processing/jobs")).status_code == 200
+        assert (await c.post("/processing/jobs/J/transition")).status_code == 200  # the route then checks the tab
 
 
 @pytest.mark.asyncio
@@ -171,6 +193,9 @@ async def test_a_role_that_had_processing_keeps_every_data_menu_once(sesi_peran)
     for rid, tingkat in (("lama", "baca"), ("antara", "tulis")):
         assert [(await sesi_peran.get(RoleHalaman, (rid, k))).tingkat for k in menu] == [tingkat] * 8
     assert await sesi_peran.get(RoleHalaman, ("antara", "data_produksi")) is None
+    tab = [k for k, _, g, _ in akses.HALAMAN if k.startswith("processing_")]
+    assert len(tab) == 4 and [(await sesi_peran.get(RoleHalaman, ("lama", k))).tingkat for k in tab] == ["baca"] * 4
+    assert await sesi_peran.get(RoleHalaman, ("lama", "processing")) is None
     await sesi_peran.delete(await sesi_peran.get(RoleHalaman, ("lama", "data_tukang")))
     await sesi_peran.commit()
     await akses.pastikan_bawaan(sesi_peran)  # the admin took one away on purpose: not given back
