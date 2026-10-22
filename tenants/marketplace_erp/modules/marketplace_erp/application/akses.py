@@ -24,6 +24,7 @@ from tenants.marketplace_erp.modules.marketplace_erp.infrastructure.models impor
     UserMarketplaceErp,
 )
 
+PENANDA_TAB = "migrasi:pemetaan_per_tab"
 PENANDA_MENU = "migrasi:data_produksi_per_menu"
 PENANDA_PISAH = "migrasi:data_produksi"  # a row of Kelola Aplikasi's store used as a one-time marker; never shown
 TINGKAT = ("baca", "tulis")
@@ -47,7 +48,10 @@ HALAMAN: list[tuple[str, str, str, tuple[str, ...]]] = [
     ("publikasi", "Buat / Salin Produk", "Produk", ("baca", "tulis")),
     ("sinkron_shopee", "Sinkronisasi dan kirim stok/harga ke Shopee", "Produk", ("tulis",)),
     ("laporan_ringkas", "Ringkasan laporan (stok kritis)", "Produk", ("baca",)),
-    ("processing", "Pemetaan Order", "Processing", ("baca", "tulis")),
+    ("processing_tukang", "Pemetaan Order: tab Tukang Kayu", "Processing", ("baca", "tulis")),
+    ("processing_supplier", "Pemetaan Order: tab Supplier", "Processing", ("baca", "tulis")),
+    ("processing_pengecatan", "Pemetaan Order: tab Pengecatan", "Processing", ("baca", "tulis")),
+    ("processing_packing", "Pemetaan Order: tab Packing", "Processing", ("baca", "tulis")),
     ("data_tukang", "Tukang Kayu", "Data Produksi", ("baca", "tulis")),
     ("data_supplier", "Supplier", "Data Produksi", ("baca", "tulis")),
     ("data_produk_kayu", "Katalog Produk Kayu", "Data Produksi", ("baca", "tulis")),
@@ -113,6 +117,22 @@ async def pastikan_bawaan(session: AsyncSession) -> None:
             session.add(RoleHalaman(role_id=r["id"], halaman=halaman, tingkat=tingkat))
     await session.flush()
     await _pisah_data_produksi(session)
+    await _pisah_pemetaan(session)
+
+
+async def _pisah_pemetaan(session: AsyncSession) -> None:
+    """Once: Pemetaan Order was one page. A role that had it keeps all four tabs (at the same level); the admin can then
+    take any of them away. The marker keeps a later removal from being given back."""
+    if await session.get(PengaturanUi, PENANDA_TAB):
+        return
+    tab = [k for k, _, g, _ in HALAMAN if k.startswith("processing_")]
+    for baris in (await session.scalars(select(RoleHalaman).where(RoleHalaman.halaman == "processing"))).all():
+        for h in tab:
+            if await session.get(RoleHalaman, (baris.role_id, h)) is None:
+                session.add(RoleHalaman(role_id=baris.role_id, halaman=h, tingkat=baris.tingkat))
+        await session.delete(baris)
+    session.add(PengaturanUi(id=PENANDA_TAB, teks="1"))
+    await session.flush()
 
 
 async def _pisah_data_produksi(session: AsyncSession) -> None:

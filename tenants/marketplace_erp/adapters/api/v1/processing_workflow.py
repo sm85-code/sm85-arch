@@ -43,6 +43,46 @@ HALAMAN_HARGA = {
 }
 
 
+# The Pemetaan Order tab (page of the role settings) of each route and stage.
+HALAMAN_TAB = {
+    "tukang": "processing_tukang",
+    "supplier": "processing_supplier",
+    "pengecatan": "processing_pengecatan",
+    "packing": "processing_packing",
+}
+TAB_STAGE = {"produksi": "tukang", "supplier": "supplier", "pengecatan": "pengecatan", "packing": "packing"}
+
+
+async def izin_tab(session, user, tab: str) -> None:
+    """Changing a job needs "tulis" on the tab it belongs to; the route rule only knows it is some Pemetaan Order tab."""
+    from tenants.marketplace_erp.modules.marketplace_erp.application import akses
+
+    punya = await akses.tingkat_halaman(session, await akses.peran_pengguna(session, user), HALAMAN_TAB[tab])
+    if punya != "tulis":
+        raise HTTPException(403, "Akses ditolak")
+
+
+def milik_tab(data, tab: str) -> bool:
+    """Whether a job is listed on a Pemetaan Order tab (the same rule as the screen's tabs)."""
+    if tab in ("tukang", "supplier"):
+        return data["route"] == tab
+    if tab == "pengecatan":
+        return bool(data.get("production_done_at")) and data.get("color") != "Polos / Tanpa Cat"
+    return bool(
+        data.get("received_at")
+        or data.get("painting_done_at")
+        or (data.get("production_done_at") and data.get("color") == "Polos / Tanpa Cat")
+    )
+
+
+async def tab_terbaca(session, user) -> set[str]:
+    """The Pemetaan Order tabs a user may look at (any level)."""
+    from tenants.marketplace_erp.modules.marketplace_erp.application import akses
+
+    roles = await akses.peran_pengguna(session, user)
+    return {t for t, h in HALAMAN_TAB.items() if await akses.tingkat_halaman(session, roles, h) is not None}
+
+
 async def izin_harga(session, user, kind: str) -> None:
     """Changing a price needs "tulis" on the page of its kind; the route rule can only tell that it is some price page."""
     from tenants.marketplace_erp.modules.marketplace_erp.application import akses
@@ -583,7 +623,10 @@ async def candidates(
     page: int = Query(1, ge=1),
     status: Literal["menunggu", "dikirim", "selesai", "semua", "dipetakan"] = "menunggu",
     session: AsyncSession = Depends(get_db_marketplace_erp),
+    actor: UserMarketplaceErp = Depends(admin),
 ):
+    if not {"tukang", "supplier"} & await tab_terbaca(session, actor):
+        raise HTTPException(403, "Akses ditolak")  # items to map are picked on the Tukang Kayu or Supplier tab
     has_job = select(ProcessingJob.id).where(ProcessingJob.source_item_id == ItemPesanan.id).exists()
     if status == "dipetakan":
         # Mapped items stay listed whatever the order became, so a cancelled one can be released too.
@@ -669,6 +712,7 @@ async def select_items(
     session: AsyncSession = Depends(get_db_marketplace_erp),
     actor: UserMarketplaceErp = Depends(admin),
 ):
+    await izin_tab(session, actor, payload.route)
     ids = set(payload.item_ids)
     rows = (
         await session.execute(
@@ -736,6 +780,7 @@ async def manual_order(
     session: AsyncSession = Depends(get_db_marketplace_erp),
     actor: UserMarketplaceErp = Depends(admin),
 ):
+    await izin_tab(session, actor, payload.route)
     prefix = "RSL-" if payload.source == "reseller" else "INT-"
     number = prefix + datetime.now(timezone.utc).strftime("%Y%m%d") + "-" + uuid.uuid4().hex[:8].upper()
     display_number = (
@@ -854,10 +899,16 @@ async def biaya_produksi(session, awal: date, akhir: date) -> dict:
 
 
 @router.get("/jobs")
-async def jobs(session: AsyncSession = Depends(get_db_marketplace_erp)):
-    rows = (
-        await session.scalars(select(ProcessingJob).order_by(ProcessingJob.created_at.desc(), ProcessingJob.id))
-    ).all()
+async def jobs(session: AsyncSession = Depends(get_db_marketplace_erp), actor: UserMarketplaceErp = Depends(admin)):
+    tab = await tab_terbaca(session, actor)
+    # Only the jobs of the tabs this user may look at: a role given Packing does not see what is being built.
+    rows = [
+        r
+        for r in (
+            await session.scalars(select(ProcessingJob).order_by(ProcessingJob.created_at.desc(), ProcessingJob.id))
+        ).all()
+        if any(milik_tab(json.loads(r.payload_json), t) for t in tab)
+    ]
     # Current cancellation is read without altering the imported order or losing production history.
     order_ids = {json.loads(r.payload_json).get("order_id") for r in rows if r.source_item_id}
     orders = (
@@ -956,6 +1007,7 @@ async def edit_job(
 ):
     await lock_prices(session)
     row, data = await load_job(session, job_id, payload.version)
+    await izin_tab(session, actor, data["route"])
     if data["stage"] not in ["draft", "produksi", "supplier"]:
         raise HTTPException(409, "Pekerjaan sudah dilanjutkan. Buka kembali tahap sebelumnya untuk mengubah pemetaan.")
     parties = await party_list(session, "tukang" if data["route"] == "tukang" else "supplier")
@@ -1150,6 +1202,7 @@ async def transition(
     actor: UserMarketplaceErp = Depends(admin),
 ):
     row, data = await load_job(session, job_id, payload.version)
+    await izin_tab(session, actor, TAB_STAGE[payload.stage])
     stage = payload.stage
     if stage == "produksi" and data["route"] != "tukang" or stage == "supplier" and data["route"] != "supplier":
         raise HTTPException(409, "Tahap tidak sesuai jalur pengerjaan")
@@ -1176,10 +1229,12 @@ async def transition(
 
 
 @router.delete("/jobs/{job_id}")
-async def remove_draft(job_id: str, version: int, session: AsyncSession = Depends(get_db_marketplace_erp)):
+async def remove_draft(job_id: str, version: int, session: AsyncSession = Depends(get_db_marketplace_erp),
+                       actor: UserMarketplaceErp = Depends(admin)):
     from sqlalchemy import delete
 
     row, data = await load_job(session, job_id, version)
+    await izin_tab(session, actor, data["route"])
     # A manual order is the work item itself (there is no order behind it), so it can be deleted at any stage;
     # an order item from Shopee only while it is a draft, later it is released from its mapping instead.
     if data["stage"] != "draft" and row.source_item_id is not None:
@@ -1210,6 +1265,7 @@ async def reset_manual_mapping(
     """Cancel the mapping of a manual order: who works on it, prices, colour, packing and progress go back to a draft.
     The order itself (customer, dates, items, code) stays; a reseller code shows "Menunggu SKU" again until it is mapped."""
     row, data = await load_job(session, job_id, version)
+    await izin_tab(session, actor, data["route"])
     if row.source_item_id is not None:
         raise HTTPException(409, "Item pesanan Shopee dilepas dari pemetaan, bukan dibatalkan")
     if data["stage"] == "draft":
@@ -1225,11 +1281,13 @@ async def reset_manual_mapping(
 
 
 @router.post("/jobs/{job_id}/release")
-async def release_mapping(job_id: str, version: int, session: AsyncSession = Depends(get_db_marketplace_erp)):
+async def release_mapping(job_id: str, version: int, session: AsyncSession = Depends(get_db_marketplace_erp),
+                          actor: UserMarketplaceErp = Depends(admin)):
     """Take an order item out of its mapping at any stage (a cancelled order, or one to map again); the data entered for it is dropped."""
     from sqlalchemy import delete
 
-    row, _ = await load_job(session, job_id, version)
+    row, data = await load_job(session, job_id, version)
+    await izin_tab(session, actor, data["route"])
     if not row.source_item_id:
         raise HTTPException(409, "Pesanan manual tidak bisa dilepas dari pemetaan")
     result = await session.execute(
@@ -1257,6 +1315,7 @@ async def edit_packing(
     actor: UserMarketplaceErp = Depends(admin),
 ):
     row, data = await load_job(session, job_id, payload.version)
+    await izin_tab(session, actor, "packing")
     if data["stage"] != "packing":
         raise HTTPException(409, "Packing hanya bisa diubah saat menunggu packing")
     data.update(payload.model_dump(mode="json", exclude={"version"}))
