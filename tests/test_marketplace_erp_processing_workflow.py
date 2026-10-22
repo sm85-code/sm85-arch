@@ -178,12 +178,28 @@ async def test_reseller_multiple_products_price_history_fees_and_stage_times(cli
     assert any(e["action"] == "selesai_packing" for e in first["events"])
     second = await advance(http, second, "produksi")
     assert second["stage"] == "packing" and second["painting_done_at"] is None
+    # Packing done by a supplier (any one) is paid to that supplier; by default it stays internal.
+    assert first["packing_by"] == "internal"
+    response = await http.put(
+        "/processing/jobs/" + first["id"] + "/packing",
+        json={"version": first["version"], "packing_type": "kayu", "packing_price": "7000", "packing_by": "supplier"},
+    )
+    assert response.status_code == 422  # a supplier must be named
+    response = await http.put(
+        "/processing/jobs/" + first["id"] + "/packing",
+        json={"version": first["version"], "packing_type": "kayu", "packing_price": "7000", "packing_by": "supplier",
+              "packing_party_id": "s1"},
+    )
+    assert response.status_code == 200, response.text
+    first = next(r for r in await rows(http) if r["id"] == first["id"])
+    assert first["packing_party_name"] == "Supplier 1" and first["packing_total"] == "14000"
+    first = await advance(http, first, "packing")
     # Arus Kas gets the cost of the finished stages as a reference only (the reopened packing counts for nothing).
     hari = datetime.now(ZoneInfo("Asia/Jakarta")).date()
     async with factory() as session:
         biaya = await processing_workflow.biaya_produksi(session, hari, hari)
     jumlah = {(i["tahap"], i["pihak"]): i["jumlah"] for i in biaya}
-    assert jumlah == {("produksi", "Tukang 1"): "300000", ("pengecatan", ""): "80000", ("produksi", "Tukang 2"): "200000"}
+    assert jumlah == {("produksi", "Tukang 1"): "300000", ("pengecatan", ""): "80000", ("produksi", "Tukang 2"): "200000", ("packing", "Supplier 1"): "14000"}
     async with factory() as session:
         assert await processing_workflow.biaya_produksi(session, hari.replace(year=hari.year - 1), hari.replace(year=hari.year - 1)) == []
     async with factory() as session:

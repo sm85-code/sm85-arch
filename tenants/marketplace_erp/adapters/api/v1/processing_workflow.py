@@ -785,7 +785,10 @@ async def biaya_produksi(session, awal: date, akhir: date) -> list[dict]:
                 continue
             jumlah = Decimal(data.get(harga) or "0") * data["qty"]
             if jumlah:
-                pihak = data.get("party_name") or "-" if tahap in ("produksi", "supplier") else ""
+                if tahap == "packing":
+                    pihak = data.get("packing_party_name") or "" if data.get("packing_by") == "supplier" else ""
+                else:
+                    pihak = data.get("party_name") or "-" if tahap in ("produksi", "supplier") else ""
                 key = (hari.isoformat(), tahap, pihak)
                 out[key] = out.get(key, Decimal(0)) + jumlah
     return [{"tanggal": t, "tahap": h, "pihak": p, "jumlah": str(v)} for (t, h, p), v in sorted(out.items())]
@@ -824,6 +827,19 @@ class JobEdit(Strict):
     paint_price: Money = Decimal(0)
     packing_type: Literal["biasa", "kayu"] = "biasa"
     packing_price: Money = Decimal(0)
+    packing_by: Literal["internal", "supplier"] = "internal"
+    packing_party_id: str = Field(default="", max_length=80)
+
+
+async def pasang_packing(session, data):
+    """Packing is done once, by us or by a supplier (any supplier, not only the one that made it); a supplier is named so it is paid."""
+    if data.get("packing_by") == "supplier":
+        pihak = next((p for p in await party_list(session, "supplier") if p["id"] == data.get("packing_party_id")), None)
+        if not pihak:
+            raise HTTPException(422, "Pilih supplier yang packing")
+        data["packing_party_name"] = pihak["nama"]
+    else:
+        data.update(packing_by="internal", packing_party_id="", packing_party_name="")
 
 
 async def load_job(session, job_id, version):
@@ -1047,6 +1063,7 @@ async def edit_job(
         data.update(
             production_sku=sku, numbering_base=base, order_sequence=sequence, order_number=f"{base}-{sequence:02d}"
         )
+    await pasang_packing(session, data)
     if data["stage"] == "draft":
         data["stage"] = "produksi" if data["route"] == "tukang" else "supplier"
     return await persist(session, row, data, "dipetakan", actor)
@@ -1169,6 +1186,8 @@ class PackingEdit(Strict):
     version: int = Field(ge=1)
     packing_type: Literal["biasa", "kayu"]
     packing_price: Money
+    packing_by: Literal["internal", "supplier"] = "internal"
+    packing_party_id: str = Field(default="", max_length=80)
 
 
 @router.put("/jobs/{job_id}/packing")
@@ -1182,6 +1201,7 @@ async def edit_packing(
     if data["stage"] != "packing":
         raise HTTPException(409, "Packing hanya bisa diubah saat menunggu packing")
     data.update(payload.model_dump(mode="json", exclude={"version"}))
+    await pasang_packing(session, data)
     return await persist(session, row, data, "ubah_packing", actor)
 
 
