@@ -178,13 +178,14 @@ async def execute(session, user, turn, name, payload):
             text, sources, cost = await research_openai(chosen["model_openai"], payload.kueri)
         _add_cost(turn, cost)
         await session.flush()
-        return {"ringkasan": text[:6000], "sumber": [{"judul": t[:200], "url": u} for u, t in list(sources.items())[:10]], "penyedia": provider}
+        return {"ringkasan": text[:6000], "sumber": [{"judul": t[:200], "url": u} for u, t in list(sources.items())[:10]], "penyedia": provider, "biaya_usd": str(cost.quantize(Decimal("0.0001")))}
     if name == "buat_gambar_produk":
         if not config.manager_ready():
             raise HTTPException(503, "Pembuatan foto perlu OPENAI_API_KEY di server")
         chosen = await settings(session)
         photos = await generate_images(chosen["model_openai"], payload.brief, payload.jumlah)
-        _add_cost(turn, Decimal(os.getenv("ERP_AI_IMAGE_USD", "0.05")) * len(photos))
+        image_cost = Decimal(os.getenv("ERP_AI_IMAGE_USD", "0.05")) * len(photos)
+        _add_cost(turn, image_cost)
         ids = []
         for photo in photos:
             row = AiGambarProduk(id=str(uuid4()), user_id=user.id, turn_id=turn.id, mime="image/png" if photo.startswith(b"\x89PNG") else "image/jpeg", data=photo, brief=payload.brief)
@@ -193,7 +194,7 @@ async def execute(session, user, turn, name, payload):
         await session.flush()
         if not ids:
             return {"error": "Model tidak mengembalikan foto. Ubah brief lalu coba lagi."}
-        return {"gambar_ids": ids, "url": [f"/asisten/gambar/{i}" for i in ids]}
+        return {"gambar_ids": ids, "url": [f"/asisten/gambar/{i}" for i in ids], "biaya_usd": str(image_cost.quantize(Decimal("0.0001")))}
     if name == "buat_draf_produk":
         from sqlalchemy import select
         if payload.gambar_ids:
