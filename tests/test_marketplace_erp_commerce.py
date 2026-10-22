@@ -460,3 +460,20 @@ async def test_empty_pending_income_verified_by_overview_for_shared_menu(monkeyp
         # A positive overview must say money is waiting; an unknown overview keeps the generic wording.
         assert ("dana menunggu cair sekitar Rp 100" in message) is (pending == 100)
     assert request.call_args_list[1].args[2] == "/api/v2/payment/get_income_overview"
+
+
+@pytest.mark.asyncio
+async def test_item_without_promotion_key_is_empty_not_a_bad_gateway(monkeypatch):
+    monkeypatch.setattr(adapter.workflows, "read", AsyncMock(return_value={"success_list": [{"item_id": 5}]}))
+    assert (await adapter.product_details(None, None, 5, "promosi"))["promotion"] == []
+    monkeypatch.setattr(adapter.workflows, "read", AsyncMock(return_value={"success_list": []}))
+    with pytest.raises(HTTPException):
+        await adapter.product_details(None, None, 5, "promosi")
+
+
+@pytest.mark.asyncio
+async def test_promotion_failure_list_reason_is_shown(monkeypatch):
+    monkeypatch.setattr(adapter.workflows, "read", AsyncMock(return_value={"failure_list": [{"item_id": 5, "failed_reason": "Product not found"}]}))
+    with pytest.raises(HTTPException) as e:
+        await adapter.product_details(None, None, 5, "promosi")
+    assert "Product not found" in e.value.detail
