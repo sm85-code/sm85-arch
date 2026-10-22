@@ -49,8 +49,12 @@ ATURAN: list[tuple[re.Pattern, set[str] | None, str]] = [
         (r"^/produk(-keluarga)?(/|$)", None, "produk"),
         (r"^/listing", None, "listing"),
         (r"^/(gudang|stok|pengaturan-stok)", None, "gudang"),
-        # Processing
-        (r"^/processing", None, "processing"),
+        # Processing: the work queue is Pemetaan Order; everything that is data kept for it is Data Produksi. Pemetaan Order
+        # may read that data (prices, parties, the supplier catalog) to map, but only Data Produksi changes it.
+        (r"^/processing/(candidates|jobs)", None, "processing"),
+        (r"^/processing/document-templates", None, "data_produksi"),
+        (r"^/processing/(data|prices|paint-colors|production-structure|parties|supplier-catalog)", GET, "processing|data_produksi"),
+        (r"^/processing", None, "data_produksi"),
         # Keuangan
         (r"^/kategori-transaksi", None, "kategori_transaksi"),
         (r"^/laporan-keuangan", None, "laporan_keuangan"),

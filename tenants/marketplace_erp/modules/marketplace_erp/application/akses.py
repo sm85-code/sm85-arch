@@ -17,12 +17,14 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from tenants.marketplace_erp.modules.marketplace_erp.infrastructure.auth import get_current_user_marketplace_erp
 from tenants.marketplace_erp.modules.marketplace_erp.infrastructure.database import get_db_marketplace_erp
 from tenants.marketplace_erp.modules.marketplace_erp.infrastructure.models import (
+    PengaturanUi,
     PeranTambahan,
     Role,
     RoleHalaman,
     UserMarketplaceErp,
 )
 
+PENANDA_PISAH = "migrasi:data_produksi"  # a row of Kelola Aplikasi's store used as a one-time marker; never shown
 TINGKAT = ("baca", "tulis")
 AKSES_TOKO = ("semua", "ditugaskan")
 ADMIN = "admin"
@@ -44,7 +46,8 @@ HALAMAN: list[tuple[str, str, str, tuple[str, ...]]] = [
     ("publikasi", "Buat / Salin Produk", "Produk", ("baca", "tulis")),
     ("sinkron_shopee", "Sinkronisasi dan kirim stok/harga ke Shopee", "Produk", ("tulis",)),
     ("laporan_ringkas", "Ringkasan laporan (stok kritis)", "Produk", ("baca",)),
-    ("processing", "Pemetaan Order dan Data Produksi", "Processing", ("baca", "tulis")),
+    ("processing", "Pemetaan Order", "Processing", ("baca", "tulis")),
+    ("data_produksi", "Data Produksi (tukang, supplier, katalog, tarif, template)", "Data Produksi", ("baca", "tulis")),
     ("operasional_umum", "Operasional Umum", "Keuangan", ("baca", "tulis")),
     ("operasional_packing", "Operasional Packing", "Keuangan", ("baca", "tulis")),
     ("arus_kas", "Arus Kas (tulis = centang)", "Keuangan", ("baca", "tulis")),
@@ -101,6 +104,19 @@ async def pastikan_bawaan(session: AsyncSession) -> None:
         for halaman, tingkat in r["halaman"].items():
             session.add(RoleHalaman(role_id=r["id"], halaman=halaman, tingkat=tingkat))
     await session.flush()
+    await _pisah_data_produksi(session)
+
+
+async def _pisah_data_produksi(session: AsyncSession) -> None:
+    """Once: Data Produksi used to be part of Pemetaan Order. A role that had that page keeps both, so nobody loses a
+    screen; the admin can then take one away. The marker keeps a later removal from being given back."""
+    if await session.get(PengaturanUi, PENANDA_PISAH):
+        return
+    for baris in (await session.scalars(select(RoleHalaman).where(RoleHalaman.halaman == "processing"))).all():
+        if await session.get(RoleHalaman, (baris.role_id, "data_produksi")) is None:
+            session.add(RoleHalaman(role_id=baris.role_id, halaman="data_produksi", tingkat=baris.tingkat))
+    session.add(PengaturanUi(id=PENANDA_PISAH, teks="1"))
+    await session.flush()
 
 
 async def _role(session: AsyncSession, role_id: str) -> Role | None:
@@ -125,6 +141,9 @@ async def peran_pengguna(session: AsyncSession, user: UserMarketplaceErp) -> lis
 
 async def tingkat_halaman(session: AsyncSession, role_id: str | Iterable[str] | None, halaman: str) -> str | None:
     """"tulis", "baca" or None on this page. With several roles the most generous one counts. Admin always has "tulis"."""
+    if "|" in halaman:  # a screen that either page may open
+        tingkat = [await tingkat_halaman(session, role_id, h) for h in halaman.split("|")]
+        return "tulis" if "tulis" in tingkat else ("baca" if "baca" in tingkat else None)
     terbaik: str | None = None
     for rid in _daftar_role(role_id):
         if rid == ADMIN:
