@@ -24,6 +24,7 @@ from tenants.marketplace_erp.modules.marketplace_erp.infrastructure.models impor
     UserMarketplaceErp,
 )
 
+PENANDA_MENU = "migrasi:data_produksi_per_menu"
 PENANDA_PISAH = "migrasi:data_produksi"  # a row of Kelola Aplikasi's store used as a one-time marker; never shown
 TINGKAT = ("baca", "tulis")
 AKSES_TOKO = ("semua", "ditugaskan")
@@ -47,7 +48,14 @@ HALAMAN: list[tuple[str, str, str, tuple[str, ...]]] = [
     ("sinkron_shopee", "Sinkronisasi dan kirim stok/harga ke Shopee", "Produk", ("tulis",)),
     ("laporan_ringkas", "Ringkasan laporan (stok kritis)", "Produk", ("baca",)),
     ("processing", "Pemetaan Order", "Processing", ("baca", "tulis")),
-    ("data_produksi", "Data Produksi (tukang, supplier, katalog, tarif, template)", "Data Produksi", ("baca", "tulis")),
+    ("data_tukang", "Tukang Kayu", "Data Produksi", ("baca", "tulis")),
+    ("data_supplier", "Supplier", "Data Produksi", ("baca", "tulis")),
+    ("data_produk_kayu", "Katalog Produk Kayu", "Data Produksi", ("baca", "tulis")),
+    ("data_katalog_otomatis", "Katalog Produk Non Kayu: tab Katalog Otomatis", "Data Produksi", ("baca", "tulis")),
+    ("data_katalog_manual", "Katalog Produk Non Kayu: tab Katalog Manual", "Data Produksi", ("baca", "tulis")),
+    ("data_tarif_pengecatan", "Tarif Pengecatan", "Data Produksi", ("baca", "tulis")),
+    ("data_tarif_packing", "Tarif Packing", "Data Produksi", ("baca", "tulis")),
+    ("data_template", "Template", "Data Produksi", ("baca", "tulis")),
     ("operasional_umum", "Operasional Umum", "Keuangan", ("baca", "tulis")),
     ("operasional_packing", "Operasional Packing", "Keuangan", ("baca", "tulis")),
     ("arus_kas", "Arus Kas (tulis = centang)", "Keuangan", ("baca", "tulis")),
@@ -108,14 +116,21 @@ async def pastikan_bawaan(session: AsyncSession) -> None:
 
 
 async def _pisah_data_produksi(session: AsyncSession) -> None:
-    """Once: Data Produksi used to be part of Pemetaan Order. A role that had that page keeps both, so nobody loses a
-    screen; the admin can then take one away. The marker keeps a later removal from being given back."""
-    if await session.get(PengaturanUi, PENANDA_PISAH):
+    """Once: Data Produksi used to be part of Pemetaan Order. A role that had that page keeps every Data Produksi menu, so
+    nobody loses a screen; the admin can then take any of them away. The marker keeps a later removal from being given back."""
+    if await session.get(PengaturanUi, PENANDA_MENU):
         return
-    for baris in (await session.scalars(select(RoleHalaman).where(RoleHalaman.halaman == "processing"))).all():
-        if await session.get(RoleHalaman, (baris.role_id, "data_produksi")) is None:
-            session.add(RoleHalaman(role_id=baris.role_id, halaman="data_produksi", tingkat=baris.tingkat))
-    session.add(PengaturanUi(id=PENANDA_PISAH, teks="1"))
+    data = [k for k, _, g, _ in HALAMAN if g == "Data Produksi"]
+    for baris in (await session.scalars(select(RoleHalaman).where(RoleHalaman.halaman.in_(["processing", "data_produksi"])))).all():
+        if baris.halaman == "data_produksi" or not await session.get(PengaturanUi, PENANDA_PISAH):
+            for h in data:
+                if await session.get(RoleHalaman, (baris.role_id, h)) is None:
+                    session.add(RoleHalaman(role_id=baris.role_id, halaman=h, tingkat=baris.tingkat))
+        if baris.halaman == "data_produksi":
+            await session.delete(baris)  # the short-lived single page, replaced by one per menu
+    for marker in (PENANDA_PISAH, PENANDA_MENU):
+        if await session.get(PengaturanUi, marker) is None:
+            session.add(PengaturanUi(id=marker, teks="1"))
     await session.flush()
 
 
