@@ -14,7 +14,7 @@ router = APIRouter(prefix="/pengaturan-ui", tags=["Kelola Aplikasi"], dependenci
 
 class Teks(BaseModel):
     model_config = ConfigDict(extra="forbid")
-    teks: str = Field(max_length=200)
+    teks: str = Field(max_length=8000)
 
 
 @router.get("")

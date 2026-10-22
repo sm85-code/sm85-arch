@@ -16,7 +16,7 @@ from pydantic import ValidationError, BaseModel, Field, ConfigDict
 from typing import Literal
 from sqlalchemy import select, func
 from sqlalchemy.exc import IntegrityError
-from . import config, tools, internal, evidence
+from . import config, tools, internal, evidence, designer
 from ...infrastructure.models import AiConversation, AiTurn, AiToolReceipt, AiDailyBudget, AiWorkerLease, UserMarketplaceErp
 
 logger = logging.getLogger(__name__)
@@ -46,7 +46,8 @@ Indikator overall_performance bukan rating bintang pembeli. Jangan mengartikan k
 Rekomendasi harus mempertimbangkan operasi: jangan menyarankan menghapus listing pre-order hanya untuk mengejar rasio;
 periksa kesiapan stok/lead time dahulu dan jangan mengarang kemampuan mengurangi waktu produksi.
 Penjualan/nilai pesanan bukan laba. Null bukan nol. Cantumkan periode/toko/snapshot atau live saat relevan.
-Tidak tersedia: pendaftaran kampanye resmi, riset kompetitor/internet, penarikan dana, video/size-chart,
+Riset internet, foto AI dan draf produk baru hanya di bidang Desainer produk; di bidang lain arahkan admin memilihnya.
+Tidak tersedia: pendaftaran kampanye resmi, penarikan dana, video/size-chart,
 FlashSale/BundleDeal yang belum terintegrasi. Jangan mengaku telah menjalankannya. Tidak ada akses tenant lain.
 """
 
@@ -101,6 +102,16 @@ async def enqueue(session, user, payload):
         return previous
     plan = internal.plan(payload.prompt, payload.agent)
     selected_model = config.selected_model(payload.agent)
+    preference = await designer.settings(session)
+    if preference["penyedia"] == "anthropic" and config.ready():
+        selected_model = preference["model_anthropic"]
+    elif preference["penyedia"] == "openai" and config.manager_ready():
+        selected_model = preference["model_openai"]
+    elif config.is_manager(selected_model):
+        selected_model = preference["model_openai"]
+    elif selected_model == config.MODEL:
+        selected_model = preference["model_anthropic"]
+    reserve = config.DESIGNER_TURN_USD if payload.agent == "desainer" else config.TURN_USD
     if plan is None and not config.model_ready(selected_model):
         raise HTTPException(503, "Asisten AI belum tersedia. Periksa OPENAI_API_KEY / ANTHROPIC_API_KEY dan ERP_AI_ENABLED di server.")
     if plan is None and not config.model_limits(selected_model):
@@ -124,7 +135,7 @@ async def enqueue(session, user, payload):
         if previous.payload_hash != digest:
             raise HTTPException(409, "ID permintaan digunakan untuk pesan berbeda")
         return previous
-    if plan is None and (budget.turns >= config.DAILY_TURNS or budget.spent_usd + budget.reserved_usd + config.TURN_USD > config.DAILY_USD):
+    if plan is None and (budget.turns >= config.DAILY_TURNS or budget.spent_usd + budget.reserved_usd + reserve > config.DAILY_USD):
         raise HTTPException(429, "Batas penggunaan AI harian tercapai. Coba besok atau sesuaikan batas server.")
     if plan is not None:
         used = (await session.execute(select(func.count()).select_from(AiTurn).where(AiTurn.user_id == user.id, AiTurn.budget_day == today, AiTurn.model.in_((internal.MODEL, "internal-execution"))))).scalar_one()
@@ -140,9 +151,9 @@ async def enqueue(session, user, payload):
     turn = AiTurn(id=str(uuid4()), user_id=user.id, session_version=user.session_version, conversation_id=conversation.id,
                   operation_id=str(payload.operation_id), payload_hash=digest, active_key=conversation.id,
                   akun_id=payload.akun_id, mode=payload.mode, prompt=payload.prompt, context_json=tools.encode(context), status="queued", answer="",
-                  model=internal.MODEL if plan is not None else selected_model, input_rate=0 if plan is not None else config.rates(selected_model)[0], output_rate=0 if plan is not None else config.rates(selected_model)[1], reserved_usd=0 if plan is not None else config.TURN_USD, budget_day=today, cost_usd=Decimal(0), input_tokens=0, output_tokens=0)
+                  model=internal.MODEL if plan is not None else selected_model, input_rate=0 if plan is not None else config.rates(selected_model)[0], output_rate=0 if plan is not None else config.rates(selected_model)[1], reserved_usd=0 if plan is not None else reserve, budget_day=today, cost_usd=Decimal(0), input_tokens=0, output_tokens=0)
     if plan is None:
-        budget.reserved_usd += config.TURN_USD
+        budget.reserved_usd += reserve
         budget.turns += 1
     session.add(turn)
     await session.commit()
@@ -492,6 +503,8 @@ async def process(factory, ident):
             system += "\nAnda manajer utama. Gunakan tools internal untuk data/argumen draf. Delegasikan analisis iklan atau rencana coding ke Sonnet bila bermanfaat, lalu periksa dan rangkum hasilnya. Delegasi tidak menambah izin, tidak mengeksekusi perubahan dan bukan coding otomatis. Jangan delegasikan perintah rutin yang bisa ditangani langsung."
         if context.get("agent") == "coding":
             system += "\nAnda membantu perencanaan perbaikan ERP. Tidak ada akses source code, shell, GitHub, migrasi atau deployment. Jangan mengaku memeriksa kode atau mengirim PR. Tanyakan reproduksi masalah, lalu susun kebutuhan, risiko dan kriteria penerimaan. Data ERP boleh diperiksa lewat tools baca. Rencana tersimpan dalam percakapan ini; eksekusi coding menunggu worker terisolasi."
+        if context.get("agent") == "desainer":
+            system += "\nPlaybook desainer produk (dari Kelola Aplikasi) untuk permintaan membuat/merancang produk baru:\n" + (await designer.settings(session))["prompt"]
         calls = {"count": 0}
         allowed = {d["name"] for d in definitions}
         try:

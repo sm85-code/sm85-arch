@@ -24,6 +24,8 @@ INPUT_RATE = decimal_setting("ERP_AI_INPUT_USD_PER_MILLION", RATES.get(MODEL, ("
 OUTPUT_RATE = decimal_setting("ERP_AI_OUTPUT_USD_PER_MILLION", RATES.get(MODEL, ("4", "20"))[1])
 DAILY_USD = decimal_setting("ERP_AI_DAILY_USD", "0.50")
 TURN_USD = decimal_setting("ERP_AI_TURN_USD", "0.20")
+# Product-designer turns run web research and image generation, so they reserve more per message.
+DESIGNER_TURN_USD = decimal_setting("ERP_AI_DESIGNER_TURN_USD", "0.45")
 DAILY_TURNS = integer_setting("ERP_AI_DAILY_TURNS", "30")
 MAX_CALLS = 6
 MAX_WRITES = 5
@@ -73,16 +75,20 @@ def selected_model(agent="auto"):
 
 
 def model_ready(model):
-    return manager_ready() if is_manager(model) else model == MODEL and ready()
+    return manager_ready() if is_manager(model) else (model == MODEL or model in RATES) and ready()
 
 
 def rates(model):
     if is_manager(model):
+        if model != MANAGER_MODEL:
+            return tuple(Decimal(v) for v in MANAGER_RATES[model])
         return MANAGER_INPUT_RATE, MANAGER_OUTPUT_RATE
+    if model != MODEL and model in RATES:
+        return tuple(Decimal(v) for v in RATES[model])
     return INPUT_RATE, OUTPUT_RATE
 
 
 def model_limits(model):
     price = rates(model)
-    known = model in MANAGER_RATES if is_manager(model) else model == MODEL and (MODEL in RATES or bool(os.getenv("ERP_AI_INPUT_USD_PER_MILLION") and os.getenv("ERP_AI_OUTPUT_USD_PER_MILLION")))
+    known = model in MANAGER_RATES if is_manager(model) else (model != MODEL and model in RATES) or model == MODEL and (MODEL in RATES or bool(os.getenv("ERP_AI_INPUT_USD_PER_MILLION") and os.getenv("ERP_AI_OUTPUT_USD_PER_MILLION")))
     return known and all(v.is_finite() and v > 0 for v in (*price, DAILY_USD, TURN_USD)) and DAILY_TURNS > 0

@@ -14,7 +14,7 @@ class TurnIn(Input):
     conversation_id: UUID | None = None
     akun_id: str | None = Field(default=None, max_length=64)
     mode: Literal["tanya", "perintah"] = "tanya"
-    agent: Literal["auto", "operasional", "iklan", "coding"] = "auto"
+    agent: Literal["auto", "operasional", "iklan", "coding", "desainer"] = "auto"
     context: PageContext | None = None
     prompt: str = Field(min_length=1, max_length=4000)
 

@@ -25,7 +25,16 @@ def _id(id_: str) -> str:
     return id_
 
 
-def _teks(teks: str) -> str:
+MAKS_TEKS_AI = 8000
+
+
+def _teks(teks: str, id_: str = "") -> str:
+    if id_.startswith("ai:"):
+        # AI settings (playbook, provider, model) keep their line breaks and may be long.
+        teks = (teks or "").strip()
+        if not 1 <= len(teks) <= MAKS_TEKS_AI:
+            raise HTTPException(422, f"Teks 1-{MAKS_TEKS_AI} karakter")
+        return teks
     teks = re.sub(r"\s+", " ", (teks or "").strip())
     if not 1 <= len(teks) <= 120:
         raise HTTPException(422, "Teks 1-120 karakter")
@@ -38,7 +47,8 @@ async def daftar(session: AsyncSession) -> dict:
 
 
 async def simpan(session: AsyncSession, id_: str, teks: str) -> dict:
-    id_, teks = _id(id_), _teks(teks)
+    id_ = _id(id_)
+    teks = _teks(teks, id_)
     row = await session.get(PengaturanUi, id_)
     if row is None:
         if ((await session.scalar(select(func.count()).select_from(PengaturanUi))) or 0) >= MAKS_ENTRI:
@@ -55,3 +65,8 @@ async def kembalikan(session: AsyncSession, id_: str) -> None:
     if row is not None:
         await session.delete(row)
         await session.commit()
+
+
+async def ambil(session: AsyncSession, id_: str) -> str | None:
+    row = await session.get(PengaturanUi, id_)
+    return row.teks if row else None

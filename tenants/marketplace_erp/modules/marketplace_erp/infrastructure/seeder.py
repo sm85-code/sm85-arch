@@ -37,6 +37,8 @@ DEFAULT_PASSWORD = "password123"
 # are self-healed here. Postgres-only syntax -- skipped on SQLite (tests
 # build the schema fresh from metadata anyway).
 _SELF_HEAL_COLUMNS = (
+    # The AI product-designer playbook is stored as a Kelola Aplikasi text and is longer than 200 characters.
+    "ALTER TABLE IF EXISTS mpe_pengaturan_ui ALTER COLUMN teks TYPE TEXT",
     "ALTER TABLE IF EXISTS mpe_ai_turns ADD COLUMN IF NOT EXISTS context_json TEXT NOT NULL DEFAULT '{}'",
     "ALTER TABLE IF EXISTS mpe_produk ADD COLUMN IF NOT EXISTS stok_referensi INTEGER",
     "ALTER TABLE IF EXISTS mpe_users ADD COLUMN IF NOT EXISTS session_version INTEGER NOT NULL DEFAULT 0",
