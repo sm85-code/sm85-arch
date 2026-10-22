@@ -1,13 +1,13 @@
 """Admin-only async assistant API. Request bodies never contain model/API secrets."""
 import json
-from fastapi import APIRouter, Depends, Query, HTTPException
+from fastapi import APIRouter, Depends, Query, HTTPException, Response
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
-from tenants.marketplace_erp.modules.marketplace_erp.application.assistant import config, service, tools
+from tenants.marketplace_erp.modules.marketplace_erp.application.assistant import config, service, tools, designer
 from tenants.marketplace_erp.modules.marketplace_erp.application.assistant.schemas import TurnIn, ResolveIn, DecisionIn
 from tenants.marketplace_erp.modules.marketplace_erp.infrastructure.auth import require_roles_marketplace_erp
 from tenants.marketplace_erp.modules.marketplace_erp.infrastructure.database import get_db_marketplace_erp
-from tenants.marketplace_erp.modules.marketplace_erp.infrastructure.models import AiConversation, AiTurn, AiToolReceipt, AiDailyBudget, UserMarketplaceErp
+from tenants.marketplace_erp.modules.marketplace_erp.infrastructure.models import AiConversation, AiTurn, AiToolReceipt, AiDailyBudget, UserMarketplaceErp, AiGambarProduk, AiDrafProduk
 
 router = APIRouter(prefix="/asisten")
 DB = Depends(get_db_marketplace_erp)
@@ -37,6 +37,8 @@ async def status(session: AsyncSession = DB, user: UserMarketplaceErp = ADMIN):
             "usd_idr": str(config.USD_IDR), "daily_usd": str(config.DAILY_USD), "turn_usd": str(config.TURN_USD), "daily_turns": config.DAILY_TURNS,
             "spent_usd": str(budget.spent_usd if budget else 0), "reserved_usd": str(budget.reserved_usd if budget else 0),
             "used_turns": budget.turns if budget else 0, "max_writes": config.MAX_WRITES,
+            "designer": {**(await designer.settings(session)), "prompt_bawaan": designer.DEFAULT_PROMPT, "riset_tersedia": config.ready() or config.manager_ready(), "foto_tersedia": config.manager_ready(),
+                         "pilihan_model_anthropic": list(config.RATES), "pilihan_model_openai": list(config.MANAGER_RATES), "anthropic_tersedia": config.ready(), "openai_tersedia": config.manager_ready()},
             "capabilities": [{"name": n, "write": w, "description": d} for n, (_s, w, d) in tools.TOOLS.items()]}
 
 
@@ -79,3 +81,19 @@ async def resolve(id: str, body: ResolveIn, session: AsyncSession = DB, user: Us
     receipt.status = "reviewed"
     await session.commit()
     return {"ok": True}
+
+
+@router.get("/gambar/{id}")
+async def image(id: str, session: AsyncSession = DB, user: UserMarketplaceErp = ADMIN):
+    row = await session.get(AiGambarProduk, id)
+    if not row or row.user_id != user.id:
+        raise HTTPException(404, "Foto tidak ditemukan")
+    return Response(row.data, media_type=row.mime, headers={"Cache-Control": "private, max-age=86400"})
+
+
+@router.get("/draf-produk/{id}")
+async def product_draft(id: str, session: AsyncSession = DB, user: UserMarketplaceErp = ADMIN):
+    row = await session.get(AiDrafProduk, id)
+    if not row or row.user_id != user.id:
+        raise HTTPException(404, "Draf tidak ditemukan")
+    return {"id": row.id, "akun_id": row.akun_id, "created_at": row.created_at, **json.loads(row.payload_json)}

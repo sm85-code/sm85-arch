@@ -14,7 +14,7 @@ from ..management_schemas import ItemEdit, ModelsEdit, TiersEdit, GmvCreate, Gmv
 from ..schemas import PromosiIn, PromosiUpdateIn, PromosiProdukIn
 from ...infrastructure.adapters import erp_shopee_management as management, erp_shopee_insights as insights, erp_shopee_promotions as promotions, erp_shopee_commerce as commerce, erp_shopee_chat as chat
 from ...infrastructure import ads_ai
-from . import extra_tools
+from . import extra_tools, designer
 
 
 class Empty(Input):
@@ -239,6 +239,9 @@ def encode(value):
 
 
 TOOLS.update(extra_tools.TOOLS)
+TOOLS.update(designer.TOOLS)
+# Product designer: research, photos, draft, plus reads that help fill the draft.
+DESIGNER_TOOLS = set(designer.TOOLS) | {"daftar_toko", "cari_produk", "metadata_publikasi", "pengaturan_produk", "produk_terlaris"}
 
 ADS_TOOLS = {"boost_produk", "daftar_produk_boost","daftar_toko", "cari_produk", "pengaturan_produk", "statistik_produk", "ringkasan_usaha", "saldo_toko", "mutasi_dana", "modal_produk", "daftar_iklan", "kelayakan_gmv", "laporan_gmv", "buat_iklan", "ubah_iklan", "ubah_kata_kunci", "buat_gmv", "ubah_gmv", "produk_gmv"}
 
@@ -247,6 +250,10 @@ def definitions(writes, agent="auto"):
     result = []
     for name, (schema, write, description) in TOOLS.items():
         if agent == "iklan" and name not in ADS_TOOLS:
+            continue
+        if agent == "desainer" and name not in DESIGNER_TOOLS:
+            continue
+        if agent != "desainer" and name in designer.TOOLS:
             continue
         if agent == "operasional" and name in ADS_TOOLS - {"daftar_toko", "cari_produk", "pengaturan_produk", "statistik_produk", "ringkasan_usaha", "saldo_toko", "mutasi_dana", "modal_produk"}:
             continue
@@ -318,6 +325,8 @@ async def execute(session, user, turn, name, payload, fingerprint):
             "omzet": "Nilai pesanan snapshot ERP, bukan laba atau saldo cair.",
         }
         return result
+    if name in designer.TOOLS:
+        return await designer.execute(session, user, turn, name, payload)
     if not turn.akun_id:
         raise HTTPException(422, "Pilih toko sebelum membaca data live atau menjalankan tindakan")
     akun = await services.akun_shopee_pengelolaan(session, turn.akun_id)
