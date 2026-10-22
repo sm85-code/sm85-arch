@@ -18,6 +18,7 @@ import hmac
 import json
 import logging
 import os
+import re
 import time
 import uuid
 from datetime import date, datetime, timedelta, timezone
@@ -1319,6 +1320,29 @@ ADS_ANGGARAN_MAKS = Decimal(os.getenv("ADS_ANGGARAN_HARIAN_MAKS", "1000000"))
 def _bagi(daftar: list, ukuran: int) -> list[list]:
     return [daftar[i : i + ukuran] for i in range(0, len(daftar), ukuran)]
 
+_ID_KAMPANYE_DITOLAK = re.compile(r"invalid product ads campaign ids?\s*-?\s*([\d,\s]+)", re.I)
+
+
+async def _ads_per_kelompok(session: Any, akun: Any, path: str, kelompok: list[int], ditolak: set[int], params) -> dict | None:
+    """One batched ads read. When Shopee rejects only some ids (e.g. a GMV Max campaign in a product-ads call), those
+    ids are recorded in ``ditolak`` and the call is retried once without them, so one id cannot blank the whole list."""
+    sisa = [i for i in kelompok if i not in ditolak]
+    if not sisa:
+        return None
+    try:
+        return await signed_shop_request(session, akun, path, params=params(sisa))
+    except ShopeeAPIError as exc:
+        cocok = _ID_KAMPANYE_DITOLAK.search(f"{exc.error} {exc.message}")
+        buang = {int(x) for x in re.findall(r"\d+", cocok.group(1))} & set(sisa) if cocok else set()
+        if not buang:
+            raise
+        ditolak.update(buang)
+        sisa = [i for i in sisa if i not in buang]
+        if not sisa:
+            return None
+        return await signed_shop_request(session, akun, path, params=params(sisa))
+
+
 
 def _desimal(nilai: Any) -> Decimal | None:
     try:
@@ -1403,36 +1427,39 @@ async def daftar_kampanye_iklan(session: Any, akun: Any, hari: int = 7) -> dict:
     ids = ids[:ADS_KAMPANYE_MAKS]
     catatan: list[str] = []
     pengaturan: dict[int, dict] = {}
+    ditolak: set[int] = set()
     for kelompok in _bagi(ids, ADS_BATCH):
-        data = await signed_shop_request(
-            session,
-            akun,
-            _PATH_ADS_PENGATURAN,
-            params={"info_type_list": "1,2,3", "campaign_id_list": ",".join(str(i) for i in kelompok)},
+        data = await _ads_per_kelompok(
+            session, akun, _PATH_ADS_PENGATURAN, kelompok, ditolak,
+            lambda k: {"info_type_list": "1,2,3", "campaign_id_list": ",".join(str(i) for i in k)},
         )
-        for c in (data.get("response") or {}).get("campaign_list") or []:
+        for c in ((data or {}).get("response") or {}).get("campaign_list") or []:
             pengaturan[int(c["campaign_id"])] = c
     kinerja: dict[int, dict] = {}
     sampai = datetime.now(timezone.utc).astimezone(timezone(timedelta(hours=7))).date()
     dari = sampai - timedelta(days=max(2, min(hari, ADS_RENTANG_MAKS_HARI)) - 1)
-    try:
-        for kelompok in _bagi(ids, ADS_BATCH):
-            data = await signed_shop_request(
-                session,
-                akun,
-                _PATH_ADS_KINERJA,
-                params={
+    for kelompok in _bagi([i for i in ids if i not in ditolak], ADS_BATCH):
+        try:
+            data = await _ads_per_kelompok(
+                session, akun, _PATH_ADS_KINERJA, kelompok, ditolak,
+                lambda k: {
                     "start_date": dari.strftime("%d-%m-%Y"),
                     "end_date": sampai.strftime("%d-%m-%Y"),
-                    "campaign_id_list": ",".join(str(i) for i in kelompok),
+                    "campaign_id_list": ",".join(str(i) for i in k),
                 },
             )
-            respon = data.get("response")
-            for toko in respon if isinstance(respon, list) else [respon or {}]:
-                for c in toko.get("campaign_list") or []:
-                    kinerja[int(c["campaign_id"])] = c
-    except HTTPException as exc:
-        catatan.append(f"Performa kampanye gagal dimuat: {exc.detail}")
+        except HTTPException as exc:
+            catatan.append(f"Performa sebagian kampanye gagal dimuat: {exc.detail}")
+            continue
+        respon = (data or {}).get("response")
+        for toko in respon if isinstance(respon, list) else [respon or {}]:
+            for c in toko.get("campaign_list") or []:
+                kinerja[int(c["campaign_id"])] = c
+    if ditolak:
+        catatan.append(
+            "Kampanye berikut bukan iklan produk (misalnya Shop GMV Max) dan dilewati di sini; lihat menu GMV Max: "
+            + ", ".join(str(i) for i in sorted(ditolak))
+        )
     saldo = None
     try:
         data = await signed_shop_request(session, akun, _PATH_ADS_SALDO)
