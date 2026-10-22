@@ -40,7 +40,8 @@ def mock_http(monkeypatch, handler):
 
 
 def test_designer_tools_only_in_designer_agent():
-    names = lambda agent: {d["name"] for d in tools.definitions(True, agent)}
+    def names(agent):
+        return {d["name"] for d in tools.definitions(True, agent)}
     assert set(designer.TOOLS) <= names("desainer")
     assert "proses_pesanan" not in names("desainer")  # no order/ads writes while designing
     for agent in ("auto", "operasional", "iklan", "coding"):
