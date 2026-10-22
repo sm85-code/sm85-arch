@@ -33,6 +33,23 @@ from tenants.marketplace_erp.modules.marketplace_erp.infrastructure.models impor
 
 admin = require_roles_marketplace_erp("admin")
 router = APIRouter(dependencies=[Depends(admin)])
+
+# The Data Produksi page that holds each kind of price.
+HALAMAN_HARGA = {
+    "produksi": "data_produk_kayu",
+    "non_kayu": "data_katalog_manual",
+    "pengecatan": "data_tarif_pengecatan",
+    "packing": "data_tarif_packing",
+}
+
+
+async def izin_harga(session, user, kind: str) -> None:
+    """Changing a price needs "tulis" on the page of its kind; the route rule can only tell that it is some price page."""
+    from tenants.marketplace_erp.modules.marketplace_erp.application import akses
+
+    punya = await akses.tingkat_halaman(session, await akses.peran_pengguna(session, user), HALAMAN_HARGA[kind])
+    if punya != "tulis":
+        raise HTTPException(403, "Akses ditolak")
 Money = Annotated[Decimal, Field(ge=0, max_digits=20, decimal_places=2)]
 
 
@@ -293,20 +310,32 @@ async def change_price_status(session, price_id, version, *, activate=False):
     return {"id": price_id, "action": action}
 
 
+async def izin_harga_id(session, user, price_id: str) -> None:
+    current = next((p for p in await price_list(session, include_inactive=True, include_deleted=True) if p["id"] == price_id), None)
+    if current:
+        await izin_harga(session, user, current["kind"])
+
+
 @router.delete("/prices/{price_id}")
 async def retire_price(price_id: str, version: int = Query(ge=0),
-                       session: AsyncSession = Depends(get_db_marketplace_erp)):
+                       session: AsyncSession = Depends(get_db_marketplace_erp),
+                       actor: UserMarketplaceErp = Depends(admin)):
+    await izin_harga_id(session, actor, price_id)
     return await change_price_status(session, price_id, version)
 
 
 @router.post("/prices/{price_id}/activate")
 async def activate_price(price_id: str, version: int = Query(ge=0),
-                         session: AsyncSession = Depends(get_db_marketplace_erp)):
+                         session: AsyncSession = Depends(get_db_marketplace_erp),
+                         actor: UserMarketplaceErp = Depends(admin)):
+    await izin_harga_id(session, actor, price_id)
     return await change_price_status(session, price_id, version, activate=True)
 
 
 @router.put("/prices/{price_id}")
-async def save_price(price_id: str, payload: PriceInput, session: AsyncSession = Depends(get_db_marketplace_erp)):
+async def save_price(price_id: str, payload: PriceInput, session: AsyncSession = Depends(get_db_marketplace_erp),
+                     actor: UserMarketplaceErp = Depends(admin)):
+    await izin_harga(session, actor, payload.kind)
     await lock_prices(session)
     if payload.kind == "pengecatan" and payload.warna is not None and not payload.warna:
         raise HTTPException(422, "Pilih warna cat untuk tarif pengecatan")
@@ -431,7 +460,9 @@ class BulkProductionInput(Strict):
 
 @router.post("/prices/bulk-structure")
 async def bulk_production_structure(payload: BulkProductionInput,
-                                    session: AsyncSession = Depends(get_db_marketplace_erp)):
+                                    session: AsyncSession = Depends(get_db_marketplace_erp),
+                                    actor: UserMarketplaceErp = Depends(admin)):
+    await izin_harga(session, actor, "produksi")
     await lock_prices(session)
     ids = {item.id for item in payload.items}
     if len(ids) != len(payload.items):

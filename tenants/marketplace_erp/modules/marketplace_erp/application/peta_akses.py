@@ -13,6 +13,9 @@ from __future__ import annotations
 import re
 
 GET = {"GET", "HEAD"}
+# Pages of Data Produksi that hold prices, and every page that may read the data for production.
+HARGA = "data_produk_kayu|data_katalog_manual|data_tarif_pengecatan|data_tarif_packing"
+LIHAT = "processing|data_tukang|data_supplier|" + HARGA + "|data_katalog_otomatis"
 PREFIX_API = "/api/marketplace-erp"
 
 # (regex on the path, methods or None for all, halaman)
@@ -49,12 +52,20 @@ ATURAN: list[tuple[re.Pattern, set[str] | None, str]] = [
         (r"^/produk(-keluarga)?(/|$)", None, "produk"),
         (r"^/listing", None, "listing"),
         (r"^/(gudang|stok|pengaturan-stok)", None, "gudang"),
-        # Processing: the work queue is Pemetaan Order; everything that is data kept for it is Data Produksi. Pemetaan Order
-        # may read that data (prices, parties, the supplier catalog) to map, but only Data Produksi changes it.
+        # Processing: the work queue is Pemetaan Order; each menu of Data Produksi is its own page. Pemetaan Order may read
+        # what it needs to map (prices, parties, the supplier catalog), only the page of that data changes it. A change to
+        # a price names the page by its kind of price, which only the request body tells: the route checks that itself
+        # (processing_workflow.izin_harga). /processing/import has no page and stays admin only.
         (r"^/processing/(candidates|jobs)", None, "processing"),
-        (r"^/processing/document-templates", None, "data_produksi"),
-        (r"^/processing/(data|prices|paint-colors|production-structure|parties|supplier-catalog)", GET, "processing|data_produksi"),
-        (r"^/processing", None, "data_produksi"),
+        (r"^/processing/document-templates", None, "data_template"),
+        (r"^/processing/parties/tukang", {"PUT"}, "data_tukang"),
+        (r"^/processing/parties/supplier", {"PUT"}, "data_supplier"),
+        (r"^/processing/paint-colors", {"PUT"}, "data_tarif_pengecatan"),
+        (r"^/processing/production-structure", {"PUT"}, "data_produk_kayu"),
+        (r"^/processing/supplier-catalog", {"POST", "DELETE"}, "data_katalog_otomatis"),
+        (r"^/processing/prices", {"PUT", "POST", "DELETE"}, HARGA),
+        (r"^/processing/parties", {"PUT"}, "data_tukang|data_supplier"),  # any other kind is refused by the route itself
+        (r"^/processing(/processing)?/(data|prices|paint-colors|production-structure|parties|supplier-catalog)", GET, LIHAT),
         # Keuangan
         (r"^/kategori-transaksi", None, "kategori_transaksi"),
         (r"^/laporan-keuangan", None, "laporan_keuangan"),
