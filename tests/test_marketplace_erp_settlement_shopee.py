@@ -169,3 +169,25 @@ async def test_deleting_a_shop_removes_its_settlement_rows(session):
     await services.simpan_settlement_pesanan(session, a, [erp_shopee.normalisasi_escrow("Z1", None, 1, DETAIL)])
     await services.delete_akun_marketplace(session, a.id)
     assert (await services.list_settlement_pesanan(session))["total"] == 0
+
+
+@pytest.mark.asyncio
+async def test_sync_settlement_keeps_read_orders_when_one_detail_fails(monkeypatch):
+    from fastapi import HTTPException as _HTTP
+
+    monkeypatch.setattr(erp_shopee, "live_sync_enabled", lambda: True)
+    monkeypatch.setattr(erp_shopee, "_akun_configured", lambda a: True)
+
+    async def fake_list(session, akun, dari, sampai):
+        return [{"order_sn": sn, "payout": 1000, "dirilis": None} for sn in ("A", "B", "C")]
+
+    async def fake(session, akun, path, *, params=None, **_):
+        if params["order_sn"] == "B":
+            raise _HTTP(502, "Shopee tidak menjawab")
+        return {"response": {"order_income": {"escrow_amount": 1000}}}
+
+    monkeypatch.setattr(erp_shopee, "daftar_escrow", fake_list)
+    monkeypatch.setattr(erp_shopee, "signed_shop_request", fake)
+    out = await erp_shopee.sync_settlement(None, object(), 0, 10)
+    assert sorted(r["order_sn"] for r in out["rows"]) == ["A", "C"]
+    assert out["sisa"] == 1 and out["gagal"] == 1

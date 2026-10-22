@@ -120,6 +120,13 @@ async def income_tracking(id: str, order_sn: str = Path(..., min_length=1, max_l
     return await adapter.tracking(session, await account(session, user, id), order_sn, package_number)
 
 
+@router.get("/akun/{id}/dana-cepat")
+async def dana_cepat(id: str, session: AsyncSession = DB, user: UserMarketplaceErp = ADMIN):
+    """Orders already paid early through Shopee Dana Cepat, so Menunggu Pencairan can label them."""
+    from tenants.marketplace_erp.modules.marketplace_erp.application.financial_fast_escrow import advanced_orders
+    return await advanced_orders(session, await account(session, user, id))
+
+
 @router.get("/akun/{id}/ringkasan-pendapatan-shopee")
 async def income_overview(id: str, session: AsyncSession = DB, user: UserMarketplaceErp = ADMIN):
     return await adapter.income_overview(session, await account(session, user, id))

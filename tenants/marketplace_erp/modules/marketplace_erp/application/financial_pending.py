@@ -114,7 +114,8 @@ async def weekly_pending_receivables(session, akun_id, periode, jumlah_kolom=Non
                       and now - timedelta(days=3) <= r["dirilis"].astimezone(WIB) <= now]
             page_info = {}
             pending, complete = await pending_pages(session, shop, now.date(), recent, page_info)
-            fast = shop_key(shop.nama_toko) == shop_key("BUMI TANI IND")
+            from .financial_fast_escrow import pakai_dana_cepat
+            fast = pakai_dana_cepat(shop)
             if fast:
                 from .financial_fast_escrow import LOOKBACK_DAYS, wallet_income
                 ignored = {}

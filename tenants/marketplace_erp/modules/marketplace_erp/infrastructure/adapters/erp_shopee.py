@@ -1215,15 +1215,22 @@ async def sync_settlement(
     gate = asyncio.Semaphore(_MODEL_CONCURRENCY)
     rows: list[dict] = []
 
+    gagal: list[str] = []
+
     async def _satu(e: dict) -> None:
         async with gate:
             if time.monotonic() - mulai > batas_detik:
                 return
-            data = await signed_shop_request(session, akun, _PATH_ESCROW_DETAIL, params={"order_sn": e["order_sn"]})
-            rows.append(normalisasi_escrow(e["order_sn"], e["dirilis"], e["payout"], data.get("response")))
+            try:
+                data = await signed_shop_request(session, akun, _PATH_ESCROW_DETAIL, params={"order_sn": e["order_sn"]})
+                rows.append(normalisasi_escrow(e["order_sn"], e["dirilis"], e["payout"], data.get("response")))
+            except HTTPException as exc:
+                # One unreadable order must not drop the ones already read; it stays in ``sisa`` for the next pull.
+                gagal.append(e["order_sn"])
+                _log.warning("shopee_settlement phase=detail_failed http=%s", exc.status_code)
 
     await asyncio.gather(*(_satu(e) for e in baru[:maks_detail]))
-    return {"rows": rows, "ditemukan": len(daftar), "sisa": len(baru) - len(rows)}
+    return {"rows": rows, "ditemukan": len(daftar), "sisa": len(baru) - len(rows), "gagal": len(gagal)}
 
 
 # --- Ads: shop-level performance and balance (v2.ads.*) ---------------------------------
