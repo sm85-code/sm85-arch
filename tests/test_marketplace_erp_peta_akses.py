@@ -46,7 +46,7 @@ def test_snapshot_is_complete_and_every_route_has_a_page():
 
 
 def test_every_page_in_the_rules_is_in_the_registry():
-    halaman = {h for _, _, h in (a for a in peta_akses.ATURAN)} - {"*"}
+    halaman = {h for _, _, hal in peta_akses.ATURAN for h in hal.split("|")} - {"*"}
     assert halaman <= set(akses.TINGKAT_HALAMAN)
 
 
@@ -99,3 +99,49 @@ async def test_a_role_with_no_ticks_still_gets_the_shop_list_but_nothing_else(se
         assert (await c.get("/akun")).status_code == 200  # any existing role
         assert (await c.get("/pesanan")).status_code == 403
         assert (await c.post("/akun")).status_code == 403
+
+
+@pytest.mark.asyncio
+async def test_pemetaan_order_and_data_produksi_are_separate_pages(sesi_peran):
+    from tenants.marketplace_erp.modules.marketplace_erp.infrastructure.models import Role, RoleHalaman
+
+    for rid, halaman in (("pemetaan", "processing"), ("datastaf", "data_produksi")):
+        sesi_peran.add(Role(id=rid, nama=rid, akses_toko="semua"))
+        sesi_peran.add(RoleHalaman(role_id=rid, halaman=halaman, tingkat="tulis"))
+    await sesi_peran.commit()
+    async with app_for("pemetaan", sesi_peran, "admin") as c:
+        assert (await c.get("/processing/jobs")).status_code == 200
+        assert (await c.put("/processing/jobs/J")).status_code == 200
+        assert (await c.get("/processing/prices")).status_code == 200  # reads what it needs to map
+        assert (await c.get("/processing/parties/tukang")).status_code == 200
+        assert (await c.put("/processing/prices/P")).status_code == 403  # but does not change it
+        assert (await c.put("/processing/parties/tukang/T")).status_code == 403
+        assert (await c.get("/processing/document-templates/INV")).status_code == 403
+    async with app_for("datastaf", sesi_peran, "admin") as c:
+        assert (await c.get("/processing/prices")).status_code == 200
+        assert (await c.put("/processing/prices/P")).status_code == 200
+        assert (await c.put("/processing/document-templates/INV")).status_code == 200
+        assert (await c.post("/processing/import")).status_code == 200
+        assert (await c.get("/processing/jobs")).status_code == 403
+        assert (await c.get("/processing/candidates")).status_code == 403
+
+
+@pytest.mark.asyncio
+async def test_a_role_that_had_processing_keeps_data_produksi_once(sesi_peran):
+    from sqlalchemy import select
+
+    from tenants.marketplace_erp.modules.marketplace_erp.infrastructure.models import PengaturanUi, Role, RoleHalaman
+
+    sesi_peran.add(Role(id="lama", nama="Lama", akses_toko="semua"))
+    sesi_peran.add(RoleHalaman(role_id="lama", halaman="processing", tingkat="baca"))
+    await sesi_peran.execute(PengaturanUi.__table__.delete().where(PengaturanUi.id == akses.PENANDA_PISAH))
+    await sesi_peran.commit()
+    await akses.pastikan_bawaan(sesi_peran)
+    await sesi_peran.commit()
+    assert (await sesi_peran.get(RoleHalaman, ("lama", "data_produksi"))).tingkat == "baca"
+    await sesi_peran.delete(await sesi_peran.get(RoleHalaman, ("lama", "data_produksi")))
+    await sesi_peran.commit()
+    await akses.pastikan_bawaan(sesi_peran)  # the admin took it away on purpose: not given back
+    await sesi_peran.commit()
+    assert await sesi_peran.get(RoleHalaman, ("lama", "data_produksi")) is None
+    assert (await sesi_peran.scalars(select(PengaturanUi).where(PengaturanUi.id == akses.PENANDA_PISAH))).first()
