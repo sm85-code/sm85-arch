@@ -766,8 +766,10 @@ def computed(row, data, order=None):
         packing_total=str(packing * qty),
         process_fee=str(fee * qty),
         packing_termasuk_cat=termasuk,
-        # What a reseller is billed: one price for the product (production and paint), wood packing apart, then the process fee.
-        harga_produk_total=str((production + paint) * qty) if reseller else None,
+        # What a reseller is billed, in components: the product (all a craftsman is paid), paint with ordinary packing,
+        # wood packing apart (only when the type is wood), and the process fee.
+        harga_produk_total=str(production * qty) if reseller else None,
+        cat_packing_total=str((paint + (packing if data.get("packing_type") != "kayu" else 0)) * qty) if reseller else None,
         packing_kayu_total=str(packing * qty) if reseller and data.get("packing_type") == "kayu" else "0",
         reseller_total=str((production + paint + packing + fee) * qty) if reseller else None,
         order_cancelled=bool(
@@ -777,40 +779,47 @@ def computed(row, data, order=None):
 
 
 WIB = ZoneInfo("Asia/Jakarta")
-# Which stage's completion date a cost is counted on, and the amount that stage costs per unit.
-BIAYA_TAHAP = (
-    ("produksi", "production_done_at", "production_price"),
-    ("supplier", "received_at", "production_price"),
-    ("pengecatan", "painting_done_at", "paint_price"),
-    ("packing", "packing_done_at", "packing_price"),
-)
+async def biaya_produksi(session, awal: date, akhir: date) -> dict:
+    """Arus Kas references from Pemetaan Order for the stages finished in a date range (WIB). Read only: nothing is posted.
 
-
-async def biaya_produksi(session, awal: date, akhir: date) -> list[dict]:
-    """Cost of the stages finished in a date range (WIB), per date, stage and party. Read only: nothing is posted anywhere."""
-    out: dict[tuple[str, str, str], Decimal] = {}
+    "pembayaran" is what is paid out: the production price to a craftsman or supplier, and packing only when a supplier
+    packs. Paint and our own packing are nobody's bill. "tagihan" is what each reseller is billed, in components."""
+    bayar: dict[tuple[str, str, str], Decimal] = {}
+    tagih: dict[tuple[str, str], dict[str, Decimal]] = {}
     for row in (await session.scalars(select(ProcessingJob))).all():
         data = json.loads(row.payload_json)
-        for tahap, waktu, harga in BIAYA_TAHAP:
-            selesai = data.get(waktu)
-            if not selesai:
-                continue
-            hari = datetime.fromisoformat(selesai).astimezone(WIB).date()
+        qty = data["qty"]
+        tukang_selesai = data.get("production_done_at") or data.get("received_at")
+        if tukang_selesai:
+            hari = datetime.fromisoformat(tukang_selesai).astimezone(WIB).date()
+            jumlah = Decimal(data.get("production_price") or "0") * qty
+            if awal <= hari <= akhir and jumlah:
+                tahap = "produksi" if data["route"] == "tukang" else "supplier"
+                key = (hari.isoformat(), tahap, data.get("party_name") or "-")
+                bayar[key] = bayar.get(key, Decimal(0)) + jumlah
+        if data.get("packing_done_at"):
+            hari = datetime.fromisoformat(data["packing_done_at"]).astimezone(WIB).date()
             if not awal <= hari <= akhir:
                 continue
-            if tahap == "pengecatan" and (data["route"] != "tukang" or data.get("color") == "Polos / Tanpa Cat"):
-                continue
-            if tahap == "packing" and packing_termasuk_cat(data):
-                continue
-            jumlah = Decimal(data.get(harga) or "0") * data["qty"]
-            if jumlah:
-                if tahap == "packing":
-                    pihak = data.get("packing_party_name") or "" if data.get("packing_by") == "supplier" else ""
-                else:
-                    pihak = data.get("party_name") or "-" if tahap in ("produksi", "supplier") else ""
-                key = (hari.isoformat(), tahap, pihak)
-                out[key] = out.get(key, Decimal(0)) + jumlah
-    return [{"tanggal": t, "tahap": h, "pihak": p, "jumlah": str(v)} for (t, h, p), v in sorted(out.items())]
+            hitung = computed(row, data)
+            if data.get("packing_by") == "supplier" and Decimal(hitung["packing_total"]):
+                key = (hari.isoformat(), "packing", data.get("packing_party_name") or "-")
+                bayar[key] = bayar.get(key, Decimal(0)) + Decimal(hitung["packing_total"])
+            if data["source"] == "reseller":
+                kom = tagih.setdefault((hari.isoformat(), data.get("customer") or "-"), {})
+                for nama, nilai in (
+                    ("harga_produk", hitung["harga_produk_total"]),
+                    ("cat_packing", hitung["cat_packing_total"]),
+                    ("biaya_proses", hitung["process_fee"]),
+                    ("packing_kayu", hitung["packing_kayu_total"]),
+                ):
+                    kom[nama] = kom.get(nama, Decimal(0)) + Decimal(nilai)
+    return {
+        "pembayaran": [{"tanggal": t, "tahap": h, "pihak": p, "jumlah": str(v)} for (t, h, p), v in sorted(bayar.items())],
+        "tagihan": [
+            {"tanggal": t, "reseller": r, **{k: str(v) for k, v in kom.items()}} for (t, r), kom in sorted(tagih.items())
+        ],
+    }
 
 
 @router.get("/jobs")

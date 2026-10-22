@@ -141,10 +141,12 @@ async def test_reseller_multiple_products_price_history_fees_and_stage_times(cli
     assert first["production_total"] == "300000" and first["process_fee"] == "20000"
     # Painted wood for a reseller: ordinary packing is inside the paint price, so one product price plus the process fee.
     assert first["packing_termasuk_cat"] and first["packing_total"] == "0"
-    assert first["harga_produk_total"] == "380000" and first["packing_kayu_total"] == "0"
+    assert first["harga_produk_total"] == "300000" and first["cat_packing_total"] == "80000"
+    assert first["packing_kayu_total"] == "0" and first["process_fee"] == "20000"
     assert first["reseller_total"] == "400000"
     kayu = await save(http, first, paint_price="40000", packing_type="kayu")
-    assert not kayu["packing_termasuk_cat"] and kayu["packing_kayu_total"] == "10000" and kayu["reseller_total"] == "410000"
+    assert not kayu["packing_termasuk_cat"] and kayu["packing_kayu_total"] == "10000" and kayu["cat_packing_total"] == "80000"
+    assert kayu["reseller_total"] == "410000"
     first = await save(http, kayu, paint_price="40000")
     second = await save(
         http,
@@ -204,10 +206,14 @@ async def test_reseller_multiple_products_price_history_fees_and_stage_times(cli
     hari = datetime.now(ZoneInfo("Asia/Jakarta")).date()
     async with factory() as session:
         biaya = await processing_workflow.biaya_produksi(session, hari, hari)
-    jumlah = {(i["tahap"], i["pihak"]): i["jumlah"] for i in biaya}
-    assert jumlah == {("produksi", "Tukang 1"): "300000", ("pengecatan", ""): "80000", ("produksi", "Tukang 2"): "200000", ("packing", "Supplier 1"): "14000"}
+    jumlah = {(i["tahap"], i["pihak"]): i["jumlah"] for i in biaya["pembayaran"]}
+    # A craftsman is paid the product price only (paint and own packing are nobody's bill); a packing supplier is paid too.
+    assert jumlah == {("produksi", "Tukang 1"): "300000", ("produksi", "Tukang 2"): "200000", ("packing", "Supplier 1"): "14000"}
+    assert [(t["reseller"], t["harga_produk"], t["cat_packing"], t["biaya_proses"], t["packing_kayu"]) for t in biaya["tagihan"]] == [
+        ("Reseller A", "300000", "80000", "20000", "14000")
+    ]
     async with factory() as session:
-        assert await processing_workflow.biaya_produksi(session, hari.replace(year=hari.year - 1), hari.replace(year=hari.year - 1)) == []
+        assert await processing_workflow.biaya_produksi(session, hari.replace(year=hari.year - 1), hari.replace(year=hari.year - 1)) == {"pembayaran": [], "tagihan": []}
     async with factory() as session:
         assert (
             json.loads((await session.get(ProcessingCatalog, "global")).payload_json)["harga_produksi"][0]["harga"]
