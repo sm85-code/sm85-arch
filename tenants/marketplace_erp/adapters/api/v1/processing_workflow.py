@@ -617,6 +617,35 @@ PER_PAGE = 50
 CANDIDATE_STATUS = {"menunggu": "to_ship", "dikirim": "shipped", "selesai": "completed"}
 
 
+@router.get("/candidates/rekap")
+async def candidates_rekap(
+    session: AsyncSession = Depends(get_db_marketplace_erp),
+    actor: UserMarketplaceErp = Depends(admin),
+):
+    """Items already mapped vs still waiting, per shop: a small recap above the mapping list (same scope as /candidates)."""
+    if not {"tukang", "supplier"} & await tab_terbaca(session, actor):
+        raise HTTPException(403, "Akses ditolak")
+    has_job = select(ProcessingJob.id).where(ProcessingJob.source_item_id == ItemPesanan.id).exists()
+    toko = func.coalesce(AkunMarketplace.nama_toko, "Pesanan manual")
+
+    async def per_toko(*filters):
+        rows = await session.execute(
+            select(toko, func.count())
+            .select_from(ItemPesanan)
+            .join(Pesanan, Pesanan.id == ItemPesanan.pesanan_id)
+            .outerjoin(AkunMarketplace, AkunMarketplace.id == Pesanan.akun_id)
+            .where(*filters)
+            .group_by(toko)
+        )
+        return {name: n for name, n in rows.all()}
+
+    belum = await per_toko(siap(), ~has_job)
+    sudah = await per_toko(Pesanan.platform.in_(["shopee", PLATFORM_MANUAL]), has_job)
+    names = sorted(set(belum) | set(sudah))
+    items = [{"toko": n, "belum": belum.get(n, 0), "sudah": sudah.get(n, 0)} for n in names]
+    return {"items": items, "belum": sum(belum.values()), "sudah": sum(sudah.values())}
+
+
 @router.get("/candidates")
 async def candidates(
     q: str = Query("", max_length=200),

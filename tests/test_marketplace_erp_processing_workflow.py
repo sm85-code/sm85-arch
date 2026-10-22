@@ -271,6 +271,8 @@ async def test_candidate_status_filters_and_releasing_a_mapping_at_any_stage(cli
     assert [(await count(s)).json()["total"] for s in ("menunggu", "dikirim", "selesai", "semua", "dipetakan")] == [3, 0, 0, 3, 0]
     assert (await http.get("/processing/candidates")).json()["items"][0]["status"] == "to_ship"
     assert (await http.post("/processing/jobs/select", json={"route": "tukang", "item_ids": ["i1", "i2"]})).status_code == 200
+    rekap = (await http.get("/processing/candidates/rekap")).json()
+    assert (rekap["belum"], rekap["sudah"]) == (1, 2) and sum(r["belum"] + r["sudah"] for r in rekap["items"]) == 3
     mapped = (await count("dipetakan")).json()
     assert mapped["total"] == 2 and all(i["job"]["route"] == "tukang" and i["job"]["stage"] == "draft" for i in mapped["items"])
     assert (await count("menunggu")).json()["total"] == 1
@@ -319,6 +321,7 @@ async def test_all_workflow_endpoints_are_admin_only(client, role, sesi_peran):
         ("PUT", "/prices/p1"),
         ("GET", "/jobs"),
         ("GET", "/candidates"),
+        ("GET", "/candidates/rekap"),
         ("POST", "/jobs/select"),
         ("POST", "/jobs/manual"),
         ("GET", "/production-structure"),
