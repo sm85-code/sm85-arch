@@ -93,6 +93,8 @@ async def product_details(session, akun, item_id, kind):
     if not isinstance(rows, list) or any(not isinstance(r, dict) for r in rows):
         management.incomplete(path, result)
     row = next((r for r in rows if str(r.get("item_id")) == str(item_id)), None)
+    if kind == "promosi" and row is not None and row.get("promotion") is None:
+        row = {**row, "promotion": []}  # Shopee omits the key for an item with no promotion
     if row is None or row.get("fail_error") or (kind == "promosi" and not isinstance(row.get("promotion"), list)):
         management.incomplete(path, {"request_id": None})
     if kind == "promosi":
