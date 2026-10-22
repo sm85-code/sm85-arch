@@ -1,12 +1,29 @@
 """BUMI TANI only: actual wallet credits, never a second copy of final escrow totals."""
 from datetime import datetime, time, timedelta
 from decimal import Decimal
+import os
 import re
+from unicodedata import normalize
 
 from fastapi import HTTPException
 
 from .financial_reports import WIB, ZERO, money
 from ..infrastructure.adapters import erp_shopee_workflows as provider
+
+def _key(name):
+    return " ".join(normalize("NFKC", name or "").casefold().split())
+
+
+def dana_cepat_shops():
+    """Shops enrolled in Shopee Dana Cepat. Configurable (comma separated) so a renamed or newly enrolled shop does not
+    need a code change; the default keeps the current shop."""
+    raw = os.getenv("SHOPEE_DANA_CEPAT_TOKO", "BUMI TANI IND")
+    return {_key(n) for n in raw.split(",") if n.strip()}
+
+
+def pakai_dana_cepat(shop):
+    return _key(getattr(shop, "nama_toko", "")) in dana_cepat_shops()
+
 
 KINDS = {
     '452': 'advance', 'FAST_ESCROW_DISBURSE': 'advance',
@@ -146,3 +163,18 @@ def dana_cepat_cells(events, periods, end, start):
                               paling_awal=earliest.date().isoformat() if earliest else None,
                           ) if available else None))
     return cells
+
+
+async def advanced_orders(session, shop, now=None):
+    """Orders that received a Dana Cepat advance (wallet `advance` credits) in the last tenors, with the amount
+    already paid out early. Read-only; empty for shops not enrolled."""
+    if not pakai_dana_cepat(shop):
+        return {"aktif": False, "pesanan": {}}
+    now = now or datetime.now(WIB)
+    events = await wallet_income(session, shop, now - timedelta(days=LOOKBACK_DAYS), now)
+    paid = {}
+    for event in events:
+        if event["kind"] == "advance":
+            for sn in event["orders"]:
+                paid[sn] = paid.get(sn, ZERO) + event["amount"] / max(1, len(event["orders"]))
+    return {"aktif": True, "pesanan": {sn: str(v) for sn, v in sorted(paid.items())}}

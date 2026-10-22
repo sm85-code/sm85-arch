@@ -2713,7 +2713,7 @@ async def sinkron_settlement_akun(session: AsyncSession, akun: AkunMarketplace, 
     )
     hasil = await erp_shopee.sync_settlement(session, akun, sekarang - hari * 86400, sekarang, sudah)
     simpan = await simpan_settlement_pesanan(session, akun, hasil["rows"])
-    return {"ditemukan": hasil["ditemukan"], "sisa": hasil["sisa"], **simpan}
+    return {"ditemukan": hasil["ditemukan"], "sisa": hasil["sisa"], "gagal": hasil.get("gagal", 0), **simpan}
 
 
 def _kondisi_settlement(akun_id: str | None, dari: datetime | None, sampai: datetime | None, q: str | None) -> list:

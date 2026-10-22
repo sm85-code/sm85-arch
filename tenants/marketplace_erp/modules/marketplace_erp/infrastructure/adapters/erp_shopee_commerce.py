@@ -235,6 +235,9 @@ async def income(session, akun, start, end, status, cursor, size, *, tolerate_un
                         raise InvalidOperation
                 except (InvalidOperation, ValueError):
                     reject("monetary_value")
+    if rows and not cursor:
+        # Field names only (never values): shows whether Shopee sends estimated_payout_time for this status.
+        _log.info("shopee_income phase=fields income_status=%s rows=%d fields=%s", status, len(rows), sorted(k for k in rows[0] if isinstance(k, str)))
     known = isinstance(page, dict) and page.get("cursor") is not None
     following = page["cursor"] if known else ""
     if not isinstance(following, str) or (following and following == cursor):
