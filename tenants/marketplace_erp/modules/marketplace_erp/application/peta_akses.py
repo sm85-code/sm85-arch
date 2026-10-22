@@ -56,7 +56,7 @@ ATURAN: list[tuple[re.Pattern, set[str] | None, str]] = [
         # Processing: the work queue is Pemetaan Order; each menu of Data Produksi is its own page. Pemetaan Order may read
         # what it needs to map (prices, parties, the supplier catalog), only the page of that data changes it. A change to
         # a price names the page by its kind of price, which only the request body tells: the route checks that itself
-        # (processing_workflow.izin_harga). /processing/import has no page and stays admin only.
+        # (processing_workflow.izin_harga).
         (r"^/processing/(candidates|jobs)", None, PROSES),  # which tab a change belongs to: processing_workflow.izin_tab
         (r"^/processing/document-templates", None, "data_template"),
         (r"^/processing/parties/tukang", {"PUT"}, "data_tukang"),

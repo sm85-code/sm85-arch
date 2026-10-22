@@ -42,7 +42,7 @@ def app_for(role, session, *fixed):
 
 def test_snapshot_is_complete_and_every_route_has_a_page():
     assert len(SNAPSHOT) > 200
-    # /processing/import is a one-off admin tool without a page: it keeps its fixed admin-only list.
+    # /processing/import (the one-off import of the old spreadsheet) has been removed; the snapshot is of the old routes.
     assert [s["path"] for s in SNAPSHOT if peta_akses.cari(s["path"], s["method"]) is None] == ["/processing/processing/import"]
 
 
@@ -131,7 +131,6 @@ async def test_pemetaan_order_and_each_data_produksi_menu_are_separate_pages(ses
     async with app_for("tpl", sesi_peran, "admin") as c:
         assert (await c.put("/processing/document-templates/INV")).status_code == 200
         assert (await c.put("/processing/prices/P")).status_code == 403
-        assert (await c.post("/processing/import")).status_code == 403  # no page: admin only
 
 
 @pytest.mark.asyncio
@@ -202,3 +201,22 @@ async def test_a_role_that_had_processing_keeps_every_data_menu_once(sesi_peran)
     await sesi_peran.commit()
     assert await sesi_peran.get(RoleHalaman, ("lama", "data_tukang")) is None
     assert (await sesi_peran.scalars(select(PengaturanUi).where(PengaturanUi.id == akses.PENANDA_MENU))).first()
+
+
+@pytest.mark.asyncio
+async def test_a_pemetaan_tab_lists_only_the_jobs_that_belong_to_it(sesi_peran):
+    from tenants.marketplace_erp.adapters.api.v1.processing_workflow import milik_tab, tab_terbaca
+    from tenants.marketplace_erp.modules.marketplace_erp.infrastructure.models import Role, RoleHalaman
+
+    sesi_peran.add(Role(id="pack", nama="Pack", akses_toko="semua"))
+    sesi_peran.add(RoleHalaman(role_id="pack", halaman="processing_packing", tingkat="baca"))
+    await sesi_peran.commit()
+    assert await tab_terbaca(sesi_peran, SimpleNamespace(id="u", role="pack")) == {"packing"}
+    assert await tab_terbaca(sesi_peran, SimpleNamespace(id="u", role="admin")) == {"tukang", "supplier", "pengecatan", "packing"}
+    polos = "Polos / Tanpa Cat"
+    baru = {"route": "tukang", "color": "Putih"}
+    assert milik_tab(baru, "tukang") and not milik_tab(baru, "packing") and not milik_tab(baru, "pengecatan")
+    sudah_produksi = {"route": "tukang", "color": "Putih", "production_done_at": "x"}
+    assert milik_tab(sudah_produksi, "pengecatan") and not milik_tab(sudah_produksi, "packing")
+    assert milik_tab({"route": "tukang", "color": polos, "production_done_at": "x"}, "packing")
+    assert milik_tab({"route": "supplier", "color": "", "received_at": "x"}, "packing")

@@ -62,6 +62,27 @@ async def izin_tab(session, user, tab: str) -> None:
         raise HTTPException(403, "Akses ditolak")
 
 
+def milik_tab(data, tab: str) -> bool:
+    """Whether a job is listed on a Pemetaan Order tab (the same rule as the screen's tabs)."""
+    if tab in ("tukang", "supplier"):
+        return data["route"] == tab
+    if tab == "pengecatan":
+        return bool(data.get("production_done_at")) and data.get("color") != "Polos / Tanpa Cat"
+    return bool(
+        data.get("received_at")
+        or data.get("painting_done_at")
+        or (data.get("production_done_at") and data.get("color") == "Polos / Tanpa Cat")
+    )
+
+
+async def tab_terbaca(session, user) -> set[str]:
+    """The Pemetaan Order tabs a user may look at (any level)."""
+    from tenants.marketplace_erp.modules.marketplace_erp.application import akses
+
+    roles = await akses.peran_pengguna(session, user)
+    return {t for t, h in HALAMAN_TAB.items() if await akses.tingkat_halaman(session, roles, h) is not None}
+
+
 async def izin_harga(session, user, kind: str) -> None:
     """Changing a price needs "tulis" on the page of its kind; the route rule can only tell that it is some price page."""
     from tenants.marketplace_erp.modules.marketplace_erp.application import akses
@@ -602,7 +623,10 @@ async def candidates(
     page: int = Query(1, ge=1),
     status: Literal["menunggu", "dikirim", "selesai", "semua", "dipetakan"] = "menunggu",
     session: AsyncSession = Depends(get_db_marketplace_erp),
+    actor: UserMarketplaceErp = Depends(admin),
 ):
+    if not {"tukang", "supplier"} & await tab_terbaca(session, actor):
+        raise HTTPException(403, "Akses ditolak")  # items to map are picked on the Tukang Kayu or Supplier tab
     has_job = select(ProcessingJob.id).where(ProcessingJob.source_item_id == ItemPesanan.id).exists()
     if status == "dipetakan":
         # Mapped items stay listed whatever the order became, so a cancelled one can be released too.
@@ -875,10 +899,16 @@ async def biaya_produksi(session, awal: date, akhir: date) -> dict:
 
 
 @router.get("/jobs")
-async def jobs(session: AsyncSession = Depends(get_db_marketplace_erp)):
-    rows = (
-        await session.scalars(select(ProcessingJob).order_by(ProcessingJob.created_at.desc(), ProcessingJob.id))
-    ).all()
+async def jobs(session: AsyncSession = Depends(get_db_marketplace_erp), actor: UserMarketplaceErp = Depends(admin)):
+    tab = await tab_terbaca(session, actor)
+    # Only the jobs of the tabs this user may look at: a role given Packing does not see what is being built.
+    rows = [
+        r
+        for r in (
+            await session.scalars(select(ProcessingJob).order_by(ProcessingJob.created_at.desc(), ProcessingJob.id))
+        ).all()
+        if any(milik_tab(json.loads(r.payload_json), t) for t in tab)
+    ]
     # Current cancellation is read without altering the imported order or losing production history.
     order_ids = {json.loads(r.payload_json).get("order_id") for r in rows if r.source_item_id}
     orders = (
