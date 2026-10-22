@@ -837,7 +837,13 @@ async def ambil_item_mentah(session: Any, akun: Any) -> list[tuple[dict, dict | 
             return None
         async with gate:
             try:
-                data = await signed_shop_request(session, akun, _PATH_MODEL_LIST, params={"item_id": item["item_id"]})
+                try:
+                    data = await signed_shop_request(session, akun, _PATH_MODEL_LIST, params={"item_id": item["item_id"]})
+                except HTTPException as exc:
+                    if isinstance(exc, ShopeeAPIError):
+                        raise
+                    # A transient transport failure of one item would otherwise abort the whole catalogue: retry once.
+                    data = await signed_shop_request(session, akun, _PATH_MODEL_LIST, params={"item_id": item["item_id"]})
             except HTTPException:
                 if str(item.get("item_status") or "NORMAL").upper() in ("NORMAL", "UNLIST"):
                     raise

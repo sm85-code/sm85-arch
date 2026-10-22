@@ -370,3 +370,29 @@ async def test_catalogue_list_rows_carry_the_variants_and_the_old_summary_still_
     await session.flush()
     lama = (await services.list_katalog_shopee(session))["items"][0]["varian"][0]
     assert lama["nama"] == "Merah" and "model_id" not in lama and "berat_gram" not in lama
+
+
+@pytest.mark.asyncio
+async def test_catalogue_variant_read_is_retried_once_after_a_transport_failure(monkeypatch):
+    from types import SimpleNamespace
+
+    from fastapi import HTTPException
+
+    monkeypatch.setattr(erp_shopee, "SHOPEE_LIVE_SYNC", True)
+    monkeypatch.setattr(erp_shopee, "SHOPEE_PARTNER_ID", "1")
+    monkeypatch.setattr(erp_shopee, "SHOPEE_PARTNER_KEY", "k")
+    percobaan = []
+
+    async def fake(session, akun, path, *, params=None, **_):
+        if path == erp_shopee._PATH_ITEM_LIST:
+            return {"response": {"item": [{"item_id": 4}], "has_next_page": False}}
+        if path == erp_shopee._PATH_ITEM_BASE:
+            return {"response": {"item_list": [{"item_id": 4, "item_status": "NORMAL", "has_model": True}]}}
+        percobaan.append(path)
+        if len(percobaan) == 1:
+            raise HTTPException(status_code=502, detail="koneksi terputus")
+        return {"response": {"model": [{"model_id": 1}]}}
+
+    monkeypatch.setattr(erp_shopee, "signed_shop_request", fake)
+    hasil = await erp_shopee.ambil_item_mentah(None, SimpleNamespace(access_token="at", id_toko_eksternal="5"))
+    assert len(percobaan) == 2 and hasil[0][1] == {"model": [{"model_id": 1}]}
