@@ -104,6 +104,32 @@ async def gmv_mutation(session, akun, payload, action):
     return {"ok": True, "campaign_id": str(ident), "request_id": data.get("request_id"), "warnings": [str(data["warning"])] if data.get("warning") else []}
 
 
+GMV_HINTS = {
+    "ads_error_not_whitelisted_for_product_gms": "Toko belum masuk daftar Shopee untuk GMV Max produk.",
+    "ads_error_product_gms_campaign_not_found": "Kampanye GMV Max tidak ditemukan. Isi ID Kampanye dari Seller Centre (atau dari catatan menu Kampanye).",
+    "ads.performance.error_same_start_end_dates": "Tanggal mulai dan selesai tidak boleh sama.",
+    "ads.performance.error_date_range_too_long": "Periode terlalu panjang; perpendek rentang tanggal.",
+    "ads.performance.error_date_in_future": "Tanggal tidak boleh di masa depan.",
+    "ads.performance.error_date_too_old": "Tanggal tidak boleh lebih dari 6 bulan lalu.",
+    "error_api_permission": "Aplikasi belum punya izin Ads API di Shopee Open Platform Console.",
+}
+
+
+def readable_gmv_error(exc):
+    """The gateway hides 5xx bodies, so a quick Shopee rejection showed only a generic 'server lambat'. Return it as
+    424 with Shopee's own code and message (no credentials), plus a hint for known codes."""
+    if isinstance(exc, provider.ShopeeNotConfigured) or exc.status_code not in (502, 503, 504):
+        return exc
+    if isinstance(exc, provider.ShopeeAPIError):
+        hint = GMV_HINTS.get(str(exc.error))
+        message = f"Shopee menolak laporan GMV Max: {exc.error} {exc.message}".strip() + (f" {hint}" if hint else "")
+        if exc.request_id:
+            message += f" (request_id: {exc.request_id})"
+    else:
+        message = f"Laporan GMV Max belum dijawab Shopee: {exc.detail}"
+    return HTTPException(424, message)
+
+
 def shift_months(value, months):
     absolute = value.year * 12 + value.month - 1 + months
     year, month = divmod(absolute, 12)
@@ -121,7 +147,10 @@ async def gmv_performance(session, akun, campaign_id, start, end, offset=0, limi
     if per_item:
         body.update(offset=offset, limit=limit)
     path = "/api/v2/ads/" + ("get_gms_item_performance" if per_item else "get_gms_campaign_performance")
-    data = await provider.signed_shop_request(session, akun, path, method="POST", body=body, read_only=True, timeout=20.0)
+    try:
+        data = await provider.signed_shop_request(session, akun, path, method="POST", body=body, read_only=True, timeout=20.0)
+    except HTTPException as exc:
+        raise readable_gmv_error(exc) from exc
     response = data.get("response")
     if not isinstance(response, dict) or type(response.get("campaign_id")) is not int or response["campaign_id"] <= 0 or (campaign_id is not None and str(response["campaign_id"]) != str(campaign_id)) or (per_item and (not isinstance(response.get("result_list"), list) or type(response.get("has_next_page")) is not bool or type(response.get("total")) is not int)) or (not per_item and not isinstance(response.get("report"), dict)):
         incomplete(path, data)

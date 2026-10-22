@@ -172,9 +172,11 @@ async def advanced_orders(session, shop, now=None):
         return {"aktif": False, "pesanan": {}}
     now = now or datetime.now(WIB)
     events = await wallet_income(session, shop, now - timedelta(days=LOOKBACK_DAYS), now)
-    paid = {}
+    paid, orphan = {}, 0
     for event in events:
         if event["kind"] == "advance":
+            if not event["orders"]:
+                orphan += 1
             for sn in event["orders"]:
                 paid[sn] = paid.get(sn, ZERO) + event["amount"] / max(1, len(event["orders"]))
-    return {"aktif": True, "pesanan": {sn: str(v) for sn, v in sorted(paid.items())}}
+    return {"aktif": True, "pesanan": {sn: str(v) for sn, v in sorted(paid.items())}, "tanpa_pesanan": orphan}

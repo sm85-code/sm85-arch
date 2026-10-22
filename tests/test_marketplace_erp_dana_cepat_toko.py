@@ -29,5 +29,5 @@ async def test_advanced_orders_lists_only_advances(monkeypatch):
 
     monkeypatch.setattr(fe, "wallet_income", fake)
     out = await fe.advanced_orders(None, SimpleNamespace(nama_toko="BUMI TANI IND"), now=at)
-    assert out == {"aktif": True, "pesanan": {"A": "1000"}}
+    assert out == {"aktif": True, "pesanan": {"A": "1000"}, "tanpa_pesanan": 0}
     assert (await fe.advanced_orders(None, SimpleNamespace(nama_toko="X"), now=at)) == {"aktif": False, "pesanan": {}}

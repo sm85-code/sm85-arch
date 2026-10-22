@@ -75,3 +75,15 @@ def test_contract_rejects_empty_changes_and_wrong_action_fields():
         schemas.ModelEdit(model_id=9, model_sku="x", dimension={"package_length": 1, "package_width": 1, "package_height": 1})
     with pytest.raises(ValidationError):
         schemas.GmvEdit(campaign_id=7, edit_action="pause", daily_budget=1, reference_id=uuid4())
+
+
+@pytest.mark.asyncio
+async def test_gmv_report_shows_shopee_rejection_as_424(monkeypatch):
+    monkeypatch.setattr(schemas, "today", lambda: date(2026, 10, 22))
+    request = AsyncMock(side_effect=management.provider.ShopeeAPIError(
+        "/api/v2/ads/get_gms_campaign_performance", "ads_error_not_whitelisted_for_product_gms", "This shop is not whitelisted for Product GMS.", "rid-1"))
+    monkeypatch.setattr(management.provider, "signed_shop_request", request)
+    with pytest.raises(HTTPException) as exc:
+        await management.gmv_performance(None, None, None, date(2026, 10, 15), date(2026, 10, 21))
+    assert exc.value.status_code == 424
+    assert "not whitelisted" in exc.value.detail and "rid-1" in exc.value.detail and "GMV Max produk" in exc.value.detail
