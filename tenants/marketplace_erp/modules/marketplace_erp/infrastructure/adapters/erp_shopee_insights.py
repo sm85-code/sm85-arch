@@ -76,7 +76,7 @@ async def product_stats(session, akun, item_id):
 
 async def diagnosis(session, akun, item_ids):
     path = "/api/v2/product/get_item_content_diagnosis_result"
-    data = await provider.signed_shop_request(session, akun, path, method="POST", body={"item_id_list": item_ids})
+    data = await provider.signed_shop_request(session, akun, path, method="POST", body={"item_id_list": item_ids}, read_only=True)
     response = data.get("response")
     if not isinstance(response, dict) or not isinstance(response.get("success_item_list", []), list) or not isinstance(response.get("failure_item_list", []), list):
         raise provider.ShopeeAPIError(path, "incomplete_response", "Diagnosis Shopee belum lengkap.", data.get("request_id"))
