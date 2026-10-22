@@ -44,8 +44,9 @@ def test_designer_tools_only_in_designer_agent():
         return {d["name"] for d in tools.definitions(True, agent)}
     assert set(designer.TOOLS) <= names("desainer")
     assert "proses_pesanan" not in names("desainer")  # no order/ads writes while designing
-    for agent in ("auto", "operasional", "iklan", "coding"):
-        assert not set(designer.TOOLS) & names(agent)
+    for agent in ("auto", "operasional", "coding"):
+        assert set(designer.TOOLS) & names(agent) == designer.SHARED
+    assert "daftar_toko" in names("auto") and "daftar_toko" not in {d["name"] for d in tools.definitions(False, "auto", shop_known=True)}
     assert not any(tools.TOOLS[n][1] for n in designer.TOOLS)  # never a marketplace write
 
 
@@ -65,7 +66,8 @@ async def test_research_anthropic_returns_sources_and_cost(session, monkeypatch)
     t = turn()
     out = await designer.execute(session, USER, t, "riset_web", designer.Research(kueri="tas rajut wanita"))
     assert out["penyedia"] == "anthropic" and "Rp45.000" in out["ringkasan"]
-    assert {s["url"] for s in out["sumber"]} == {"https://a.example/1", "https://b.example/2"}
+    # Only the cited source is shown; uncited search hits (often unrelated) are dropped.
+    assert {s["url"] for s in out["sumber"]} == {"https://b.example/2"}
     body = json.loads(seen[0].content)
     assert body["model"] == config.MODEL and body["tools"][0]["name"] == "web_search"
     assert "test-only" not in json.dumps(out)
@@ -134,3 +136,39 @@ async def test_settings_long_playbook_and_model_allowlist(session):
     assert s["prompt"] == long and s["model_openai"] == config.MANAGER_MODEL and s["penyedia"] == "otomatis"
     with pytest.raises(HTTPException):
         await pengaturan_ui.simpan(session, "menu:/pesanan", "x" * 300)  # ordinary texts keep the 120 limit
+
+
+@pytest.mark.asyncio
+async def test_shopee_competitors_restricted_and_validated(session, monkeypatch):
+    monkeypatch.setenv("ANTHROPIC_API_KEY", "test-only")
+    seen = []
+    rows = [{"nama": "Tas Rajut A", "toko": "Toko A", "harga": 85000, "terjual": "1rb+", "rating": 4.8, "url": "https://shopee.co.id/tas-a-i.1.2"},
+            {"nama": "Karangan", "harga": 1, "url": "https://shopee.co.id/tidak-dicari-i.9.9"},
+            {"nama": "Tokopedia", "harga": 2, "url": "https://www.tokopedia.com/x"}]
+
+    def handler(request):
+        seen.append(json.loads(request.content))
+        return httpx.Response(200, json={"content": [
+            {"type": "web_search_tool_result", "content": [{"url": "https://shopee.co.id/tas-a-i.1.2", "title": "Tas A"}, {"url": "https://www.tokopedia.com/x", "title": "T"}]},
+            {"type": "text", "text": json.dumps(rows)}], "usage": {"input_tokens": 10, "output_tokens": 10}})
+    mock_http(monkeypatch, handler)
+    out = await designer.execute(session, USER, turn(), "kompetitor_shopee", designer.Competitors(kueri="tas rajut", jumlah=3))
+    assert seen[0]["tools"][0]["allowed_domains"] == ["shopee.co.id"]
+    assert [r["nama"] for r in out["pesaing"]] == ["Tas Rajut A"]
+    assert out["pesaing"][0] == {"nama": "Tas Rajut A", "toko": "Toko A", "harga": 85000, "terjual": "1rb+", "rating": 4.8, "url": "https://shopee.co.id/tas-a-i.1.2"}
+
+
+def test_parse_competitors_rejects_bad_json_and_hosts():
+    assert designer.parse_competitors("bukan json", set(), 5) == []
+    assert designer.parse_competitors('[{"url":"https://evilshopee.co.id/x"},{"url":"http://shopee.co.id/x"}]', set(), 5) == []
+
+
+@pytest.mark.asyncio
+async def test_shop_list_scoped_to_selected_shop(session):
+    from tenants.marketplace_erp.modules.marketplace_erp.infrastructure.models import AkunMarketplace
+    session.add_all([AkunMarketplace(id="a1", nama_toko="Bumi Lestari", platform="shopee"), AkunMarketplace(id="a2", nama_toko="Syafaqa", platform="shopee")])
+    await session.commit()
+    admin = SimpleNamespace(id="admin", role="admin", session_version=0)
+    t = SimpleNamespace(id="t", akun_id="a1", mode="tanya", session_version=0)
+    out = await tools.execute(session, admin, t, "daftar_toko", tools.TOOLS["daftar_toko"][0](), "fp")
+    assert [r["nama"] for r in out] == ["Bumi Lestari"]

@@ -246,14 +246,17 @@ DESIGNER_TOOLS = set(designer.TOOLS) | {"daftar_toko", "cari_produk", "metadata_
 ADS_TOOLS = {"boost_produk", "daftar_produk_boost","daftar_toko", "cari_produk", "pengaturan_produk", "statistik_produk", "ringkasan_usaha", "saldo_toko", "mutasi_dana", "modal_produk", "daftar_iklan", "kelayakan_gmv", "laporan_gmv", "buat_iklan", "ubah_iklan", "ubah_kata_kunci", "buat_gmv", "ubah_gmv", "produk_gmv"}
 
 
-def definitions(writes, agent="auto"):
+def definitions(writes, agent="auto", shop_known=False):
     result = []
     for name, (schema, write, description) in TOOLS.items():
+        # The chosen shop is already the scope; listing every shop only confuses the answer.
+        if shop_known and name == "daftar_toko":
+            continue
         if agent == "iklan" and name not in ADS_TOOLS:
             continue
         if agent == "desainer" and name not in DESIGNER_TOOLS:
             continue
-        if agent != "desainer" and name in designer.TOOLS:
+        if agent != "desainer" and name in designer.TOOLS and name not in designer.SHARED:
             continue
         if agent == "operasional" and name in ADS_TOOLS - {"daftar_toko", "cari_produk", "pengaturan_produk", "statistik_produk", "ringkasan_usaha", "saldo_toko", "mutasi_dana", "modal_produk"}:
             continue
@@ -289,7 +292,7 @@ async def execute(session, user, turn, name, payload, fingerprint):
     if write and (turn.mode != "perintah" or not turn.akun_id):
         raise HTTPException(403, "Mode Tanya tidak mengizinkan perubahan")
     if name == "daftar_toko":
-        return [{"id": a.id, "nama": a.nama_toko, "platform": a.platform} for a in await services.list_akun_marketplace(session)]
+        return [{"id": a.id, "nama": a.nama_toko, "platform": a.platform} for a in await services.list_akun_marketplace(session) if not turn.akun_id or a.id == turn.akun_id]
     if name == "cari_produk":
         result = await services.list_katalog_shopee(session, akun_id=turn.akun_id, q=payload.q, halaman=payload.halaman, per_halaman=20)
         from sqlalchemy import select
