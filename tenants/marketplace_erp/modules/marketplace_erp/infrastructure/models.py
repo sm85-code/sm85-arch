@@ -1064,3 +1064,15 @@ class ProcessingSupplierConnection(MarketplaceErpBase):
     unit_id: Mapped[str] = mapped_column(String(36), nullable=False)
     unit_name: Mapped[str] = mapped_column(String(255), nullable=False)
     expires_at: Mapped[str] = mapped_column(String(64), nullable=False)
+
+
+class PesananHapusLog(MarketplaceErpBase):
+    """Audit of a deleted manual order: who, when, and the order as it was (no FK, so it outlives the order)."""
+    __tablename__ = "mpe_pesanan_hapus_log"
+    id: Mapped[str] = mapped_column(String(64), primary_key=True, default=_uuid)
+    pesanan_id: Mapped[str] = mapped_column(String(64), nullable=False, index=True)
+    id_eksternal: Mapped[str] = mapped_column(String(255), nullable=False, index=True)
+    platform: Mapped[str] = mapped_column(String(16), nullable=False)
+    snapshot_json: Mapped[str] = mapped_column(Text, nullable=False)
+    dihapus_oleh: Mapped[Optional[str]] = mapped_column(String(255), nullable=True)
+    dihapus_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=_utcnow)
