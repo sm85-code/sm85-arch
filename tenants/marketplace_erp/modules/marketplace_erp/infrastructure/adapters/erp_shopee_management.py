@@ -121,7 +121,7 @@ async def gmv_performance(session, akun, campaign_id, start, end, offset=0, limi
     if per_item:
         body.update(offset=offset, limit=limit)
     path = "/api/v2/ads/" + ("get_gms_item_performance" if per_item else "get_gms_campaign_performance")
-    data = await provider.signed_shop_request(session, akun, path, method="POST", body=body)
+    data = await provider.signed_shop_request(session, akun, path, method="POST", body=body, read_only=True, timeout=20.0)
     response = data.get("response")
     if not isinstance(response, dict) or type(response.get("campaign_id")) is not int or response["campaign_id"] <= 0 or (campaign_id is not None and str(response["campaign_id"]) != str(campaign_id)) or (per_item and (not isinstance(response.get("result_list"), list) or type(response.get("has_next_page")) is not bool or type(response.get("total")) is not int)) or (not per_item and not isinstance(response.get("report"), dict)):
         incomplete(path, data)

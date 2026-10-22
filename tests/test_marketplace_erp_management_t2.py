@@ -14,7 +14,7 @@ async def test_diagnosis_official_excellent_sample_and_incomplete(monkeypatch):
     monkeypatch.setattr(insights.provider, "signed_shop_request", request)
     result = await insights.diagnosis(None, None, [7])
     assert result["success_item_list"][0]["unfinished_task"] == []
-    assert request.call_args.kwargs == {"method": "POST", "body": {"item_id_list": [7]}}
+    assert request.call_args.kwargs == {"method": "POST", "body": {"item_id_list": [7]}, "read_only": True}
     with pytest.raises(insights.provider.ShopeeAPIError):
         await insights.diagnosis(None, None, [7, 8])
 
@@ -62,7 +62,7 @@ async def test_gmv_report_uses_post_and_calendar_bounds(monkeypatch):
     request = AsyncMock(return_value={"response": {"campaign_id": 7, "report": {"expense": 0}}})
     monkeypatch.setattr(management.provider, "signed_shop_request", request)
     await management.gmv_performance(None, None, 7, date(2026, 9, 1), date(2026, 10, 9))
-    assert request.call_args.kwargs == {"method": "POST", "body": {"campaign_id": 7, "start_date": "01-09-2026", "end_date": "09-10-2026"}}
+    assert request.call_args.kwargs == {"method": "POST", "body": {"campaign_id": 7, "start_date": "01-09-2026", "end_date": "09-10-2026"}, "read_only": True, "timeout": 20.0}
     with pytest.raises(HTTPException):
         await management.gmv_performance(None, None, 7, date(2026, 4, 8), date(2026, 4, 9))
     assert request.await_count == 1

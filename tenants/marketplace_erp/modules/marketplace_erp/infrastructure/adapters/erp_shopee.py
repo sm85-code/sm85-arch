@@ -339,8 +339,11 @@ async def signed_shop_request(
     params: dict | None = None,
     raw: bool = False,
     timeout: float = 25.0,
+    read_only: bool | None = None,
 ) -> dict:
-    """Generic signed shop call. Used by sync_* once LIVE_SYNC is on."""
+    """Generic signed shop call. Used by sync_* once LIVE_SYNC is on.
+
+    ``read_only=True`` bounds the whole call like a GET, for POST endpoints that only read (e.g. reports)."""
     if not live_sync_enabled():
         raise ShopeeNotConfigured(
             "Shopee live sync nonaktif. Set SHOPEE_LIVE_SYNC=true dan partner credentials."
@@ -361,6 +364,7 @@ async def signed_shop_request(
         params=params,
         raw=raw,
         timeout=timeout,
+        read_only=read_only,
     )
 
 
@@ -393,6 +397,7 @@ async def iklan_saran(session: Any, akun: Any, item_id: int, kata: str | None = 
         signed_shop_request(
             session, akun, "/api/v2/ads/get_create_product_ad_budget_suggestion",
             method="POST",
+            read_only=True,
             body={
                 "reference_id": str(uuid.uuid4()), "product_selection": "manual", "campaign_placement": "all",
                 "bidding_method": bidding, "item_id": item_id, **({"enhanced_cpc": "false"} if bidding == "manual" else {}),
@@ -423,6 +428,7 @@ async def _call_shop_api(
     params: dict | None = None,
     raw: bool = False,
     timeout: float = 25.0,
+    read_only: bool | None = None,
 ) -> dict:
     """Signed shop-level call with an explicit token (no AkunMarketplace row needed).
 
@@ -488,7 +494,7 @@ async def _call_shop_api(
 
     started = time.monotonic()
     try:
-        if method.upper() == "GET":
+        if (method.upper() == "GET") if read_only is None else read_only:
             # requests read timeout resets between chunks; bound the whole read
             # too. Only reads may be cancelled here, never token rotation/writes.
             try:

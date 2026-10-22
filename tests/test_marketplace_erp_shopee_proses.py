@@ -684,3 +684,23 @@ async def test_business_error_log_redacts_credentials(live, monkeypatch, caplog)
     assert 'business_failed' in caplog.text and 'error_api_permission' in caplog.text
     assert 'permission-id' in caplog.text
     assert 'token-secret' not in caplog.text and 'partner-secret' not in caplog.text
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("read_only,expected", [(True, 504), (None, "done")])
+async def test_read_only_post_is_bounded_like_get(live, monkeypatch, read_only, expected):
+    """A reporting POST (e.g. GMV Max performance) must not outlive the gateway: read_only bounds the whole call."""
+    import time as _time
+
+    def slow_post(*a, **k):
+        _time.sleep(0.3)
+        return SimpleNamespace(ok=True, status_code=200, content=b"{}", json=lambda: {"error": "", "response": {"ok": 1}})
+
+    monkeypatch.setattr(requests, "post", slow_post)
+    call = erp_shopee._call_shop_api(access_token="at", shop_id="5", api_path="/x", method="POST", body={}, timeout=0.1, read_only=read_only)
+    if expected == 504:
+        with pytest.raises(HTTPException) as exc:
+            await call
+        assert exc.value.status_code == 504
+    else:
+        assert (await call)["response"] == {"ok": 1}
