@@ -39,7 +39,7 @@ async def biaya_produksi(periode: str = PERIODE, session: AsyncSession = Depends
     from .processing_workflow import biaya_produksi as hitung
 
     awal, akhir = ops.rentang(periode)
-    return {"periode": periode, "items": await hitung(session, awal, akhir)}
+    return {"periode": periode, **await hitung(session, awal, akhir)}
 
 
 @router.get("/lembar")
