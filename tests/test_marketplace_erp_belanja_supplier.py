@@ -76,3 +76,21 @@ async def test_duplicate_names_ignore_case_and_spaces_and_arus_kas_rows_count(se
         assert r.status_code == 409
         items = {k["id"]: k for k in (await c.get("/kategori-transaksi")).json()["items"]}
     assert items["non_kayu"]["dipakai_arus_kas"] == 1 and items["lain_keluar"]["dipakai_arus_kas"] == 2
+
+
+@pytest.mark.asyncio
+async def test_parties_listed_and_linked_to_an_arus_kas_row(session):  # noqa: F811
+    import json as _json
+    from tenants.marketplace_erp.modules.marketplace_erp.infrastructure.models import ProcessingCatalog
+    from tenants.marketplace_erp.modules.marketplace_erp.application import operasional as ops
+    session.add(ProcessingCatalog(id="global", checksum="t", payload_json=_json.dumps({"supplier": [{"id": "supplier-3", "nama": "MAHPUDIN"}], "tukang": []})))
+    await session.commit()
+    async with client_for("staf_operasional", session) as c:
+        data = (await c.get("/operasional/supplier", params={"periode": "2026-10"})).json()
+        assert data["pihak"] == [{"id": "supplier-3", "nama": "MAHPUDIN", "baris_arus_kas": ""}]
+        assert (await c.post("/operasional/supplier", json={"kategori": "belanja_supplier", "tanggal": "2026-10-05", "uraian": "MAHPUDIN", "jumlah": "10"})).status_code == 201
+        r = await c.put("/operasional/supplier/pihak/supplier-3", json={"baris_arus_kas": "Tagihan Produk [PUDIN]"})
+        assert r.status_code == 200
+        assert (await c.put("/operasional/supplier/pihak/nope", json={"baris_arus_kas": "x"})).status_code == 404
+    arus = await ops.untuk_arus_kas(session, "2026-10")
+    assert {"tanggal": "2026-10-05", "kategori": "belanja_supplier", "jumlah": "10.00", "uraian": "Tagihan Produk [PUDIN]"} in arus["items"]

@@ -24,6 +24,18 @@ async def daftar(
     return await ops.daftar(session, jenis, periode, tingkat == "tulis")
 
 
+@router.put("/{jenis}/pihak/{pihak_id}")
+async def simpan_peta(
+    jenis: str,
+    pihak_id: str,
+    isian: ops.PetaIsian,
+    session: AsyncSession = Depends(get_db_marketplace_erp),
+    user: UserMarketplaceErp = Depends(get_current_user_marketplace_erp),
+):
+    await ops.pastikan_tulis(session, jenis, await akses.peran_pengguna(session, user))
+    return await ops.simpan_peta(session, jenis, pihak_id, isian)
+
+
 @router.post("/{jenis}", status_code=status.HTTP_201_CREATED)
 async def tambah(
     jenis: str,
