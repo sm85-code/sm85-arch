@@ -26,7 +26,7 @@ PEMASUKAN = "pemasukan"
 KELOMPOK_BAWAAN = [(PEMASUKAN, "masuk", "Pemasukan"), (HPP, "keluar", "Harga pokok penjualan"), (BEBAN, "keluar", "Beban operasional")]
 # Categories saved before groups had ids hold the name text.
 _NAMA_LAMA = {nama: id_ for id_, _, nama in KELOMPOK_BAWAAN}
-OPERASIONAL = ("umum", "packing", "supplier")
+OPERASIONAL = ("umum", "packing", "supplier", "tukang")
 # Typed into Arus Kas by an admin, never as entries of the Operasional pages.
 ARUS_KAS_SAJA = ("gaji", "iklan")
 
@@ -54,10 +54,11 @@ BAWAAN: list[tuple[str, str, str, str, str | None, bool, bool]] = [
     ("lain_keluar", "keluar", "Operasional lainnya", BEBAN, "umum", True, True),
     ("bukan_keluar", "keluar", "Bukan pengeluaran", "", None, True, True),
     ("belanja_supplier", "keluar", "Belanja Supplier", HPP, "supplier", True, False),
+    ("belanja_tukang", "keluar", "Belanja Tukang", HPP, "tukang", True, False),
 ]
 # Categories added after installations were seeded: created once when missing (never deleted, only hidden, so a missing id
 # means it was never created). Same tuple shape as BAWAAN.
-TAMBAHAN = [b for b in BAWAAN if b[0] == "belanja_supplier"]
+TAMBAHAN = [b for b in BAWAAN if b[0] in ("belanja_supplier", "belanja_tukang")]
 
 async def _pastikan_kelompok(session: AsyncSession) -> bool:
     """The three starting groups exist, and categories that still hold a group's name text point at its id. Names that an
@@ -79,7 +80,7 @@ PENANDA_RAPI = "migrasi:kategori_rapi_2026_10"
 _GANTI_NAMA = [("non_kayu", "Belanja Supplier", "Pembelian Produk (otomatis ERP)"), ("belanja_supplier", "Belanja supplier", "Belanja Supplier")]
 _URUTAN = {
     "masuk": ["produk", "proses", "cat", "packing", "saldo_toko", "lain_masuk", "produk_proses", "cat_packing", "bukan_masuk"],
-    "keluar": ["non_kayu", "belanja_supplier", "tukang", "belanja_produk_eceran", "bahan_cat", "belanja_packing", "perl_packing", "ongkir",
+    "keluar": ["non_kayu", "belanja_supplier", "tukang", "belanja_tukang", "belanja_produk_eceran", "bahan_cat", "belanja_packing", "perl_packing", "ongkir",
                "gaji", "iklan", "langganan", "atk", "atk_eceran", "lain_keluar", "bukan_keluar"],
 }
 
