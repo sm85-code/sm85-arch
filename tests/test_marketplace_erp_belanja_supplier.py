@@ -38,7 +38,7 @@ async def test_page_works_like_operasional_and_flows_to_arus_kas(session):  # no
         assert (await c.get("/operasional/supplier", params={"periode": "2026-10"})).status_code == 403
     from tenants.marketplace_erp.modules.marketplace_erp.application import operasional as ops
     arus = await ops.untuk_arus_kas(session, "2026-10")
-    assert {"tanggal": "2026-10-05", "kategori": "belanja_supplier", "jumlah": "150000.00"} in arus["items"]
+    assert {"tanggal": "2026-10-05", "kategori": "belanja_supplier", "jumlah": "150000.00", "uraian": "Rak besi"} in arus["items"]
 
 
 @pytest.mark.asyncio

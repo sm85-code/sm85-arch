@@ -16,7 +16,7 @@ from decimal import Decimal
 
 from fastapi import HTTPException, status
 from pydantic import BaseModel, Field, field_validator
-from sqlalchemy import func, select
+from sqlalchemy import case, func, literal, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from tenants.marketplace_erp.modules.marketplace_erp.application import akses
@@ -90,15 +90,20 @@ async def untuk_arus_kas(session: AsyncSession, periode: str) -> dict:
     """What Arus Kas takes from both pages: the amount per date and category for a month. Gaji and iklan are left out,
     an admin types them in Arus Kas itself."""
     awal, akhir = rentang(periode)
+    # Belanja Supplier entries keep their description (the supplier's name) so Arus Kas can put each supplier in its own row.
+    uraian = case((TransaksiOperasional.jenis == "supplier", TransaksiOperasional.uraian), else_=literal(""))
     rows = (
         await session.execute(
-            select(TransaksiOperasional.tanggal, TransaksiOperasional.kategori, func.sum(TransaksiOperasional.jumlah))
+            select(TransaksiOperasional.tanggal, TransaksiOperasional.kategori, uraian, func.sum(TransaksiOperasional.jumlah))
             .where(TransaksiOperasional.tanggal.between(awal, akhir), TransaksiOperasional.kategori.not_in(kat.ARUS_KAS_SAJA))
-            .group_by(TransaksiOperasional.tanggal, TransaksiOperasional.kategori)
-            .order_by(TransaksiOperasional.tanggal, TransaksiOperasional.kategori)
+            .group_by(TransaksiOperasional.tanggal, TransaksiOperasional.kategori, uraian)
+            .order_by(TransaksiOperasional.tanggal, TransaksiOperasional.kategori, uraian)
         )
     ).all()
-    return {"periode": periode, "items": [{"tanggal": t.isoformat(), "kategori": k, "jumlah": str(j)} for t, k, j in rows]}
+    return {
+        "periode": periode,
+        "items": [{"tanggal": t.isoformat(), "kategori": k, "jumlah": str(j), **({"uraian": u} if u else {})} for t, k, u, j in rows],
+    }
 
 
 def _baris(t: TransaksiOperasional) -> dict:
