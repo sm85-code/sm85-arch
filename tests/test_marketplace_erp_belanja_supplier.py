@@ -83,7 +83,7 @@ async def test_parties_listed_and_linked_to_an_arus_kas_row(session):  # noqa: F
     import json as _json
     from tenants.marketplace_erp.modules.marketplace_erp.infrastructure.models import ProcessingCatalog
     from tenants.marketplace_erp.modules.marketplace_erp.application import operasional as ops
-    session.add(ProcessingCatalog(id="global", checksum="t", payload_json=_json.dumps({"supplier": [{"id": "supplier-3", "nama": "MAHPUDIN"}], "tukang": []})))
+    session.add(ProcessingCatalog(id="global", checksum="t", imported_by="t", payload_json=_json.dumps({"supplier": [{"id": "supplier-3", "nama": "MAHPUDIN"}], "tukang": []})))
     await session.commit()
     async with client_for("staf_operasional", session) as c:
         data = (await c.get("/operasional/supplier", params={"periode": "2026-10"})).json()
