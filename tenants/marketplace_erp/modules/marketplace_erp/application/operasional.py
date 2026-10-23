@@ -10,6 +10,9 @@ operasional_packing, level baca or tulis.
 """
 from __future__ import annotations
 
+import json
+import re
+
 from calendar import monthrange
 from datetime import date
 from decimal import Decimal
@@ -21,7 +24,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from tenants.marketplace_erp.modules.marketplace_erp.application import akses
 from tenants.marketplace_erp.modules.marketplace_erp.application import kategori as kat
-from tenants.marketplace_erp.modules.marketplace_erp.infrastructure.models import KategoriTransaksi, TransaksiOperasional
+from tenants.marketplace_erp.modules.marketplace_erp.infrastructure.models import KategoriTransaksi, PengaturanUi, ProcessingCatalog, ProcessingParty, TransaksiOperasional
 
 # "supplier" is Belanja Supplier: purchases of goods from suppliers, typed by hand for now. Every row here is a manual
 # entry. When the supplier order mapping (Pemetaan Order, tab Supplier) is linked later, its amounts should be computed
@@ -91,19 +94,89 @@ async def untuk_arus_kas(session: AsyncSession, periode: str) -> dict:
     an admin types them in Arus Kas itself."""
     awal, akhir = rentang(periode)
     # Belanja Supplier entries keep their description (the supplier's name) so Arus Kas can put each supplier in its own row.
-    uraian = case((TransaksiOperasional.jenis.in_(("supplier", "tukang")), TransaksiOperasional.uraian), else_=literal(""))
+    uraian = case((TransaksiOperasional.jenis.in_(tuple(PIHAK)), TransaksiOperasional.uraian), else_=literal(""))
+    jenis = case((TransaksiOperasional.jenis.in_(tuple(PIHAK)), TransaksiOperasional.jenis), else_=literal(""))
     rows = (
         await session.execute(
-            select(TransaksiOperasional.tanggal, TransaksiOperasional.kategori, uraian, func.sum(TransaksiOperasional.jumlah))
+            select(TransaksiOperasional.tanggal, TransaksiOperasional.kategori, uraian, func.sum(TransaksiOperasional.jumlah), jenis)
             .where(TransaksiOperasional.tanggal.between(awal, akhir), TransaksiOperasional.kategori.not_in(kat.ARUS_KAS_SAJA))
-            .group_by(TransaksiOperasional.tanggal, TransaksiOperasional.kategori, uraian)
+            .group_by(TransaksiOperasional.tanggal, TransaksiOperasional.kategori, uraian, jenis)
             .order_by(TransaksiOperasional.tanggal, TransaksiOperasional.kategori, uraian)
         )
     ).all()
+    # A supplier / tukang picked on its page goes to the Arus Kas row linked to it (when one was set), else its own name.
+    tujuan: dict[str, dict[str, str]] = {}
+    for j in {r[4] for r in rows if r[4]}:
+        tujuan[j] = {_kunci(p["nama"]): p["baris_arus_kas"] for p in await pihak(session, j) if p["baris_arus_kas"]}
     return {
         "periode": periode,
-        "items": [{"tanggal": t.isoformat(), "kategori": k, "jumlah": str(j), **({"uraian": u} if u else {})} for t, k, u, j in rows],
+        "items": [
+            {"tanggal": t.isoformat(), "kategori": k, "jumlah": str(j), **({"uraian": tujuan.get(jn, {}).get(_kunci(u), u)} if u else {})}
+            for t, k, u, j, jn in rows
+        ],
     }
+
+
+# Belanja Supplier / Belanja Tukang: each entry is for one party of the Supplier / Tukang Kayu list (Data Produksi);
+# its name is kept in uraian. Each party may be linked to an Arus Kas row by that row's name.
+PIHAK = {"supplier": "supplier", "tukang": "tukang"}
+_PETA = "peta_arus_kas:"
+
+
+def _kunci(nama: str) -> str:
+    return re.sub(r"\s+", " ", nama or "").strip().lower()
+
+
+async def _peta(session: AsyncSession, jenis: str) -> dict[str, str]:
+    r = await session.get(PengaturanUi, _PETA + jenis)
+    try:
+        return dict(json.loads(r.teks)) if r else {}
+    except (ValueError, TypeError):
+        return {}
+
+
+async def pihak(session: AsyncSession, jenis: str) -> list[dict]:
+    """The parties of the matching Data Produksi list (id, name) with the Arus Kas row each is linked to ("" = by name)."""
+    kind = PIHAK.get(jenis)
+    if not kind:
+        return []
+    asal = await session.get(ProcessingCatalog, "global")
+    try:
+        katalog = json.loads(asal.payload_json) if asal else {}
+    except ValueError:
+        katalog = {}
+    daftar_ = {str(p.get("id")): str(p.get("nama") or "") for p in katalog.get(kind, []) if isinstance(p, dict)}
+    for row in (await session.scalars(select(ProcessingParty).where(ProcessingParty.kind == kind))).all():
+        try:
+            daftar_[row.source_id] = str(json.loads(row.payload_json).get("nama") or "")
+        except ValueError:
+            continue
+    peta = await _peta(session, jenis)
+    return [{"id": i, "nama": n, "baris_arus_kas": peta.get(i, "")} for i, n in daftar_.items() if n]
+
+
+class PetaIsian(BaseModel):
+    baris_arus_kas: str = Field(default="", max_length=200)
+
+
+async def simpan_peta(session: AsyncSession, jenis: str, pihak_id: str, isian: PetaIsian) -> dict:
+    if jenis not in PIHAK:
+        raise HTTPException(404, "Halaman ini tidak memakai daftar supplier/tukang")
+    if pihak_id not in {p["id"] for p in await pihak(session, jenis)}:
+        raise HTTPException(404, "Tidak ada di daftar")
+    peta = await _peta(session, jenis)
+    nama = isian.baris_arus_kas.strip()
+    if nama:
+        peta[pihak_id] = nama
+    else:
+        peta.pop(pihak_id, None)
+    r = await session.get(PengaturanUi, _PETA + jenis)
+    if r is None:
+        session.add(PengaturanUi(id=_PETA + jenis, teks=json.dumps(peta)))
+    else:
+        r.teks = json.dumps(peta)
+    await session.commit()
+    return {"id": pihak_id, "baris_arus_kas": nama}
 
 
 def _baris(t: TransaksiOperasional) -> dict:
@@ -142,6 +215,7 @@ async def daftar(session: AsyncSession, jenis: str, periode: str, bisa_tulis: bo
         "items": [_baris(r) for r in rows],
         "ringkasan": {"per_kategori": {k: str(v) for k, v in per_kategori.items()}, "total": str(sum(per_kategori.values(), Decimal("0")))},
         "bisa_tulis": bisa_tulis,
+        **({"pihak": await pihak(session, jenis)} if jenis in PIHAK else {}),
     }
 
 

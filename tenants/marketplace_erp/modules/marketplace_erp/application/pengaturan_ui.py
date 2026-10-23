@@ -43,7 +43,7 @@ def _teks(teks: str, id_: str = "") -> str:
 
 async def daftar(session: AsyncSession) -> dict:
     rows = (await session.scalars(select(PengaturanUi).order_by(PengaturanUi.id))).all()
-    return {"items": {r.id: r.teks for r in rows if not r.id.startswith("migrasi:")}}
+    return {"items": {r.id: r.teks for r in rows if not r.id.startswith(("migrasi:", "peta_arus_kas:"))}}
 
 
 async def simpan(session: AsyncSession, id_: str, teks: str) -> dict:
