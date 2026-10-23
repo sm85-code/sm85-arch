@@ -50,3 +50,29 @@ async def test_existing_installation_gets_the_new_category_once(session):  # noq
     await kat.pastikan_bawaan(session)
     k = await session.get(KategoriTransaksi, "belanja_supplier")
     assert (k.arah, k.kelompok, k.operasional) == ("keluar", kat.HPP, "supplier")
+
+
+@pytest.mark.asyncio
+async def test_tidy_up_renames_once_and_orders(session):  # noqa: F811
+    from tenants.marketplace_erp.modules.marketplace_erp.infrastructure.models import KategoriTransaksi as K
+    await kat.pastikan_bawaan(session)
+    (await session.get(K, "non_kayu")).nama = "Belanja Supplier"
+    (await session.get(K, "belanja_supplier")).nama = "Belanja supplier"
+    marker = await session.get(PengaturanUi, kat.PENANDA_RAPI)
+    if marker:
+        await session.delete(marker)
+    await session.commit()
+    await kat.pastikan_bawaan(session)
+    assert (await session.get(K, "non_kayu")).nama == "Pembelian Produk (otomatis ERP)"
+    assert (await session.get(K, "belanja_supplier")).nama == "Belanja Supplier"
+    keluar = (await session.scalars(select(K).where(K.arah == "keluar").order_by(K.urut))).all()
+    assert [k.id for k in keluar][:3] == ["non_kayu", "belanja_supplier", "tukang"] and keluar[-1].id == "bukan_keluar"
+
+
+@pytest.mark.asyncio
+async def test_duplicate_names_ignore_case_and_spaces_and_arus_kas_rows_count(session):  # noqa: F811
+    async with client_for("admin", session) as c:
+        r = await c.post("/kategori-transaksi", json={"arah": "keluar", "nama": "belanja  SUPPLIER", "kelompok": "hpp"})
+        assert r.status_code == 409
+        items = {k["id"]: k for k in (await c.get("/kategori-transaksi")).json()["items"]}
+    assert items["non_kayu"]["dipakai_arus_kas"] == 1 and items["lain_keluar"]["dipakai_arus_kas"] == 2

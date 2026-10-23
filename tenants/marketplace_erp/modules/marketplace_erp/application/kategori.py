@@ -6,6 +6,7 @@ points at it is ever orphaned.
 """
 from __future__ import annotations
 
+import json
 import re
 import unicodedata
 
@@ -14,7 +15,7 @@ from sqlalchemy import func, select
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from tenants.marketplace_erp.modules.marketplace_erp.infrastructure.models import KategoriTransaksi, KelompokTransaksi, TransaksiOperasional
+from tenants.marketplace_erp.modules.marketplace_erp.infrastructure.models import KategoriTransaksi, KelompokTransaksi, LaporanKeuanganManual, PengaturanUi, TransaksiOperasional
 
 ARAH = ("masuk", "keluar")
 # The groups every installation starts with: (id, arah, nama). Categories point at the id; the name can be changed on the
@@ -52,7 +53,7 @@ BAWAAN: list[tuple[str, str, str, str, str | None, bool, bool]] = [
     ("atk_eceran", "keluar", "Belanja ATK eceran", BEBAN, "packing", True, True),
     ("lain_keluar", "keluar", "Operasional lainnya", BEBAN, "umum", True, True),
     ("bukan_keluar", "keluar", "Bukan pengeluaran", "", None, True, True),
-    ("belanja_supplier", "keluar", "Belanja supplier", HPP, "supplier", True, False),
+    ("belanja_supplier", "keluar", "Belanja Supplier", HPP, "supplier", True, False),
 ]
 # Categories added after installations were seeded: created once when missing (never deleted, only hidden, so a missing id
 # means it was never created). Same tuple shape as BAWAAN.
@@ -73,6 +74,59 @@ async def _pastikan_kelompok(session: AsyncSession) -> bool:
     return ubah
 
 
+PENANDA_RAPI = "migrasi:kategori_rapi_2026_10"
+# Approved tidy-up (Oct 2026): two renames (only while the name is still the old one) and the report order. Nothing hidden.
+_GANTI_NAMA = [("non_kayu", "Belanja Supplier", "Pembelian Produk (otomatis ERP)"), ("belanja_supplier", "Belanja supplier", "Belanja Supplier")]
+_URUTAN = {
+    "masuk": ["produk", "proses", "cat", "packing", "saldo_toko", "lain_masuk", "produk_proses", "cat_packing", "bukan_masuk"],
+    "keluar": ["non_kayu", "belanja_supplier", "tukang", "belanja_produk_eceran", "bahan_cat", "belanja_packing", "perl_packing", "ongkir",
+               "gaji", "iklan", "langganan", "atk", "atk_eceran", "lain_keluar", "bukan_keluar"],
+}
+
+
+async def _rapikan_sekali(session: AsyncSession) -> bool:
+    if await session.get(PengaturanUi, PENANDA_RAPI):
+        return False
+    for id_, lama, baru in _GANTI_NAMA:
+        k = await session.get(KategoriTransaksi, id_)
+        if k is not None and k.nama == lama:
+            k.nama = baru
+            await session.flush()  # non_kayu frees its name before belanja_supplier takes it
+    for arah, urutan in _URUTAN.items():
+        semua = (await session.scalars(select(KategoriTransaksi).where(KategoriTransaksi.arah == arah).order_by(KategoriTransaksi.urut, KategoriTransaksi.id))).all()
+        posisi = {id_: i for i, id_ in enumerate(urutan)}
+        lainnya = [k for k in semua if k.id not in posisi]  # added by the admin: after the known ones, in their own order
+        susunan = sorted((k for k in semua if k.id in posisi), key=lambda k: posisi[k.id])
+        bukan = [k for k in susunan if k.kelompok == ""]
+        for i, k in enumerate([k for k in susunan if k.kelompok != ""] + lainnya + bukan, start=1):
+            k.urut = i
+    session.add(PengaturanUi(id=PENANDA_RAPI, teks="1"))
+    return True
+
+
+# Arus Kas rows that start out filed under a category (mirrors AWAL in the frontend's kategoriKeuangan.ts).
+BARIS_AWAL = {"k_toko": "saldo_toko", "k_prod": "produk", "k_cat": "cat", "k_lain": "lain_masuk", "k_tukang": "tukang", "k_pembelian": "non_kayu",
+              "k_operasional": "lain_keluar", "k_langganan": "langganan", "k_gaji": "gaji", "k_topup": "bukan_keluar", "k_lain_keluar": "lain_keluar"}
+_PREFIX_KATEGORI = "c:kt-"
+
+
+async def baris_arus_kas(session: AsyncSession) -> dict[str, int]:
+    """How many Arus Kas rows (over all saved months, each row counted once) are filed under each category: the
+    built-in rows' starting categories plus every category chosen for a row."""
+    per_baris: dict[str, set[str]] = {}
+    for baris, kategori in BARIS_AWAL.items():
+        per_baris.setdefault(kategori, set()).add(baris)
+    for teks in (await session.scalars(select(LaporanKeuanganManual.data_json))).all():
+        try:
+            daftar_baris = json.loads(teks).get("baris") or []
+        except (ValueError, AttributeError):
+            continue
+        for b in daftar_baris:
+            if isinstance(b, dict) and str(b.get("id", "")).startswith(_PREFIX_KATEGORI) and b.get("label"):
+                per_baris.setdefault(b["label"], set()).add(b["id"][len(_PREFIX_KATEGORI):])
+    return {k: len(v) for k, v in per_baris.items()}
+
+
 async def pastikan_bawaan(session: AsyncSession) -> None:
     """Fill the tables on a fresh installation. After that nothing is added or restored on its own."""
     kelompok_ditulis = await _pastikan_kelompok(session)
@@ -87,7 +141,8 @@ async def pastikan_bawaan(session: AsyncSession) -> None:
             akhir = (await session.scalar(select(func.max(KategoriTransaksi.urut)))) or 0
             for i, (id_, arah, nama, kelompok, operasional, sistem, auto) in enumerate(baru, start=1):
                 session.add(KategoriTransaksi(id=id_, arah=arah, nama=nama, kelompok=kelompok, operasional=operasional, urut=akhir + i, aktif=True, sistem=sistem, auto_sembunyi=auto))
-        if lama or kelompok_ditulis or baru:
+        rapi = await _rapikan_sekali(session)
+        if lama or kelompok_ditulis or baru or rapi:
             try:
                 await session.commit()
             except IntegrityError:  # another request added it first
@@ -95,17 +150,19 @@ async def pastikan_bawaan(session: AsyncSession) -> None:
         return
     for urut, (id_, arah, nama, kelompok, operasional, sistem, auto) in enumerate(BAWAAN, start=1):
         session.add(KategoriTransaksi(id=id_, arah=arah, nama=nama, kelompok=kelompok, operasional=operasional, urut=urut, aktif=True, sistem=sistem, auto_sembunyi=auto))
+    if await session.get(PengaturanUi, PENANDA_RAPI) is None:
+        session.add(PengaturanUi(id=PENANDA_RAPI, teks="1"))  # a fresh installation needs no tidy-up
     try:
         await session.commit()
     except IntegrityError:  # another request filled it first
         await session.rollback()
 
 
-def _baris(k: KategoriTransaksi, nama_kelompok: dict[str, str], dipakai: int = 0) -> dict:
+def _baris(k: KategoriTransaksi, nama_kelompok: dict[str, str], dipakai: int = 0, arus_kas: int = 0) -> dict:
     # `kelompok` is the group's current name, `kelompok_id` its id.
     return {
         "id": k.id, "arah": k.arah, "nama": k.nama, "kelompok": nama_kelompok.get(k.kelompok, k.kelompok), "kelompok_id": k.kelompok,
-        "operasional": k.operasional, "urut": k.urut, "aktif": k.aktif, "sistem": k.sistem, "auto_sembunyi": k.auto_sembunyi, "dipakai": dipakai,
+        "operasional": k.operasional, "urut": k.urut, "aktif": k.aktif, "sistem": k.sistem, "auto_sembunyi": k.auto_sembunyi, "dipakai": dipakai, "dipakai_arus_kas": arus_kas,
     }
 
 
@@ -117,11 +174,12 @@ async def daftar(session: AsyncSession) -> dict:
     await pastikan_bawaan(session)
     rows = (await session.scalars(select(KategoriTransaksi).order_by(KategoriTransaksi.arah, KategoriTransaksi.urut, KategoriTransaksi.id))).all()
     pakai = dict((await session.execute(select(TransaksiOperasional.kategori, func.count()).group_by(TransaksiOperasional.kategori))).all())
+    arus = await baris_arus_kas(session)
     grup = (await session.scalars(select(KelompokTransaksi).order_by(KelompokTransaksi.arah, KelompokTransaksi.urut, KelompokTransaksi.id))).all()
     nama = {g.id: g.nama for g in grup}
     por_arah = {a: [{"id": g.id, "nama": g.nama} for g in grup if g.arah == a] for a in ARAH}
     return {
-        "items": [_baris(k, nama, pakai.get(k.id, 0)) for k in rows],
+        "items": [_baris(k, nama, pakai.get(k.id, 0), arus.get(k.id, 0)) for k in rows],
         "kelompok": {a: [g["nama"] for g in daftar_] for a, daftar_ in por_arah.items()},
         "kelompok_daftar": por_arah,
         "operasional": list(OPERASIONAL),
@@ -160,11 +218,11 @@ async def _periksa(session: AsyncSession, arah: str, kelompok: str, operasional:
 
 
 async def _nama_bebas(session: AsyncSession, arah: str, nama: str, kecuali: str | None = None) -> None:
-    q = select(KategoriTransaksi.id).where(KategoriTransaksi.arah == arah, func.lower(KategoriTransaksi.nama) == nama.lower())
-    if kecuali:
-        q = q.where(KategoriTransaksi.id != kecuali)
-    if await session.scalar(q):
-        raise HTTPException(409, "Nama kategori sudah dipakai")
+    # Case and spaces do not make a different name ("Belanja supplier" = "belanja  Supplier" = "BelanjaSupplier").
+    kunci = re.sub(r"\s+", "", nama).lower()
+    for id_, ada in (await session.execute(select(KategoriTransaksi.id, KategoriTransaksi.nama).where(KategoriTransaksi.arah == arah))).all():
+        if id_ != kecuali and re.sub(r"\s+", "", ada).lower() == kunci:
+            raise HTTPException(409, f"Nama kategori sudah dipakai: {ada}")
 
 
 def _nama(nama: str) -> str:
