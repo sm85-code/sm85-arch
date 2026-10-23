@@ -23,7 +23,11 @@ from tenants.marketplace_erp.modules.marketplace_erp.application import akses
 from tenants.marketplace_erp.modules.marketplace_erp.application import kategori as kat
 from tenants.marketplace_erp.modules.marketplace_erp.infrastructure.models import KategoriTransaksi, TransaksiOperasional
 
-HALAMAN = {"umum": "operasional_umum", "packing": "operasional_packing"}
+# "supplier" is Belanja Supplier: purchases of goods from suppliers, typed by hand for now. Every row here is a manual
+# entry. When the supplier order mapping (Pemetaan Order, tab Supplier) is linked later, its amounts should be computed
+# from that data and added beside these rows (e.g. in untuk_arus_kas), not written into this table, so manual and
+# automatic stay apart and the choice between them can be made per period.
+HALAMAN = {"umum": "operasional_umum", "packing": "operasional_packing", "supplier": "belanja_supplier"}
 MAKS_JUMLAH = Decimal("9999999999999.99")
 
 

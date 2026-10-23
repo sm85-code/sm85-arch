@@ -65,8 +65,8 @@ async def test_list_has_builtin_roles_and_the_pages(session):
     assert {"admin", "owner", "staff", "staf_keuangan", "staf_operasional", "staf_produksi"} <= set(by_id)
     assert by_id["admin"]["terkunci"] is True
     assert by_id["admin"]["halaman"] == {k: lv[-1] for k, lv in akses.TINGKAT_HALAMAN.items()}  # the highest level of every page
-    assert by_id["staf_keuangan"]["halaman"] == {"operasional_umum": "tulis", "operasional_packing": "tulis", "arus_kas": "tulis"}
-    assert by_id["owner"]["halaman"] == akses._OWNER
+    assert by_id["staf_keuangan"]["halaman"] == {"operasional_umum": "tulis", "operasional_packing": "tulis", "arus_kas": "tulis", "belanja_supplier": "tulis"}
+    assert by_id["owner"]["halaman"] == {**akses._OWNER, "belanja_supplier": "baca"}  # given with Operasional Umum
     assert by_id["staff"]["halaman"] == akses._STAFF
     assert by_id["staff"]["akses_toko"] == "ditugaskan" and by_id["owner"]["akses_toko"] == "semua"
     pages = {h["id"]: h for h in data["halaman"]}

@@ -26,6 +26,7 @@ from tenants.marketplace_erp.modules.marketplace_erp.infrastructure.models impor
 
 PENANDA_TAB = "migrasi:pemetaan_per_tab"
 PENANDA_MENU = "migrasi:data_produksi_per_menu"
+PENANDA_SUPPLIER = "migrasi:belanja_supplier"
 PENANDA_PISAH = "migrasi:data_produksi"  # a row of Kelola Aplikasi's store used as a one-time marker; never shown
 TINGKAT = ("baca", "tulis")
 AKSES_TOKO = ("semua", "ditugaskan")
@@ -62,6 +63,7 @@ HALAMAN: list[tuple[str, str, str, tuple[str, ...]]] = [
     ("data_template", "Template", "Data Produksi", ("baca", "tulis")),
     ("operasional_umum", "Operasional Umum", "Keuangan", ("baca", "tulis")),
     ("operasional_packing", "Operasional Packing", "Keuangan", ("baca", "tulis")),
+    ("belanja_supplier", "Belanja Supplier", "Keuangan", ("baca", "tulis")),
     ("arus_kas", "Arus Kas (tulis = centang)", "Keuangan", ("baca", "tulis")),
     ("kategori_transaksi", "Kategori Transaksi", "Keuangan", ("baca", "tulis")),
     ("laporan_keuangan", "Laporan Keuangan", "Keuangan", ("baca", "tulis")),
@@ -118,6 +120,19 @@ async def pastikan_bawaan(session: AsyncSession) -> None:
     await session.flush()
     await _pisah_data_produksi(session)
     await _pisah_pemetaan(session)
+    await _beri_belanja_supplier(session)
+
+
+async def _beri_belanja_supplier(session: AsyncSession) -> None:
+    """Once: Belanja Supplier is new. Every role that has Operasional Umum gets it at the same level; nobody loses
+    anything, and the marker keeps a later removal by the admin from being given back."""
+    if await session.get(PengaturanUi, PENANDA_SUPPLIER):
+        return
+    for baris in (await session.scalars(select(RoleHalaman).where(RoleHalaman.halaman == "operasional_umum"))).all():
+        if await session.get(RoleHalaman, (baris.role_id, "belanja_supplier")) is None:
+            session.add(RoleHalaman(role_id=baris.role_id, halaman="belanja_supplier", tingkat=baris.tingkat))
+    session.add(PengaturanUi(id=PENANDA_SUPPLIER, teks="1"))
+    await session.flush()
 
 
 async def _pisah_pemetaan(session: AsyncSession) -> None:
