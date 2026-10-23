@@ -57,7 +57,7 @@ async def test_a_fresh_installation_starts_with_the_known_categories(session):
     async with client_for("admin", session) as c:
         data = (await c.get("/kategori-transaksi")).json()
     items = by_id(data)
-    assert len(data["items"]) == len(kat.BAWAAN) == 22
+    assert len(data["items"]) == len(kat.BAWAAN) == 23
     assert [k["id"] for k in data["items"] if k["arah"] == "masuk"][:3] == ["saldo_toko", "produk", "cat"]
     assert items["gaji"]["kelompok"] == "Beban operasional" and items["gaji"]["operasional"] is None
     assert items["perl_packing"]["kelompok"] == "Harga pokok penjualan" and items["perl_packing"]["operasional"] == "packing"

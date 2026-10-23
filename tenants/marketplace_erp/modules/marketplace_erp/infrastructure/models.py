@@ -814,7 +814,7 @@ class KategoriTransaksi(MarketplaceErpBase):
     arah: Mapped[str] = mapped_column(String(8), nullable=False, index=True)  # "masuk" | "keluar"
     nama: Mapped[str] = mapped_column(String(80), nullable=False)
     kelompok: Mapped[str] = mapped_column(String(48), nullable=False, default="")
-    operasional: Mapped[Optional[str]] = mapped_column(String(16), nullable=True)  # "umum" | "packing" | "supplier" | None
+    operasional: Mapped[Optional[str]] = mapped_column(String(16), nullable=True)  # "umum" | "packing" | "supplier" | "tukang" | None
     urut: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
     aktif: Mapped[bool] = mapped_column(Boolean, nullable=False, default=True, server_default=text("true"))
     sistem: Mapped[bool] = mapped_column(Boolean, nullable=False, default=False, server_default=text("false"))

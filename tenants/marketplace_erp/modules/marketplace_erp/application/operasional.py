@@ -27,7 +27,7 @@ from tenants.marketplace_erp.modules.marketplace_erp.infrastructure.models impor
 # entry. When the supplier order mapping (Pemetaan Order, tab Supplier) is linked later, its amounts should be computed
 # from that data and added beside these rows (e.g. in untuk_arus_kas), not written into this table, so manual and
 # automatic stay apart and the choice between them can be made per period.
-HALAMAN = {"umum": "operasional_umum", "packing": "operasional_packing", "supplier": "belanja_supplier"}
+HALAMAN = {"umum": "operasional_umum", "packing": "operasional_packing", "supplier": "belanja_supplier", "tukang": "belanja_tukang"}
 MAKS_JUMLAH = Decimal("9999999999999.99")
 
 
@@ -91,7 +91,7 @@ async def untuk_arus_kas(session: AsyncSession, periode: str) -> dict:
     an admin types them in Arus Kas itself."""
     awal, akhir = rentang(periode)
     # Belanja Supplier entries keep their description (the supplier's name) so Arus Kas can put each supplier in its own row.
-    uraian = case((TransaksiOperasional.jenis == "supplier", TransaksiOperasional.uraian), else_=literal(""))
+    uraian = case((TransaksiOperasional.jenis.in_(("supplier", "tukang")), TransaksiOperasional.uraian), else_=literal(""))
     rows = (
         await session.execute(
             select(TransaksiOperasional.tanggal, TransaksiOperasional.kategori, uraian, func.sum(TransaksiOperasional.jumlah))
