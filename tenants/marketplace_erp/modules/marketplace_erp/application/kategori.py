@@ -25,7 +25,7 @@ PEMASUKAN = "pemasukan"
 KELOMPOK_BAWAAN = [(PEMASUKAN, "masuk", "Pemasukan"), (HPP, "keluar", "Harga pokok penjualan"), (BEBAN, "keluar", "Beban operasional")]
 # Categories saved before groups had ids hold the name text.
 _NAMA_LAMA = {nama: id_ for id_, _, nama in KELOMPOK_BAWAAN}
-OPERASIONAL = ("umum", "packing")
+OPERASIONAL = ("umum", "packing", "supplier")
 # Typed into Arus Kas by an admin, never as entries of the Operasional pages.
 ARUS_KAS_SAJA = ("gaji", "iklan")
 
@@ -52,7 +52,11 @@ BAWAAN: list[tuple[str, str, str, str, str | None, bool, bool]] = [
     ("atk_eceran", "keluar", "Belanja ATK eceran", BEBAN, "packing", True, True),
     ("lain_keluar", "keluar", "Operasional lainnya", BEBAN, "umum", True, True),
     ("bukan_keluar", "keluar", "Bukan pengeluaran", "", None, True, True),
+    ("belanja_supplier", "keluar", "Belanja supplier", HPP, "supplier", True, False),
 ]
+# Categories added after installations were seeded: created once when missing (never deleted, only hidden, so a missing id
+# means it was never created). Same tuple shape as BAWAAN.
+TAMBAHAN = [b for b in BAWAAN if b[0] == "belanja_supplier"]
 
 async def _pastikan_kelompok(session: AsyncSession) -> bool:
     """The three starting groups exist, and categories that still hold a group's name text point at its id. Names that an
@@ -77,8 +81,17 @@ async def pastikan_bawaan(session: AsyncSession) -> None:
         lama = (await session.scalars(select(KategoriTransaksi).where(KategoriTransaksi.id.in_(ARUS_KAS_SAJA), KategoriTransaksi.operasional.is_not(None)))).all()
         for k in lama:
             k.operasional = None
-        if lama or kelompok_ditulis:
-            await session.commit()
+        ada = set((await session.scalars(select(KategoriTransaksi.id))).all())
+        baru = [b for b in TAMBAHAN if b[0] not in ada]
+        if baru:
+            akhir = (await session.scalar(select(func.max(KategoriTransaksi.urut)))) or 0
+            for i, (id_, arah, nama, kelompok, operasional, sistem, auto) in enumerate(baru, start=1):
+                session.add(KategoriTransaksi(id=id_, arah=arah, nama=nama, kelompok=kelompok, operasional=operasional, urut=akhir + i, aktif=True, sistem=sistem, auto_sembunyi=auto))
+        if lama or kelompok_ditulis or baru:
+            try:
+                await session.commit()
+            except IntegrityError:  # another request added it first
+                await session.rollback()
         return
     for urut, (id_, arah, nama, kelompok, operasional, sistem, auto) in enumerate(BAWAAN, start=1):
         session.add(KategoriTransaksi(id=id_, arah=arah, nama=nama, kelompok=kelompok, operasional=operasional, urut=urut, aktif=True, sistem=sistem, auto_sembunyi=auto))
