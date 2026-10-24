@@ -86,6 +86,24 @@ _URUTAN = {
 
 
 PENANDA_KAS_KECIL = "migrasi:kas_kecil_2026_10"
+PENANDA_TUKANG_DOBEL = "migrasi:hapus_belanja_tukang_kosong"
+
+
+async def _hapus_belanja_tukang_kosong(session: AsyncSession) -> bool:
+    """Once (approved Oct 2026): where another category already serves the Belanja Tukang page, the spare "belanja_tukang"
+    category is removed, but only when nothing points at it (no entry, no Arus Kas row). It is not created again."""
+    if await session.get(PengaturanUi, PENANDA_TUKANG_DOBEL):
+        return False
+    k = await session.get(KategoriTransaksi, "belanja_tukang")
+    lain = await session.scalar(select(func.count()).select_from(KategoriTransaksi).where(KategoriTransaksi.operasional == "tukang", KategoriTransaksi.id != "belanja_tukang"))
+    if k is None or not lain:
+        return False
+    entri = await session.scalar(select(func.count()).select_from(TransaksiOperasional).where(TransaksiOperasional.kategori == "belanja_tukang"))
+    if entri or (await baris_arus_kas(session)).get("belanja_tukang"):
+        return False
+    await session.delete(k)
+    session.add(PengaturanUi(id=PENANDA_TUKANG_DOBEL, teks="1"))
+    return True
 
 
 async def _kas_kecil_sekali(session: AsyncSession) -> bool:
@@ -150,7 +168,8 @@ async def pastikan_bawaan(session: AsyncSession) -> None:
         lama = (await session.scalars(select(KategoriTransaksi).where(KategoriTransaksi.id.in_(ARUS_KAS_SAJA), KategoriTransaksi.operasional.is_not(None)))).all()
         for k in lama:
             k.operasional = None
-        ada = set((await session.scalars(select(KategoriTransaksi.id))).all())
+        dobel = await _hapus_belanja_tukang_kosong(session)
+        ada = set((await session.scalars(select(KategoriTransaksi.id))).all()) | ({"belanja_tukang"} if await session.get(PengaturanUi, PENANDA_TUKANG_DOBEL) else set())
         baru = [b for b in TAMBAHAN if b[0] not in ada]
         if baru:
             akhir = (await session.scalar(select(func.max(KategoriTransaksi.urut)))) or 0
@@ -158,7 +177,7 @@ async def pastikan_bawaan(session: AsyncSession) -> None:
                 session.add(KategoriTransaksi(id=id_, arah=arah, nama=nama, kelompok=kelompok, operasional=operasional, urut=akhir + i, aktif=True, sistem=sistem, auto_sembunyi=auto))
         rapi = await _rapikan_sekali(session)
         kecil = await _kas_kecil_sekali(session)
-        if lama or kelompok_ditulis or baru or rapi or kecil:
+        if lama or kelompok_ditulis or baru or rapi or kecil or dobel:
             try:
                 await session.commit()
             except IntegrityError:  # another request added it first
