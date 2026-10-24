@@ -248,7 +248,7 @@ async def _periksa(session: AsyncSession, arah: str, kelompok: str, operasional:
         return "", None  # "not income / not an expense" lands nowhere, whatever is sent
     kelompok = await _kelompok_id(session, arah, kelompok)
     if operasional not in (None, *OPERASIONAL):
-        raise HTTPException(422, "Halaman operasional harus Operasional Umum, Operasional Eceran, Belanja Supplier atau Belanja Tukang")
+        raise HTTPException(422, "Halaman operasional harus Kas Utama, Kas Kecil, Belanja Supplier atau Belanja Tukang")
     if operasional and arah != "keluar":
         raise HTTPException(422, "Hanya pengeluaran yang bisa dipakai di halaman operasional")
     return kelompok, operasional
