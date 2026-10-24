@@ -536,6 +536,7 @@ async def product_ranking(session, akun, payload):
         konversi = round(sale / views * 100, 2) if views and sale is not None else None
         items.append({"id": row.get("id"), "item_id": row.get("item_id"), "nama": row.get("nama"), "status": row.get("status"),
                       "harga_min": row.get("harga_min"), "stok_shopee": row.get("stok_shopee"), "foto_utama": row.get("foto_utama"), **s, "konversi_persen": konversi})
+    fetched = len(items)
     limits = [(f, "views" if f.startswith("views") else "sale" if f.startswith("sale") else "konversi_persen", getattr(payload, f))
               for f in ("views_minimal", "views_kurang_dari", "sale_minimal", "sale_kurang_dari", "konversi_minimal", "konversi_kurang_dari") if getattr(payload, f) is not None]
     for name, field, bound in limits:
@@ -545,7 +546,7 @@ async def product_ranking(session, akun, payload):
     nonzero = sum(1 for i in items if i.get(key))
     return {
         "urut": payload.urut, "status": payload.status, "terendah": payload.terendah,
-        "cakupan": {"total_produk": len(rows), "statistik_didapat": len(items), "gagal": len(gagal), "nilai_lebih_dari_nol": nonzero},
+        "cakupan": {"total_produk": len(rows), "statistik_didapat": fetched, "gagal": len(gagal), "nilai_lebih_dari_nol": nonzero},
         "filter": {n: b for n, _f, b in limits},
         "jumlah_cocok": len(items),
         "total_cocok": {"views": sum(i.get("views") or 0 for i in items), "sale": sum(i.get("sale") or 0 for i in items)},
