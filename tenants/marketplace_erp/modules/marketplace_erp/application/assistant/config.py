@@ -27,9 +27,9 @@ TURN_USD = decimal_setting("ERP_AI_TURN_USD", "0.20")
 # Product-designer turns run web research and image generation, so they reserve more per message.
 DESIGNER_TURN_USD = decimal_setting("ERP_AI_DESIGNER_TURN_USD", "0.45")
 DAILY_TURNS = integer_setting("ERP_AI_DAILY_TURNS", "30")
-MAX_CALLS = 6
+MAX_CALLS = int(os.getenv("ERP_AI_MAX_CALLS", "60"))  # dibatasi biaya per pesan/harian, bukan langkah
 MAX_WRITES = 5
-MAX_TOOLS = 16
+MAX_TOOLS = int(os.getenv("ERP_AI_MAX_TOOLS", "200"))
 MAX_INPUT_BYTES = 60000
 MAX_OUTPUT = min(8000, max(1000, integer_setting("ERP_AI_MAX_OUTPUT_TOKENS", "4000")))
 USD_IDR = decimal_setting("KURS_USD_IDR", "16000")
