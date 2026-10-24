@@ -820,6 +820,9 @@ class KategoriTransaksi(MarketplaceErpBase):
     sistem: Mapped[bool] = mapped_column(Boolean, nullable=False, default=False, server_default=text("false"))
     # The component in the summarized tabs stays hidden while all its figures are zero.
     auto_sembunyi: Mapped[bool] = mapped_column(Boolean, nullable=False, default=True, server_default=text("true"))
+    # Paid out of Kas Kecil (the petty cash topped up weekly), not Kas Utama: Arus Kas takes these entries off the Kas Kecil
+    # balance instead. They still count once as an expense in Laporan Keuangan.
+    kas_kecil: Mapped[bool] = mapped_column(Boolean, nullable=False, default=False, server_default=text("false"))
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=_utcnow)
     updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=_utcnow, onupdate=_utcnow)
 
