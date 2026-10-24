@@ -15,7 +15,7 @@ from tenants.marketplace_erp.modules.marketplace_erp.infrastructure.adapters imp
 
 MODEL = os.getenv("ADS_AI_MODEL", "claude-sonnet-5-5")
 # USD per million tokens (input, output) of the models this advisor may run on.
-HARGA = {"claude-opus-5-5": (4.0, 20.0), "claude-sonnet-5-5": (2.0, 10.0)}
+HARGA = {"claude-opus-5-5": (4.0, 20.0), "claude-sonnet-5-5": (2.0, 10.0), "claude-haiku-5-5": (0.1, 0.5)}
 KAMPANYE_MAKS = 40  # most campaigns sent per request (the biggest spenders): keeps cost and latency bounded
 KATA_MAKS = 15
 TINDAKAN = ("pause", "resume", "change_budget", "change_roas_target", "hapus_kata_kunci", "ubah_bid", "perhatikan")

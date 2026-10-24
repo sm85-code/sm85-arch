@@ -19,7 +19,7 @@ def integer_setting(name, default):
 
 MODEL = os.getenv("ERP_AI_MODEL", "claude-sonnet-5-5")
 # Estimation only; Anthropic sets the actual invoice prices. No cache/batch enabled.
-RATES = {"claude-sonnet-5-5": ("2", "10"), "claude-opus-5-5": ("4", "20"), "claude-sonnet-4-6": ("3", "15")}
+RATES = {"claude-haiku-5-5": ("0.1", "0.5"), "claude-sonnet-5-5": ("2", "10"), "claude-opus-5-5": ("4", "20"), "claude-sonnet-4-6": ("3", "15")}
 INPUT_RATE = decimal_setting("ERP_AI_INPUT_USD_PER_MILLION", RATES.get(MODEL, ("4", "20"))[0])
 OUTPUT_RATE = decimal_setting("ERP_AI_OUTPUT_USD_PER_MILLION", RATES.get(MODEL, ("4", "20"))[1])
 DAILY_USD = decimal_setting("ERP_AI_DAILY_USD", "0.50")
