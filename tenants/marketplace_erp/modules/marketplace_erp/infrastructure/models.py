@@ -1001,6 +1001,17 @@ class ProcessingPrice(MarketplaceErpBase):
     version: Mapped[int] = mapped_column(Integer, nullable=False, default=1)
 
 
+class ProcessingPriceBackup(MarketplaceErpBase):
+    """Before-values of manual catalog rows changed by a one-time data fix (e.g. uppercasing); never read by the app."""
+    __tablename__ = "mpe_processing_price_backup"
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
+    price_id: Mapped[str] = mapped_column(String(80), nullable=False, index=True)
+    alasan: Mapped[str] = mapped_column(String(80), nullable=False)
+    payload_json: Mapped[str] = mapped_column(Text, nullable=False)
+    version: Mapped[int] = mapped_column(Integer, nullable=False)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=_utcnow)
+
+
 class ProcessingDocumentTemplate(MarketplaceErpBase):
     """Versioned INV/PO layouts, independent of orders and financial postings."""
     __tablename__ = "mpe_processing_document_template"

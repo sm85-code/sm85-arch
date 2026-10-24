@@ -729,7 +729,7 @@ async def test_supplier_catalog_connection_prices_stock_snapshots_and_manual_cat
     job = await save(http, job, party_id="s1", price_id="nonwood1", catalog_mode="manual", production_price="1")
     assert (
         job["production_price"] == "12345"
-        and job["supplier_product_name"] == "Produk manual"
+        and job["supplier_product_name"] == "PRODUK MANUAL"
         and job["supplier_reference"] is None
     )
     response = await http.put(
@@ -1065,8 +1065,8 @@ async def test_manual_product_takes_any_variants_and_keeps_a_one_line_summary(cl
     }
     assert (await http.put("/processing/prices/pupuk", json=body)).status_code == 200
     row = next(p for p in (await http.get("/processing/prices")).json()["items"] if p["id"] == "pupuk")
-    assert row["varian"] == [{"nama": "Ukuran", "nilai": "5 kg"}, {"nama": "Jenis", "nilai": "Basah"}]
-    assert row["ukuran"] == "5 kg · Basah"
+    assert row["varian"] == [{"nama": "UKURAN", "nilai": "5 KG"}, {"nama": "JENIS", "nilai": "BASAH"}]
+    assert row["ukuran"] == "5 KG · BASAH" and row["produk"] == "PUPUK" and row["sku"] == "PPK-1"
     # Without variants the product is valid too, and the summary is cleared.
     body = {**body, "version": row["version"], "varian": []}
     assert (await http.put("/processing/prices/pupuk", json=body)).status_code == 200
@@ -1076,7 +1076,7 @@ async def test_manual_product_takes_any_variants_and_keeps_a_one_line_summary(cl
     legacy = {"version": row["version"], "kind": "non_kayu", "produk": "Pupuk", "harga": "15000", "ukuran": "10 kg"}
     assert (await http.put("/processing/prices/pupuk", json=legacy)).status_code == 200
     row = next(p for p in (await http.get("/processing/prices")).json()["items"] if p["id"] == "pupuk")
-    assert row.get("varian") is None and row["ukuran"] == "10 kg"
+    assert row.get("varian") is None and row["ukuran"] == "10 KG"
 
 
 @pytest.mark.asyncio
@@ -1102,7 +1102,7 @@ async def test_manual_product_takes_one_variant_name_with_several_values(client)
             "varian": [{"nama": "Warna", "nilai": "Merah"}, {"nama": "warna", "nilai": "Hitam"}]}
     assert (await http.put("/processing/prices/kain", json=body)).status_code == 200, "same name, different value"
     row = next(p for p in (await http.get("/processing/prices")).json()["items"] if p["id"] == "kain")
-    assert row["ukuran"] == "Merah · Hitam"
+    assert row["ukuran"] == "MERAH · HITAM"
 
 
 def test_supplier_product_name_carries_the_variants():

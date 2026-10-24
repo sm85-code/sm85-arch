@@ -393,12 +393,19 @@ async def save_price(price_id: str, payload: PriceInput, session: AsyncSession =
     value = dict(current or {}, **payload.model_dump(mode="json", exclude={"version"}, exclude_none=True), id=price_id)
     if payload.harga is None:
         value.pop("harga", None)
+    if payload.kind == "non_kayu":
+        # The manual catalog is kept in capitals; only what is saved now changes, stored products stay as they are.
+        for field in ("produk", "sku", "ukuran", "catatan"):
+            if isinstance(value.get(field), str):
+                value[field] = value[field].upper()
     if payload.varian is not None:
         if payload.kind != "non_kayu":
             raise HTTPException(422, "Varian hanya untuk produk manual")
         cleaned, seen = [], set()
         for item in payload.varian:
             nama, nilai = " ".join(item.nama.split()), " ".join(item.nilai.split())
+            if payload.kind == "non_kayu":
+                nama, nilai = nama.upper(), nilai.upper()
             if not nama and not nilai:
                 continue
             if not nama or not nilai:
