@@ -290,3 +290,16 @@ async def test_operasional_eceran_categories_are_paid_from_kas_kecil(session):
         assert tetap.json()["kas_kecil"] is True
         baru = (await c.post("/kategori-transaksi", json={"arah": "keluar", "nama": "Plastik Eceran", "kelompok": "Beban operasional", "operasional": "packing"})).json()
         assert baru["kas_kecil"] is True
+
+
+@pytest.mark.asyncio
+async def test_spare_belanja_tukang_is_removed_only_when_unused(session):
+    from tenants.marketplace_erp.modules.marketplace_erp.infrastructure.models import KategoriTransaksi
+    await kat.pastikan_bawaan(session)
+    tukang = await session.get(KategoriTransaksi, "tukang")
+    tukang.operasional = "tukang"
+    await session.commit()
+    await kat.pastikan_bawaan(session)
+    assert await session.get(KategoriTransaksi, "belanja_tukang") is None
+    await kat.pastikan_bawaan(session)  # not created again
+    assert await session.get(KategoriTransaksi, "belanja_tukang") is None
