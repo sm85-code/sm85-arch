@@ -107,7 +107,8 @@ async def untuk_arus_kas(session: AsyncSession, periode: str) -> dict:
     # A supplier / tukang picked on its page goes to the Arus Kas row linked to it (when one was set), else its own name.
     tujuan: dict[str, dict[str, str]] = {}
     for j in {r[4] for r in rows if r[4]}:
-        tujuan[j] = {_kunci(p["nama"]): p["baris_arus_kas"] for p in await pihak(session, j) if p["baris_arus_kas"]}
+        # Several linked rows ("A; B") = one row per linked row on the page; an entry under the party's own name goes to the first.
+        tujuan[j] = {_kunci(p["nama"]): p["baris_arus_kas"].split(";")[0].strip() for p in await pihak(session, j) if p["baris_arus_kas"].split(";")[0].strip()}
     return {
         "periode": periode,
         "items": [
