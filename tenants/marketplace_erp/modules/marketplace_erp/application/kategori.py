@@ -85,6 +85,20 @@ _URUTAN = {
 }
 
 
+PENANDA_KAS_KECIL = "migrasi:kas_kecil_2026_10"
+
+
+async def _kas_kecil_sekali(session: AsyncSession) -> bool:
+    """Once: the categories offered on Operasional Eceran (page "packing") are paid out of Kas Kecil. Later changes made on
+    the Kategori Transaksi page are never overwritten."""
+    if await session.get(PengaturanUi, PENANDA_KAS_KECIL):
+        return False
+    for k in (await session.scalars(select(KategoriTransaksi).where(KategoriTransaksi.operasional == "packing"))).all():
+        k.kas_kecil = True
+    session.add(PengaturanUi(id=PENANDA_KAS_KECIL, teks="1"))
+    return True
+
+
 async def _rapikan_sekali(session: AsyncSession) -> bool:
     if await session.get(PengaturanUi, PENANDA_RAPI):
         return False
@@ -143,16 +157,19 @@ async def pastikan_bawaan(session: AsyncSession) -> None:
             for i, (id_, arah, nama, kelompok, operasional, sistem, auto) in enumerate(baru, start=1):
                 session.add(KategoriTransaksi(id=id_, arah=arah, nama=nama, kelompok=kelompok, operasional=operasional, urut=akhir + i, aktif=True, sistem=sistem, auto_sembunyi=auto))
         rapi = await _rapikan_sekali(session)
-        if lama or kelompok_ditulis or baru or rapi:
+        kecil = await _kas_kecil_sekali(session)
+        if lama or kelompok_ditulis or baru or rapi or kecil:
             try:
                 await session.commit()
             except IntegrityError:  # another request added it first
                 await session.rollback()
         return
     for urut, (id_, arah, nama, kelompok, operasional, sistem, auto) in enumerate(BAWAAN, start=1):
-        session.add(KategoriTransaksi(id=id_, arah=arah, nama=nama, kelompok=kelompok, operasional=operasional, urut=urut, aktif=True, sistem=sistem, auto_sembunyi=auto))
+        session.add(KategoriTransaksi(id=id_, arah=arah, nama=nama, kelompok=kelompok, operasional=operasional, urut=urut, aktif=True, sistem=sistem, auto_sembunyi=auto, kas_kecil=operasional == "packing"))
     if await session.get(PengaturanUi, PENANDA_RAPI) is None:
         session.add(PengaturanUi(id=PENANDA_RAPI, teks="1"))  # a fresh installation needs no tidy-up
+    if await session.get(PengaturanUi, PENANDA_KAS_KECIL) is None:
+        session.add(PengaturanUi(id=PENANDA_KAS_KECIL, teks="1"))
     try:
         await session.commit()
     except IntegrityError:  # another request filled it first
@@ -163,7 +180,7 @@ def _baris(k: KategoriTransaksi, nama_kelompok: dict[str, str], dipakai: int = 0
     # `kelompok` is the group's current name, `kelompok_id` its id.
     return {
         "id": k.id, "arah": k.arah, "nama": k.nama, "kelompok": nama_kelompok.get(k.kelompok, k.kelompok), "kelompok_id": k.kelompok,
-        "operasional": k.operasional, "urut": k.urut, "aktif": k.aktif, "sistem": k.sistem, "auto_sembunyi": k.auto_sembunyi, "dipakai": dipakai, "dipakai_arus_kas": arus_kas,
+        "operasional": k.operasional, "urut": k.urut, "aktif": k.aktif, "sistem": k.sistem, "auto_sembunyi": k.auto_sembunyi, "kas_kecil": bool(k.kas_kecil), "dipakai": dipakai, "dipakai_arus_kas": arus_kas,
     }
 
 
@@ -212,7 +229,7 @@ async def _periksa(session: AsyncSession, arah: str, kelompok: str, operasional:
         return "", None  # "not income / not an expense" lands nowhere, whatever is sent
     kelompok = await _kelompok_id(session, arah, kelompok)
     if operasional not in (None, *OPERASIONAL):
-        raise HTTPException(422, "Halaman operasional harus umum atau packing")
+        raise HTTPException(422, "Halaman operasional harus Operasional Umum, Operasional Eceran, Belanja Supplier atau Belanja Tukang")
     if operasional and arah != "keluar":
         raise HTTPException(422, "Hanya pengeluaran yang bisa dipakai di halaman operasional")
     return kelompok, operasional
@@ -233,7 +250,7 @@ def _nama(nama: str) -> str:
     return nama
 
 
-async def buat(session: AsyncSession, arah: str, nama: str, kelompok: str, operasional: str | None) -> dict:
+async def buat(session: AsyncSession, arah: str, nama: str, kelompok: str, operasional: str | None, kas_kecil: bool | None = None) -> dict:
     await pastikan_bawaan(session)
     nama = _nama(nama)
     kelompok, operasional = await _periksa(session, arah, kelompok, operasional)
@@ -245,13 +262,14 @@ async def buat(session: AsyncSession, arah: str, nama: str, kelompok: str, opera
         id_ = f"{dasar}_{n}"[:48]
         n += 1
     urut = ((await session.scalar(select(func.max(KategoriTransaksi.urut)).where(KategoriTransaksi.arah == arah))) or 0) + 1
-    k = KategoriTransaksi(id=id_, arah=arah, nama=nama, kelompok=kelompok, operasional=operasional, urut=urut, aktif=True, sistem=False, auto_sembunyi=True)
+    kecil = (operasional == "packing") if kas_kecil is None else (kas_kecil and arah == "keluar")
+    k = KategoriTransaksi(id=id_, arah=arah, nama=nama, kelompok=kelompok, operasional=operasional, urut=urut, aktif=True, sistem=False, auto_sembunyi=True, kas_kecil=kecil)
     session.add(k)
     await session.commit()
     return _baris(k, await _nama_kelompok(session))
 
 
-async def ubah(session: AsyncSession, id_: str, nama: str, kelompok: str, operasional: str | None, aktif: bool) -> dict:
+async def ubah(session: AsyncSession, id_: str, nama: str, kelompok: str, operasional: str | None, aktif: bool, kas_kecil: bool | None = None) -> dict:
     await pastikan_bawaan(session)
     k = await session.get(KategoriTransaksi, id_)
     if k is None:
@@ -262,6 +280,8 @@ async def ubah(session: AsyncSession, id_: str, nama: str, kelompok: str, operas
     if k.kelompok == "" and k.sistem and not aktif:
         raise HTTPException(409, "Kategori ini tidak bisa disembunyikan")
     k.nama, k.kelompok, k.operasional, k.aktif = nama, kelompok, operasional, aktif
+    if kas_kecil is not None:
+        k.kas_kecil = kas_kecil and k.arah == "keluar"
     await session.commit()
     return _baris(k, await _nama_kelompok(session))
 

@@ -63,7 +63,7 @@ HALAMAN: list[tuple[str, str, str, tuple[str, ...]]] = [
     ("data_tarif_packing", "Tarif Packing", "Data Produksi", ("baca", "tulis")),
     ("data_template", "Template", "Data Produksi", ("baca", "tulis")),
     ("operasional_umum", "Operasional Umum", "Keuangan", ("baca", "tulis")),
-    ("operasional_packing", "Operasional Packing", "Keuangan", ("baca", "tulis")),
+    ("operasional_packing", "Operasional Eceran", "Keuangan", ("baca", "tulis")),
     ("belanja_supplier", "Belanja Supplier", "Keuangan", ("baca", "tulis")),
     ("belanja_tukang", "Belanja Tukang", "Keuangan", ("baca", "tulis")),
     ("arus_kas", "Arus Kas (tulis = centang)", "Keuangan", ("baca", "tulis")),
@@ -100,7 +100,7 @@ BAWAAN: list[dict] = [
      "halaman": {"operasional_umum": "tulis", "operasional_packing": "tulis", "arus_kas": "tulis"}},
     {"id": "staf_operasional", "nama": "Staf Operasional", "keterangan": "Mencatat operasional umum", "akses_toko": "semua", "sistem": False,
      "halaman": {"operasional_umum": "tulis"}},
-    {"id": "staf_produksi", "nama": "Staf Produksi", "keterangan": "Mencatat operasional packing", "akses_toko": "semua", "sistem": False,
+    {"id": "staf_produksi", "nama": "Staf Produksi", "keterangan": "Mencatat operasional eceran", "akses_toko": "semua", "sistem": False,
      "halaman": {"operasional_packing": "tulis"}},
 ]
 

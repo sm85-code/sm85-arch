@@ -275,3 +275,18 @@ async def test_categories_saved_with_a_group_name_are_pointed_at_its_id(session)
     await kat.pastikan_bawaan(session)
     assert (await session.get(KategoriTransaksi, "tukang")).kelompok == "hpp"
 
+
+
+@pytest.mark.asyncio
+async def test_operasional_eceran_categories_are_paid_from_kas_kecil(session):
+    async with client_for("admin", session) as c:
+        items = by_id((await c.get("/kategori-transaksi")).json())
+        assert items["atk_eceran"]["kas_kecil"] is True and items["perl_packing"]["kas_kecil"] is True
+        assert items["atk"]["kas_kecil"] is False and items["bahan_cat"]["kas_kecil"] is False
+        # the admin can switch it per category; leaving it out keeps it as it was
+        ubah = await c.put("/kategori-transaksi/atk", json={"nama": "Belanja ATK", "kelompok": "Beban operasional", "operasional": "umum", "aktif": True, "kas_kecil": True})
+        assert ubah.status_code == 200 and ubah.json()["kas_kecil"] is True
+        tetap = await c.put("/kategori-transaksi/atk", json={"nama": "Belanja ATK", "kelompok": "Beban operasional", "operasional": "umum", "aktif": True})
+        assert tetap.json()["kas_kecil"] is True
+        baru = (await c.post("/kategori-transaksi", json={"arah": "keluar", "nama": "Plastik Eceran", "kelompok": "Beban operasional", "operasional": "packing"})).json()
+        assert baru["kas_kecil"] is True

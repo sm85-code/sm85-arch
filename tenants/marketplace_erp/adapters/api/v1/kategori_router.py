@@ -18,6 +18,7 @@ class KategoriBaru(BaseModel):
     nama: str = Field(max_length=80)
     kelompok: str
     operasional: str | None = None
+    kas_kecil: bool | None = None
 
 
 class KategoriUbah(BaseModel):
@@ -26,6 +27,7 @@ class KategoriUbah(BaseModel):
     kelompok: str
     operasional: str | None = None
     aktif: bool = True
+    kas_kecil: bool | None = None
 
 
 class KelompokBaru(BaseModel):
@@ -52,7 +54,7 @@ async def daftar(session: AsyncSession = Depends(get_db_marketplace_erp)):
 
 @router.post("", status_code=201)
 async def buat(body: KategoriBaru, session: AsyncSession = Depends(get_db_marketplace_erp)):
-    return await kat.buat(session, body.arah, body.nama, body.kelompok, body.operasional)
+    return await kat.buat(session, body.arah, body.nama, body.kelompok, body.operasional, body.kas_kecil)
 
 
 @router.post("/kelompok", status_code=201)
@@ -73,4 +75,4 @@ async def urutkan(body: Urutan, session: AsyncSession = Depends(get_db_marketpla
 
 @router.put("/{id_}")
 async def ubah(id_: str, body: KategoriUbah, session: AsyncSession = Depends(get_db_marketplace_erp)):
-    return await kat.ubah(session, id_, body.nama, body.kelompok, body.operasional, body.aktif)
+    return await kat.ubah(session, id_, body.nama, body.kelompok, body.operasional, body.aktif, body.kas_kecil)

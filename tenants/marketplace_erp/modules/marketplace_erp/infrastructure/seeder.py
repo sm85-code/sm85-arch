@@ -39,6 +39,8 @@ DEFAULT_PASSWORD = "password123"
 _SELF_HEAL_COLUMNS = (
     # The AI product-designer playbook is stored as a Kelola Aplikasi text and is longer than 200 characters.
     "ALTER TABLE IF EXISTS mpe_pengaturan_ui ALTER COLUMN teks TYPE TEXT",
+    # Kas Kecil: categories paid out of the petty cash (Operasional Eceran) instead of Kas Utama.
+    "ALTER TABLE IF EXISTS mpe_kategori_transaksi ADD COLUMN IF NOT EXISTS kas_kecil BOOLEAN NOT NULL DEFAULT FALSE",
     "ALTER TABLE IF EXISTS mpe_ai_turns ADD COLUMN IF NOT EXISTS context_json TEXT NOT NULL DEFAULT '{}'",
     "ALTER TABLE IF EXISTS mpe_produk ADD COLUMN IF NOT EXISTS stok_referensi INTEGER",
     "ALTER TABLE IF EXISTS mpe_users ADD COLUMN IF NOT EXISTS session_version INTEGER NOT NULL DEFAULT 0",
