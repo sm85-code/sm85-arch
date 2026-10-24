@@ -9,7 +9,15 @@ Autentikasi (pilih satu, jangan dicetak):
   ERP_ADMIN_COOKIE=<token admin>  python scripts/eval/eval_asisten_ai.py --akun <ID>
   python scripts/eval/eval_asisten_ai.py --akun <ID> --bridge "node api.mjs"   (sesi browser admin)
 """
-import argparse, json, re, shlex, subprocess, sys, time, uuid, os
+import argparse
+import json
+import os
+import re
+import shlex
+import subprocess
+import sys
+import time
+import uuid
 from datetime import datetime
 
 API = os.getenv("ERP_API", "https://api.ampelkuning.com/api/marketplace-erp")
@@ -163,7 +171,7 @@ def main():
             else:
                 try:
                     ok = bool(t["status"] == "completed" and check(t, rk))
-                except Exception as e:
+                except Exception:
                     ok = False
             r = {"agent": agent, "model": t.get("model"), "no": n, "kategori": cat, "lulus": ok, "status": t["status"],
                  "tools": [x["tool"] + ("(draf)" if x["is_write"] else "") for x in t.get("actions", [])],
