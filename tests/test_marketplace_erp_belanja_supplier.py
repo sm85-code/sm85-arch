@@ -94,3 +94,19 @@ async def test_parties_listed_and_linked_to_an_arus_kas_row(session):  # noqa: F
         assert (await c.put("/operasional/supplier/pihak/nope", json={"baris_arus_kas": "x"})).status_code == 404
     arus = await ops.untuk_arus_kas(session, "2026-10")
     assert {"tanggal": "2026-10-05", "kategori": "belanja_supplier", "jumlah": "10.00", "uraian": "Tagihan Produk [PUDIN]"} in arus["items"]
+
+
+@pytest.mark.asyncio
+async def test_party_split_over_several_arus_kas_rows(session):  # noqa: F811
+    import json as _json
+    from tenants.marketplace_erp.modules.marketplace_erp.infrastructure.models import ProcessingCatalog
+    from tenants.marketplace_erp.modules.marketplace_erp.application import operasional as ops
+    session.add(ProcessingCatalog(id="global", checksum="t", imported_by="t", payload_json=_json.dumps({"supplier": [{"id": "supplier-9", "nama": "RIZKI"}], "tukang": []})))
+    await session.commit()
+    async with client_for("staf_operasional", session) as c:
+        assert (await c.put("/operasional/supplier/pihak/supplier-9", json={"baris_arus_kas": "Tagihan Produk [RIZKI]; Packing [RIZKI]"})).status_code == 200
+        for u, j in (("RIZKI", "5"), ("Packing [RIZKI]", "7")):
+            assert (await c.post("/operasional/supplier", json={"kategori": "belanja_supplier", "tanggal": "2026-10-05", "uraian": u, "jumlah": j})).status_code == 201
+    items = (await ops.untuk_arus_kas(session, "2026-10"))["items"]
+    assert {"tanggal": "2026-10-05", "kategori": "belanja_supplier", "jumlah": "5.00", "uraian": "Tagihan Produk [RIZKI]"} in items
+    assert {"tanggal": "2026-10-05", "kategori": "belanja_supplier", "jumlah": "7.00", "uraian": "Packing [RIZKI]"} in items
