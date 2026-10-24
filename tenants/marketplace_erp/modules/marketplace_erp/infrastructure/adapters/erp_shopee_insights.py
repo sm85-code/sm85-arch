@@ -74,6 +74,24 @@ async def product_stats(session, akun, item_id):
     }
 
 
+async def product_stats_many(session, akun, item_ids, chunk=50):
+    """Batch get_item_extra_info (max 50 ids per call). Sequential: the DB session is shared
+    (token refresh) and one call per 50 items keeps well inside Shopee rate limits."""
+    ids = [str(i) for i in dict.fromkeys(item_ids) if str(i).isdecimal()]
+    stats, gagal = {}, []
+    for start in range(0, len(ids), chunk):
+        part = ids[start:start + chunk]
+        try:
+            _, response = await fetch(session, akun, "/api/v2/product/get_item_extra_info", "item_list", {"item_id_list": ",".join(part)})
+        except provider.ShopeeAPIError:
+            gagal.extend(part)
+            continue
+        for r in response["item_list"]:
+            if isinstance(r, dict) and str(r.get("item_id")) in part:
+                stats[str(r["item_id"])] = {k: r.get(k) for k in ("sale", "views", "likes", "rating_star", "comment_count") if number(r.get(k))}
+    return stats, gagal
+
+
 async def diagnosis(session, akun, item_ids):
     path = "/api/v2/product/get_item_content_diagnosis_result"
     data = await provider.signed_shop_request(session, akun, path, method="POST", body={"item_id_list": item_ids}, read_only=True)

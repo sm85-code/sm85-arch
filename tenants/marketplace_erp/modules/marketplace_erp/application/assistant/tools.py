@@ -35,6 +35,15 @@ class Page(Input):
 
 class CatalogSearch(Page):
     q: str | None = Field(default=None, max_length=100)
+    status: Literal["NORMAL", "UNLIST", "BANNED", "REVIEWING"] | None = None
+
+
+class ProductRanking(Input):
+    urut: Literal["views", "sale", "likes", "rating_star", "comment_count", "konversi"] = "views"
+    status: Literal["NORMAL", "UNLIST", "BANNED", "REVIEWING", "semua"] = "NORMAL"
+    q: str | None = Field(default=None, max_length=100)
+    top: int = Field(default=10, ge=1, le=50)
+    terendah: bool = False
 
 
 class CatalogRef(Input):
@@ -206,8 +215,9 @@ TOOLS = {
     "ringkasan_pendapatan": (Empty, False, "Total pendapatan Shopee terkini: belum cair dan sudah dirilis. Bukan total periode historis atau saldo kas."),
     "detail_pesanan": (OrderRef, False, "Baca ringkasan dan item pesanan snapshot ERP pada toko terpilih, termasuk status, resi dan catatan pembeli. ID dapat berasal dari konteks halaman."),
     "daftar_toko": (Empty, False, "Daftar nama dan ID toko ERP tanpa credential."),
-    "cari_produk": (CatalogSearch, False, "Cari katalog toko terpilih atau seluruh toko; 20 produk per halaman. Snapshot ERP, bukan stok live."),
-    "statistik_produk": (CatalogRef, False, "Statistik live Shopee: views 30 hari, sale kumulatif, rating; bukan skor kualitas."),
+    "cari_produk": (CatalogSearch, False, "Cari katalog toko; 20 per halaman, NORMAL dulu. Jika total > 20 lanjutkan halaman sebelum menyimpulkan semua produk. Snapshot ERP."),
+    "peringkat_produk": (ProductRanking, False, "Untuk tertinggi/terendah/urutkan/bandingkan produk: statistik live SEMUA produk toko sekaligus, sudah diurutkan (konversi=sale/views) dengan cakupan. Default status NORMAL. Kutip hasilnya, jangan hitung ulang."),
+    "statistik_produk": (CatalogRef, False, "Statistik live satu produk: views 30 hari, sale kumulatif, rating. Banyak produk: pakai peringkat_produk."),
     "diagnosis_produk": (CatalogRef, False, "Diagnosis kualitas konten dan masalah/saran resmi Shopee."),
     "metadata_produk": (CategoryMetadata, False, "Atribut/aturan kategori produk. Gunakan sebelum mengubah kategori/atribut; category_id kosong memakai kategori saat ini."),
     "pengaturan_produk": (CatalogRef, False, "Baca informasi, model dan pilihan varian live sebelum mengusulkan perubahan."),
@@ -241,9 +251,9 @@ def encode(value):
 TOOLS.update(extra_tools.TOOLS)
 TOOLS.update(designer.TOOLS)
 # Product designer: research, photos, draft, plus reads that help fill the draft.
-DESIGNER_TOOLS = set(designer.TOOLS) | {"daftar_toko", "cari_produk", "metadata_publikasi", "pengaturan_produk", "produk_terlaris"}
+DESIGNER_TOOLS = set(designer.TOOLS) | {"daftar_toko", "cari_produk", "peringkat_produk", "metadata_publikasi", "pengaturan_produk", "produk_terlaris"}
 
-ADS_TOOLS = {"boost_produk", "daftar_produk_boost","daftar_toko", "cari_produk", "pengaturan_produk", "statistik_produk", "ringkasan_usaha", "saldo_toko", "mutasi_dana", "modal_produk", "daftar_iklan", "kelayakan_gmv", "laporan_gmv", "buat_iklan", "ubah_iklan", "ubah_kata_kunci", "buat_gmv", "ubah_gmv", "produk_gmv"}
+ADS_TOOLS = {"peringkat_produk", "boost_produk", "daftar_produk_boost","daftar_toko", "cari_produk", "pengaturan_produk", "statistik_produk", "ringkasan_usaha", "saldo_toko", "mutasi_dana", "modal_produk", "daftar_iklan", "kelayakan_gmv", "laporan_gmv", "buat_iklan", "ubah_iklan", "ubah_kata_kunci", "buat_gmv", "ubah_gmv", "produk_gmv"}
 
 
 def definitions(writes, agent="auto", shop_known=False):
@@ -258,7 +268,7 @@ def definitions(writes, agent="auto", shop_known=False):
             continue
         if agent != "desainer" and name in designer.TOOLS and name not in designer.SHARED:
             continue
-        if agent == "operasional" and name in ADS_TOOLS - {"daftar_toko", "cari_produk", "pengaturan_produk", "statistik_produk", "ringkasan_usaha", "saldo_toko", "mutasi_dana", "modal_produk"}:
+        if agent == "operasional" and name in ADS_TOOLS - {"daftar_toko", "cari_produk", "pengaturan_produk", "statistik_produk", "peringkat_produk", "ringkasan_usaha", "saldo_toko", "mutasi_dana", "modal_produk"}:
             continue
         if write and not writes:
             continue
@@ -294,7 +304,8 @@ async def execute(session, user, turn, name, payload, fingerprint):
     if name == "daftar_toko":
         return [{"id": a.id, "nama": a.nama_toko, "platform": a.platform} for a in await services.list_akun_marketplace(session) if not turn.akun_id or a.id == turn.akun_id]
     if name == "cari_produk":
-        result = await services.list_katalog_shopee(session, akun_id=turn.akun_id, q=payload.q, halaman=payload.halaman, per_halaman=20)
+        result = await services.list_katalog_shopee(session, akun_id=turn.akun_id, q=payload.q, status=payload.status, urut="status:asc", halaman=payload.halaman, per_halaman=20)
+        result["halaman_terakhir"] = max(1, -(-result["total"] // 20))
         from sqlalchemy import select
         from ...infrastructure.models import AkunMarketplace
         account_ids = {r.get("akun_id") for r in result["items"] if r.get("akun_id")}
@@ -340,6 +351,8 @@ async def execute(session, user, turn, name, payload, fingerprint):
             if write and exc.status_code == 424:
                 raise HTTPException(502, exc.detail) from exc
             raise
+    if name == "peringkat_produk":
+        return await product_ranking(session, akun, payload)
     if name == "kotak_masuk_chat":
         return await chat.inbox(session, akun, payload.cursor, payload.unread)
     if name in ("riwayat_chat", "balas_chat"):
@@ -457,3 +470,34 @@ async def execute(session, user, turn, name, payload, fingerprint):
     if name == "produk_promosi":
         return await services.kelola_barang_promosi(session, akun.id, payload.promosi_id, payload.perubahan)
     raise HTTPException(422, "Fungsi tidak tersedia")
+
+
+async def product_ranking(session, akun, payload):
+    """All catalogue rows of the pinned shop, live stats in batches, sorted server-side."""
+    status = None if payload.status == "semua" else payload.status
+    rows, page = [], 1
+    while True:
+        r = await services.list_katalog_shopee(session, akun_id=akun.id, q=payload.q, status=status, urut="status:asc", halaman=page, per_halaman=200)
+        rows += r["items"]
+        if len(rows) >= r["total"] or not r["items"] or page >= 50:
+            break
+        page += 1
+    stats, gagal = await insights.product_stats_many(session, akun, [r.get("item_id") for r in rows])
+    items = []
+    for row in rows:
+        s = stats.get(str(row.get("item_id") or ""))
+        if s is None:
+            continue
+        views, sale = s.get("views"), s.get("sale")
+        konversi = round(sale / views * 100, 2) if views and sale is not None else None
+        items.append({"id": row.get("id"), "item_id": row.get("item_id"), "nama": row.get("nama"), "status": row.get("status"),
+                      "harga_min": row.get("harga_min"), "stok_shopee": row.get("stok_shopee"), "foto_utama": row.get("foto_utama"), **s, "konversi_persen": konversi})
+    key = "konversi_persen" if payload.urut == "konversi" else payload.urut
+    items.sort(key=lambda i: (i.get(key) is None, (i.get(key) or 0) if payload.terendah else -(i.get(key) or 0)))
+    nonzero = sum(1 for i in items if i.get(key))
+    return {
+        "urut": payload.urut, "status": payload.status, "terendah": payload.terendah,
+        "cakupan": {"total_produk": len(rows), "statistik_didapat": len(items), "gagal": len(gagal), "nilai_lebih_dari_nol": nonzero},
+        "items": items[:payload.top],
+        "definisi": "views = 30 hari terakhir; sale = kumulatif; konversi_persen = sale/views*100 (perkiraan, periode berbeda). Data live Shopee, sudah diurutkan server.",
+    }
