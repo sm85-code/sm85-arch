@@ -403,9 +403,10 @@ async def save_price(price_id: str, payload: PriceInput, session: AsyncSession =
                 continue
             if not nama or not nilai:
                 raise HTTPException(422, "Isi nama dan nilai pada setiap varian")
-            if nama.casefold() in seen:
-                raise HTTPException(422, f"Nama varian {nama} dipakai dua kali")
-            seen.add(nama.casefold())
+            # The same name may hold different values (Warna: Merah + Warna: Hitam); only an exact repeat is refused.
+            if (nama.casefold(), nilai.casefold()) in seen:
+                raise HTTPException(422, f"Varian {nama}: {nilai} diisi dua kali")
+            seen.add((nama.casefold(), nilai.casefold()))
             cleaned.append({"nama": nama, "nilai": nilai})
         label = " · ".join(v["nilai"] for v in cleaned)
         if len(label) > 100:

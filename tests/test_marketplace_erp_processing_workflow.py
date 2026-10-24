@@ -1084,7 +1084,7 @@ async def test_manual_product_takes_any_variants_and_keeps_a_one_line_summary(cl
     "varian,kind",
     [
         ([{"nama": "Ukuran", "nilai": ""}], "non_kayu"),
-        ([{"nama": "Jenis", "nilai": "Basah"}, {"nama": "jenis", "nilai": "Kering"}], "non_kayu"),
+        ([{"nama": "Jenis", "nilai": "Basah"}, {"nama": "jenis", "nilai": "basah"}], "non_kayu"),
         ([{"nama": "Jenis", "nilai": "x" * 100}, {"nama": "Ukuran", "nilai": "y"}], "non_kayu"),
         ([{"nama": "Jenis", "nilai": "Basah"}], "packing"),
     ],
@@ -1093,6 +1093,16 @@ async def test_manual_product_variants_are_validated(client, varian, kind):
     http, _, _ = client
     body = {"version": 0, "kind": kind, "produk": "Barang", "harga": "1", "varian": varian}
     assert (await http.put("/processing/prices/x1", json=body)).status_code == 422
+
+
+@pytest.mark.asyncio
+async def test_manual_product_takes_one_variant_name_with_several_values(client):
+    http, _, _ = client
+    body = {"version": 0, "kind": "non_kayu", "produk": "Kain", "harga": "1",
+            "varian": [{"nama": "Warna", "nilai": "Merah"}, {"nama": "warna", "nilai": "Hitam"}]}
+    assert (await http.put("/processing/prices/kain", json=body)).status_code == 200, "same name, different value"
+    row = next(p for p in (await http.get("/processing/prices")).json()["items"] if p["id"] == "kain")
+    assert row["ukuran"] == "Merah · Hitam"
 
 
 def test_supplier_product_name_carries_the_variants():
