@@ -1,6 +1,6 @@
 """Finite typed tools. Shop is pinned by the user, never by model-supplied URLs."""
 import json
-from datetime import date, datetime, time
+from datetime import date, datetime, time, timedelta
 from decimal import Decimal
 from typing import Literal
 from uuid import uuid5, NAMESPACE_URL
@@ -141,9 +141,46 @@ class PromoProducts(Input):
     perubahan: PromosiProdukIn
 
 
+PERIODE = Literal["hari ini", "kemarin", "7 hari terakhir", "7 hari sebelumnya", "14 hari terakhir", "30 hari terakhir",
+                  "minggu ini", "minggu lalu", "bulan ini", "bulan lalu"]
+
+
+def named_period(name, today=None):
+    """Named period -> (mulai, selesai) in Asia/Jakarta; 'terakhir' includes today."""
+    from .config import day
+    today = today or day()
+    if name == "hari ini":
+        return today, today
+    if name == "kemarin":
+        return today - timedelta(days=1), today - timedelta(days=1)
+    if name.endswith("hari terakhir"):
+        n = int(name.split()[0])
+        return today - timedelta(days=n - 1), today
+    if name == "7 hari sebelumnya":
+        return today - timedelta(days=13), today - timedelta(days=7)
+    if name == "minggu ini":
+        return today - timedelta(days=today.weekday()), today
+    if name == "minggu lalu":
+        start = today - timedelta(days=today.weekday() + 7)
+        return start, start + timedelta(days=6)
+    if name == "bulan ini":
+        return today.replace(day=1), today
+    end = today.replace(day=1) - timedelta(days=1)
+    return end.replace(day=1), end
+
+
 class SummaryPeriod(Input):
-    mulai: date
-    selesai: date
+    periode: PERIODE | None = Field(default=None, description="Utamakan ini: tanggal dihitung server (WIB). Jangan hitung tanggal sendiri.")
+    mulai: date | None = None
+    selesai: date | None = None
+
+    @model_validator(mode="after")
+    def resolve_period(self):
+        if self.periode:
+            self.mulai, self.selesai = named_period(self.periode)
+        elif self.mulai is None or self.selesai is None:
+            raise ValueError("Isi periode (mis. '7 hari terakhir') atau mulai dan selesai")
+        return self
 
 
 class WalletPeriod(SummaryPeriod):
