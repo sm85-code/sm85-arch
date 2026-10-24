@@ -44,6 +44,13 @@ class ProductRanking(Input):
     q: str | None = Field(default=None, max_length=100)
     top: int = Field(default=10, ge=1, le=50)
     terendah: bool = False
+    # Filter dihitung server; hasil jumlah_cocok adalah hitungan pasti (jangan hitung sendiri).
+    views_minimal: int | None = Field(default=None, ge=0)
+    views_kurang_dari: int | None = Field(default=None, ge=0)
+    sale_minimal: int | None = Field(default=None, ge=0)
+    sale_kurang_dari: int | None = Field(default=None, ge=0)
+    konversi_minimal: float | None = Field(default=None, ge=0)
+    konversi_kurang_dari: float | None = Field(default=None, ge=0)
 
 
 class CatalogRef(Input):
@@ -253,7 +260,7 @@ TOOLS = {
     "detail_pesanan": (OrderRef, False, "Baca ringkasan dan item pesanan snapshot ERP pada toko terpilih, termasuk status, resi dan catatan pembeli. ID dapat berasal dari konteks halaman."),
     "daftar_toko": (Empty, False, "Daftar nama dan ID toko ERP tanpa credential."),
     "cari_produk": (CatalogSearch, False, "Cari katalog toko; 20 per halaman, NORMAL dulu. Jika total > 20 lanjutkan halaman sebelum menyimpulkan semua produk. Snapshot ERP."),
-    "peringkat_produk": (ProductRanking, False, "Untuk tertinggi/terendah/urutkan/bandingkan produk: statistik live SEMUA produk toko sekaligus, sudah diurutkan (konversi=sale/views) dengan cakupan. Default status NORMAL. Kutip hasilnya, jangan hitung ulang."),
+    "peringkat_produk": (ProductRanking, False, "Filter ambang (views_minimal/views_kurang_dari/sale_*/konversi_*) dihitung server; kutip jumlah_cocok dan total_cocok, jangan menghitung sendiri. Untuk tertinggi/terendah/urutkan/bandingkan produk: statistik live SEMUA produk toko sekaligus, sudah diurutkan (konversi=sale/views) dengan cakupan. Default status NORMAL. Kutip hasilnya, jangan hitung ulang."),
     "statistik_produk": (CatalogRef, False, "Statistik live satu produk: views 30 hari, sale kumulatif, rating. Banyak produk: pakai peringkat_produk."),
     "diagnosis_produk": (CatalogRef, False, "Diagnosis kualitas konten dan masalah/saran resmi Shopee."),
     "metadata_produk": (CategoryMetadata, False, "Atribut/aturan kategori produk. Gunakan sebelum mengubah kategori/atribut; category_id kosong memakai kategori saat ini."),
@@ -529,12 +536,21 @@ async def product_ranking(session, akun, payload):
         konversi = round(sale / views * 100, 2) if views and sale is not None else None
         items.append({"id": row.get("id"), "item_id": row.get("item_id"), "nama": row.get("nama"), "status": row.get("status"),
                       "harga_min": row.get("harga_min"), "stok_shopee": row.get("stok_shopee"), "foto_utama": row.get("foto_utama"), **s, "konversi_persen": konversi})
+    limits = [(f, "views" if f.startswith("views") else "sale" if f.startswith("sale") else "konversi_persen", getattr(payload, f))
+              for f in ("views_minimal", "views_kurang_dari", "sale_minimal", "sale_kurang_dari", "konversi_minimal", "konversi_kurang_dari") if getattr(payload, f) is not None]
+    for name, field, bound in limits:
+        items = [i for i in items if i.get(field) is not None and (i[field] >= bound if name.endswith("minimal") else i[field] < bound)]
     key = "konversi_persen" if payload.urut == "konversi" else payload.urut
     items.sort(key=lambda i: (i.get(key) is None, (i.get(key) or 0) if payload.terendah else -(i.get(key) or 0)))
     nonzero = sum(1 for i in items if i.get(key))
     return {
         "urut": payload.urut, "status": payload.status, "terendah": payload.terendah,
         "cakupan": {"total_produk": len(rows), "statistik_didapat": len(items), "gagal": len(gagal), "nilai_lebih_dari_nol": nonzero},
+        "filter": {n: b for n, _f, b in limits},
+        "jumlah_cocok": len(items),
+        "total_cocok": {"views": sum(i.get("views") or 0 for i in items), "sale": sum(i.get("sale") or 0 for i in items)},
+        "item_id_cocok": [i.get("item_id") for i in items],
+        "ditampilkan": min(len(items), payload.top),
         "items": items[:payload.top],
         "definisi": "views = 30 hari terakhir; sale = kumulatif; konversi_persen = sale/views*100 (perkiraan, periode berbeda). Data live Shopee, sudah diurutkan server.",
     }

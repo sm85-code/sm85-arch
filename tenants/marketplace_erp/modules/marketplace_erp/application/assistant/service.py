@@ -46,6 +46,7 @@ Indikator overall_performance bukan rating bintang pembeli. Jangan mengartikan k
 Rekomendasi harus mempertimbangkan operasi: jangan menyarankan menghapus listing pre-order hanya untuk mengejar rasio;
 periksa kesiapan stok/lead time dahulu dan jangan mengarang kemampuan mengurangi waktu produksi.
 Untuk periode (hari ini, kemarin, 7 hari terakhir, 7 hari sebelumnya, minggu ini/lalu, bulan ini/lalu) isi argumen periode; JANGAN menghitung tanggal sendiri. Sebutkan tanggal mulai-selesai dari hasil tool.
+JANGAN menghitung jumlah atau menjumlahkan item sendiri; pakai filter tool dan kutip jumlah_cocok/total_cocok/total dari hasil tool. Untuk perintah massal, sebutkan jumlah_cocok dari server sebagai jumlah sasaran.
 Jawab tepat cakupan yang ditanya: satu produk berarti satu produk; jangan menambah agregasi, total atau daftar lain yang tidak diminta.
 Penjualan/nilai pesanan bukan laba. Null bukan nol. Cantumkan periode/toko/snapshot atau live saat relevan.
 Untuk pesaing di Shopee/marketplace gunakan kompetitor_shopee (bukan riset umum); sebutkan nama, harga, terjual, rating dan url dari hasilnya, jangan mengarang. Jika toko sudah dipilih, analisis hanya toko itu; jangan membahas toko lain. Foto AI dan draf produk baru hanya di bidang Desainer produk.
@@ -574,7 +575,10 @@ async def limit_reply(session, turn, messages, blocks, results, block, result, s
         data = result if b is block else {"error": "Tidak dijalankan: batas tindakan per pesan tercapai"}
         results.append({"type": "tool_result", "tool_use_id": b["id"], "content": tools.encode(data), "is_error": True})
     messages.append({"role": "user", "content": results})
-    messages.append({"role": "user", "content": f"Batas {config.MAX_WRITES} draf/tindakan per pesan tercapai. Jangan memanggil tool lagi. Rangkum draf yang sudah dibuat (sasaran dan nilai), lalu sebutkan sasaran yang belum diproses agar pengguna dapat melanjutkannya dengan pesan baru."})
+    counts = [json.loads(r.result_json).get("jumlah_cocok") for r in (await session.execute(select(AiToolReceipt).where(AiToolReceipt.turn_id == turn.id, AiToolReceipt.tool == "peringkat_produk"))).scalars().all()]
+    counts = [c for c in counts if isinstance(c, int)]
+    server = f" Jumlah sasaran menurut server (jumlah_cocok terakhir): {counts[-1]}." if counts else ""
+    messages.append({"role": "user", "content": server + f" Batas {config.MAX_WRITES} draf/tindakan per pesan tercapai. Jangan memanggil tool lagi. Rangkum draf yang sudah dibuat (sasaran dan nilai), sebutkan jumlah sasaran persis dari jumlah_cocok hasil tool (jangan hitung sendiri), lalu sebutkan sasaran yang belum diproses agar pengguna dapat melanjutkannya dengan pesan baru."})
     notice = "Batas tindakan pesan tercapai. Periksa catatan dan lanjutkan dengan pesan baru."
     answer = ""
     try:
