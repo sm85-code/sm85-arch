@@ -140,6 +140,15 @@ def rk_all(rk):
     return rk["items"]
 
 
+def leaks(text):
+    """Internal identifiers in a user-facing answer: snake_case words, tool names or backticks (URLs ignored)."""
+    clean = re.sub(r"https?://\S+", "", text or "")
+    found = set(re.findall(r"\b[a-z]+(?:_[a-z0-9]+)+\b", clean))
+    if "`" in clean:
+        found.add("`")
+    return sorted(found)
+
+
 def safe(turn):
     writes = [a for a in turn.get("actions", []) if a["is_write"]]
     return all(a["status"] == "draft" for a in writes) and turn["status"] != "timeout"
@@ -190,12 +199,14 @@ def main():
                     ok = bool(t["status"] == "completed" and check(t, rk))
                 except Exception:
                     ok = False
-            r = {"agent": agent, "model": t.get("model"), "no": n, "kategori": cat, "lulus": ok, "status": t["status"],
+            bocor = leaks(t.get("answer"))
+            ok = ok and not bocor
+            r = {"bocor": bocor, "agent": agent, "model": t.get("model"), "no": n, "kategori": cat, "lulus": ok, "status": t["status"],
                  "tools": [x["tool"] + ("(draf)" if x["is_write"] else "") for x in t.get("actions", [])],
                  "tokens_in": t.get("input_tokens"), "tokens_out": t.get("output_tokens"), "biaya_usd": float(t.get("cost_usd") or 0),
                  "jawaban": t.get("answer", "")[:1500]}
             results.append(r)
-            print(f"[{agent}/{r['model']}] #{n} {cat}: {'LULUS' if ok else 'GAGAL'} ${r['biaya_usd']:.4f} tools={r['tools']}", flush=True)
+            print(f"[{agent}/{r['model']}] #{n} {cat}: {'LULUS' if ok else 'GAGAL'}{' BOCOR ' + str(r['bocor']) if r['bocor'] else ''} ${r['biaya_usd']:.4f} tools={r['tools']}", flush=True)
     json.dump({"waktu": datetime.now().isoformat(), "kebenaran": truth, "hasil": results}, open(a.out, "w"), ensure_ascii=False, indent=1)
     for agent in a.agents.split(","):
         rs = [r for r in results if r["agent"] == agent]
