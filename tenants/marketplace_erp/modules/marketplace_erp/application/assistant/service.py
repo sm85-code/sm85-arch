@@ -45,6 +45,8 @@ Ikuti definisi total_pesanan/tahap_dihitung_omzet: pesanan batal/belum bayar ter
 Indikator overall_performance bukan rating bintang pembeli. Jangan mengartikan kode rating tanpa definisi API.
 Rekomendasi harus mempertimbangkan operasi: jangan menyarankan menghapus listing pre-order hanya untuk mengejar rasio;
 periksa kesiapan stok/lead time dahulu dan jangan mengarang kemampuan mengurangi waktu produksi.
+Untuk periode (hari ini, kemarin, 7 hari terakhir, 7 hari sebelumnya, minggu ini/lalu, bulan ini/lalu) isi argumen periode; JANGAN menghitung tanggal sendiri. Sebutkan tanggal mulai-selesai dari hasil tool.
+Jawab tepat cakupan yang ditanya: satu produk berarti satu produk; jangan menambah agregasi, total atau daftar lain yang tidak diminta.
 Penjualan/nilai pesanan bukan laba. Null bukan nol. Cantumkan periode/toko/snapshot atau live saat relevan.
 Untuk pesaing di Shopee/marketplace gunakan kompetitor_shopee (bukan riset umum); sebutkan nama, harga, terjual, rating dan url dari hasilnya, jangan mengarang. Jika toko sudah dipilih, analisis hanya toko itu; jangan membahas toko lain. Foto AI dan draf produk baru hanya di bidang Desainer produk.
 Tidak tersedia: pendaftaran kampanye resmi, penarikan dana, video/size-chart,
@@ -546,7 +548,7 @@ async def process(factory, ident):
                             result, stop = await tool_call(session, user, turn, block)
                         if stop:
                             if isinstance(result, dict) and str(result.get("error", "")).startswith("Batas"):
-                                await finish(session, turn, "partial", "Batas tindakan pesan tercapai. Periksa catatan dan lanjutkan dengan pesan baru.")
+                                await limit_reply(session, turn, messages, blocks, results, block, result, grounded_system, calls)
                             else:
                                 await finish(session, turn, "unknown", "Eksekusi dihentikan. Periksa catatan tindakan dan data terbaru; hasil yang belum pasti tidak dikirim ulang otomatis.")
                             return
@@ -561,6 +563,30 @@ async def process(factory, ident):
             await session.refresh(turn)
             # No automatic retry, including billing after a lost model response.
             await finish(session, turn, "unknown", "Proses AI terhenti atau layanan menolak permintaan. Periksa catatan tindakan sebelum mengirim perintah baru. Estimasi biaya memakai batas cadangan bila tagihan belum pasti.", uncertain_billing=True)
+
+
+async def limit_reply(session, turn, messages, blocks, results, block, result, system, calls):
+    """Action limit hit: no more tools, but the model still summarises drafts and remaining targets."""
+    done = {r["tool_use_id"] for r in results}
+    for b in blocks:
+        if b["id"] in done:
+            continue
+        data = result if b is block else {"error": "Tidak dijalankan: batas tindakan per pesan tercapai"}
+        results.append({"type": "tool_result", "tool_use_id": b["id"], "content": tools.encode(data), "is_error": True})
+    messages.append({"role": "user", "content": results})
+    messages.append({"role": "user", "content": f"Batas {config.MAX_WRITES} draf/tindakan per pesan tercapai. Jangan memanggil tool lagi. Rangkum draf yang sudah dibuat (sasaran dan nilai), lalu sebutkan sasaran yang belum diproses agar pengguna dapat melanjutkannya dengan pesan baru."})
+    notice = "Batas tindakan pesan tercapai. Periksa catatan dan lanjutkan dengan pesan baru."
+    answer = ""
+    try:
+        # Same tool schemas (providers require them when history has tool calls); any new tool call is ignored.
+        definitions = tools.definitions(turn.mode == "perintah", json.loads(turn.context_json or "{}").get("agent", "auto"), bool(turn.akun_id))
+        response = await charged_call(session, turn, turn.model, messages, definitions, system, calls)
+        answer = "\n".join(b.model_dump(mode="json", exclude_none=True).get("text", "") for b in response.content if b.model_dump(mode="json").get("type") == "text").strip()
+    except BudgetExceeded:
+        pass
+    drafts = (await session.execute(select(AiToolReceipt.id).where(AiToolReceipt.turn_id == turn.id, AiToolReceipt.status == "draft"))).first()
+    prefix = "Draf perubahan tersedia di bawah. **Belum dieksekusi.** Periksa toko, sasaran dan nilai, lalu Konfirmasi atau Batal.\n\n" if drafts else ""
+    await finish(session, turn, "partial", prefix + (answer + "\n\n" if answer else "") + notice)
 
 
 async def run_forever(factory):
