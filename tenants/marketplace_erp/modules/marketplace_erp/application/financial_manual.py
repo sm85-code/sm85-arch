@@ -65,7 +65,20 @@ class Simpan(BaseModel):
 async def muat(session: AsyncSession, periode: str):
     row = await session.get(LaporanKeuanganManual, periode)
     if row is None:
-        return {"version": 0, "lembar": Lembar().model_dump()}
+        # A month not saved yet takes the rows of the latest earlier month (names, sub-rows, categories, order, hidden
+        # rows) without its figures, so the user does not rebuild or reorder the sheet every month.
+        lalu = (
+            await session.execute(
+                select(LaporanKeuanganManual)
+                .where(LaporanKeuanganManual.periode < periode)
+                .order_by(LaporanKeuanganManual.periode.desc())
+                .limit(1)
+            )
+        ).scalar_one_or_none()
+        if lalu is None:
+            return {"version": 0, "lembar": Lembar().model_dump()}
+        data = json.loads(lalu.data_json)
+        return {"version": 0, "lembar": {"sel": {}, "baris": data.get("baris", []), "hapus": data.get("hapus", [])}}
     return {"version": row.version, "lembar": json.loads(row.data_json)}
 
 

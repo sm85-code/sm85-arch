@@ -948,6 +948,26 @@ async def test_manual_sheet_round_trip_and_conflict(session):
     assert again["version"] == 2 and again["lembar"]["sel"] == {}
 
 
+@pytest.mark.asyncio
+async def test_new_month_takes_rows_and_order_of_last_month_without_figures(session):
+    from tenants.marketplace_erp.modules.marketplace_erp.application import financial_manual as manual
+
+    actor = SimpleNamespace(id="admin")
+    baris = [
+        {"id": "c:anak2", "tabel": "arus_rinci", "grup": "anak:operasional", "label": "Ongkir"},
+        {"id": "c:anak1", "tabel": "arus_rinci", "grup": "anak:operasional", "label": "Belanja Cat"},
+        {"id": "c:ur-gaji", "tabel": "arus_rinci", "grup": "urutan", "label": "1"},
+    ]
+    sheet = manual.Lembar(sel={"c:anak1|2026-10-05": "5"}, baris=baris, hapus=["jasa_cat"])
+    await manual.simpan(session, "2026-10", manual.Simpan(version=0, lembar=sheet), actor)
+    baru = await manual.muat(session, "2026-11")
+    assert baru["version"] == 0
+    assert baru["lembar"] == {"sel": {}, "baris": baris, "hapus": ["jasa_cat"]}
+    assert (await manual.muat(session, "2026-09"))["lembar"]["baris"] == []
+    saved = await manual.simpan(session, "2026-11", manual.Simpan(version=0, lembar=manual.Lembar(**baru["lembar"])), actor)
+    assert saved["version"] == 1
+
+
 @pytest.mark.parametrize(
     "bad",
     [
