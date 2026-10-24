@@ -235,12 +235,69 @@ async def ensure_marketplace_erp_schema() -> None:
         await _ensure_admin(session)
         await akses.pastikan_bawaan(session)
         await kategori.pastikan_bawaan(session)
+        await kapitalkan_katalog_manual(session)
         if await _flag_default_password_owner(session):
             logger.warning(
                 "marketplace_erp: seeded owner %s still uses the default password -- "
                 "flagged must_change_password", OWNER_EMAIL,
             )
         await session.commit()
+
+
+KAPITAL_ALASAN = "kapital-katalog-manual-2026-10"
+
+
+def _kapital(payload: dict) -> dict:
+    out = dict(payload)
+    for field in ("produk", "sku", "ukuran", "catatan"):
+        if isinstance(out.get(field), str):
+            out[field] = out[field].upper()
+    if isinstance(out.get("varian"), list):
+        out["varian"] = [{**v, "nama": str(v.get("nama", "")).upper(), "nilai": str(v.get("nilai", "")).upper()} for v in out["varian"]]
+    return out
+
+
+async def kapitalkan_katalog_manual(session: AsyncSession) -> dict[str, int]:
+    """One-time, idempotent: manual (non_kayu) catalog text to capitals, as new entries are saved.
+
+    UPDATE only, never deletes. Each changed row's before-value goes to mpe_processing_price_backup first. Rows that
+    would end up identical (name + variants) to another manual product are left as they are and logged.
+    """
+    import json
+
+    from tenants.marketplace_erp.modules.marketplace_erp.infrastructure.models import ProcessingPrice, ProcessingPriceBackup
+
+    rows = (await session.execute(select(ProcessingPrice).where(ProcessingPrice.kind == "non_kayu"))).scalars().all()
+    data = {}
+    for r in rows:
+        try:
+            data[r.id] = json.loads(r.payload_json)
+        except ValueError:
+            continue
+    kunci = lambda p: (str(p.get("produk", "")).upper(), str(p.get("ukuran", "")).upper())  # noqa: E731
+    pakai: dict[tuple, list[str]] = {}
+    for pid, p in data.items():
+        if not p.get("deleted"):
+            pakai.setdefault(kunci(p), []).append(pid)
+    bentrok = {pid for ids in pakai.values() if len(ids) > 1 for pid in ids}
+    changed = 0
+    for r in rows:
+        p = data.get(r.id)
+        if p is None or p.get("deleted"):
+            continue
+        baru = _kapital(p)
+        if baru == p:
+            continue
+        if r.id in bentrok:
+            logger.warning("marketplace_erp: katalog manual %s tidak dikapitalkan, bentrok dengan produk lain bernama sama", r.id)
+            continue
+        session.add(ProcessingPriceBackup(price_id=r.id, alasan=KAPITAL_ALASAN, payload_json=r.payload_json, version=r.version))
+        r.payload_json = json.dumps(baru)
+        r.version = r.version + 1
+        changed += 1
+    if changed or bentrok:
+        logger.warning("marketplace_erp: katalog manual dikapitalkan: %d baris, %d dilewati karena bentrok", changed, len(bentrok))
+    return {"diubah": changed, "bentrok": len(bentrok)}
 
 
 async def seed_marketplace_erp(session: AsyncSession) -> dict[str, str]:
