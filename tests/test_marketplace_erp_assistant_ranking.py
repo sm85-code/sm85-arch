@@ -24,6 +24,11 @@ def test_ranking_covers_all_products_sorted(monkeypatch):
     assert out["cakupan"]["total_produk"] == 120 and out["cakupan"]["statistik_didapat"] == 120
     views = [i["views"] for i in out["items"]]
     assert views == sorted(views, reverse=True) and views[0] == 96 and len(views) == 5
+    low = asyncio.run(tools.product_ranking(None, SimpleNamespace(id="a"), tools.ProductRanking(urut="views", top=3, views_kurang_dari=10)))
+    expected = [r for r in rows if (int(r["item_id"]) % 97) < 10]
+    assert low["jumlah_cocok"] == len(expected) and len(low["items"]) == 3 and low["ditampilkan"] == 3
+    assert low["total_cocok"]["views"] == sum(int(r["item_id"]) % 97 for r in expected)
+    assert sorted(low["item_id_cocok"]) == sorted(r["item_id"] for r in expected)
 
 
 def test_ranking_available_in_tanya_for_all_bidang():
