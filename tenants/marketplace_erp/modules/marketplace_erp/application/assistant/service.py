@@ -135,6 +135,10 @@ async def enqueue(session, user, payload):
         if previous.payload_hash != digest:
             raise HTTPException(409, "ID permintaan digunakan untuk pesan berbeda")
         return previous
+    # Cadangan per pesan tidak boleh melebihi sisa anggaran harian; batas utama adalah anggaran harian.
+    remaining = config.DAILY_USD - budget.spent_usd - budget.reserved_usd
+    if plan is None and remaining > Decimal("0.01"):
+        reserve = min(reserve, remaining)
     if plan is None and (budget.turns >= config.DAILY_TURNS or budget.spent_usd + budget.reserved_usd + reserve > config.DAILY_USD):
         raise HTTPException(429, "Batas penggunaan AI harian tercapai. Coba besok atau sesuaikan batas server.")
     if plan is not None:
