@@ -106,3 +106,17 @@ async def test_payment_accounts_list_only_craftsmen_with_an_account_number(sessi
     async with client_for("staff", session) as client:
         rows = (await client.get("/arus-kas/rekening-tukang")).json()
     assert rows == [{"id": "a", "nama": "Pak A", "nama_bank": "BRI", "no_rekening": "123"}]
+
+
+@pytest.mark.asyncio
+async def test_rekening_daftar_admin_saves_staff_reads_only(session):
+    body = {"lain": [{"id": "lain-iklan", "nama": "UMAR", "jenis": "Iklan", "bank": "BRI", "rekening": "123"}], "urutan": ["t1", "lain-iklan"]}
+    async with client_for("staff", session) as client:
+        assert (await client.get("/arus-kas/rekening-daftar")).json() is None
+        assert (await client.put("/arus-kas/rekening-daftar", json=body)).status_code == 403
+    async with client_for("admin", session) as client:
+        assert (await client.put("/arus-kas/rekening-daftar", json=body)).status_code == 200
+        dobel = {"lain": body["lain"] * 2, "urutan": []}
+        assert (await client.put("/arus-kas/rekening-daftar", json=dobel)).status_code == 422
+    async with client_for("staff", session) as client:
+        assert (await client.get("/arus-kas/rekening-daftar")).json() == body
