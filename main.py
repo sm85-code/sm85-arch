@@ -7,6 +7,7 @@ from __future__ import annotations
 
 import asyncio
 import logging
+import os
 from collections import defaultdict, deque
 from contextlib import asynccontextmanager
 from time import monotonic
@@ -41,13 +42,20 @@ logging.basicConfig(
 logger = logging.getLogger("sm85.audit")
 
 
+# A startup schema step that waits on a database lock (e.g. a table held by the instance being replaced) must not keep
+# the server from listening: the platform's readiness probe fails the deploy. Each step gives up after this many seconds
+# (logged; the app continues, as with any other failure of these steps).
+STARTUP_STEP_TIMEOUT = float(os.getenv("STARTUP_STEP_TIMEOUT_SECONDS", "60"))
+
+
 @asynccontextmanager
 async def lifespan(_: FastAPI):
+    logger.warning("startup: schema steps begin")
     try:
         # Each tenant's startup step is isolated: a failure repairing the
         # madrasah schema (e.g. DATABASE_URL_MADRASAH unset) must not affect,
         # and is not affected by, the other tenants' startup.
-        await ensure_madrasah_schema()
+        await asyncio.wait_for(ensure_madrasah_schema(), STARTUP_STEP_TIMEOUT)
     except Exception:
         logger.exception("madrasah schema repair failed — app continues")
     try:
@@ -55,18 +63,19 @@ async def lifespan(_: FastAPI):
         # first deploy (mpe_users.must_change_password) and flags a seeded
         # owner still on the default password. No-op when
         # DATABASE_URL_MARKETPLACE_ERP is unset.
-        await ensure_marketplace_erp_schema()
+        await asyncio.wait_for(ensure_marketplace_erp_schema(), STARTUP_STEP_TIMEOUT)
     except Exception:
         logger.exception("marketplace_erp schema repair failed — app continues")
     try:
         # Store: adds the product slug column (SEO URLs) to databases created before it existed and backfills it.
-        await ensure_store_schema()
+        await asyncio.wait_for(ensure_store_schema(), STARTUP_STEP_TIMEOUT)
     except Exception:
         logger.exception("store schema repair failed — app continues")
     try:
-        await ensure_bumi_lestari_schema()
+        await asyncio.wait_for(ensure_bumi_lestari_schema(), STARTUP_STEP_TIMEOUT)
     except Exception:
         logger.exception("bumi_lestari schema repair failed — app continues")
+    logger.warning("startup: schema steps done")
     # Marketplace ERP: pull Shopee orders in the background (SHOPEE_AUTO_SYNC_MINUTES, 0 = off).
     tugas_sinkron = None
     interval = marketplace_erp_auto_sync.interval_seconds()

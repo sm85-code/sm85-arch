@@ -213,6 +213,9 @@ async def _ensure_default_gudang(session: AsyncSession) -> Gudang:
 
 async def _create_schema(engine) -> None:
     async with engine.begin() as conn:
+        if conn.dialect.name == "postgresql":
+            # Never wait forever for a table lock held by the running instance; the step fails and is retried next start.
+            await conn.exec_driver_sql("SET LOCAL lock_timeout = '10s'")
         await conn.run_sync(MarketplaceErpBase.metadata.create_all)
         await _self_heal_columns(conn)
     # Commit additive schema changes even when the encryption key is not ready.
