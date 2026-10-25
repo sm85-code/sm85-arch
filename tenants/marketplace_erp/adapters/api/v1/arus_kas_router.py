@@ -4,10 +4,7 @@ Everything else under Laporan Keuangan stays admin-only. Staff may only tick ("s
 rows or names, so saving here refuses any change besides the tick marks.
 """
 
-import json
-
 from fastapi import APIRouter, Depends, HTTPException, Query
-from pydantic import BaseModel, Field
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from tenants.marketplace_erp.modules.marketplace_erp.application import financial_manual as manual
@@ -15,8 +12,7 @@ from tenants.marketplace_erp.modules.marketplace_erp.application import financia
 from tenants.marketplace_erp.modules.marketplace_erp.application import operasional as ops
 from tenants.marketplace_erp.modules.marketplace_erp.application.akses import butuh_halaman
 from tenants.marketplace_erp.modules.marketplace_erp.infrastructure.database import get_db_marketplace_erp
-from tenants.marketplace_erp.modules.marketplace_erp.infrastructure.auth import require_roles_marketplace_erp
-from tenants.marketplace_erp.modules.marketplace_erp.infrastructure.models import PengaturanUi, UserMarketplaceErp
+from tenants.marketplace_erp.modules.marketplace_erp.infrastructure.models import UserMarketplaceErp
 
 baca = butuh_halaman("arus_kas", "baca")
 tulis = butuh_halaman("arus_kas", "tulis")  # ticking transactions; any other change is refused below
@@ -83,48 +79,3 @@ async def rekening_tukang(session: AsyncSession = Depends(get_db_marketplace_erp
         for p in await party_list(session, "tukang")
         if (p.get("no_rekening") or "").strip()
     ]
-
-
-# The payment-account list: the accounts that are not craftsmen and the order of all rows, set by an admin. Kept as one
-# JSON setting (mpe_pengaturan_ui); craftsmen accounts themselves stay in Tukang Kayu and are never stored here.
-KUNCI_REKENING = "rekening:daftar"
-
-
-class RekeningLain(BaseModel):
-    id: str = Field(min_length=1, max_length=64)
-    nama: str = Field(min_length=1, max_length=120)
-    jenis: str = Field(default="", max_length=80)
-    bank: str = Field(default="", max_length=60)
-    rekening: str = Field(min_length=1, max_length=40)
-
-
-class DaftarRekening(BaseModel):
-    lain: list[RekeningLain] = Field(default_factory=list, max_length=200)
-    urutan: list[str] = Field(default_factory=list, max_length=400)
-
-
-@router.get("/rekening-daftar")
-async def rekening_daftar(session: AsyncSession = Depends(get_db_marketplace_erp)):
-    """Saved list, or null while the admin has never changed it (the page then shows its built-in list)."""
-    row = await session.get(PengaturanUi, KUNCI_REKENING)
-    return json.loads(row.teks) if row else None
-
-
-@router.put("/rekening-daftar")
-async def simpan_rekening_daftar(
-    payload: DaftarRekening,
-    session: AsyncSession = Depends(get_db_marketplace_erp),
-    _actor: UserMarketplaceErp = Depends(require_roles_marketplace_erp("admin")),
-):
-    ids = [r.id for r in payload.lain]
-    if len(set(ids)) != len(ids):
-        raise HTTPException(422, "ID rekening ganda")
-    data = payload.model_dump()
-    teks = json.dumps(data, ensure_ascii=False)
-    row = await session.get(PengaturanUi, KUNCI_REKENING)
-    if row:
-        row.teks = teks
-    else:
-        session.add(PengaturanUi(id=KUNCI_REKENING, teks=teks))
-    await session.commit()
-    return data
