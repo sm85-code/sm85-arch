@@ -57,7 +57,26 @@ async def save_manual_sheet(
     session: AsyncSession = Depends(get_db_marketplace_erp),
     actor: UserMarketplaceErp = Depends(admin),
 ):
+    await _cek_pembagian_laba(session, periode, payload)
     return await manual.simpan(session, periode, payload, actor)
+
+
+def _sel_pembagian(sel: dict) -> dict:
+    return {k: v for k, v in sel.items() if k.startswith("pl_")}
+
+
+async def _cek_pembagian_laba(session, periode: str, payload) -> None:
+    """The profit split of a month is filed in the next month's Arus Kas; it may only be set once that month is final."""
+    saved = await manual.muat(session, periode)
+    lama = _sel_pembagian(saved["lembar"]["sel"])
+    baru = _sel_pembagian(payload.lembar.sel)
+    berubah = {k: v for k, v in baru.items() if lama.get(k) != v and str(v).strip() not in ("", "0")}
+    if not berubah:
+        return
+    y, m = int(periode[:4]), int(periode[5:])
+    lalu = f"{y - 1}-12" if m == 1 else f"{y}-{m - 1:02d}"
+    if not (await reports.overview(session, lalu))["bulanan"]["final"]:
+        raise HTTPException(409, f"Pembagian laba {lalu} hanya bisa diisi setelah tutup buku bulan itu final (1 s/d akhir bulan)")
 
 
 @router.get("/pemasukan-shopee")
