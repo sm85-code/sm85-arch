@@ -106,3 +106,29 @@ async def test_payment_accounts_list_only_craftsmen_with_an_account_number(sessi
     async with client_for("staff", session) as client:
         rows = (await client.get("/arus-kas/rekening-tukang")).json()
     assert rows == [{"id": "a", "nama": "Pak A", "nama_bank": "BRI", "no_rekening": "123"}]
+
+
+@pytest.mark.asyncio
+async def test_owner_with_read_access_may_only_tick(session):
+    from tenants.marketplace_erp.modules.marketplace_erp.application import akses
+
+    async def baca(session, role_id, halaman):
+        return "baca"
+
+    import tenants.marketplace_erp.adapters.api.v1.arus_kas_router as r
+
+    asli_r, asli_a = r.tingkat_halaman, akses.tingkat_halaman
+    r.tingkat_halaman = baca
+    akses.tingkat_halaman = baca
+    try:
+        async with client_for("owner", session) as owner:
+            tick = {"sel": {"ok:c:x|2026-10-04": "1"}, "baris": [], "hapus": []}
+            ok = await owner.put("/arus-kas/lembar?periode=2026-10", json={"version": 0, "lembar": tick})
+            assert ok.status_code == 200
+            figure = {"sel": {**tick["sel"], "rb:k_toko|2026-10-04": "5"}, "baris": [], "hapus": []}
+            assert (await owner.put("/arus-kas/lembar?periode=2026-10", json={"version": 1, "lembar": figure})).status_code == 403
+            assert (await owner.put("/arus-kas/lembar?periode=2026-10", json={"version": 1, "lembar": {"sel": {}, "baris": [], "hapus": []}})).status_code == 200
+        async with client_for("staf_operasional", session) as other:
+            assert (await other.put("/arus-kas/lembar?periode=2026-10", json={"version": 2, "lembar": {"sel": {}, "baris": [], "hapus": []}})).status_code == 403
+    finally:
+        r.tingkat_halaman, akses.tingkat_halaman = asli_r, asli_a
