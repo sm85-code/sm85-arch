@@ -25,6 +25,17 @@ from tenants.marketplace_erp.modules.marketplace_erp.infrastructure.models impor
 )
 
 admin = require_roles_marketplace_erp("admin")
+
+
+async def hanya_admin(
+    user: UserMarketplaceErp = Depends(admin), session: AsyncSession = Depends(get_db_marketplace_erp)
+) -> UserMarketplaceErp:
+    """Tab Transaksi (ERP) (Shopee tables from the ERP's own data) is admin-only, even for roles that may open Laporan Keuangan."""
+    from tenants.marketplace_erp.modules.marketplace_erp.application import akses
+
+    if "admin" not in await akses.peran_pengguna(session, user):
+        raise HTTPException(403, "Tab Transaksi (ERP) hanya untuk admin")
+    return user
 router = APIRouter(prefix="/laporan-keuangan", tags=["Laporan Keuangan"], dependencies=[Depends(admin)])
 
 
@@ -91,7 +102,7 @@ async def shopee_income(
     return await weekly_income(session, periode, jumlah_kolom, sampai=sampai)
 
 
-@router.get("/piutang-pengiriman-shopee")
+@router.get("/piutang-pengiriman-shopee", dependencies=[Depends(hanya_admin)])
 async def shipping_receivables(
     periode: str = Query(pattern=r"^\d{4}-\d{2}$"),
     jumlah_kolom: int | None = Query(default=None, ge=1, le=7),
@@ -103,7 +114,7 @@ async def shipping_receivables(
     return await weekly_shipping_receivables(session, periode, jumlah_kolom, sampai=sampai)
 
 
-@router.get("/piutang-pengiriman-shopee/{akun_id}", summary="Piutang mingguan dengan mutasi Dana Cepat BUMI TANI IND")
+@router.get("/piutang-pengiriman-shopee/{akun_id}", dependencies=[Depends(hanya_admin)], summary="Piutang mingguan dengan mutasi Dana Cepat BUMI TANI IND")
 async def shipping_receivables_pending(
     akun_id: str,
     periode: str = Query(pattern=r"^\d{4}-\d{2}$"),
@@ -128,7 +139,7 @@ async def shopee_released_funds(
     return await weekly_income(session, periode, jumlah_kolom, released=True, sampai=sampai)
 
 
-@router.get("/saldo-wallet-shopee/{akun_id}")
+@router.get("/saldo-wallet-shopee/{akun_id}", dependencies=[Depends(hanya_admin)])
 async def shopee_weekly_wallet(
     akun_id: str,
     tanggal: date,
