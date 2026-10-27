@@ -547,7 +547,8 @@ async def overview(session, month):
         "berikutnya": next_cutoff(previous).isoformat() if previous else None,
         "terakhir": previous.isoformat() if rows else None,
         "bulanan": {
-            "final": bool(monthly_report and monthly_report["lengkap"]),
+            # A month counts as final once all its weekly periods have passed (Drive-imported weeks included) or its books are closed.
+            "final": bool(monthly_report and monthly_report["lengkap"]) or end < datetime.now(WIB).date(),
             "pemasukan": str(monthly_report["hasil"]["pemasukan"]) if monthly_report else "0",
             "pengeluaran": str(monthly_report["hasil"]["pengeluaran"]) if monthly_report else "0",
             "laba": str(monthly_report["hasil"]["laba"]) if monthly_report else "0",
