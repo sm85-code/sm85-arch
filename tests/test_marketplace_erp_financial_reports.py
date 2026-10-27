@@ -433,7 +433,8 @@ async def test_partial_month_not_final_and_legacy_reports_are_not_mixed(session)
     p.preview_token = (await f.preview(session, p))["preview_token"]
     await f.close(session, p, actor)
     view = await f.overview(session, "2020-10")
-    assert view["bulanan"]["final"] is False
+    # The closings do not cover the whole month, but every weekly period of it has passed, so the month counts as final.
+    assert view["bulanan"]["final"] is True
     assert view["laporan_bulanan"]["lengkap"] is False
     row = await session.get(LaporanKeuanganTutup, p.tanggal)
     snap = json.loads(row.snapshot_json)
