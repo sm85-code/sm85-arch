@@ -4,18 +4,34 @@ Everything else under Laporan Keuangan stays admin-only. Staff may only tick ("s
 rows or names, so saving here refuses any change besides the tick marks.
 """
 
-from fastapi import APIRouter, Depends, HTTPException, Query
+from fastapi import APIRouter, Depends, HTTPException, Query, status
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from tenants.marketplace_erp.modules.marketplace_erp.application import financial_manual as manual
 from tenants.marketplace_erp.modules.marketplace_erp.application import financial_reports as reports
 from tenants.marketplace_erp.modules.marketplace_erp.application import operasional as ops
-from tenants.marketplace_erp.modules.marketplace_erp.application.akses import butuh_halaman
+from tenants.marketplace_erp.modules.marketplace_erp.application.akses import butuh_halaman, peran_pengguna, tingkat_halaman
+from tenants.marketplace_erp.modules.marketplace_erp.infrastructure.auth import get_current_user_marketplace_erp
 from tenants.marketplace_erp.modules.marketplace_erp.infrastructure.database import get_db_marketplace_erp
 from tenants.marketplace_erp.modules.marketplace_erp.infrastructure.models import UserMarketplaceErp
 
 baca = butuh_halaman("arus_kas", "baca")
 tulis = butuh_halaman("arus_kas", "tulis")  # ticking transactions; any other change is refused below
+
+
+async def centang(
+    user: UserMarketplaceErp = Depends(get_current_user_marketplace_erp),
+    session: AsyncSession = Depends(get_db_marketplace_erp),
+) -> UserMarketplaceErp:
+    """Who may save tick marks here: Arus Kas "tulis" (admin, Staf Keuangan, ...) or the owner, who otherwise only reads.
+    Either way only the tick marks may change (see simpan_lembar)."""
+    peran = await peran_pengguna(session, user)
+    punya = await tingkat_halaman(session, peran, "arus_kas")
+    if punya == "tulis" or ("owner" in peran and punya == "baca"):
+        return user
+    raise HTTPException(status.HTTP_403_FORBIDDEN, "Akses ditolak")
+
+
 router = APIRouter(prefix="/arus-kas", tags=["Arus Kas"], dependencies=[Depends(baca)])
 
 TANDA = "ok:"
@@ -62,7 +78,7 @@ async def simpan_lembar(
     payload: manual.Simpan,
     periode: str = PERIODE,
     session: AsyncSession = Depends(get_db_marketplace_erp),
-    actor: UserMarketplaceErp = Depends(tulis),
+    actor: UserMarketplaceErp = Depends(centang),
 ):
     saved = await manual.muat(session, periode)
     if not hanya_tanda(saved["lembar"], payload.lembar):
