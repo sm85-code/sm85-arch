@@ -119,8 +119,9 @@ async def test_admin_can_edit_what_owner_may_do(session):
         assert (await c.put("/roles/owner", json=edit)).status_code == 200
     async with client_for("owner", session) as c:
         assert (await c.get("/arus-kas/lembar?periode=2026-10")).status_code == 200
-        # reading is not ticking: saving the sheet needs write access
-        assert (await c.put("/arus-kas/lembar?periode=2026-10", json={"version": 0, "lembar": {"sel": {}, "baris": [], "hapus": []}})).status_code == 403
+        # the owner may save tick marks only; any figure change is refused
+        assert (await c.put("/arus-kas/lembar?periode=2026-10", json={"version": 0, "lembar": {"sel": {"rb:k_toko|2026-10-04": "5"}, "baris": [], "hapus": []}})).status_code == 403
+        assert (await c.put("/arus-kas/lembar?periode=2026-10", json={"version": 0, "lembar": {"sel": {"ok:c:x|2026-10-04": "1"}, "baris": [], "hapus": []}})).status_code == 200
         assert (await c.post("/operasional/umum", json=ENTRI)).status_code == 201
         assert (await c.get("/operasional/packing?periode=2026-10")).status_code == 403  # removed from owner
     async with client_for("admin", session) as c:
