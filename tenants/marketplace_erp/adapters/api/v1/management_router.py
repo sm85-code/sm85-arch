@@ -5,7 +5,8 @@ from fastapi import APIRouter, Depends, Query
 from sqlalchemy.ext.asyncio import AsyncSession
 from tenants.marketplace_erp.modules.marketplace_erp.application import services
 from tenants.marketplace_erp.modules.marketplace_erp.application.management_schemas import ItemEdit, ModelsEdit, TiersEdit, GmvCreate, GmvEdit, GmvItems
-from tenants.marketplace_erp.modules.marketplace_erp.infrastructure.adapters import erp_shopee_management as adapter, erp_shopee_insights as insights
+from tenants.marketplace_erp.modules.marketplace_erp.application.edit_schemas import ProductEdit
+from tenants.marketplace_erp.modules.marketplace_erp.infrastructure.adapters import erp_shopee_management as adapter, erp_shopee_insights as insights, erp_shopee_edit as edit
 from tenants.marketplace_erp.modules.marketplace_erp.infrastructure.auth import require_roles_marketplace_erp, pastikan_akses_akun
 from tenants.marketplace_erp.modules.marketplace_erp.infrastructure.database import get_db_marketplace_erp
 from tenants.marketplace_erp.modules.marketplace_erp.infrastructure.models import UserMarketplaceErp
@@ -45,7 +46,7 @@ async def refreshed(session, akun, katalog, result):
 async def settings(id: str, session: AsyncSession = DB, user: UserMarketplaceErp = ADMIN):
     k, a = await listing(session, user, id)
     parent = await adapter.item(session, a, k.item_id)
-    fields = {key: parent.get(key) for key in ("item_name", "item_sku", "description", "category_id", "attribute_list", "brand", "image", "weight", "dimension", "pre_order")}
+    fields = {key: parent.get(key) for key in ("item_name", "item_sku", "description", "category_id", "attribute_list", "brand", "image", "weight", "dimension", "pre_order", "price_info", "stock_info_v2")}
     variants = await adapter.workflows.read(session, a, "/api/v2/product/get_model_list", {"item_id": int(k.item_id)}) if parent.get("has_model") else {}
     fields["models"] = [{**r, "model_id": str(r["model_id"])} for r in variants.get("model", [])]
     fields["tiers"] = variants.get("tier_variation", [])
@@ -62,6 +63,13 @@ async def diagnosis(id: str, session: AsyncSession = DB, user: UserMarketplaceEr
 async def edit_item(id: str, body: ItemEdit, session: AsyncSession = DB, user: UserMarketplaceErp = ADMIN):
     k, a = await listing(session, user, id)
     return await refreshed(session, a, k, await adapter.update_item(session, a, k.item_id, body))
+
+
+@router.patch("/katalog-shopee/{id}/edit")
+async def edit_product(id: str, body: ProductEdit, session: AsyncSession = DB, user: UserMarketplaceErp = ADMIN):
+    """One-screen edit: information, variations, variants, price and stock, applied to Shopee in order."""
+    k, a = await listing(session, user, id)
+    return await refreshed(session, a, k, await edit.apply(session, a, k.item_id, body))
 
 
 @router.patch("/katalog-shopee/{id}/model")
