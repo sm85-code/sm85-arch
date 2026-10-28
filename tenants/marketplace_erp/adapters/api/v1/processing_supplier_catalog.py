@@ -18,7 +18,7 @@ CATALOG_PATH = "/api/v1/uu05_inventory/supplier-catalog"
 
 
 def source_url():
-    return os.getenv("SIABUMDES_API_URL", "https://backend-siabumdes-ywd2h.ondigitalocean.app").rstrip("/")
+    return os.getenv("SIABUMDES_API_URL", "https://api-siabumdes.ampelkuning.com").rstrip("/")
 
 
 def catalog_http_client(timeout=20):

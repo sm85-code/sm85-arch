@@ -67,3 +67,26 @@ jobs:
         env:
           TEST_DATABASE_URL: postgresql://sm85:sm85@localhost:5432/sm85_test
         run: python -m pytest tests/test_marketplace_erp_pg_selfheal.py tests/test_bumi_lestari_pg_selfheal.py tests/test_stage2_pg_migration.py tests/test_keu_pg.py tests/test_marketplace_erp_assistant_pg.py -n 0 -rs
+
+  # Auto-deploy to the Oracle server (sm85-amd-temp) on push to main, only after all checks pass.
+  # The deploy key is restricted server-side to /opt/deploy/dispatch.sh, which runs /opt/sm85-arch/deploy.sh:
+  # build image -> docker compose up -d (this service only) -> health check -> automatic rollback on failure.
+  # Manual rollback on the server: sudo /opt/sm85-arch/deploy.sh rollback
+  deploy-oracle:
+    needs: [lint-and-test, integration-pg]
+    if: github.event_name == 'push' && github.ref == 'refs/heads/main'
+    runs-on: ubuntu-latest
+    concurrency:
+      group: oracle-deploy-sm85-arch
+      cancel-in-progress: false
+    steps:
+      - name: Deploy to Oracle server
+        env:
+          KEY: ${{ secrets.ORACLE_DEPLOY_KEY }}
+          KNOWN: ${{ secrets.ORACLE_KNOWN_HOSTS }}
+          HOST: ${{ secrets.ORACLE_HOST }}
+        run: |
+          install -m 700 -d ~/.ssh
+          printf '%s\n' "$KEY" > ~/.ssh/deploy && chmod 600 ~/.ssh/deploy
+          printf '%s\n' "$KNOWN" > ~/.ssh/known_hosts
+          ssh -i ~/.ssh/deploy -o IdentitiesOnly=yes -o StrictHostKeyChecking=yes -o ServerAliveInterval=30 ubuntu@"$HOST" "deploy sm85-arch ${{ github.sha }}"
