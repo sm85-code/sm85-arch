@@ -22,6 +22,7 @@ from datetime import date, datetime, timezone
 from fastapi import APIRouter, BackgroundTasks, Body, Depends, HTTPException, Path, Query, Request, Response, status
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from .agen_guardrail_router import router as agen_guardrail_router
 from .auto_order_router import router as auto_order_router
 from .engagement_automation_router import router as engagement_automation_router
 from .notification_router import router as notification_router
@@ -1843,6 +1844,7 @@ async def kelola_barang_promosi(
     return await services.kelola_barang_promosi(session, akun_id, promosi_id, payload)
 
 
+marketplace_erp_router.include_router(agen_guardrail_router)
 marketplace_erp_router.include_router(workflow_router)
 marketplace_erp_router.include_router(management_router)
 marketplace_erp_router.include_router(commerce_router)
