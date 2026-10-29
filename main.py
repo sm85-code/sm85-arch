@@ -111,9 +111,19 @@ async def lifespan(_: FastAPI):
         detik_jadwal = jadwal_interval()
         if detik_jadwal:
             jadwal_task = asyncio.create_task(jalankan_jadwal(marketplace_erp_database.SessionLocal, detik_jadwal))
+    # Product snapshots stay off unless AGEN_PRODUK_SNAPSHOT_MENIT is greater than 0.
+    snapshot_task = None
+    if marketplace_erp_database.SessionLocal is not None:
+        from tenants.marketplace_erp.modules.marketplace_erp.application.agen_produk import interval_seconds as snapshot_interval
+        from tenants.marketplace_erp.modules.marketplace_erp.application.agen_produk import jalankan_berkala as jalankan_snapshot
+        detik_snapshot = snapshot_interval()
+        if detik_snapshot:
+            snapshot_task = asyncio.create_task(jalankan_snapshot(marketplace_erp_database.SessionLocal, detik_snapshot))
     try:
         yield
     finally:
+        if snapshot_task is not None:
+            snapshot_task.cancel()
         if jadwal_task is not None:
             jadwal_task.cancel()
         if push_task is not None:
