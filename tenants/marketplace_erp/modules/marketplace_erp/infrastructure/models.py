@@ -1114,3 +1114,8 @@ class AiDrafProduk(MarketplaceErpBase):
     akun_id: Mapped[Optional[str]] = mapped_column(String(64), nullable=True)
     payload_json: Mapped[str] = mapped_column(Text, default="{}")
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=_utcnow)
+
+
+# Ads-agent tables live in their own module so this file is not edited for every agent change.
+# Importing them registers the tables on MarketplaceErpBase.metadata (startup create_all).
+from tenants.marketplace_erp.modules.marketplace_erp.infrastructure import models_agen as _models_agen  # noqa: E402, F401
