@@ -2,7 +2,7 @@
 from fastapi import APIRouter, Depends, Query
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from tenants.marketplace_erp.modules.marketplace_erp.application import agen_aksi, agen_guardrail, services
+from tenants.marketplace_erp.modules.marketplace_erp.application import agen_aksi, agen_guardrail, agen_jadwal, services
 from tenants.marketplace_erp.modules.marketplace_erp.infrastructure.auth import (
     akun_ids_diizinkan,
     pastikan_akses_akun,
@@ -58,6 +58,23 @@ async def simpan_stop_toko(akun_id: str, body: agen_guardrail.StopIn, session: A
     akun = await services.get_akun_marketplace(session, akun_id)
     await pastikan_akses_akun(user, session, akun.id)
     hasil = await agen_guardrail.simpan_stop(session, akun.id, body, user)
+    await session.commit()
+    return hasil
+
+
+@router.get("/akun/{akun_id}/iklan/agen/jadwal")
+async def daftar_jadwal(akun_id: str, session: AsyncSession = DB, user: UserMarketplaceErp = ADMIN):
+    """Allowed WIB hours per campaign. Rows and the background loop are off until turned on."""
+    akun = await services.get_akun_marketplace(session, akun_id)
+    await pastikan_akses_akun(user, session, akun.id)
+    return await agen_jadwal.daftar(session, akun.id)
+
+
+@router.put("/akun/{akun_id}/iklan/agen/jadwal")
+async def simpan_jadwal(akun_id: str, body: agen_jadwal.JadwalIn, session: AsyncSession = DB, user: UserMarketplaceErp = ADMIN):
+    akun = await services.get_akun_marketplace(session, akun_id)
+    await pastikan_akses_akun(user, session, akun.id)
+    hasil = await agen_jadwal.simpan(session, akun.id, body)
     await session.commit()
     return hasil
 
