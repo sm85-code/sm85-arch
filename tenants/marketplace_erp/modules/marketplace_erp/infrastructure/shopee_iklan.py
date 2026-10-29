@@ -24,6 +24,7 @@ IKLAN_API: dict[str, tuple[str, str]] = {
     "buat_manual": ("POST", "/api/v2/ads/create_manual_product_ads"),
     "ubah_manual": ("POST", "/api/v2/ads/edit_manual_product_ads"),
     "ubah_kata_kunci": ("POST", "/api/v2/ads/edit_manual_product_ad_keywords"),
+    # Shopee is retiring these two. They stay callable; new ads should use GMV Max or manual.
     "buat_otomatis": ("POST", "/api/v2/ads/create_auto_product_ads"),
     "ubah_otomatis": ("POST", "/api/v2/ads/edit_auto_product_ads"),
     "cek_gmv": ("GET", "/api/v2/ads/check_create_gms_product_campaign_eligibility"),
@@ -34,6 +35,14 @@ IKLAN_API: dict[str, tuple[str, str]] = {
     "kinerja_gmv_item": ("POST", "/api/v2/ads/get_gms_item_performance"),
     "item_dihapus_gmv": ("GET", "/api/v2/ads/list_gms_user_deleted_item"),
 }
+
+# create_auto_product_ads / edit_auto_product_ads are going offline on Shopee's side.
+USANG = frozenset({"buat_otomatis", "ubah_otomatis"})
+
+
+def daftar_aksi() -> list[dict]:
+    """Every documented ads call. ``usang`` marks the auto-product endpoints Shopee is retiring."""
+    return [{"aksi": k, "method": v[0], "path": v[1], "usang": k in USANG} for k, v in IKLAN_API.items()]
 
 
 async def panggil(session: Any, akun: Any, aksi: str, *, params: dict | None = None, body: dict | None = None) -> dict:

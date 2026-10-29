@@ -23,6 +23,7 @@ from fastapi import APIRouter, BackgroundTasks, Body, Depends, HTTPException, Pa
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from .agen_guardrail_router import router as agen_guardrail_router
+from .agen_router import router as agen_router
 from .auto_order_router import router as auto_order_router
 from .engagement_automation_router import router as engagement_automation_router
 from .notification_router import router as notification_router
@@ -1292,7 +1293,7 @@ async def iklan_shopee(
 @marketplace_erp_router.get("/iklan/shopee/aksi")
 async def daftar_aksi_iklan(_: UserMarketplaceErp = Depends(require_roles_marketplace_erp(*ADMIN_ONLY))):
     from tenants.marketplace_erp.modules.marketplace_erp.infrastructure import shopee_iklan
-    return [{"aksi": k, "method": v[0], "path": v[1]} for k, v in shopee_iklan.IKLAN_API.items()]
+    return shopee_iklan.daftar_aksi()
 
 
 @marketplace_erp_router.post("/akun/{akun_id}/sync/iklan")
@@ -1845,6 +1846,7 @@ async def kelola_barang_promosi(
 
 
 marketplace_erp_router.include_router(agen_guardrail_router)
+marketplace_erp_router.include_router(agen_router)
 marketplace_erp_router.include_router(workflow_router)
 marketplace_erp_router.include_router(management_router)
 marketplace_erp_router.include_router(commerce_router)
