@@ -272,11 +272,18 @@ def serialize(value):
     return json.loads(json.dumps(value, default=lambda x: str(x) if isinstance(x, Decimal) else x.isoformat()))
 
 
-async def baseline(session, cutoff):
+async def baseline(session, cutoff, *, updating=False):
     opening = await session.get(LaporanKeuanganAwal, "global")
     if not opening:
         raise HTTPException(409, "Isi saldo awal laporan terlebih dahulu")
     latest = await session.scalar(select(LaporanKeuanganTutup).order_by(LaporanKeuanganTutup.tanggal.desc()).limit(1))
+    if updating:
+        if not latest or latest.tanggal != cutoff:
+            raise HTTPException(409, "Hanya tutup buku paling akhir yang dapat diperbarui")
+        latest = await session.scalar(
+            select(LaporanKeuanganTutup).where(LaporanKeuanganTutup.tanggal < cutoff)
+            .order_by(LaporanKeuanganTutup.tanggal.desc()).limit(1)
+        )
     previous = latest.tanggal if latest else opening.tanggal
     if latest and json.loads(latest.snapshot_json).get("calendar_version") != 2:
         raise HTTPException(
@@ -355,8 +362,11 @@ async def sources(session, start, end):
     }
 
 
-async def preview(session, p):
-    previous, before = await baseline(session, p.tanggal)
+async def preview(session, p, *, updating=None):
+    # Existing cut-offs can be previewed for an in-place update; close explicitly opts out.
+    if updating is None:
+        updating = await session.get(LaporanKeuanganTutup, p.tanggal) is not None
+    previous, before = await baseline(session, p.tanggal, updating=updating)
     p = normalize_transactions(p, previous)
     origin = await session.get(LaporanKeuanganAsal, "global")
     if origin and not any(t.jenis == "biaya_iklan" for t in p.transaksi):
@@ -368,7 +378,10 @@ async def preview(session, p):
     if len(selected) != len(p.settlement_ids) or not selected.issubset({s["id"] for s in source["settlements"]}):
         raise HTTPException(422, "Settlement duplikat atau tidak termasuk sumber periode ini")
     used = set()
-    for raw in (await session.scalars(select(LaporanKeuanganTutup.snapshot_json))).all():
+    used_query = select(LaporanKeuanganTutup.snapshot_json)
+    if updating:
+        used_query = used_query.where(LaporanKeuanganTutup.tanggal != p.tanggal)
+    for raw in (await session.scalars(used_query)).all():
         used.update(json.loads(raw)["input"]["settlement_ids"])
     if selected & used:
         raise HTTPException(409, "Settlement sudah dipakai dalam laporan sebelumnya")
@@ -414,14 +427,29 @@ async def preview(session, p):
     )
 
 
+async def update(session, cutoff, p, actor):
+    if p.tanggal != cutoff:
+        raise HTTPException(422, "Tanggal input harus sama dengan tanggal laporan")
+    return await _save_close(session, p, actor, updating=True)
+
+
 async def close(session, p, actor):
+    return await _save_close(session, p, actor, updating=False)
+
+
+async def _save_close(session, p, actor, *, updating):
     # Serialize all report writes on the baseline; leaves operational ERP records unlocked.
     await session.scalar(select(LaporanKeuanganAwal).where(LaporanKeuanganAwal.id == "global").with_for_update())
+    target = None
+    if updating:
+        target = await session.get(LaporanKeuanganTutup, p.tanggal, populate_existing=True)
+        if target is None:
+            raise HTTPException(404, "Tutup buku tidak ditemukan")
     if p.tanggal >= datetime.now(WIB).date():
         raise HTTPException(422, "Cut-off selesai pukul 23:59 WIB; simpan setelah tanggal cut-off berakhir")
     if not p.sumber_diperiksa:
         raise HTTPException(422, "Konfirmasi pemeriksaan sumber ERP dan saldo akhir")
-    snapshot = await preview(session, p)
+    snapshot = await preview(session, p, updating=updating)
     if p.preview_token != snapshot["preview_token"]:
         raise HTTPException(409, "Data sumber atau input berubah; buat pratinjau lagi sebelum tutup buku")
     result = snapshot["hasil"]
@@ -432,10 +460,15 @@ async def close(session, p, actor):
     snapshot["created_by"] = actor.id
     snapshot["created_at"] = datetime.now(WIB).isoformat()
     text = json.dumps(snapshot)
-    session.add(LaporanKeuanganTutup(tanggal=p.tanggal, snapshot_json=text, created_by=actor.id))
+    if updating:
+        target.snapshot_json = text
+        target.created_by = actor.id
+        target.created_at = datetime.now(WIB)
+    else:
+        session.add(LaporanKeuanganTutup(tanggal=p.tanggal, snapshot_json=text, created_by=actor.id))
     session.add(
         LaporanKeuanganAudit(
-            tanggal=p.tanggal, action="close", reason=p.catatan, snapshot_json=text, created_by=actor.id
+            tanggal=p.tanggal, action="update" if updating else "close", reason=p.catatan, snapshot_json=text, created_by=actor.id
         )
     )
     try:

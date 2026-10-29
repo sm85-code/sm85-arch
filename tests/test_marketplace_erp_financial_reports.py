@@ -270,6 +270,7 @@ async def test_every_report_endpoint_denies_non_admin_before_db_access(role, ses
             ("POST", "/tutup"),
             ("POST", "/impor-drive"),
             ("POST", "/2026-10-06/buka-kembali"),
+            ("POST", "/2026-10-06/perbarui"),
         ]:
             response = await client.request(method, "/laporan-keuangan" + path, json={} if method == "POST" else None)
             assert response.status_code == 403, (path, response.text)
@@ -987,3 +988,114 @@ def test_manual_sheet_rejects_bad_input(bad):
 
     with pytest.raises(ValidationError):
         manual.Lembar(**bad)
+
+
+@pytest.mark.asyncio
+async def test_update_close_in_place_preserves_audit_and_operational_data(session):
+    import json
+    from sqlalchemy import event
+
+    actor, order, settlement, ad = await seed_report(session)
+    p = payload(settlement_ids=['paid'], topup_iklan=100)
+    p.preview_token = (await f.preview(session, p))['preview_token']
+    old = await f.close(session, p, actor)
+    row = await session.get(LaporanKeuanganTutup, p.tanggal)
+    p = payload(settlement_ids=['paid'], topup_iklan=100, pendapatan_produk=50, catatan='Koreksi penjualan')
+    preview = await f.preview(session, p)
+    assert preview['hasil']['saldo_awal'] == old['hasil']['saldo_awal']
+    p.preview_token = preview['preview_token']
+    statements = []
+
+    def record(conn, cursor, statement, parameters, context, executemany):
+        statements.append(statement.upper())
+
+    event.listen(session.bind.sync_engine, 'before_cursor_execute', record)
+    try:
+        new = await f.update(session, p.tanggal, p, actor)
+    finally:
+        event.remove(session.bind.sync_engine, 'before_cursor_execute', record)
+    assert await session.get(LaporanKeuanganTutup, p.tanggal) is row
+    assert json.loads(row.snapshot_json) == new
+    assert not any(s.lstrip().startswith('DELETE') for s in statements)
+    assert any(s.startswith('UPDATE MPE_LAPORAN_KEUANGAN_TUTUP') for s in statements)
+    audits = (await session.scalars(select(LaporanKeuanganAudit))).all()
+    assert json.loads(next(a.snapshot_json for a in audits if a.action == 'close')) == old
+    updated = next(a for a in audits if a.action == 'update')
+    assert updated.reason == p.catatan and json.loads(updated.snapshot_json) == new
+    assert order.status == 'shipped' and settlement.status == 'paid' and ad.expense == 100
+    assert await session.scalar(select(func.count()).select_from(LaporanKeuanganTutup)) == 1
+
+
+@pytest.mark.asyncio
+async def test_update_rejects_wrong_date_missing_past_and_stale_preview(session):
+    actor, _, _, ad = await seed_report(session)
+    p = payload(topup_iklan=100)
+    p.preview_token = (await f.preview(session, p))['preview_token']
+    await f.close(session, p, actor)
+    row = await session.get(LaporanKeuanganTutup, p.tanggal)
+    old = row.snapshot_json
+    for cutoff, code in [(date(2020, 10, 5), 422)]:
+        with pytest.raises(HTTPException) as exc:
+            await f.update(session, cutoff, p, actor)
+        assert exc.value.status_code == code
+    with pytest.raises(HTTPException) as exc:
+        await f.update(session, date(2020, 10, 11), payload(tanggal=date(2020, 10, 11)), actor)
+    assert exc.value.status_code == 404
+    p.preview_token = (await f.preview(session, p))['preview_token']
+    ad.expense = 90
+    await session.commit()
+    with pytest.raises(HTTPException) as exc:
+        await f.update(session, p.tanggal, p, actor)
+    assert exc.value.status_code == 409
+    assert row.snapshot_json == old
+    next_p = payload(tanggal=date(2020, 10, 11))
+    next_p.preview_token = (await f.preview(session, next_p))['preview_token']
+    second = await f.close(session, next_p, actor)
+    with pytest.raises(HTTPException) as exc:
+        await f.update(session, p.tanggal, p, actor)
+    assert exc.value.status_code == 409
+    preview = await f.preview(session, next_p)
+    assert preview['hasil']['saldo_awal'] == second['hasil']['saldo_awal']
+
+
+@pytest.mark.asyncio
+async def test_update_cannot_reuse_settlement_from_another_close(session):
+    actor, *_ = await seed_report(session)
+    p = payload(settlement_ids=['paid'], topup_iklan=100)
+    p.preview_token = (await f.preview(session, p))['preview_token']
+    await f.close(session, p, actor)
+    p = payload(tanggal=date(2020, 10, 11))
+    p.preview_token = (await f.preview(session, p))['preview_token']
+    await f.close(session, p, actor)
+    p = payload(tanggal=p.tanggal, settlement_ids=['paid'])
+    with pytest.raises(HTTPException) as exc:
+        await f.update(session, p.tanggal, p, actor)
+    assert exc.value.status_code == 409
+
+
+@pytest.mark.asyncio
+async def test_update_rolls_back_snapshot_if_audit_write_fails(session):
+    from sqlalchemy import event
+    from sqlalchemy.exc import IntegrityError
+
+    actor, *_ = await seed_report(session)
+    p = payload(topup_iklan=100)
+    p.preview_token = (await f.preview(session, p))['preview_token']
+    await f.close(session, p, actor)
+    old = (await session.get(LaporanKeuanganTutup, p.tanggal)).snapshot_json
+    p = payload(topup_iklan=100, pendapatan_produk=50)
+    p.preview_token = (await f.preview(session, p))['preview_token']
+
+    def fail_audit(mapper, connection, target):
+        if target.action == 'update':
+            raise IntegrityError('audit unavailable', {}, Exception())
+
+    event.listen(LaporanKeuanganAudit, 'before_insert', fail_audit)
+    try:
+        with pytest.raises(HTTPException):
+            await f.update(session, p.tanggal, p, actor)
+    finally:
+        event.remove(LaporanKeuanganAudit, 'before_insert', fail_audit)
+    assert (await session.get(LaporanKeuanganTutup, p.tanggal)).snapshot_json == old
+    assert await session.scalar(select(func.count()).select_from(LaporanKeuanganAudit).where(
+        LaporanKeuanganAudit.action == 'update')) == 0
