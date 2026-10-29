@@ -102,6 +102,10 @@ BAWAAN: list[dict] = [
      "halaman": {"operasional_umum": "tulis"}},
     {"id": "staf_produksi", "nama": "Staf Produksi", "keterangan": "Mencatat operasional eceran", "akses_toko": "semua", "sistem": False,
      "halaman": {"operasional_packing": "tulis"}},
+    # Created when missing, never overwritten. Shops are assigned per user. Autonomy stays off until a shop limit says otherwise.
+    {"id": "agen_iklan", "nama": "Agen Iklan", "keterangan": "Bot iklan: ubah iklan dalam batas, baca produk, katalog, dan pesanan",
+     "akses_toko": "ditugaskan", "sistem": True,
+     "halaman": {"iklan": "tulis", "produk": "baca", "katalog": "baca", "pesanan": "baca"}},
 ]
 
 

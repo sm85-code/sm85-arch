@@ -23,6 +23,7 @@ from fastapi import APIRouter, BackgroundTasks, Body, Depends, HTTPException, Pa
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from .agen_guardrail_router import router as agen_guardrail_router
+from .agen_pengguna_router import router as agen_pengguna_router
 from .agen_router import router as agen_router
 from .auto_order_router import router as auto_order_router
 from .engagement_automation_router import router as engagement_automation_router
@@ -1846,6 +1847,7 @@ async def kelola_barang_promosi(
 
 
 marketplace_erp_router.include_router(agen_guardrail_router)
+marketplace_erp_router.include_router(agen_pengguna_router)
 marketplace_erp_router.include_router(agen_router)
 marketplace_erp_router.include_router(workflow_router)
 marketplace_erp_router.include_router(management_router)
