@@ -268,6 +268,31 @@ def calculate(before: Balances, p: CloseInput, payouts: Decimal, ads: Decimal, l
     }
 
 
+MONTHLY = "tutup_bulanan"
+
+
+def next_monthly_cutoff(day):
+    """Books close per calendar month only: the next cut-off is the last day of the month after ``day``."""
+    return month_bounds((day + timedelta(days=1)).strftime("%Y-%m"))[1]
+
+
+def imported(snapshot):
+    """Snapshots copied from the old Google Drive book are history only, never a closing baseline."""
+    return bool(snapshot.get("imported_historical")) or (snapshot.get("sumber") or {}).get("utama") == "google_drive"
+
+
+async def native_closes(session, *, before=None):
+    """ERP-made monthly closings (newest first); Drive-imported or older weekly rows are never a baseline."""
+    query = select(LaporanKeuanganTutup).order_by(LaporanKeuanganTutup.tanggal.desc())
+    if before is not None:
+        query = query.where(LaporanKeuanganTutup.tanggal < before)
+    return [r for r in (await session.scalars(query)).all() if monthly_close(json.loads(r.snapshot_json))]
+
+
+def monthly_close(snapshot):
+    return snapshot.get("jenis") == MONTHLY and not imported(snapshot)
+
+
 def serialize(value):
     return json.loads(json.dumps(value, default=lambda x: str(x) if isinstance(x, Decimal) else x.isoformat()))
 
@@ -276,21 +301,17 @@ async def baseline(session, cutoff, *, updating=False):
     opening = await session.get(LaporanKeuanganAwal, "global")
     if not opening:
         raise HTTPException(409, "Isi saldo awal laporan terlebih dahulu")
-    latest = await session.scalar(select(LaporanKeuanganTutup).order_by(LaporanKeuanganTutup.tanggal.desc()).limit(1))
+    if cutoff != month_bounds(cutoff.strftime("%Y-%m"))[1]:
+        raise HTTPException(422, "Tutup buku hanya bulanan: pilih tanggal akhir bulan")
+    closes = await native_closes(session)
+    latest = closes[0] if closes else None
     if updating:
         if not latest or latest.tanggal != cutoff:
             raise HTTPException(409, "Hanya tutup buku paling akhir yang dapat diperbarui")
-        latest = await session.scalar(
-            select(LaporanKeuanganTutup).where(LaporanKeuanganTutup.tanggal < cutoff)
-            .order_by(LaporanKeuanganTutup.tanggal.desc()).limit(1)
-        )
+        latest = closes[1] if len(closes) > 1 else None
     previous = latest.tanggal if latest else opening.tanggal
-    if latest and json.loads(latest.snapshot_json).get("calendar_version") != 2:
-        raise HTTPException(
-            409, "Laporan lama memakai cut-off Selasa. Buka kembali laporan lama sebelum memakai kalender baru."
-        )
-    if cutoff != next_cutoff(previous):
-        raise HTTPException(409, f"Cut-off berikutnya harus {next_cutoff(previous).isoformat()}")
+    if cutoff != next_monthly_cutoff(previous):
+        raise HTTPException(409, f"Tutup buku berikutnya harus {next_monthly_cutoff(previous).isoformat()}")
     data = json.loads(latest.snapshot_json)["hasil"]["saldo_akhir"] if latest else json.loads(opening.saldo_json)
     return previous, Balances(**data)
 
@@ -368,11 +389,6 @@ async def preview(session, p, *, updating=None):
         updating = await session.get(LaporanKeuanganTutup, p.tanggal) is not None
     previous, before = await baseline(session, p.tanggal, updating=updating)
     p = normalize_transactions(p, previous)
-    origin = await session.get(LaporanKeuanganAsal, "global")
-    if origin and not any(t.jenis == "biaya_iklan" for t in p.transaksi):
-        raise HTTPException(422, "Isi pemakaian iklan buku utama sebagai transaksi bertanggal, termasuk 0 jika nihil")
-    if origin and p.settlement_ids:
-        raise HTTPException(422, "ERP hanya pembanding; isi penarikan dari buku utama sebagai transaksi bertanggal")
     source = await sources(session, previous + timedelta(days=1), p.tanggal)
     selected = set(p.settlement_ids)
     if len(selected) != len(p.settlement_ids) or not selected.issubset({s["id"] for s in source["settlements"]}):
@@ -391,19 +407,9 @@ async def preview(session, p, *, updating=None):
         for s in source["settlements"]
         if s["id"] in selected
     ]
-    result = calculate(before, p, payouts, ZERO if origin else money(source["biaya_iklan"]))
-    if origin:
-        source["utama"] = "google_drive"
-        source["drive"] = json.loads(origin.asal_json)
-        source["pembanding_erp"] = {
-            "biaya_iklan": source["biaya_iklan"],
-            "piutang_pengiriman_bruto": str(sum((money(o["total_bruto"]) for o in source["pesanan_pengiriman"]), ZERO)),
-            "saldo_toko": None,
-            "piutang_belum_ditarik": None,
-            "catatan": "ERP tidak memisahkan saldo tertahan dan belum memiliki saldo gabungan historis terverifikasi. Total pengiriman adalah bruto, bukan estimasi dana bersih.",
-        }
-    else:
-        source["utama"] = "erp"
+    # The closing baseline and sources are always the ERP's own data; Drive-imported history is never used.
+    result = calculate(before, p, payouts, money(source["biaya_iklan"]))
+    source["utama"] = "erp"
     token = hashlib.sha256(
         json.dumps(
             serialize(
@@ -416,6 +422,7 @@ async def preview(session, p, *, updating=None):
         {
             "preview_token": token,
             "calendar_version": 2,
+            "jenis": MONTHLY,
             "jadwal_laporan": next_presentation(p.tanggal),
             "tanggal": p.tanggal,
             "mulai": previous + timedelta(days=1),
@@ -481,7 +488,8 @@ async def _save_close(session, p, actor, *, updating):
 
 async def reopen(session, cutoff, reason, actor):
     await session.scalar(select(LaporanKeuanganAwal).where(LaporanKeuanganAwal.id == "global").with_for_update())
-    latest = await session.scalar(select(LaporanKeuanganTutup).order_by(LaporanKeuanganTutup.tanggal.desc()).limit(1))
+    closes = await native_closes(session)
+    latest = closes[0] if closes else None
     if not latest or latest.tanggal != cutoff:
         raise HTTPException(409, "Hanya tutup buku paling akhir yang dapat dibuka kembali")
     session.add(
@@ -544,7 +552,10 @@ async def overview(session, month):
     start, end = month_bounds(month)
     opening = await session.get(LaporanKeuanganAwal, "global")
     origin = await session.get(LaporanKeuanganAsal, "global")
-    rows = (await session.scalars(select(LaporanKeuanganTutup).order_by(LaporanKeuanganTutup.tanggal))).all()
+    every = (await session.scalars(select(LaporanKeuanganTutup).order_by(LaporanKeuanganTutup.tanggal))).all()
+    # Monthly closings are decision baselines only; the weekly sheet keeps reading the other rows exactly as before.
+    closes = [json.loads(r.snapshot_json) for r in every if monthly_close(json.loads(r.snapshot_json))]
+    rows = [r for r in every if json.loads(r.snapshot_json).get("jenis") != MONTHLY]
     valid = [json.loads(r.snapshot_json) for r in rows if json.loads(r.snapshot_json).get("calendar_version") == 2]
     monthly = [r for r in valid if start.isoformat() <= r["mulai"] and r["tanggal"] <= end.isoformat()]
     monthly_report = aggregate(monthly, start, end)
@@ -563,8 +574,13 @@ async def overview(session, month):
         )
         day += timedelta(days=7)
     previous = rows[-1].tanggal if rows else opening.tanggal if opening else None
+    close_previous = date.fromisoformat(closes[-1]["tanggal"]) if closes else opening.tanggal if opening else None
     return {
-        "sumber_utama": "google_drive" if origin else "erp",
+        "sumber_utama": "erp",
+        # Closing baseline for this month: the ERP's own monthly close only (never Drive-imported history).
+        "patokan_bulanan": next((s for s in closes if s["tanggal"] == end.isoformat()), None),
+        "tutup_berikutnya": next_monthly_cutoff(close_previous).isoformat() if close_previous else None,
+        "tutup_terakhir": closes[-1]["tanggal"] if closes else None,
         "asal": json.loads(origin.asal_json) if origin else None,
         "akhir_bulan": end.isoformat(),
         "jadwal_bulanan": next_presentation(end).isoformat(),
@@ -581,7 +597,8 @@ async def overview(session, month):
         "terakhir": previous.isoformat() if rows else None,
         "bulanan": {
             # A month counts as final once all its weekly periods have passed (Drive-imported weeks included) or its books are closed.
-            "final": bool(monthly_report and monthly_report["lengkap"]) or end < datetime.now(WIB).date(),
+            "final": bool(monthly_report and monthly_report["lengkap"]) or any(s["tanggal"] == end.isoformat() for s in closes)
+            or end < datetime.now(WIB).date(),
             "pemasukan": str(monthly_report["hasil"]["pemasukan"]) if monthly_report else "0",
             "pengeluaran": str(monthly_report["hasil"]["pengeluaran"]) if monthly_report else "0",
             "laba": str(monthly_report["hasil"]["laba"]) if monthly_report else "0",

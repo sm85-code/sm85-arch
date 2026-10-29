@@ -35,7 +35,7 @@ def balances(**extra):
 
 def payload(**extra):
     data = dict(
-        tanggal=date(2020, 10, 4),
+        tanggal=date(2020, 10, 31),
         piutang_pengiriman=0,
         saldo_toko=0,
         stok=0,
@@ -221,7 +221,7 @@ async def test_erp_sources_snapshot_freeze_reopen_and_no_operational_mutations(s
     assert await session.get(LaporanKeuanganTutup, p.tanggal) is None
     assert await session.scalar(select(func.count()).select_from(LaporanKeuanganAudit)) == 3
     with pytest.raises(HTTPException):
-        await f.preview(session, payload(tanggal=date(2020, 10, 11)))
+        await f.preview(session, payload(tanggal=date(2020, 11, 30)))
 
 
 @pytest.mark.asyncio
@@ -317,43 +317,44 @@ async def test_changed_erp_source_requires_new_preview_and_negative_balance_is_r
 
 
 @pytest.mark.asyncio
-async def test_month_final_uses_calendar_end_and_split_week_preserves_months(session):
+async def test_month_final_uses_calendar_end_and_monthly_close_only(session):
     from tenants.marketplace_erp.adapters.api.v1.financial_reports_router import overview
 
     actor, *_ = await seed_report(session)
-    for day in (4, 11, 18, 25, 31):
-        p = payload(
-            tanggal=date(2020, 10, day), topup_iklan=100 if day == 4 else 0, penarikan_lain=600 if day == 31 else 0
-        )
-        p.preview_token = (await f.preview(session, p))["preview_token"]
-        await f.close(session, p, actor)
+    # Weekly cut-offs are rejected: books close per calendar month only.
+    for day in (4, 11, 25):
+        with pytest.raises(HTTPException) as exc:
+            await f.preview(session, payload(tanggal=date(2020, 10, day)))
+        assert exc.value.status_code == 422
+    p = payload(tanggal=date(2020, 10, 31), topup_iklan=100, penarikan_lain=600)
+    p.preview_token = (await f.preview(session, p))["preview_token"]
+    await f.close(session, p, actor)
     monthly = await overview("2020-10", session)
     assert monthly["bulanan"]["final"] is True
     assert monthly["akhir_bulan"] == "2020-10-31"
-    assert monthly["berikutnya"] == "2020-11-01"
-    assert f.money(monthly["bulanan"]["pemasukan"]) == 600
-    october_cash = monthly["bulanan"]["saldo_akhir"]["kas_utama"]
-    p = payload(tanggal=date(2020, 11, 1), penarikan_lain=100)
+    assert monthly["tutup_berikutnya"] == "2020-11-30"
+    assert monthly["tutup_terakhir"] == "2020-10-31"
+    assert monthly["laporan"] == []  # monthly closes never feed the weekly sheet
+    assert monthly["patokan_bulanan"]["tanggal"] == "2020-10-31"
+    assert f.money(monthly["patokan_bulanan"]["hasil"]["pemasukan"]) == 600
+    october_cash = monthly["patokan_bulanan"]["hasil"]["saldo_akhir"]["kas_utama"]
+    with pytest.raises(HTTPException) as exc:
+        await f.preview(session, payload(tanggal=date(2020, 11, 1), penarikan_lain=100))
+    assert exc.value.status_code == 422
+    p = payload(tanggal=date(2020, 11, 30), penarikan_lain=100)
     next_preview = await f.preview(session, p)
     assert next_preview["mulai"] == "2020-11-01"
     p.preview_token = next_preview["preview_token"]
     await f.close(session, p, actor)
     october = await overview("2020-10", session)
     november = await overview("2020-11", session)
-    assert october["bulanan"]["saldo_akhir"]["kas_utama"] == october_cash
-    assert f.money(october["bulanan"]["pemasukan"]) == 600
-    assert f.money(november["bulanan"]["pemasukan"]) == 100
-    split_week = october["mingguan"][-1]
-    assert split_week["mulai"] == "2020-10-26"
-    assert split_week["tanggal"] == "2020-11-01"
-    assert split_week["jadwal_laporan"] == "2020-11-03"
-    assert split_week["laporan"]["lengkap"] is True
-    assert f.money(split_week["laporan"]["hasil"]["pemasukan"]) == 700
-    assert split_week["laporan"]["hasil"]["saldo_awal"] == october["laporan"][-1]["hasil"]["saldo_awal"]
+    assert october["patokan_bulanan"]["hasil"]["saldo_akhir"]["kas_utama"] == october_cash
+    assert f.money(october["patokan_bulanan"]["hasil"]["pemasukan"]) == 600
+    assert f.money(november["patokan_bulanan"]["hasil"]["pemasukan"]) == 100
     with pytest.raises(HTTPException):
         await save_opening(f.Opening(tanggal=date(2020, 9, 30), saldo=balances()), session, actor)
     with pytest.raises(HTTPException):
-        await f.reopen(session, date(2020, 10, 25), "Koreksi lama", actor)
+        await f.reopen(session, date(2020, 10, 31), "Koreksi lama", actor)
 
 
 @pytest.mark.asyncio
@@ -361,9 +362,9 @@ async def test_dates_required_and_out_of_range_transactions_are_rejected(session
     await seed_report(session)
     for p in [
         payload(penarikan_lain=100, transaksi=[]),
-        payload(transaksi=[dict(tanggal=date(2020, 10, 5), jenis="operasional", nominal=100)]),
+        payload(transaksi=[dict(tanggal=date(2020, 11, 5), jenis="operasional", nominal=100)]),
         payload(settlement_ids=["paid"], tanggal_settlement={}),
-        payload(settlement_ids=["paid"], tanggal_settlement={"paid": date(2020, 10, 5)}),
+        payload(settlement_ids=["paid"], tanggal_settlement={"paid": date(2020, 11, 5)}),
     ]:
         with pytest.raises(HTTPException) as exc:
             await f.preview(session, p)
@@ -378,33 +379,32 @@ async def test_daily_ads_filtered_at_month_end_wib_and_actual_payout_date(sessio
     session.add(IklanHarianToko(id="ads-oct31", akun_id="shop", tanggal=date(2020, 10, 31), expense=60))
     session.add(IklanHarianToko(id="ads-nov1", akun_id="shop", tanggal=date(2020, 11, 1), expense=10))
     await session.commit()
-    for day in (4, 11, 18, 25, 31):
-        p = payload(tanggal=date(2020, 10, day), topup_iklan=100 if day == 4 else 60 if day == 31 else 0)
-        p.preview_token = (await f.preview(session, p))["preview_token"]
-        await f.close(session, p, actor)
+    p = payload(tanggal=date(2020, 10, 31), topup_iklan=160)
+    p.preview_token = (await f.preview(session, p))["preview_token"]
+    await f.close(session, p, actor)
     october = await f.overview(session, "2020-10")
-    p = payload(tanggal=date(2020, 11, 1), settlement_ids=["paid"], topup_iklan=10)
+    p = payload(tanggal=date(2020, 11, 30), settlement_ids=["paid"], topup_iklan=10,
+                tanggal_settlement={"paid": date(2020, 11, 1)})
     p.preview_token = (await f.preview(session, p))["preview_token"]
     await f.close(session, p, actor)
     november = await f.overview(session, "2020-11")
-    assert f.money(october["laporan_bulanan"]["hasil"]["biaya_iklan"]) == 160
-    assert f.money(november["laporan_bulanan"]["hasil"]["biaya_iklan"]) == 10
-    assert f.money(october["laporan_bulanan"]["hasil"]["pemasukan_toko"]) == 0
-    assert f.money(november["laporan_bulanan"]["hasil"]["pemasukan_toko"]) == 1000
+    assert f.money(october["patokan_bulanan"]["hasil"]["biaya_iklan"]) == 160
+    assert f.money(november["patokan_bulanan"]["hasil"]["biaya_iklan"]) == 10
+    assert f.money(october["patokan_bulanan"]["hasil"]["pemasukan_toko"]) == 0
+    assert f.money(november["patokan_bulanan"]["hasil"]["pemasukan_toko"]) == 1000
 
 
 @pytest.mark.asyncio
 async def test_month_end_receivables_use_month_end_baseline_not_week_end(session):
     actor, *_ = await seed_report(session)
-    for day in (4, 11, 18, 25, 31):
-        p = payload(tanggal=date(2020, 10, day), topup_iklan=100 if day == 4 else 0, saldo_toko=600 if day == 31 else 0)
-        p.preview_token = (await f.preview(session, p))["preview_token"]
-        await f.close(session, p, actor)
-    p = payload(tanggal=date(2020, 11, 1), penarikan_lain=500, saldo_toko=100)
+    p = payload(tanggal=date(2020, 10, 31), topup_iklan=100, saldo_toko=600)
     p.preview_token = (await f.preview(session, p))["preview_token"]
     await f.close(session, p, actor)
-    oct_report = (await f.overview(session, "2020-10"))["laporan_bulanan"]
-    nov_report = (await f.overview(session, "2020-11"))["laporan_bulanan"]
+    p = payload(tanggal=date(2020, 11, 30), penarikan_lain=500, saldo_toko=100)
+    p.preview_token = (await f.preview(session, p))["preview_token"]
+    await f.close(session, p, actor)
+    oct_report = (await f.overview(session, "2020-10"))["patokan_bulanan"]
+    nov_report = (await f.overview(session, "2020-11"))["patokan_bulanan"]
     assert f.money(oct_report["hasil"]["perubahan_piutang"]) == 600
     assert f.money(oct_report["hasil"]["pemasukan"]) == 600
     assert f.money(oct_report["hasil"]["saldo_akhir"]["saldo_toko"]) == 600
@@ -436,22 +436,17 @@ async def test_partial_month_not_final_and_legacy_reports_are_not_mixed(session)
     view = await f.overview(session, "2020-10")
     # The closings do not cover the whole month, but every weekly period of it has passed, so the month counts as final.
     assert view["bulanan"]["final"] is True
-    assert view["laporan_bulanan"]["lengkap"] is False
+    assert view["patokan_bulanan"]["mulai"] == "2020-10-26"
+    assert view["laporan_bulanan"] is None and view["legacy"] == []
     row = await session.get(LaporanKeuanganTutup, p.tanggal)
-    snap = json.loads(row.snapshot_json)
-    snap.pop("calendar_version")
-    row.snapshot_json = json.dumps(snap)
-    await session.commit()
-    view = await f.overview(session, "2020-10")
-    assert len(view["legacy"]) == 1
-    assert view["laporan_bulanan"] is None
+    assert json.loads(row.snapshot_json)["jenis"] == "tutup_bulanan"
     with pytest.raises(HTTPException) as exc:
         await f.baseline(session, date(2020, 11, 1))
-    assert exc.value.status_code == 409
+    assert exc.value.status_code == 422
 
 
 @pytest.mark.asyncio
-async def test_drive_import_primary_no_erp_overwrite(session):
+async def test_drive_import_is_history_only_never_the_closing_baseline(session):
     from tenants.marketplace_erp.modules.marketplace_erp.application.financial_drive_import import (
         DriveImport,
         import_drive,
@@ -532,18 +527,26 @@ async def test_drive_import_primary_no_erp_overwrite(session):
     )
     session.add(IklanHarianToko(id="compare-ads", akun_id="compare", tanggal=date(2026, 10, 8), expense=888888))
     await session.commit()
-    p = payload(tanggal=date(2026, 10, 11), piutang_pengiriman=2334462, saldo_toko=7207000, stok=3585000, biaya_iklan=0)
-    preview = await f.preview(session, p)
-    assert f.money(preview["hasil"]["biaya_iklan"]) == 0
-    assert preview["sumber"]["utama"] == "google_drive"
-    assert preview["sumber"]["biaya_iklan"] == "888888.00"
-    view = await f.overview(session, "2026-10")
-    assert view["sumber_utama"] == "google_drive"
-    assert f.money(view["bulanan"]["laba"]) == 567462
-    assert view["berikutnya"] == "2026-10-11"
-    # Actual dated new-week supplement required; cannot silently import ERP ads.
-    with pytest.raises(HTTPException):
+    # Drive-imported weeks stay visible as history but are never the closing baseline: the monthly close starts
+    # from the ERP opening balance and uses the ERP's own sources.
+    with pytest.raises(HTTPException) as exc:
         await f.preview(session, payload(tanggal=date(2026, 10, 11)))
+    assert exc.value.status_code == 422
+    p = payload(tanggal=date(2026, 10, 31), piutang_pengiriman=2334462, saldo_toko=7207000, stok=3585000,
+                topup_iklan=888888)
+    preview = await f.preview(session, p)
+    assert preview["mulai"] == "2026-10-01"
+    assert preview["sumber"]["utama"] == "erp"
+    assert f.money(preview["hasil"]["biaya_iklan"]) == 888888
+    assert preview["hasil"]["saldo_awal"]["kas_utama"] == "5725000.00"
+    view = await f.overview(session, "2026-10")
+    assert view["sumber_utama"] == "erp"
+    assert view["patokan_bulanan"] is None
+    assert f.money(view["bulanan"]["laba"]) == 567462
+    assert view["tutup_berikutnya"] == "2026-10-31"
+    assert view["tutup_terakhir"] is None
+    # The weekly sheet still continues after the imported weeks.
+    assert view["berikutnya"] == "2026-10-11"
     payload_import.rows[44][2] = 123
     with pytest.raises(HTTPException):
         parse(payload_import)
@@ -1039,7 +1042,7 @@ async def test_update_rejects_wrong_date_missing_past_and_stale_preview(session)
             await f.update(session, cutoff, p, actor)
         assert exc.value.status_code == code
     with pytest.raises(HTTPException) as exc:
-        await f.update(session, date(2020, 10, 11), payload(tanggal=date(2020, 10, 11)), actor)
+        await f.update(session, date(2020, 11, 30), payload(tanggal=date(2020, 11, 30)), actor)
     assert exc.value.status_code == 404
     p.preview_token = (await f.preview(session, p))['preview_token']
     ad.expense = 90
@@ -1048,7 +1051,7 @@ async def test_update_rejects_wrong_date_missing_past_and_stale_preview(session)
         await f.update(session, p.tanggal, p, actor)
     assert exc.value.status_code == 409
     assert row.snapshot_json == old
-    next_p = payload(tanggal=date(2020, 10, 11))
+    next_p = payload(tanggal=date(2020, 11, 30))
     next_p.preview_token = (await f.preview(session, next_p))['preview_token']
     second = await f.close(session, next_p, actor)
     with pytest.raises(HTTPException) as exc:
@@ -1064,7 +1067,7 @@ async def test_update_cannot_reuse_settlement_from_another_close(session):
     p = payload(settlement_ids=['paid'], topup_iklan=100)
     p.preview_token = (await f.preview(session, p))['preview_token']
     await f.close(session, p, actor)
-    p = payload(tanggal=date(2020, 10, 11))
+    p = payload(tanggal=date(2020, 11, 30))
     p.preview_token = (await f.preview(session, p))['preview_token']
     await f.close(session, p, actor)
     p = payload(tanggal=p.tanggal, settlement_ids=['paid'])
