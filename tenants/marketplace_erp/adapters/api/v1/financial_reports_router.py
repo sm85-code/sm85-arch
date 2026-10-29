@@ -17,7 +17,6 @@ from tenants.marketplace_erp.modules.marketplace_erp.infrastructure.auth import 
 from tenants.marketplace_erp.modules.marketplace_erp.infrastructure.database import get_db_marketplace_erp
 from tenants.marketplace_erp.modules.marketplace_erp.infrastructure.models import (
     LaporanKeuanganAwal,
-    LaporanKeuanganAsal,
     LaporanKeuanganTutup,
     LaporanKeuanganAudit,
     UserMarketplaceErp,
@@ -195,9 +194,8 @@ async def save_opening(
 @router.get("/sumber")
 async def source_data(tanggal: date, session: AsyncSession = Depends(get_db_marketplace_erp)):
     previous, before = await reports.baseline(session, tanggal)
-    origin = await session.get(LaporanKeuanganAsal, "global")
     return {
-        "sumber_utama": "google_drive" if origin else "erp",
+        "sumber_utama": "erp",
         "mulai": (previous + timedelta(days=1)).isoformat(),
         "saldo_sebelumnya": reports.serialize(before.model_dump()),
         "sumber": await reports.sources(session, previous + timedelta(days=1), tanggal),
