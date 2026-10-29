@@ -1,0 +1,56 @@
+name: Weekly full tests
+
+on:
+  schedule:
+    - cron: "0 19 * * 6"   # Minggu 02:00 WIB
+  workflow_dispatch:
+
+jobs:
+  full-tests:
+    runs-on: ubuntu-latest
+    services:
+      postgres:
+        image: postgres:16-alpine
+        env:
+          POSTGRES_USER: sm85
+          POSTGRES_PASSWORD: sm85
+          POSTGRES_DB: sm85_test
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -U sm85 -d sm85_test"
+          --health-interval 3s
+          --health-timeout 3s
+          --health-retries 10
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+          cache: "pip"
+      - run: pip install -r requirements.txt
+      - name: Lint
+        run: ruff check .
+      - name: Semua tes (termasuk Postgres)
+        env:
+          TEST_DATABASE_URL: postgresql://sm85:sm85@localhost:5432/sm85_test
+        run: python -m pytest tests/ -n 0 -rs
+
+  notify-telegram:
+    needs: [full-tests]
+    if: failure()
+    runs-on: ubuntu-latest
+    steps:
+      - name: Kirim notifikasi Telegram (lewati jika secret belum ada)
+        env:
+          TG_TOKEN: ${{ secrets.TELEGRAM_BOT_TOKEN }}
+          TG_CHAT: ${{ secrets.TELEGRAM_CHAT_ID }}
+          RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
+        run: |
+          if [ -z "$TG_TOKEN" ] || [ -z "$TG_CHAT" ]; then
+            echo "::notice::TELEGRAM_BOT_TOKEN / TELEGRAM_CHAT_ID belum diset; notifikasi dilewati."
+            exit 0
+          fi
+          curl -sS -o /dev/null -X POST "https://api.telegram.org/bot${TG_TOKEN}/sendMessage" \
+            --data-urlencode "chat_id=${TG_CHAT}" \
+            --data-urlencode "text=❌ Tes mingguan ${GITHUB_REPOSITORY} GAGAL: ${RUN_URL}"
