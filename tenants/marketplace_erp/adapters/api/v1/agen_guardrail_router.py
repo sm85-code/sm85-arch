@@ -1,8 +1,15 @@
 """Limits, STOP, and the audit log for the ads agent. These routes do not call Shopee."""
-from fastapi import APIRouter, Depends, HTTPException, Query
+from fastapi import APIRouter, Depends, HTTPException, Query, Request
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from tenants.marketplace_erp.modules.marketplace_erp.application import agen_aksi, agen_guardrail, agen_jadwal, agen_produk, services
+from tenants.marketplace_erp.modules.marketplace_erp.application import (
+    agen_aksi,
+    agen_guardrail,
+    agen_jadwal,
+    agen_pemasaran,
+    agen_produk,
+    services,
+)
 from tenants.marketplace_erp.modules.marketplace_erp.infrastructure.auth import (
     akun_ids_diizinkan,
     pastikan_akses_akun,
@@ -87,6 +94,27 @@ async def simpan_jadwal(akun_id: str, body: agen_jadwal.JadwalIn, session: Async
     hasil = await agen_jadwal.simpan(session, akun.id, body)
     await session.commit()
     return hasil
+
+
+@router.get("/iklan/agen/pemasaran/aksi")
+async def daftar_pemasaran(_: UserMarketplaceErp = ADMIN):
+    """Voucher, flash sale, follow prize, video upload, and listing-issue calls. Writes stay on the guarded path."""
+    return agen_pemasaran.daftar_aksi()
+
+
+@router.get("/akun/{akun_id}/iklan/agen/pemasaran/{aksi}")
+async def baca_pemasaran(akun_id: str, aksi: str, request: Request, session: AsyncSession = DB, user: UserMarketplaceErp = ADMIN):
+    akun = await services.get_akun_marketplace(session, akun_id)
+    await pastikan_akses_akun(user, session, akun.id)
+    return await agen_pemasaran.baca(session, akun, aksi, dict(request.query_params))
+
+
+@router.post("/akun/{akun_id}/iklan/agen/pemasaran")
+async def tulis_pemasaran(akun_id: str, body: agen_pemasaran.TulisIn, session: AsyncSession = DB, user: UserMarketplaceErp = ADMIN):
+    """Dry-run unless ``kering`` is false and ``persetujuan`` is ``ya``. STOP blocks the call before Shopee."""
+    akun = await services.get_akun_marketplace(session, akun_id)
+    await pastikan_akses_akun(user, session, akun.id)
+    return await agen_pemasaran.tulis(session, akun, body, user)
 
 
 @router.post("/akun/{akun_id}/iklan/agen/aksi")
