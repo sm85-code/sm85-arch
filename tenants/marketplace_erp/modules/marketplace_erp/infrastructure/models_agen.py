@@ -51,6 +51,23 @@ class AgenIklanStop(MarketplaceErpBase):
     updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=_utcnow, onupdate=_utcnow)
 
 
+class AgenIklanJadwal(MarketplaceErpBase):
+    """Hours (WIB) a campaign may stay on. ``aktif`` is off until someone turns that row on."""
+
+    __tablename__ = "mpe_agen_iklan_jadwal"
+    __table_args__ = (UniqueConstraint("akun_id", "campaign_id", name="uq_mpe_agen_iklan_jadwal_akun_kampanye"),)
+
+    id: Mapped[str] = mapped_column(String(64), primary_key=True, default=_uuid)
+    akun_id: Mapped[str] = mapped_column(
+        String(64), ForeignKey("mpe_akun_marketplace.id", ondelete="CASCADE"), nullable=False, index=True
+    )
+    campaign_id: Mapped[str] = mapped_column(String(32), nullable=False)
+    jam_json: Mapped[str] = mapped_column(Text, nullable=False, default="[]")
+    aktif: Mapped[bool] = mapped_column(Boolean, nullable=False, default=False, server_default=text("false"))
+    dijeda_jadwal: Mapped[bool] = mapped_column(Boolean, nullable=False, default=False, server_default=text("false"))
+    updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=_utcnow, onupdate=_utcnow)
+
+
 class AgenIklanAudit(MarketplaceErpBase):
     """Who changed ads settings or limits, with the before/after payload and the caller's request id."""
 

@@ -103,9 +103,19 @@ async def lifespan(_: FastAPI):
     if marketplace_erp_database.SessionLocal is not None:
         from tenants.marketplace_erp.modules.marketplace_erp.application.push_notifications import run_forever as run_push
         push_task = asyncio.create_task(run_push(marketplace_erp_database.SessionLocal))
+    # Ads dayparting stays off unless AGEN_IKLAN_JADWAL_MENIT is set above 0. Each campaign row is also off by default.
+    jadwal_task = None
+    if marketplace_erp_database.SessionLocal is not None:
+        from tenants.marketplace_erp.modules.marketplace_erp.application.agen_jadwal import interval_seconds as jadwal_interval
+        from tenants.marketplace_erp.modules.marketplace_erp.application.agen_jadwal import jalankan_berkala as jalankan_jadwal
+        detik_jadwal = jadwal_interval()
+        if detik_jadwal:
+            jadwal_task = asyncio.create_task(jalankan_jadwal(marketplace_erp_database.SessionLocal, detik_jadwal))
     try:
         yield
     finally:
+        if jadwal_task is not None:
+            jadwal_task.cancel()
         if push_task is not None:
             push_task.cancel()
         if engagement_task is not None:

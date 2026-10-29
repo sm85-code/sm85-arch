@@ -266,9 +266,11 @@ async def _tolak(session, *, akun, jenis, campaign_id, pengguna, sebelum, sesuda
     raise HTTPException(status_code=status, detail=detail)
 
 
-async def terapkan(session: AsyncSession, akun, body: AksiIn, pengguna, *, kembalikan: bool = False) -> dict:
+async def terapkan(session: AsyncSession, akun, body: AksiIn, pengguna, *, kembalikan: bool = False, sumber: str = "permintaan") -> dict:
     if getattr(akun, "platform", None) != "shopee":
         raise HTTPException(status_code=409, detail="API iklan ini khusus toko Shopee.")
+    if sumber == "jadwal" and body.jenis not in {"jeda", "lanjut"}:
+        raise HTTPException(status_code=422, detail="Jadwal hanya boleh jeda atau lanjut")
     if body.jenis not in JENIS and body.jenis not in JENIS_KATA:
         raise HTTPException(status_code=422, detail="Jenis aksi harus anggaran, roas, jeda, lanjut, bid, kata_kunci, atau kata_negatif")
     ada = await agen_guardrail._sudah(session, akun.id, body.request_id)
@@ -331,7 +333,7 @@ async def terapkan(session: AsyncSession, akun, body: AksiIn, pengguna, *, kemba
                         sebelum=sekarang, sesudah=sesudah, body=body, hasil="ditolak", status=422,
                         detail="Bid sebelum melebihi CPC maksimum toko", kering=body.kering,
                     )
-    disetujui = body.persetujuan == "ya"
+    disetujui = body.persetujuan == "ya" or sumber == "jadwal"
     if kembalikan and not body.kering and not disetujui:
         await _tolak(
             session, akun=akun, jenis="kembalikan", campaign_id=body.campaign_id, pengguna=pengguna,
