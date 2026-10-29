@@ -332,10 +332,12 @@ async def test_month_final_uses_calendar_end_and_monthly_close_only(session):
     monthly = await overview("2020-10", session)
     assert monthly["bulanan"]["final"] is True
     assert monthly["akhir_bulan"] == "2020-10-31"
-    assert monthly["berikutnya"] == "2020-11-30"
+    assert monthly["tutup_berikutnya"] == "2020-11-30"
+    assert monthly["tutup_terakhir"] == "2020-10-31"
+    assert monthly["laporan"] == []  # monthly closes never feed the weekly sheet
     assert monthly["patokan_bulanan"]["tanggal"] == "2020-10-31"
-    assert f.money(monthly["bulanan"]["pemasukan"]) == 600
-    october_cash = monthly["bulanan"]["saldo_akhir"]["kas_utama"]
+    assert f.money(monthly["patokan_bulanan"]["hasil"]["pemasukan"]) == 600
+    october_cash = monthly["patokan_bulanan"]["hasil"]["saldo_akhir"]["kas_utama"]
     with pytest.raises(HTTPException) as exc:
         await f.preview(session, payload(tanggal=date(2020, 11, 1), penarikan_lain=100))
     assert exc.value.status_code == 422
@@ -346,9 +348,9 @@ async def test_month_final_uses_calendar_end_and_monthly_close_only(session):
     await f.close(session, p, actor)
     october = await overview("2020-10", session)
     november = await overview("2020-11", session)
-    assert october["bulanan"]["saldo_akhir"]["kas_utama"] == october_cash
-    assert f.money(october["bulanan"]["pemasukan"]) == 600
-    assert f.money(november["bulanan"]["pemasukan"]) == 100
+    assert october["patokan_bulanan"]["hasil"]["saldo_akhir"]["kas_utama"] == october_cash
+    assert f.money(october["patokan_bulanan"]["hasil"]["pemasukan"]) == 600
+    assert f.money(november["patokan_bulanan"]["hasil"]["pemasukan"]) == 100
     with pytest.raises(HTTPException):
         await save_opening(f.Opening(tanggal=date(2020, 9, 30), saldo=balances()), session, actor)
     with pytest.raises(HTTPException):
@@ -386,10 +388,10 @@ async def test_daily_ads_filtered_at_month_end_wib_and_actual_payout_date(sessio
     p.preview_token = (await f.preview(session, p))["preview_token"]
     await f.close(session, p, actor)
     november = await f.overview(session, "2020-11")
-    assert f.money(october["laporan_bulanan"]["hasil"]["biaya_iklan"]) == 160
-    assert f.money(november["laporan_bulanan"]["hasil"]["biaya_iklan"]) == 10
-    assert f.money(october["laporan_bulanan"]["hasil"]["pemasukan_toko"]) == 0
-    assert f.money(november["laporan_bulanan"]["hasil"]["pemasukan_toko"]) == 1000
+    assert f.money(october["patokan_bulanan"]["hasil"]["biaya_iklan"]) == 160
+    assert f.money(november["patokan_bulanan"]["hasil"]["biaya_iklan"]) == 10
+    assert f.money(october["patokan_bulanan"]["hasil"]["pemasukan_toko"]) == 0
+    assert f.money(november["patokan_bulanan"]["hasil"]["pemasukan_toko"]) == 1000
 
 
 @pytest.mark.asyncio
@@ -401,8 +403,8 @@ async def test_month_end_receivables_use_month_end_baseline_not_week_end(session
     p = payload(tanggal=date(2020, 11, 30), penarikan_lain=500, saldo_toko=100)
     p.preview_token = (await f.preview(session, p))["preview_token"]
     await f.close(session, p, actor)
-    oct_report = (await f.overview(session, "2020-10"))["laporan_bulanan"]
-    nov_report = (await f.overview(session, "2020-11"))["laporan_bulanan"]
+    oct_report = (await f.overview(session, "2020-10"))["patokan_bulanan"]
+    nov_report = (await f.overview(session, "2020-11"))["patokan_bulanan"]
     assert f.money(oct_report["hasil"]["perubahan_piutang"]) == 600
     assert f.money(oct_report["hasil"]["pemasukan"]) == 600
     assert f.money(oct_report["hasil"]["saldo_akhir"]["saldo_toko"]) == 600
@@ -434,15 +436,10 @@ async def test_partial_month_not_final_and_legacy_reports_are_not_mixed(session)
     view = await f.overview(session, "2020-10")
     # The closings do not cover the whole month, but every weekly period of it has passed, so the month counts as final.
     assert view["bulanan"]["final"] is True
-    assert view["laporan_bulanan"]["lengkap"] is False
+    assert view["patokan_bulanan"]["mulai"] == "2020-10-26"
+    assert view["laporan_bulanan"] is None and view["legacy"] == []
     row = await session.get(LaporanKeuanganTutup, p.tanggal)
-    snap = json.loads(row.snapshot_json)
-    snap.pop("calendar_version")
-    row.snapshot_json = json.dumps(snap)
-    await session.commit()
-    view = await f.overview(session, "2020-10")
-    assert len(view["legacy"]) == 1
-    assert view["laporan_bulanan"] is None
+    assert json.loads(row.snapshot_json)["jenis"] == "tutup_bulanan"
     with pytest.raises(HTTPException) as exc:
         await f.baseline(session, date(2020, 11, 1))
     assert exc.value.status_code == 422
@@ -546,8 +543,10 @@ async def test_drive_import_is_history_only_never_the_closing_baseline(session):
     assert view["sumber_utama"] == "erp"
     assert view["patokan_bulanan"] is None
     assert f.money(view["bulanan"]["laba"]) == 567462
-    assert view["berikutnya"] == "2026-10-31"
-    assert view["terakhir"] is None
+    assert view["tutup_berikutnya"] == "2026-10-31"
+    assert view["tutup_terakhir"] is None
+    # The weekly sheet still continues after the imported weeks.
+    assert view["berikutnya"] == "2026-10-11"
     payload_import.rows[44][2] = 123
     with pytest.raises(HTTPException):
         parse(payload_import)

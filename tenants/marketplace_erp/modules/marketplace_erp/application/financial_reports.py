@@ -268,6 +268,9 @@ def calculate(before: Balances, p: CloseInput, payouts: Decimal, ads: Decimal, l
     }
 
 
+MONTHLY = "tutup_bulanan"
+
+
 def next_monthly_cutoff(day):
     """Books close per calendar month only: the next cut-off is the last day of the month after ``day``."""
     return month_bounds((day + timedelta(days=1)).strftime("%Y-%m"))[1]
@@ -279,11 +282,15 @@ def imported(snapshot):
 
 
 async def native_closes(session, *, before=None):
-    """ERP-made closings (newest first), skipping Drive-imported history."""
+    """ERP-made monthly closings (newest first); Drive-imported or older weekly rows are never a baseline."""
     query = select(LaporanKeuanganTutup).order_by(LaporanKeuanganTutup.tanggal.desc())
     if before is not None:
         query = query.where(LaporanKeuanganTutup.tanggal < before)
-    return [r for r in (await session.scalars(query)).all() if not imported(json.loads(r.snapshot_json))]
+    return [r for r in (await session.scalars(query)).all() if monthly_close(json.loads(r.snapshot_json))]
+
+
+def monthly_close(snapshot):
+    return snapshot.get("jenis") == MONTHLY and not imported(snapshot)
 
 
 def serialize(value):
@@ -415,6 +422,7 @@ async def preview(session, p, *, updating=None):
         {
             "preview_token": token,
             "calendar_version": 2,
+            "jenis": MONTHLY,
             "jadwal_laporan": next_presentation(p.tanggal),
             "tanggal": p.tanggal,
             "mulai": previous + timedelta(days=1),
@@ -544,7 +552,10 @@ async def overview(session, month):
     start, end = month_bounds(month)
     opening = await session.get(LaporanKeuanganAwal, "global")
     origin = await session.get(LaporanKeuanganAsal, "global")
-    rows = (await session.scalars(select(LaporanKeuanganTutup).order_by(LaporanKeuanganTutup.tanggal))).all()
+    every = (await session.scalars(select(LaporanKeuanganTutup).order_by(LaporanKeuanganTutup.tanggal))).all()
+    # Monthly closings are decision baselines only; the weekly sheet keeps reading the other rows exactly as before.
+    closes = [json.loads(r.snapshot_json) for r in every if monthly_close(json.loads(r.snapshot_json))]
+    rows = [r for r in every if json.loads(r.snapshot_json).get("jenis") != MONTHLY]
     valid = [json.loads(r.snapshot_json) for r in rows if json.loads(r.snapshot_json).get("calendar_version") == 2]
     monthly = [r for r in valid if start.isoformat() <= r["mulai"] and r["tanggal"] <= end.isoformat()]
     monthly_report = aggregate(monthly, start, end)
@@ -562,13 +573,14 @@ async def overview(session, month):
             }
         )
         day += timedelta(days=7)
-    native = [json.loads(r.snapshot_json) for r in rows if not imported(json.loads(r.snapshot_json))]
-    previous = date.fromisoformat(native[-1]["tanggal"]) if native else opening.tanggal if opening else None
-    # Closing baseline for this month: the ERP's own monthly close only (never Drive-imported history).
-    patokan = next((s for s in native if s["tanggal"] == end.isoformat() and s["mulai"] == start.isoformat()), None)
+    previous = rows[-1].tanggal if rows else opening.tanggal if opening else None
+    close_previous = date.fromisoformat(closes[-1]["tanggal"]) if closes else opening.tanggal if opening else None
     return {
         "sumber_utama": "erp",
-        "patokan_bulanan": patokan,
+        # Closing baseline for this month: the ERP's own monthly close only (never Drive-imported history).
+        "patokan_bulanan": next((s for s in closes if s["tanggal"] == end.isoformat()), None),
+        "tutup_berikutnya": next_monthly_cutoff(close_previous).isoformat() if close_previous else None,
+        "tutup_terakhir": closes[-1]["tanggal"] if closes else None,
         "asal": json.loads(origin.asal_json) if origin else None,
         "akhir_bulan": end.isoformat(),
         "jadwal_bulanan": next_presentation(end).isoformat(),
@@ -581,11 +593,12 @@ async def overview(session, month):
         "legacy": [
             json.loads(r.snapshot_json) for r in rows if json.loads(r.snapshot_json).get("calendar_version") != 2
         ],
-        "berikutnya": next_monthly_cutoff(previous).isoformat() if previous else None,
-        "terakhir": previous.isoformat() if native else None,
+        "berikutnya": next_cutoff(previous).isoformat() if previous else None,
+        "terakhir": previous.isoformat() if rows else None,
         "bulanan": {
             # A month counts as final once all its weekly periods have passed (Drive-imported weeks included) or its books are closed.
-            "final": bool(monthly_report and monthly_report["lengkap"]) or end < datetime.now(WIB).date(),
+            "final": bool(monthly_report and monthly_report["lengkap"]) or any(s["tanggal"] == end.isoformat() for s in closes)
+            or end < datetime.now(WIB).date(),
             "pemasukan": str(monthly_report["hasil"]["pemasukan"]) if monthly_report else "0",
             "pengeluaran": str(monthly_report["hasil"]["pengeluaran"]) if monthly_report else "0",
             "laba": str(monthly_report["hasil"]["laba"]) if monthly_report else "0",
