@@ -218,6 +218,16 @@ async def close(
     return await reports.close(session, payload, actor)
 
 
+@router.post("/{tanggal}/perbarui")
+async def update(
+    tanggal: date,
+    payload: reports.CloseInput,
+    session: AsyncSession = Depends(get_db_marketplace_erp),
+    actor: UserMarketplaceErp = Depends(admin),
+):
+    return await reports.update(session, tanggal, payload, actor)
+
+
 @router.post("/{tanggal}/buka-kembali")
 async def reopen(
     tanggal: date,
