@@ -3,13 +3,13 @@
 import json
 import re
 import uuid
-from datetime import date, datetime, timezone
+from datetime import date, datetime, timedelta, timezone
 from decimal import Decimal
 from typing import Annotated, Literal
 from zoneinfo import ZoneInfo
 
 from fastapi import APIRouter, Depends, HTTPException, Query
-from pydantic import BaseModel, ConfigDict, Field, model_validator
+from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
 from sqlalchemy import and_, delete, func, or_, select, text, update
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -998,8 +998,8 @@ async def load_job(session, job_id, version):
     return row, json.loads(row.payload_json)
 
 
-async def persist(session, row, data, action, actor):
-    data["events"].append({"action": action, "actor": actor.id, "at": datetime.now(timezone.utc).isoformat()})
+async def persist(session, row, data, action, actor, **event_details):
+    data["events"].append({**event_details, "action": action, "actor": actor.id, "at": datetime.now(timezone.utc).isoformat()})
     result = await session.execute(
         update(ProcessingJob)
         .where(ProcessingJob.id == row.id, ProcessingJob.version == row.version)
@@ -1229,6 +1229,67 @@ TIMES = {
     "pengecatan": "painting_done_at",
     "packing": "packing_done_at",
 }
+
+
+class CorrectTime(Strict):
+    version: int = Field(ge=1)
+    stage: Literal["produksi", "supplier", "pengecatan", "packing"]
+    new_time: datetime
+    reason: str = Field(min_length=1, max_length=2000)
+
+    @field_validator("new_time", mode="before")
+    @classmethod
+    def explicit_wib(cls, value):
+        # Accept an explicit ISO datetime, never a naive value or an epoch number.
+        if not isinstance(value, str) or not value.endswith("+07:00"):
+            raise ValueError("Waktu harus menyertakan zona WIB (+07:00)")
+        try:
+            parsed = datetime.fromisoformat(value)
+        except ValueError:
+            raise ValueError("Waktu tidak valid") from None
+        if parsed.utcoffset() != timedelta(hours=7):
+            raise ValueError("Waktu harus menyertakan zona WIB (+07:00)")
+        return parsed
+
+
+@router.post("/jobs/{job_id}/correct-time")
+async def correct_time(
+    job_id: str,
+    payload: CorrectTime,
+    session: AsyncSession = Depends(get_db_marketplace_erp),
+    actor: UserMarketplaceErp = Depends(admin),
+):
+    from tenants.marketplace_erp.modules.marketplace_erp.application import akses
+
+    # require_roles is page-aware: delegated page writers also pass that guard.
+    # Only accounts holding a real admin/owner role may correct history.
+    roles = await akses.peran_pengguna(session, actor)
+    if not {"admin", "owner"}.intersection(roles):
+        raise HTTPException(403, "Koreksi waktu hanya untuk admin atau owner")
+    await izin_tab(session, actor, TAB_STAGE[payload.stage])
+    row, data = await load_job(session, job_id, payload.version)
+    stages = ["supplier"] if data["route"] == "supplier" else (
+        ["produksi"] if data.get("color") == "Polos / Tanpa Cat" else ["produksi", "pengecatan"]
+    )
+    stages.append("packing")
+    stage = payload.stage
+    if stage not in stages or not data.get(TIMES[stage]):
+        raise HTTPException(422, "Hanya tahap selesai pada jalur pengerjaan ini yang dapat dikoreksi")
+    value = payload.new_time.astimezone(timezone.utc)
+    if value > datetime.now(timezone.utc):
+        raise HTTPException(422, "Waktu selesai tidak boleh di masa depan")
+    index = stages.index(stage)
+    for neighbors, preceding in ((reversed(stages[:index]), True), (stages[index + 1:], False)):
+        for neighbor in neighbors:
+            if data.get(TIMES[neighbor]):
+                boundary = datetime.fromisoformat(data[TIMES[neighbor]])
+                if (preceding and value < boundary) or (not preceding and value > boundary):
+                    raise HTTPException(422, "Waktu selesai harus sesuai urutan tahap yang sudah selesai")
+                break
+    old_time = data[TIMES[stage]]
+    data[TIMES[stage]] = value.isoformat()
+    return await persist(session, row, data, "koreksi_waktu", actor,
+                         stage=stage, old_time=old_time, new_time=data[TIMES[stage]], reason=payload.reason)
 
 
 @router.post("/jobs/{job_id}/transition")
