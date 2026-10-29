@@ -2,7 +2,7 @@
 from fastapi import APIRouter, Depends, Query
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from tenants.marketplace_erp.modules.marketplace_erp.application import agen_guardrail, services
+from tenants.marketplace_erp.modules.marketplace_erp.application import agen_aksi, agen_guardrail, services
 from tenants.marketplace_erp.modules.marketplace_erp.infrastructure.auth import (
     akun_ids_diizinkan,
     pastikan_akses_akun,
@@ -60,6 +60,26 @@ async def simpan_stop_toko(akun_id: str, body: agen_guardrail.StopIn, session: A
     hasil = await agen_guardrail.simpan_stop(session, akun.id, body, user)
     await session.commit()
     return hasil
+
+
+@router.post("/akun/{akun_id}/iklan/agen/aksi")
+async def aksi_agen(akun_id: str, body: agen_aksi.AksiIn, session: AsyncSession = DB, user: UserMarketplaceErp = ADMIN):
+    """Change budget, target ROAS, or pause/resume. Dry-run unless ``kering`` is false.
+
+    A real write needs ``persetujuan`` = ``ya`` unless the shop's autonomy flag is on, and always stays inside the caps.
+    STOP refuses the call before any Shopee write.
+    """
+    akun = await services.get_akun_marketplace(session, akun_id)
+    await pastikan_akses_akun(user, session, akun.id)
+    return await agen_aksi.terapkan(session, akun, body, user)
+
+
+@router.post("/akun/{akun_id}/iklan/agen/audit/{audit_id}/kembalikan")
+async def kembalikan_agen(akun_id: str, audit_id: str, body: agen_aksi.KembaliIn, session: AsyncSession = DB, user: UserMarketplaceErp = ADMIN):
+    """Replay the audit row's before-state. Needs ``persetujuan`` = ``ya``. STOP blocks it."""
+    akun = await services.get_akun_marketplace(session, akun_id)
+    await pastikan_akses_akun(user, session, akun.id)
+    return await agen_aksi.kembalikan(session, akun, audit_id, body, user)
 
 
 @router.get("/iklan/agen/audit")
