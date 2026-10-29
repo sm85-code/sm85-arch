@@ -64,7 +64,7 @@ async def simpan_stop_toko(akun_id: str, body: agen_guardrail.StopIn, session: A
 
 @router.post("/akun/{akun_id}/iklan/agen/aksi")
 async def aksi_agen(akun_id: str, body: agen_aksi.AksiIn, session: AsyncSession = DB, user: UserMarketplaceErp = ADMIN):
-    """Change budget, target ROAS, or pause/resume. Dry-run unless ``kering`` is false.
+    """Change budget, target ROAS, pause/resume, bids, or keywords (including negative keywords). Dry-run unless ``kering`` is false.
 
     A real write needs ``persetujuan`` = ``ya`` unless the shop's autonomy flag is on, and always stays inside the caps.
     STOP refuses the call before any Shopee write.
