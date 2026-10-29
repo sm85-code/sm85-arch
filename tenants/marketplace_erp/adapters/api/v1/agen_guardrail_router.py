@@ -1,8 +1,8 @@
 """Limits, STOP, and the audit log for the ads agent. These routes do not call Shopee."""
-from fastapi import APIRouter, Depends, Query
+from fastapi import APIRouter, Depends, HTTPException, Query
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from tenants.marketplace_erp.modules.marketplace_erp.application import agen_aksi, agen_guardrail, agen_jadwal, services
+from tenants.marketplace_erp.modules.marketplace_erp.application import agen_aksi, agen_guardrail, agen_jadwal, agen_produk, services
 from tenants.marketplace_erp.modules.marketplace_erp.infrastructure.auth import (
     akun_ids_diizinkan,
     pastikan_akses_akun,
@@ -60,6 +60,16 @@ async def simpan_stop_toko(akun_id: str, body: agen_guardrail.StopIn, session: A
     hasil = await agen_guardrail.simpan_stop(session, akun.id, body, user)
     await session.commit()
     return hasil
+
+
+@router.get("/akun/{akun_id}/iklan/agen/produk/{item_id}/tren")
+async def tren_produk(akun_id: str, item_id: str, session: AsyncSession = DB, user: UserMarketplaceErp = ADMIN):
+    """7-day vs 28-day units sold from ERP orders, plus the views change between stored snapshots."""
+    akun = await services.get_akun_marketplace(session, akun_id)
+    await pastikan_akses_akun(user, session, akun.id)
+    if not item_id.isdigit() or len(item_id) > 32:
+        raise HTTPException(status_code=422, detail="item_id tidak valid")
+    return await agen_produk.tren(session, akun.id, item_id)
 
 
 @router.get("/akun/{akun_id}/iklan/agen/jadwal")

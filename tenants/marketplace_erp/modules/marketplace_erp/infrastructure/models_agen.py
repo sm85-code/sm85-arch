@@ -6,11 +6,11 @@ do not have them yet. Existing tables are left untouched.
 from __future__ import annotations
 
 import uuid
-from datetime import datetime, timezone
+from datetime import date, datetime, timezone
 from decimal import Decimal
 from typing import Optional
 
-from sqlalchemy import Boolean, DateTime, ForeignKey, Integer, Numeric, String, Text, UniqueConstraint, text
+from sqlalchemy import Boolean, Date, DateTime, ForeignKey, Integer, Numeric, String, Text, UniqueConstraint, text
 from sqlalchemy.orm import Mapped, mapped_column
 
 from tenants.marketplace_erp.modules.marketplace_erp.infrastructure.database import MarketplaceErpBase
@@ -49,6 +49,27 @@ class AgenIklanStop(MarketplaceErpBase):
     alasan: Mapped[str] = mapped_column(String(500), nullable=False, default="")
     oleh: Mapped[Optional[str]] = mapped_column(String(64), nullable=True)
     updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=_utcnow, onupdate=_utcnow)
+
+
+class AgenProdukSnapshot(MarketplaceErpBase):
+    """One day's product stats pulled from Shopee (views, likes, sold, rating, a short diagnosis)."""
+
+    __tablename__ = "mpe_agen_produk_snapshot"
+    __table_args__ = (UniqueConstraint("akun_id", "item_id", "tanggal", name="uq_mpe_agen_produk_snapshot"),)
+
+    id: Mapped[str] = mapped_column(String(64), primary_key=True, default=_uuid)
+    akun_id: Mapped[str] = mapped_column(
+        String(64), ForeignKey("mpe_akun_marketplace.id", ondelete="CASCADE"), nullable=False, index=True
+    )
+    item_id: Mapped[str] = mapped_column(String(32), nullable=False)
+    tanggal: Mapped[date] = mapped_column(Date, nullable=False)
+    views: Mapped[Optional[int]] = mapped_column(Integer, nullable=True)
+    likes: Mapped[Optional[int]] = mapped_column(Integer, nullable=True)
+    sold: Mapped[Optional[int]] = mapped_column(Integer, nullable=True)
+    rating: Mapped[Optional[Decimal]] = mapped_column(Numeric(6, 2), nullable=True)
+    komentar: Mapped[Optional[int]] = mapped_column(Integer, nullable=True)
+    diagnosis_json: Mapped[str] = mapped_column(Text, nullable=False, default="{}")
+    diambil_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=_utcnow)
 
 
 class AgenIklanJadwal(MarketplaceErpBase):
