@@ -1,0 +1,368 @@
+{
+  "sources": {
+    "tenants/marketplace_erp/modules/marketplace_erp/application/agen_aksi.py": "9da0f3ba91d767b2cce0118b417982319a4f45d07d2e3fd1db43e041d8b954f4",
+    "tenants/marketplace_erp/modules/marketplace_erp/application/agen_guardrail.py": "e469007cc0ab5f149fc134d9327a965fcd47ab26af9de4e2c55941040066d6b2",
+    "tenants/marketplace_erp/modules/marketplace_erp/application/agen_jadwal.py": "d688d074c456395660dfe9a96e8338b7841dd5e9d5feedb0992ea5ad08841dd0",
+    "tenants/marketplace_erp/modules/marketplace_erp/application/agen_pemasaran.py": "3f3dd4680bf4fb5c62a7fc8afa156e0d436872a67e466be0e6a6068056248fdf",
+    "tenants/marketplace_erp/modules/marketplace_erp/application/agen_pengguna.py": "a6f5dff7fafe732ad7e56783681d837547bb86143ac9f8d4fb4a4c3638e76ff7",
+    "tenants/marketplace_erp/modules/marketplace_erp/application/akses.py": "7bec38321324a25e292154ca5f8397144223f5f7f6f2ea64fa1d75159a1278b7",
+    "tenants/marketplace_erp/adapters/api/v1/agen_router.py": "5db223775b4ebaf03d1ee8981ce2acbd0614eda8f6491eda6ff680675cf996f0",
+    "tenants/marketplace_erp/adapters/api/v1/agen_guardrail_router.py": "c5c548e37c9738d5543c07997a1a601a260a64dac2f529176551ebb1b64f500e",
+    "tenants/marketplace_erp/adapters/api/v1/marketplace_erp_router.py": "3c1dfe79048466d8a2c47041c84c84dfda26ddb798e2f5f8c483b9255d9dcbbf",
+    "tenants/marketplace_erp/modules/marketplace_erp/infrastructure/auth.py": "899a0b5ff5962c3165b57eed8da973cefb0297a92abde3d0ccc490cd04229235"
+  },
+  "models": {
+    "aksi": {
+      "$defs": {
+        "KataPerubahan": {
+          "additionalProperties": false,
+          "properties": {
+            "aksi": {
+              "title": "Aksi",
+              "type": "string"
+            },
+            "kata": {
+              "maxLength": 80,
+              "minLength": 1,
+              "title": "Kata",
+              "type": "string"
+            },
+            "bid": {
+              "anyOf": [
+                {
+                  "type": "number"
+                },
+                {
+                  "pattern": "^(?!^[-+.]*$)[+-]?0*\\d*\\.?\\d*$",
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "default": null,
+              "title": "Bid"
+            },
+            "tipe": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "default": null,
+              "title": "Tipe"
+            }
+          },
+          "required": [
+            "aksi",
+            "kata"
+          ],
+          "title": "KataPerubahan",
+          "type": "object"
+        }
+      },
+      "additionalProperties": false,
+      "properties": {
+        "jenis": {
+          "title": "Jenis",
+          "type": "string"
+        },
+        "campaign_id": {
+          "exclusiveMinimum": 0,
+          "title": "Campaign Id",
+          "type": "integer"
+        },
+        "nilai": {
+          "anyOf": [
+            {
+              "type": "number"
+            },
+            {
+              "pattern": "^(?!^[-+.]*$)[+-]?0*\\d*\\.?\\d*$",
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Nilai"
+        },
+        "kata": {
+          "anyOf": [
+            {
+              "maxLength": 80,
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Kata"
+        },
+        "kata_kunci": {
+          "anyOf": [
+            {
+              "items": {
+                "$ref": "#/$defs/KataPerubahan"
+              },
+              "type": "array"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Kata Kunci"
+        },
+        "alasan": {
+          "default": "",
+          "maxLength": 500,
+          "title": "Alasan",
+          "type": "string"
+        },
+        "kering": {
+          "default": true,
+          "title": "Kering",
+          "type": "boolean"
+        },
+        "persetujuan": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Persetujuan"
+        },
+        "request_id": {
+          "anyOf": [
+            {
+              "maxLength": 64,
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Request Id"
+        }
+      },
+      "required": [
+        "jenis",
+        "campaign_id"
+      ],
+      "title": "AksiIn",
+      "type": "object"
+    },
+    "pemasaran": {
+      "additionalProperties": false,
+      "properties": {
+        "aksi": {
+          "title": "Aksi",
+          "type": "string"
+        },
+        "payload": {
+          "additionalProperties": true,
+          "title": "Payload",
+          "type": "object"
+        },
+        "alasan": {
+          "default": "",
+          "maxLength": 500,
+          "title": "Alasan",
+          "type": "string"
+        },
+        "kering": {
+          "default": true,
+          "title": "Kering",
+          "type": "boolean"
+        },
+        "persetujuan": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Persetujuan"
+        },
+        "request_id": {
+          "anyOf": [
+            {
+              "maxLength": 64,
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Request Id"
+        }
+      },
+      "required": [
+        "aksi"
+      ],
+      "title": "TulisIn",
+      "type": "object"
+    },
+    "batas": {
+      "additionalProperties": false,
+      "properties": {
+        "anggaran_harian_maks": {
+          "anyOf": [
+            {
+              "type": "number"
+            },
+            {
+              "pattern": "^(?!^[-+.]*$)[+-]?0*\\d*\\.?\\d*$",
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Anggaran Harian Maks"
+        },
+        "maks_persen_perubahan": {
+          "default": 20,
+          "maximum": 100,
+          "minimum": 1,
+          "title": "Maks Persen Perubahan",
+          "type": "integer"
+        },
+        "maks_cpc": {
+          "anyOf": [
+            {
+              "type": "number"
+            },
+            {
+              "pattern": "^(?!^[-+.]*$)[+-]?0*\\d*\\.?\\d*$",
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Maks Cpc"
+        },
+        "min_hari_antar_perubahan": {
+          "default": 0,
+          "maximum": 90,
+          "minimum": 0,
+          "title": "Min Hari Antar Perubahan",
+          "type": "integer"
+        },
+        "otonomi": {
+          "default": false,
+          "title": "Otonomi",
+          "type": "boolean"
+        },
+        "alasan": {
+          "default": "",
+          "maxLength": 500,
+          "title": "Alasan",
+          "type": "string"
+        },
+        "request_id": {
+          "anyOf": [
+            {
+              "maxLength": 64,
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Request Id"
+        }
+      },
+      "title": "BatasIn",
+      "type": "object"
+    },
+    "jadwal": {
+      "additionalProperties": false,
+      "properties": {
+        "campaign_id": {
+          "exclusiveMinimum": 0,
+          "title": "Campaign Id",
+          "type": "integer"
+        },
+        "jam": {
+          "items": {
+            "type": "integer"
+          },
+          "maxItems": 24,
+          "minItems": 1,
+          "title": "Jam",
+          "type": "array"
+        },
+        "aktif": {
+          "default": false,
+          "title": "Aktif",
+          "type": "boolean"
+        }
+      },
+      "required": [
+        "campaign_id",
+        "jam"
+      ],
+      "title": "JadwalIn",
+      "type": "object"
+    }
+  },
+  "baca": [
+    "flash_barang",
+    "flash_daftar",
+    "flash_detail",
+    "flash_slot",
+    "hadiah_daftar",
+    "hadiah_detail",
+    "listing_bermasalah",
+    "video_hasil",
+    "voucher_daftar",
+    "voucher_detail"
+  ],
+  "tulis": [
+    "flash_buat",
+    "flash_hapus",
+    "flash_hapus_barang",
+    "flash_tambah_barang",
+    "flash_ubah",
+    "flash_ubah_barang",
+    "hadiah_akhiri",
+    "hadiah_buat",
+    "hadiah_hapus",
+    "hadiah_ubah",
+    "video_mulai",
+    "video_selesai",
+    "voucher_akhiri",
+    "voucher_buat",
+    "voucher_hapus",
+    "voucher_ubah"
+  ],
+  "jenis": [
+    "anggaran",
+    "bid",
+    "jeda",
+    "kata_kunci",
+    "kata_negatif",
+    "lanjut",
+    "roas"
+  ]
+}

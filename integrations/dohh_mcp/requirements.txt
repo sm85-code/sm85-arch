@@ -1,0 +1,4 @@
+# Dedicated optional MCP environment; do not install into the ERP production image.
+mcp==2.3.0
+httpx==0.28.1
+jsonschema==4.26.0

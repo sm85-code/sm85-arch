@@ -1,0 +1,25 @@
+name: Dohh MCP (offline only)
+on:
+  pull_request:
+  push:
+    branches: [main]
+permissions:
+  contents: read
+jobs:
+  dohh-mcp:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.14'
+          cache: pip
+      - run: pip install -r requirements.txt -r integrations/dohh_mcp/requirements.txt
+      - name: Verify generated schemas equal ERP source (no HTTP/DB)
+        run: >-
+          python -c "from integrations.dohh_mcp.build_contract import build;
+          from integrations.dohh_mcp.contract import SOURCE, verify_sources;
+          verify_sources(); assert build() == SOURCE"
+      - name: Offline guards and real MCP protocol over memory transport
+        run: python -m unittest integrations.dohh_mcp.test_core -v
+      - run: python -m integrations.dohh_mcp.server --inventory
