@@ -26,6 +26,7 @@ from tenants.madrasah.adapters.api.v1.madrasah_router import madrasah_router
 from tenants.madrasah.modules.madrasah.infrastructure import database as madrasah_database
 from tenants.madrasah.modules.madrasah.infrastructure.seeder import ensure_madrasah_schema
 from tenants.marketplace_erp.adapters.api.v1.marketplace_erp_router import marketplace_erp_router
+from tenants.marketplace_erp.adapters.api.v1.boost_diagnostic import boost_origin_denial
 from tenants.marketplace_erp.modules.marketplace_erp.application import auto_sync as marketplace_erp_auto_sync
 from tenants.marketplace_erp.modules.marketplace_erp.infrastructure import database as marketplace_erp_database
 from tenants.marketplace_erp.modules.marketplace_erp.infrastructure.seeder import ensure_marketplace_erp_schema
@@ -201,7 +202,7 @@ class CsrfOriginMiddleware(BaseHTTPMiddleware):
             if source and CORS_ORIGINS and not origin_allowed(source):
                 response = JSONResponse(
                     status_code=403,
-                    content={"detail": "Permintaan lintas situs ditolak"},
+                    content={"detail": boost_origin_denial(request.url.path) or "Permintaan lintas situs ditolak"},
                 )
                 return response
         try:
