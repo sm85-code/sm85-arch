@@ -1,4 +1,4 @@
-"""Admin-only connection to the read-only supplier catalog."""
+"""Page-authorized connection to the read-only supplier catalog."""
 
 import os
 from decimal import Decimal, InvalidOperation
@@ -8,12 +8,13 @@ from fastapi import APIRouter, Depends, HTTPException
 from pydantic import BaseModel, ConfigDict, Field, SecretStr
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from tenants.marketplace_erp.modules.marketplace_erp.infrastructure.auth import require_roles_marketplace_erp
 from tenants.marketplace_erp.modules.marketplace_erp.infrastructure.database import get_db_marketplace_erp
 from tenants.marketplace_erp.modules.marketplace_erp.infrastructure.models import ProcessingSupplierConnection
 from tenants.marketplace_erp.modules.marketplace_erp.infrastructure.token_crypto import keyring
 
-router = APIRouter(dependencies=[Depends(require_roles_marketplace_erp("admin"))])
+from .processing_permissions import processing_access
+
+router = APIRouter(dependencies=[Depends(processing_access)])
 CATALOG_PATH = "/api/v1/uu05_inventory/supplier-catalog"
 
 

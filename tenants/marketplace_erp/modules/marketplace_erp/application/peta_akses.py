@@ -57,7 +57,8 @@ ATURAN: list[tuple[re.Pattern, set[str] | None, str]] = [
         # what it needs to map (prices, parties, the supplier catalog), only the page of that data changes it. A change to
         # a price names the page by its kind of price, which only the request body tells: the route checks that itself
         # (processing_workflow.izin_harga).
-        (r"^/processing/(candidates|jobs)", None, PROSES),  # which tab a change belongs to: processing_workflow.izin_tab
+        (r"^/processing/candidates(/|$)", GET, "processing_tukang|processing_supplier"),
+        (r"^/processing/jobs(/|$)", None, PROSES),  # which tab a change belongs to: processing_workflow.izin_tab
         (r"^/processing/document-templates", None, "data_template"),
         (r"^/processing/parties/tukang", {"PUT"}, "data_tukang"),
         (r"^/processing/parties/supplier", {"PUT"}, "data_supplier"),

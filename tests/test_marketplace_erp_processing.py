@@ -14,7 +14,7 @@ from tenants.marketplace_erp.modules.marketplace_erp.infrastructure.models impor
 
 @pytest.mark.asyncio
 @pytest.mark.parametrize("role", ["owner", "staff"])
-async def test_processing_reads_deny_non_admin_before_database_access(role, sesi_peran):
+async def test_processing_reads_deny_builtin_roles_without_relevant_page_permissions(role, sesi_peran):
     app = FastAPI()
     app.include_router(router)
 

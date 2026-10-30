@@ -14,7 +14,6 @@ from sqlalchemy import and_, delete, func, or_, select, text, update
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from tenants.marketplace_erp.modules.marketplace_erp.infrastructure.auth import require_roles_marketplace_erp
 from tenants.marketplace_erp.modules.marketplace_erp.infrastructure.database import get_db_marketplace_erp
 from tenants.marketplace_erp.modules.marketplace_erp.infrastructure.models import (
     AkunMarketplace,
@@ -31,8 +30,9 @@ from tenants.marketplace_erp.modules.marketplace_erp.infrastructure.models impor
     UserMarketplaceErp,
 )
 
-admin = require_roles_marketplace_erp("admin")
-router = APIRouter(dependencies=[Depends(admin)])
+from .processing_permissions import processing_access
+
+router = APIRouter(dependencies=[Depends(processing_access)])
 
 # The Data Produksi page that holds each kind of price.
 HALAMAN_HARGA = {
@@ -359,7 +359,7 @@ async def izin_harga_id(session, user, price_id: str) -> None:
 @router.delete("/prices/{price_id}")
 async def retire_price(price_id: str, version: int = Query(ge=0),
                        session: AsyncSession = Depends(get_db_marketplace_erp),
-                       actor: UserMarketplaceErp = Depends(admin)):
+                       actor: UserMarketplaceErp = Depends(processing_access)):
     await izin_harga_id(session, actor, price_id)
     return await change_price_status(session, price_id, version)
 
@@ -367,14 +367,14 @@ async def retire_price(price_id: str, version: int = Query(ge=0),
 @router.post("/prices/{price_id}/activate")
 async def activate_price(price_id: str, version: int = Query(ge=0),
                          session: AsyncSession = Depends(get_db_marketplace_erp),
-                         actor: UserMarketplaceErp = Depends(admin)):
+                         actor: UserMarketplaceErp = Depends(processing_access)):
     await izin_harga_id(session, actor, price_id)
     return await change_price_status(session, price_id, version, activate=True)
 
 
 @router.put("/prices/{price_id}")
 async def save_price(price_id: str, payload: PriceInput, session: AsyncSession = Depends(get_db_marketplace_erp),
-                     actor: UserMarketplaceErp = Depends(admin)):
+                     actor: UserMarketplaceErp = Depends(processing_access)):
     await izin_harga(session, actor, payload.kind)
     await lock_prices(session)
     if payload.kind == "pengecatan" and payload.warna is not None and not payload.warna:
@@ -509,7 +509,7 @@ class BulkProductionInput(Strict):
 @router.post("/prices/bulk-structure")
 async def bulk_production_structure(payload: BulkProductionInput,
                                     session: AsyncSession = Depends(get_db_marketplace_erp),
-                                    actor: UserMarketplaceErp = Depends(admin)):
+                                    actor: UserMarketplaceErp = Depends(processing_access)):
     await izin_harga(session, actor, "produksi")
     await lock_prices(session)
     ids = {item.id for item in payload.items}
@@ -628,7 +628,7 @@ CANDIDATE_STATUS = {"menunggu": "to_ship", "dikirim": "shipped", "selesai": "com
 @router.get("/candidates/rekap")
 async def candidates_rekap(
     session: AsyncSession = Depends(get_db_marketplace_erp),
-    actor: UserMarketplaceErp = Depends(admin),
+    actor: UserMarketplaceErp = Depends(processing_access),
 ):
     """Items already mapped vs still waiting, per shop: a small recap above the mapping list (same scope as /candidates)."""
     if not {"tukang", "supplier"} & await tab_terbaca(session, actor):
@@ -660,7 +660,7 @@ async def candidates(
     page: int = Query(1, ge=1),
     status: Literal["menunggu", "dikirim", "selesai", "semua", "dipetakan"] = "menunggu",
     session: AsyncSession = Depends(get_db_marketplace_erp),
-    actor: UserMarketplaceErp = Depends(admin),
+    actor: UserMarketplaceErp = Depends(processing_access),
 ):
     if not {"tukang", "supplier"} & await tab_terbaca(session, actor):
         raise HTTPException(403, "Akses ditolak")  # items to map are picked on the Tukang Kayu or Supplier tab
@@ -747,7 +747,7 @@ def draft(data, route, actor):
 async def select_items(
     payload: SelectItems,
     session: AsyncSession = Depends(get_db_marketplace_erp),
-    actor: UserMarketplaceErp = Depends(admin),
+    actor: UserMarketplaceErp = Depends(processing_access),
 ):
     await izin_tab(session, actor, payload.route)
     ids = set(payload.item_ids)
@@ -815,7 +815,7 @@ class ManualOrder(Strict):
 async def manual_order(
     payload: ManualOrder,
     session: AsyncSession = Depends(get_db_marketplace_erp),
-    actor: UserMarketplaceErp = Depends(admin),
+    actor: UserMarketplaceErp = Depends(processing_access),
 ):
     await izin_tab(session, actor, payload.route)
     prefix = "RSL-" if payload.source == "reseller" else "INT-"
@@ -936,7 +936,7 @@ async def biaya_produksi(session, awal: date, akhir: date) -> dict:
 
 
 @router.get("/jobs")
-async def jobs(session: AsyncSession = Depends(get_db_marketplace_erp), actor: UserMarketplaceErp = Depends(admin)):
+async def jobs(session: AsyncSession = Depends(get_db_marketplace_erp), actor: UserMarketplaceErp = Depends(processing_access)):
     tab = await tab_terbaca(session, actor)
     # Only the jobs of the tabs this user may look at: a role given Packing does not see what is being built.
     rows = [
@@ -1040,7 +1040,7 @@ async def edit_job(
     job_id: str,
     payload: JobEdit,
     session: AsyncSession = Depends(get_db_marketplace_erp),
-    actor: UserMarketplaceErp = Depends(admin),
+    actor: UserMarketplaceErp = Depends(processing_access),
 ):
     await lock_prices(session)
     row, data = await load_job(session, job_id, payload.version)
@@ -1257,11 +1257,11 @@ async def correct_time(
     job_id: str,
     payload: CorrectTime,
     session: AsyncSession = Depends(get_db_marketplace_erp),
-    actor: UserMarketplaceErp = Depends(admin),
+    actor: UserMarketplaceErp = Depends(processing_access),
 ):
     from tenants.marketplace_erp.modules.marketplace_erp.application import akses
 
-    # require_roles is page-aware: delegated page writers also pass that guard.
+    # Page writers pass the route guard; correcting history also needs an admin/owner role.
     # Only accounts holding a real admin/owner role may correct history.
     roles = await akses.peran_pengguna(session, actor)
     if not {"admin", "owner"}.intersection(roles):
@@ -1297,7 +1297,7 @@ async def transition(
     job_id: str,
     payload: Transition,
     session: AsyncSession = Depends(get_db_marketplace_erp),
-    actor: UserMarketplaceErp = Depends(admin),
+    actor: UserMarketplaceErp = Depends(processing_access),
 ):
     row, data = await load_job(session, job_id, payload.version)
     await izin_tab(session, actor, TAB_STAGE[payload.stage])
@@ -1328,7 +1328,7 @@ async def transition(
 
 @router.delete("/jobs/{job_id}")
 async def remove_draft(job_id: str, version: int, session: AsyncSession = Depends(get_db_marketplace_erp),
-                       actor: UserMarketplaceErp = Depends(admin)):
+                       actor: UserMarketplaceErp = Depends(processing_access)):
     from sqlalchemy import delete
 
     row, data = await load_job(session, job_id, version)
@@ -1358,7 +1358,7 @@ async def reset_manual_mapping(
     job_id: str,
     version: int = Query(ge=1),
     session: AsyncSession = Depends(get_db_marketplace_erp),
-    actor: UserMarketplaceErp = Depends(admin),
+    actor: UserMarketplaceErp = Depends(processing_access),
 ):
     """Cancel the mapping of a manual order: who works on it, prices, colour, packing and progress go back to a draft.
     The order itself (customer, dates, items, code) stays; a reseller code shows "Menunggu SKU" again until it is mapped."""
@@ -1380,7 +1380,7 @@ async def reset_manual_mapping(
 
 @router.post("/jobs/{job_id}/release")
 async def release_mapping(job_id: str, version: int, session: AsyncSession = Depends(get_db_marketplace_erp),
-                          actor: UserMarketplaceErp = Depends(admin)):
+                          actor: UserMarketplaceErp = Depends(processing_access)):
     """Take an order item out of its mapping at any stage (a cancelled order, or one to map again); the data entered for it is dropped."""
     from sqlalchemy import delete
 
@@ -1410,7 +1410,7 @@ async def edit_packing(
     job_id: str,
     payload: PackingEdit,
     session: AsyncSession = Depends(get_db_marketplace_erp),
-    actor: UserMarketplaceErp = Depends(admin),
+    actor: UserMarketplaceErp = Depends(processing_access),
 ):
     row, data = await load_job(session, job_id, payload.version)
     await izin_tab(session, actor, "packing")
@@ -1447,7 +1447,7 @@ async def save_party(
     party_id: str,
     payload: PartyEdit,
     session: AsyncSession = Depends(get_db_marketplace_erp),
-    actor: UserMarketplaceErp = Depends(admin),
+    actor: UserMarketplaceErp = Depends(processing_access),
 ):
     if not party_id or len(party_id) > 80:
         raise HTTPException(422, "ID tidak valid")
