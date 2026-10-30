@@ -11,11 +11,12 @@ from sqlalchemy import text, update
 from sqlalchemy.exc import DBAPIError, IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from tenants.marketplace_erp.modules.marketplace_erp.infrastructure.auth import require_roles_marketplace_erp
 from tenants.marketplace_erp.modules.marketplace_erp.infrastructure.database import get_db_marketplace_erp
 from tenants.marketplace_erp.modules.marketplace_erp.infrastructure.models import ProcessingDocumentTemplate
 
-router = APIRouter(dependencies=[Depends(require_roles_marketplace_erp("admin"))])
+from .processing_permissions import processing_access
+
+router = APIRouter(dependencies=[Depends(processing_access)])
 
 
 class Strict(BaseModel):

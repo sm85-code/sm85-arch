@@ -1256,3 +1256,175 @@ async def test_manual_orders_from_the_pesanan_menu_are_read_by_pemetaan_order(cl
         moved = await services.ubah_status_pesanan(session, internal_id, "shipped")
         assert moved.status == "shipped"
     assert (await http.get("/processing/candidates?status=semua")).json()["total"] >= 2
+
+
+async def use_processing_permissions(app, factory, halaman):
+    """Synthetic role only; exercise real dependencies on the assembled router."""
+    from tenants.marketplace_erp.modules.marketplace_erp.infrastructure.models import Role, RoleHalaman
+
+    async with factory() as db:
+        db.add(Role(id="delegated", nama="Delegated", akses_toko="semua"))
+        db.add_all(RoleHalaman(role_id="delegated", halaman=h, tingkat=lv) for h, lv in halaman.items())
+        await db.commit()
+
+    async def user():
+        return SimpleNamespace(id="delegate", role="delegated")
+
+    app.dependency_overrides[get_current_user_marketplace_erp] = user
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("tab", ["tukang", "supplier", "pengecatan", "packing"])
+@pytest.mark.parametrize("level", ["baca", "tulis"])
+async def test_delegated_tabs_read_real_processing_routes(client, tab, level):
+    http, app, factory = client
+    await http.post('/processing/jobs/select', json={"route": "tukang", "item_ids": ["i1"]})
+    await http.post('/processing/jobs/select', json={"route": "supplier", "item_ids": ["i2"]})
+    await use_processing_permissions(app, factory, {f"processing_{tab}": level})
+    for path in ('data', 'jobs', 'prices', 'paint-colors', 'production-structure', 'supplier-catalog/connection'):
+        response = await http.get('/processing/' + path)
+        assert response.status_code == 200, (path, response.text)
+    catalog_response = await http.get('/processing/supplier-catalog')
+    assert catalog_response.status_code == 409 and catalog_response.json()['detail'] == 'Hubungkan katalog terlebih dahulu'
+    jobs = (await http.get('/processing/jobs')).json()['items']
+    assert len(jobs) == (1 if tab in ('tukang', 'supplier') else 0)
+    assert all(j['route'] == tab for j in jobs)
+    for path in ('candidates', 'candidates/rekap'):
+        assert (await http.get('/processing/' + path)).status_code == (200 if tab in ('tukang', 'supplier') else 403)
+    # A mapping tab never grants access to edit Data Produksi or read templates.
+    assert (await http.get('/processing/document-templates/INV')).status_code == 403
+    assert (await http.put('/processing/paint-colors/new', json={'version': 0, 'name': 'Blue'})).status_code == 403
+    assert (await http.put('/processing/parties/tukang/t1', json={'version': 0})).status_code == 403
+    assert (await http.put('/processing/prices/new', json={'version': 0, 'kind': 'packing', 'produk': 'Box', 'harga': '10'})).status_code == 403
+    assert (await http.post('/processing/supplier-catalog/connect', json={})).status_code == 403
+    assert (await http.delete('/processing/supplier-catalog/connection')).status_code == 403
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize('halaman', [{}, {'processing': 'tulis'}, {'data_template': 'baca'}])
+async def test_processing_without_relevant_ticks_is_denied(client, halaman):
+    http, app, factory = client
+    await use_processing_permissions(app, factory, halaman)
+    for path in ('data', 'jobs', 'candidates', 'candidates/rekap', 'prices', 'paint-colors', 'production-structure', 'supplier-catalog'):
+        assert (await http.get('/processing/' + path)).status_code == 403
+
+
+@pytest.mark.asyncio
+async def test_read_only_tabs_cannot_write_any_processing_job_route(client):
+    http, app, factory = client
+    await http.post('/processing/jobs/select', json={'route': 'tukang', 'item_ids': ['i1']})
+    job = (await rows(http))[0]
+    await use_processing_permissions(app, factory, {f'processing_{t}': 'baca' for t in ('tukang', 'supplier', 'pengecatan', 'packing')})
+    requests = [
+        ('POST', '/jobs/select', {'route': 'tukang', 'item_ids': ['i2']}),
+        ('POST', '/jobs/manual', {}),
+        ('PUT', '/jobs/' + job['id'], {}),
+        ('POST', '/jobs/' + job['id'] + '/transition', {}),
+        ('POST', '/jobs/' + job['id'] + '/correct-time', {}),
+        ('PUT', '/jobs/' + job['id'] + '/packing', {}),
+        ('DELETE', '/jobs/' + job['id'] + '?version=1', None),
+        ('POST', '/jobs/' + job['id'] + '/reset?version=1', None),
+        ('POST', '/jobs/' + job['id'] + '/release?version=1', None),
+    ]
+    for method, path, body in requests:
+        response = await http.request(method, '/processing' + path, json=body)
+        assert response.status_code == 403, (method, path, response.text)
+    assert (await rows(http))[0]['version'] == job['version']
+
+
+@pytest.mark.asyncio
+async def test_other_tab_writer_cannot_change_read_only_tukang_jobs(client):
+    http, app, factory = client
+    await http.post('/processing/jobs/select', json={'route': 'tukang', 'item_ids': ['i1']})
+    job = (await rows(http))[0]
+    await use_processing_permissions(app, factory, {'processing_tukang': 'baca', 'processing_supplier': 'tulis'})
+    assert (await http.post('/processing/jobs/select', json={'route': 'supplier', 'item_ids': ['i2']})).status_code == 200
+    assert (await http.post('/processing/jobs/select', json={'route': 'tukang', 'item_ids': ['i3']})).status_code == 403
+    url = '/processing/jobs/' + job['id']
+    for suffix in ('/release', '/reset', ''):
+        method = 'DELETE' if suffix == '' else 'POST'
+        assert (await http.request(method, url + suffix + '?version=1')).status_code == 403
+    assert (await http.put(url, json={'version': 1, 'party_id': 't1', 'price_id': 'p1', 'color': 'Putih', 'packing_type': 'biasa', 'packing_price': '0'})).status_code == 403
+    for stage in ('produksi', 'pengecatan', 'packing'):
+        assert (await http.post(url + '/transition', json={'version': 1, 'stage': stage})).status_code == 403
+    assert (await http.put(url + '/packing', json={'version': 1, 'packing_type': 'biasa', 'packing_price': '0'})).status_code == 403
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize('page,path,body', [
+    ('data_tarif_pengecatan', 'paint-colors/delegated', {'version': 0, 'name': 'Blue'}),
+    ('data_produk_kayu', 'production-structure/delegated', {'version': 0, 'kind': 'kategori', 'code': 'K', 'name': 'Kayu'}),
+    ('data_template', 'document-templates/INV', {'version': 0, 'blocks': []}),
+    ('data_supplier', 'parties/supplier/new', {'version': 0, 'nama': 'Fixture', 'alamat': 'Fixture'}),
+    ('data_tukang', 'parties/tukang/new', {'version': 0, 'nama': 'Fixture', 'alamat': 'Fixture'}),
+    ('data_tarif_packing', 'prices/delegated', {'version': 0, 'kind': 'packing', 'produk': 'Box', 'packing_type': 'biasa', 'harga': '10'}),
+    ('data_katalog_manual', 'prices/delegated', {'version': 0, 'kind': 'non_kayu', 'produk': 'Box', 'harga': '10'}),
+])
+@pytest.mark.parametrize('level', ['baca', 'tulis'])
+async def test_data_produksi_writes_follow_their_own_page(client, page, path, body, level):
+    http, app, factory = client
+    await use_processing_permissions(app, factory, {page: level})
+    response = await http.put('/processing/' + path, json=body)
+    assert response.status_code == (200 if level == 'tulis' else 403), response.text
+    assert (await http.get('/processing/jobs')).status_code == 403
+
+
+@pytest.mark.asyncio
+async def test_all_assembled_processing_routes_have_page_rules_and_deny_without_ticks(client):
+    import re
+    from tenants.marketplace_erp.modules.marketplace_erp.application import peta_akses
+
+    http, app, factory = client
+    await use_processing_permissions(app, factory, {})
+    paths = app.openapi()['paths']
+    assert len(paths) >= 20
+    for path, operations in paths.items():
+        for method in operations:
+            if method.upper() not in {'GET', 'POST', 'PUT', 'DELETE', 'PATCH'}:
+                continue
+            concrete = re.sub(r"\{[^}]+\}", "fixture", path)
+            assert peta_akses.cari(concrete, method) is not None, (method, path)
+            response = await http.request(method, concrete, json={})
+            assert response.status_code == 403, (method, path, response.text)
+
+
+@pytest.mark.asyncio
+async def test_processing_page_guard_denies_unmapped_routes_even_for_admin(client):
+    from fastapi import Depends
+    from tenants.marketplace_erp.adapters.api.v1.processing_permissions import processing_access
+
+    http, app, _ = client
+
+    @app.get('/processing/unmapped', dependencies=[Depends(processing_access)])
+    async def unmapped():
+        return {'unexpected': True}
+
+    assert (await http.get('/processing/unmapped')).status_code == 403
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize('level', ['baca', 'tulis'])
+async def test_supplier_connection_requires_automatic_catalog_write(client, level):
+    http, app, factory = client
+    await use_processing_permissions(app, factory, {'data_katalog_otomatis': level})
+    assert (await http.get('/processing/data')).status_code == 200
+    assert (await http.get('/processing/supplier-catalog/connection')).status_code == 200
+    assert (await http.delete('/processing/supplier-catalog/connection')).status_code == (200 if level == 'tulis' else 403)
+    # Missing credentials stop at validation; no outbound request is made.
+    assert (await http.post('/processing/supplier-catalog/connect', json={})).status_code == (422 if level == 'tulis' else 403)
+
+
+@pytest.mark.asyncio
+async def test_packing_writer_can_finish_packing_without_tukang_write(client):
+    http, app, factory = client
+    await http.post('/processing/jobs/select', json={'route': 'tukang', 'item_ids': ['i1']})
+    job = await save(http, (await rows(http))[0], color='Polos / Tanpa Cat')
+    job = await advance(http, job, 'produksi')
+    await use_processing_permissions(app, factory, {'processing_tukang': 'baca', 'processing_packing': 'tulis'})
+    response = await http.put('/processing/jobs/' + job['id'] + '/packing', json={
+        'version': job['version'], 'packing_type': 'biasa', 'packing_price': '0',
+    })
+    assert response.status_code == 200, response.text
+    job = (await rows(http))[0]
+    job = await advance(http, job, 'packing')
+    assert job['stage'] == 'siap_kirim'
