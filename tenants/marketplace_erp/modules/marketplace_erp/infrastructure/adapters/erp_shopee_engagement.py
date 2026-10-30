@@ -4,6 +4,7 @@ import logging
 import re
 from datetime import datetime, timezone
 from uuid import uuid4
+from typing import NoReturn
 
 from fastapi import HTTPException
 from . import erp_shopee as provider, erp_shopee_management as management
@@ -21,8 +22,8 @@ def safe(value, akun):
     return ' '.join(text.split())[:500]
 
 
-def diagnostic(path, akun, data, failures=None, code=None):
-    report = {'diagnostic_id': str(uuid4()), 'time': datetime.now(timezone.utc).isoformat(),
+def diagnostic(path, akun, data, failures=None, code=None, source='shopee'):
+    report = {'source': source, 'diagnostic_id': str(uuid4()), 'time': datetime.now(timezone.utc).isoformat(),
               'endpoint': path, 'account_id': getattr(akun, 'id', None),
               'request_id': safe(data.get('request_id'), akun) or None,
               'error': safe(code or data.get('error'), akun), 'message': safe(data.get('message'), akun),
@@ -31,16 +32,48 @@ def diagnostic(path, akun, data, failures=None, code=None):
     return report
 
 
+def provider_rejection(path, akun, exc, *, preflight=False) -> NoReturn:
+    permission = exc.error in {'error_api_permission', 'common.error_api_permission'}
+    report = diagnostic(path, akun, {'request_id': exc.request_id, 'error': exc.error, 'message': exc.message},
+                        source='shopee_permission' if permission else 'shopee')
+    message = 'Izin API Shopee untuk fitur ini ditolak. Hubungi admin aplikasi Shopee Open Platform.' if permission else 'Shopee menolak permintaan. Hubungi dukungan dengan kode pemeriksaan.'
+    if preflight:
+        message += ' Boost belum dikirim karena pemeriksaan produk gagal.'
+    raise HTTPException(403 if permission else 502, {'message': message, 'diagnostic': report}) from None
+
+
+async def boost_preflight(session, akun, item):
+    # Keep the existing shop/item validation; failures must stop before any write.
+    path = BASE + 'get_item_base_info'
+    message = 'Pemeriksaan produk Shopee gagal. Boost belum dikirim. Hubungi dukungan dengan kode pemeriksaan.'
+    try:
+        return await management.item(session, akun, item)
+    except provider.ShopeeAPIError as exc:
+        provider_rejection(path, akun, exc, preflight=True)
+    except provider.ShopeeNotConfigured as exc:
+        report = diagnostic(path, akun, {'message': safe(exc.detail, akun)}, code='not_configured')
+        raise HTTPException(503, {'message': message, 'diagnostic': report}) from None
+    except HTTPException as exc:
+        # Preserve local validation (e.g. item not in this shop); never label it Shopee permission.
+        if exc.status_code < 500:
+            raise
+        report = diagnostic(path, akun, {'message': safe(exc.detail, akun)}, code='http_' + str(exc.status_code))
+        raise HTTPException(exc.status_code, {'message': message, 'diagnostic': report}) from None
+    except Exception:
+        report = diagnostic(path, akun, {'message': 'Koneksi atau decoding pemeriksaan produk gagal.'}, code='transport_or_decode_error')
+        raise HTTPException(502, {'message': message, 'diagnostic': report}) from None
+
+
 async def call(session, akun, name, **kwargs):
     path = BASE + name
     try:
         return await provider.signed_shop_request(session, akun, path, **kwargs)
     except provider.ShopeeAPIError as exc:
         data = {'request_id': exc.request_id, 'error': exc.error, 'message': exc.message, 'response': exc.response}
-        if name in {'reply_comment', 'boost_item'} and exc.response:
+        permission = exc.error in {'error_api_permission', 'common.error_api_permission'}
+        if name in {'reply_comment', 'boost_item'} and exc.response and not permission:
             return data
-        report = diagnostic(path, akun, data)
-        raise HTTPException(502, {'message': f'Shopee menolak permintaan: {report["error"]} {report["message"]}', 'diagnostic': report}) from None
+        provider_rejection(path, akun, exc)
     except provider.ShopeeNotConfigured as exc:
         report = diagnostic(path, akun, {'message': str(exc)}, code='not_configured')
         raise HTTPException(503, {'message': report['message'], 'diagnostic': report}) from None
@@ -122,7 +155,7 @@ async def boost(session, akun, item_ids, *, before_send=None):
     if not 1 <= len(item_ids) <= 5 or len(set(item_ids)) != len(item_ids):
         raise HTTPException(422, 'Boost memerlukan 1–5 produk berbeda.')
     for item in item_ids:
-        await management.item(session, akun, item)
+        await boost_preflight(session, akun, item)
     if before_send is not None:
         await before_send()
     data = await call(session, akun, 'boost_item', method='POST', body={'item_id_list': [int(i) for i in item_ids]})
