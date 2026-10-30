@@ -18,8 +18,10 @@ from tenants.marketplace_erp.modules.marketplace_erp.infrastructure.models impor
 from .management_router import account, listing, refreshed
 from tenants.marketplace_erp.modules.marketplace_erp.infrastructure.adapters import erp_shopee_engagement as engagement
 
+from .boost_diagnostic import BoostDiagnosticRoute
+
 logger = logging.getLogger(__name__)
-router = APIRouter()
+router = APIRouter(route_class=BoostDiagnosticRoute)
 DB = Depends(get_db_marketplace_erp)
 ADMIN = Depends(require_roles_marketplace_erp("admin"))
 STAFF = Depends(require_roles_marketplace_erp("admin", "owner", "staff"))

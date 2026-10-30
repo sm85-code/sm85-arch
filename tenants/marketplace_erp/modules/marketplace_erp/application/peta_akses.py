@@ -74,7 +74,9 @@ ATURAN: list[tuple[re.Pattern, set[str] | None, str]] = [
         (r"^/settlement", None, "settlement"),
         # Info Toko, Iklan
         (r"^/akun/[^/]+/(performa-toko|penalti|pengaturan-shopee)", None, "info_toko"),
-        (r"^/akun/[^/]+/(produk-boost|otomasi-produk)", None, "otomasi"),
+        # Manual catalog tools and scheduled automation have different page permissions.
+        (r"^/akun/[^/]+/produk-boost$", None, "katalog_lanjutan"),
+        (r"^/akun/[^/]+/otomasi-produk", None, "otomasi"),
         (r"^/akun/[^/]+/(sync/iklan|iklan|gmv-max)", None, "iklan"),
         (r"^/iklan", None, "iklan"),
         # Pengaturan

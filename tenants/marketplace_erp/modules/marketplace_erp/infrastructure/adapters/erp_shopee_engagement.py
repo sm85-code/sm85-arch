@@ -21,8 +21,8 @@ def safe(value, akun):
     return ' '.join(text.split())[:500]
 
 
-def diagnostic(path, akun, data, failures=None, code=None):
-    report = {'diagnostic_id': str(uuid4()), 'time': datetime.now(timezone.utc).isoformat(),
+def diagnostic(path, akun, data, failures=None, code=None, source='shopee'):
+    report = {'source': source, 'diagnostic_id': str(uuid4()), 'time': datetime.now(timezone.utc).isoformat(),
               'endpoint': path, 'account_id': getattr(akun, 'id', None),
               'request_id': safe(data.get('request_id'), akun) or None,
               'error': safe(code or data.get('error'), akun), 'message': safe(data.get('message'), akun),
@@ -37,10 +37,12 @@ async def call(session, akun, name, **kwargs):
         return await provider.signed_shop_request(session, akun, path, **kwargs)
     except provider.ShopeeAPIError as exc:
         data = {'request_id': exc.request_id, 'error': exc.error, 'message': exc.message, 'response': exc.response}
-        if name in {'reply_comment', 'boost_item'} and exc.response:
+        permission = exc.error in {'error_api_permission', 'common.error_api_permission'}
+        if name in {'reply_comment', 'boost_item'} and exc.response and not permission:
             return data
-        report = diagnostic(path, akun, data)
-        raise HTTPException(502, {'message': f'Shopee menolak permintaan: {report["error"]} {report["message"]}', 'diagnostic': report}) from None
+        report = diagnostic(path, akun, data, source='shopee_permission' if permission else 'shopee')
+        message = 'Izin API Shopee untuk fitur ini ditolak. Hubungi admin aplikasi Shopee Open Platform.' if permission else 'Shopee menolak permintaan. Hubungi dukungan dengan kode pemeriksaan.'
+        raise HTTPException(403 if permission else 502, {'message': message, 'diagnostic': report}) from None
     except provider.ShopeeNotConfigured as exc:
         report = diagnostic(path, akun, {'message': str(exc)}, code='not_configured')
         raise HTTPException(503, {'message': report['message'], 'diagnostic': report}) from None
