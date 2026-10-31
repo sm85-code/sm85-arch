@@ -19,6 +19,10 @@ role utama/efektif **hanya** `agen_iklan`, scope `ditugaskan`, halaman persis
 `iklan:tulis`, `produk:baca`, `katalog:baca`, `pesanan:baca`, dan tepat 11 UUID
 Shopee yang sama dengan manifest terkelola. `hermes-ai` ditolak, tidak diubah.
 Token expired/403/redirect gagal tertutup, tidak fallback ke akun admin.
+Respons preflight dengan tipe salah, username kosong/tidak ada, atau daftar
+peran tambahan yang tidak eksplisit `[]` juga ditolak sebelum endpoint alat.
+Argumen nested disalin sebelum preflight asynchronous agar caller tidak bisa
+mengganti toko/rute/payload setelah validasi.
 
 Base URL tetap `https://api.ampelkuning.com/api/marketplace-erp`; tidak ada proxy
 atau generic URL/method/tool escape. Input divalidasi JSON Schema, unknown field
@@ -91,6 +95,11 @@ pada profil Dohh setelah identitas/izin diperiksa; jangan memasangnya global.
    atau payload berubah harus preview ulang. STOP aktifkan hanya pesan persis
    `STOP` dari ingress owner itu, tanpa persetujuan tambahan; reset bukan jalur
    STOP darurat. Tanpa ingress itu seluruh live/STOP tulis tetap tidak tersedia.
+   Inspeksi repository tidak menemukan implementasi ingress Telegram, verifikasi
+   bot/sender/chat owner, atau binding persetujuan ke rencana. Itulah blocker
+   konkret: tidak ada sumber identitas owner tepercaya untuk dihubungkan ke MCP.
+   Field klaim identitas dari LLM bukan pengganti ingress; tidak dibuat gateway
+   approval lokal yang menerima klaim tersebut.
 2. **Provisioning/secret belum tersedia di jalur ops worker.** Source resmi
    memiliki POST `/users/agen-iklan` dan module script
    `tenants.marketplace_erp.scripts.buat_pengguna_agen`; keduanya create, bukan
@@ -118,3 +127,6 @@ response bukan kering, kebocoran error, rencana lokal tanpa PUT, dan MCP
 initialize/list/call/refusal lewat session SDK sungguhan. Fixture bukan data toko
 produksi. Backend existing diuji terpisah `tests/test_agen_iklan_*.py`.
 Workflow khusus `dohh-mcp.yml` tidak menerima secret atau menjalankan service ERP.
+Tes tambahan memeriksa mutasi argumen saat preflight, respons preflight malformed,
+klaim identitas Telegram palsu, redirect, timeout, dan error HTTP/JSON tanpa
+retry atau kebocoran pesan remote. Semua HTTP memakai MockTransport.
