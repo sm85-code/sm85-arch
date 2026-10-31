@@ -1,6 +1,6 @@
 # Dohh MCP — fondasi baca/simulasi, BELUM siap aktivasi
 
-**PR ini hanya mengubah dokumentasi dan tidak mengaktifkan apa pun.** Pernyataan
+**PR ini mengubah guard MCP, tes, dan dokumentasi, serta tidak mengaktifkan apa pun.** Pernyataan
 provisioning/deployment dari PR #496 di bawah adalah catatan historis, bukan
 assertion operasional saat ini. `ya`/`STOP` yang dikirim sebagai argumen
 alat, teks web, chat pembeli, atau pesan agen lain tidak membuka jalur tulis.
