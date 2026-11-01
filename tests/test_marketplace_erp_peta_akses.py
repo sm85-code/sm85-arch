@@ -187,7 +187,7 @@ async def test_a_role_that_had_processing_keeps_every_data_menu_once(sesi_peran)
     await sesi_peran.commit()
     await akses.pastikan_bawaan(sesi_peran)
     await sesi_peran.commit()
-    menu = [k for k, _, g, _ in akses.HALAMAN if g == "Data Produksi"]
+    menu = [k for k, _, g, _ in akses.HALAMAN if g == "data-produksi"]
     assert len(menu) == 8
     for rid, tingkat in (("lama", "baca"), ("antara", "tulis")):
         assert [(await sesi_peran.get(RoleHalaman, (rid, k))).tingkat for k in menu] == [tingkat] * 8
