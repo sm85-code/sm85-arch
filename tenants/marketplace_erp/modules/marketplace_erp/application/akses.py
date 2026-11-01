@@ -33,52 +33,71 @@ TINGKAT = ("baca", "tulis")
 AKSES_TOKO = ("semua", "ditugaskan")
 ADMIN = "admin"
 
-# (key, label, group, levels). levels: which of baca/tulis exist for the page (a page that is only read, or only an
-# action, has a single level).
-HALAMAN: list[tuple[str, str, str, tuple[str, ...]]] = [
-    ("dashboard", "Dashboard", "Harian", ("baca",)),
-    ("pesanan", "Pesanan", "Harian", ("baca", "tulis")),
-    ("pesanan_manual", "Buat dan hapus pesanan manual", "Harian", ("tulis",)),
-    ("chat", "Chat", "Harian", ("baca", "tulis")),
-    ("retur", "Retur & Refund", "Harian", ("baca", "tulis")),
-    ("katalog", "Katalog Shopee", "Produk", ("baca", "tulis")),
-    ("katalog_lanjutan", "Katalog: pengaturan lanjutan Shopee", "Produk", ("baca", "tulis")),
-    ("produk", "Produk (SKU)", "Produk", ("baca", "tulis")),
-    ("listing", "Pemetaan Produk Toko", "Produk", ("baca", "tulis")),
-    ("gudang", "Gudang & Stok", "Produk", ("baca", "tulis")),
-    ("promosi", "Promosi Diskon", "Produk", ("baca", "tulis")),
-    ("publikasi", "Buat / Salin Produk", "Produk", ("baca", "tulis")),
-    ("sinkron_shopee", "Sinkronisasi dan kirim stok/harga ke Shopee", "Produk", ("tulis",)),
-    ("laporan_ringkas", "Ringkasan laporan (stok kritis)", "Produk", ("baca",)),
-    ("processing_tukang", "Pemetaan Order: tab Tukang Kayu", "Processing", ("baca", "tulis")),
-    ("processing_supplier", "Pemetaan Order: tab Supplier", "Processing", ("baca", "tulis")),
-    ("processing_pengecatan", "Pemetaan Order: tab Pengecatan", "Processing", ("baca", "tulis")),
-    ("processing_packing", "Pemetaan Order: tab Packing", "Processing", ("baca", "tulis")),
-    ("data_tukang", "Tukang Kayu", "Data Produksi", ("baca", "tulis")),
-    ("data_supplier", "Supplier", "Data Produksi", ("baca", "tulis")),
-    ("data_produk_kayu", "Katalog Produk Kayu", "Data Produksi", ("baca", "tulis")),
-    ("data_katalog_otomatis", "Katalog Produk Non Kayu: tab Katalog Otomatis", "Data Produksi", ("baca", "tulis")),
-    ("data_katalog_manual", "Katalog Produk Non Kayu: tab Katalog Manual", "Data Produksi", ("baca", "tulis")),
-    ("data_tarif_pengecatan", "Tarif Pengecatan", "Data Produksi", ("baca", "tulis")),
-    ("data_tarif_packing", "Tarif Packing", "Data Produksi", ("baca", "tulis")),
-    ("data_template", "Template", "Data Produksi", ("baca", "tulis")),
-    ("operasional_umum", "Kas Utama", "Keuangan", ("baca", "tulis")),
-    ("operasional_packing", "Kas Kecil", "Keuangan", ("baca", "tulis")),
-    ("belanja_supplier", "Belanja Supplier", "Keuangan", ("baca", "tulis")),
-    ("belanja_tukang", "Belanja Tukang", "Keuangan", ("baca", "tulis")),
-    ("arus_kas", "Arus Kas (tulis = centang)", "Keuangan", ("baca", "tulis")),
-    ("kategori_transaksi", "Kategori Transaksi", "Keuangan", ("baca", "tulis")),
-    ("laporan_keuangan", "Laporan Keuangan", "Keuangan", ("baca", "tulis")),
-    ("settlement", "Dana & Saldo Shopee", "Keuangan", ("baca", "tulis")),
-    ("info_toko", "Performa dan Pengaturan Toko", "Info Toko", ("baca", "tulis")),
-    ("otomasi", "Otomasi produk dan pesanan", "Info Toko", ("baca", "tulis")),
-    ("iklan", "Iklan", "Iklan", ("baca", "tulis")),
-    ("kelola_toko", "Kelola Toko", "Pengaturan", ("baca", "tulis")),
-    ("push_shopee", "Pengaturan push Shopee", "Pengaturan", ("baca", "tulis")),
-    ("asisten", "Asisten AI", "Pengaturan", ("baca", "tulis")),
-    ("kelola_pengguna", "Kelola Pengguna dan Role", "Pengaturan", ("baca", "tulis")),
-    ("kelola_aplikasi", "Kelola Aplikasi (teks menu dan halaman)", "Pengaturan", ("baca", "tulis")),
+# Ordered groups of the role editor, matching the app sidebar (frontend src/config/nav.ts, GRUP_NAV). The id is what the
+# code goes by; the label here is only the default text - the app shows what the admin typed in Kelola Aplikasi under
+# `grup:<id>`, so renaming a group there renames it in Kelola Pengguna -> Role too.
+GRUP_HALAMAN: list[tuple[str, str]] = [
+    ("harian", "Harian"),
+    ("produk", "Produk"),
+    ("processing", "Processing"),
+    ("data-produksi", "Data Produksi"),
+    ("keuangan", "Keuangan"),
+    ("info-toko", "Info Toko"),
+    ("pengaturan", "Pengaturan"),
 ]
+GRUP_LABEL = dict(GRUP_HALAMAN)
+
+# (key, label, group id, levels). levels: which of baca/tulis exist for the page (a page that is only read, or only an
+# action, has a single level). The label is only the default: for a row that is a menu it mirrors the menu's default name
+# and the app shows the text set in Kelola Aplikasi (`menu:<route>`) instead - see the frontend src/lib/namaAkses.ts. Rows
+# that are not a menu (an action or a tab) keep this label, with any ": tab ..." or "(...)" hint kept as it is.
+HALAMAN: list[tuple[str, str, str, tuple[str, ...]]] = [
+    ("dashboard", "Dashboard", "harian", ("baca",)),
+    ("pesanan", "Pesanan", "harian", ("baca", "tulis")),
+    ("pesanan_manual", "Buat dan hapus pesanan manual", "harian", ("tulis",)),
+    ("chat", "Chat", "harian", ("baca", "tulis")),
+    ("retur", "Retur & Refund", "harian", ("baca", "tulis")),
+    ("katalog", "Katalog Shopee", "produk", ("baca", "tulis")),
+    ("katalog_lanjutan", "Katalog: pengaturan lanjutan Shopee", "produk", ("baca", "tulis")),
+    ("produk", "Produk (SKU)", "produk", ("baca", "tulis")),
+    ("listing", "Pemetaan Produk Toko", "produk", ("baca", "tulis")),
+    ("gudang", "Gudang & Stok", "produk", ("baca", "tulis")),
+    ("promosi", "Promosi Diskon", "produk", ("baca", "tulis")),
+    ("publikasi", "Buat / Salin Produk", "produk", ("baca", "tulis")),
+    ("sinkron_shopee", "Sinkronisasi dan kirim stok/harga ke Shopee", "produk", ("tulis",)),
+    ("laporan_ringkas", "Ringkasan laporan (stok kritis)", "produk", ("baca",)),
+    ("processing_tukang", "Pemetaan Order: tab Tukang Kayu", "processing", ("baca", "tulis")),
+    ("processing_supplier", "Pemetaan Order: tab Supplier", "processing", ("baca", "tulis")),
+    ("processing_pengecatan", "Pemetaan Order: tab Pengecatan", "processing", ("baca", "tulis")),
+    ("processing_packing", "Pemetaan Order: tab Packing", "processing", ("baca", "tulis")),
+    ("data_tukang", "Tukang Kayu", "data-produksi", ("baca", "tulis")),
+    ("data_supplier", "Supplier", "data-produksi", ("baca", "tulis")),
+    ("data_produk_kayu", "Katalog Produk Kayu", "data-produksi", ("baca", "tulis")),
+    ("data_katalog_otomatis", "Katalog Produk Non Kayu: tab Katalog Otomatis", "data-produksi", ("baca", "tulis")),
+    ("data_katalog_manual", "Katalog Produk Non Kayu: tab Katalog Manual", "data-produksi", ("baca", "tulis")),
+    ("data_tarif_pengecatan", "Tarif Pengecatan", "data-produksi", ("baca", "tulis")),
+    ("data_tarif_packing", "Tarif Packing", "data-produksi", ("baca", "tulis")),
+    ("data_template", "Template", "data-produksi", ("baca", "tulis")),
+    ("operasional_umum", "Kas Utama", "keuangan", ("baca", "tulis")),
+    ("operasional_packing", "Kas Kecil", "keuangan", ("baca", "tulis")),
+    ("belanja_supplier", "Belanja Supplier", "keuangan", ("baca", "tulis")),
+    ("belanja_tukang", "Belanja Tukang", "keuangan", ("baca", "tulis")),
+    ("arus_kas", "Arus Kas (tulis = centang)", "keuangan", ("baca", "tulis")),
+    ("laporan_keuangan", "Laporan Keuangan", "keuangan", ("baca", "tulis")),
+    ("info_toko", "Pengaturan Toko & Performa Toko", "info-toko", ("baca", "tulis")),
+    ("otomasi", "Otomasi produk dan pesanan", "info-toko", ("baca", "tulis")),
+    ("iklan", "Iklan", "info-toko", ("baca", "tulis")),
+    ("settlement", "Dana & Saldo Shopee", "info-toko", ("baca", "tulis")),
+    ("kelola_toko", "Kelola Toko", "pengaturan", ("baca", "tulis")),
+    ("push_shopee", "Pengaturan push Shopee", "pengaturan", ("baca", "tulis")),
+    ("asisten", "Asisten AI", "pengaturan", ("baca", "tulis")),
+    ("kelola_pengguna", "Kelola Pengguna", "pengaturan", ("baca", "tulis")),
+    ("kelola_aplikasi", "Kelola Aplikasi", "pengaturan", ("baca", "tulis")),
+    ("kategori_transaksi", "Kategori Transaksi", "pengaturan", ("baca", "tulis")),
+]
+if any(g not in GRUP_LABEL for _, _, g, _ in HALAMAN):
+    raise RuntimeError("HALAMAN memakai grup di luar GRUP_HALAMAN")
+
 TINGKAT_HALAMAN = {k: lv for k, _, _, lv in HALAMAN}
 
 # What the built-in roles could reach before roles were editable; seeded as the starting checkmarks. The test
@@ -174,7 +193,7 @@ async def _pisah_data_produksi(session: AsyncSession) -> None:
     nobody loses a screen; the admin can then take any of them away. The marker keeps a later removal from being given back."""
     if await session.get(PengaturanUi, PENANDA_MENU):
         return
-    data = [k for k, _, g, _ in HALAMAN if g == "Data Produksi"]
+    data = [k for k, _, g, _ in HALAMAN if g == "data-produksi"]
     for baris in (await session.scalars(select(RoleHalaman).where(RoleHalaman.halaman.in_(["processing", "data_produksi"])))).all():
         if baris.halaman == "data_produksi" or not await session.get(PengaturanUi, PENANDA_PISAH):
             for h in data:
@@ -304,7 +323,7 @@ async def daftar(session: AsyncSession) -> dict:
             }
             for r in roles
         ],
-        "halaman": [{"id": k, "label": lbl, "grup": g, "tingkat": list(lv)} for k, lbl, g, lv in HALAMAN],
+        "halaman": [{"id": k, "label": lbl, "grup": GRUP_LABEL[g], "grup_id": g, "tingkat": list(lv)} for k, lbl, g, lv in HALAMAN],
     }
 
 

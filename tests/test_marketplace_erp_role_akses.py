@@ -73,6 +73,11 @@ async def test_list_has_builtin_roles_and_the_pages(session):
     assert {"pesanan", "produk", "iklan", "operasional_umum", "arus_kas", "kelola_pengguna"} <= set(pages)
     assert pages["dashboard"]["tingkat"] == ["baca"] and pages["sinkron_shopee"]["tingkat"] == ["tulis"]
     assert pages["pesanan"]["tingkat"] == ["baca", "tulis"] and pages["pesanan"]["grup"] == "Harian"
+    assert pages["pesanan"]["grup_id"] == "harian"  # the app sidebar group id, not a display text
+    # Every row carries a group the app knows; the group texts themselves come from Kelola Aplikasi (grup:<id>).
+    assert {h["grup_id"] for h in data["halaman"]} == {g for g, _ in akses.GRUP_HALAMAN}
+    assert pages["iklan"]["grup_id"] == "info-toko" and pages["settlement"]["grup_id"] == "info-toko"
+    assert pages["kategori_transaksi"]["grup_id"] == "pengaturan"
 
 
 @pytest.mark.asyncio
