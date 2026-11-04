@@ -18,6 +18,9 @@ HARGA = "data_produk_kayu|data_katalog_manual|data_tarif_pengecatan|data_tarif_p
 PROSES = "processing_tukang|processing_supplier|processing_pengecatan|processing_packing"
 LIHAT = PROSES + "|data_tukang|data_supplier|" + HARGA + "|data_katalog_otomatis"
 PREFIX_API = "/api/marketplace-erp"
+# Dana & Saldo Shopee and Pengaturan Toko were one page each; the old key still opens them until a role is saved again.
+SETTLEMENT = "settlement_saldo|settlement_pendapatan|settlement_dana|settlement_mutasi|settlement"
+PENGATURAN_TOKO = "pengaturan_toko_profil|pengaturan_toko_pengiriman|pengaturan_toko_alamat|pengaturan_toko_libur|info_toko"
 
 # (regex on the path, methods or None for all, halaman)
 ATURAN: list[tuple[re.Pattern, set[str] | None, str]] = [
@@ -33,7 +36,7 @@ ATURAN: list[tuple[re.Pattern, set[str] | None, str]] = [
         # Harian
         (r"^/laporan/dashboard$", GET, "dashboard"),
         (r"^/laporan/ringkas$", GET, "laporan_ringkas"),
-        (r"^/pesanan/[^/]+/pendapatan-shopee$", GET, "settlement"),
+        (r"^/pesanan/[^/]+/pendapatan-shopee$", GET, SETTLEMENT),
         (r"^/pesanan(/manual)?$", {"POST"}, "pesanan_manual"),
         (r"^/pesanan/[^/]+$", {"DELETE"}, "pesanan_manual"),
         (r"^/pesanan/[^/]+/chat", None, "chat"),
@@ -71,10 +74,18 @@ ATURAN: list[tuple[re.Pattern, set[str] | None, str]] = [
         # Keuangan
         (r"^/kategori-transaksi", None, "kategori_transaksi"),
         (r"^/laporan-keuangan", None, "laporan_keuangan"),
-        (r"^/akun/[^/]+/(sync/settlement|transaksi-dana|saldo-toko|pendapatan-shopee|rincian-pesanan-pendapatan|pelacakan-pendapatan|ringkasan-pendapatan-shopee)", None, "settlement"),
-        (r"^/settlement", None, "settlement"),
+        (r"^/akun/[^/]+/saldo-toko", None, "settlement_saldo|settlement"),
+        (r"^/akun/[^/]+/transaksi-dana", None, "settlement_mutasi|settlement"),
+        (r"^/akun/[^/]+/(pendapatan-shopee|rincian-pesanan-pendapatan|pelacakan-pendapatan|ringkasan-pendapatan-shopee)", None, "settlement_pendapatan|settlement"),
+        (r"^/akun/[^/]+/sync/settlement", None, "settlement_dana|settlement"),
+        (r"^/settlement", None, "settlement_dana|settlement"),
         # Info Toko, Iklan
-        (r"^/akun/[^/]+/(performa-toko|penalti|pengaturan-shopee)", None, "info_toko"),
+        (r"^/akun/[^/]+/(performa-toko|penalti)", None, "performa_toko|info_toko"),
+        (r"^/akun/[^/]+/pengaturan-shopee/profil", None, "pengaturan_toko_profil|info_toko"),
+        (r"^/akun/[^/]+/pengaturan-shopee/jasa-kirim", None, "pengaturan_toko_pengiriman|info_toko"),
+        (r"^/akun/[^/]+/pengaturan-shopee/alamat", None, "pengaturan_toko_alamat|info_toko"),
+        (r"^/akun/[^/]+/pengaturan-shopee/libur", None, "pengaturan_toko_libur|info_toko"),
+        (r"^/akun/[^/]+/pengaturan-shopee", None, PENGATURAN_TOKO),
         # Manual catalog tools and scheduled automation have different page permissions.
         (r"^/akun/[^/]+/produk-boost$", None, "katalog_lanjutan"),
         (r"^/akun/[^/]+/otomasi-produk", None, "otomasi"),
@@ -82,9 +93,12 @@ ATURAN: list[tuple[re.Pattern, set[str] | None, str]] = [
         (r"^/iklan", None, "iklan"),
         # Pengaturan
         (r"^/shopee/push/", None, "push_shopee"),
-        (r"^/(akun|oauth|koneksi-toko|toko-penjualan)(/|$)", None, "kelola_toko"),
+        (r"^/toko-penjualan(/|$)", None, "toko_penjualan"),
+        (r"^/(akun|oauth|koneksi-toko)(/|$)", None, "kelola_toko"),
         (r"^/asisten", None, "asisten"),
-        (r"^/(users|staff-akun|roles)", None, "kelola_pengguna"),
+        (r"^/roles", GET, "kelola_role|kelola_pengguna"),  # the Pengguna tab needs the role names for its form
+        (r"^/roles", None, "kelola_role"),
+        (r"^/(users|staff-akun)", None, "kelola_pengguna"),
         (r"^/pengaturan-ui", None, "kelola_aplikasi"),
     ]
 ]

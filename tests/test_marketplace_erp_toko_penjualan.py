@@ -85,6 +85,6 @@ async def test_validasi_dan_duplikat(session):
 
 @pytest.mark.asyncio
 async def test_hak_akses(session):
-    assert peta_akses.cari("/api/marketplace-erp/toko-penjualan", "GET")[0] == "kelola_toko"
-    assert peta_akses.cari("/api/marketplace-erp/toko-penjualan/x", "PUT")[0] == "kelola_toko"
-    assert (await akses.akses_pengguna(session, "staff"))["halaman"].get("kelola_toko", "tidak") == "tidak"
+    assert peta_akses.cari("/api/marketplace-erp/toko-penjualan", "GET")[0] == "toko_penjualan"
+    assert peta_akses.cari("/api/marketplace-erp/toko-penjualan/x", "PUT")[0] == "toko_penjualan"
+    assert (await akses.akses_pengguna(session, "staff"))["halaman"].get("toko_penjualan", "tidak") == "tidak"

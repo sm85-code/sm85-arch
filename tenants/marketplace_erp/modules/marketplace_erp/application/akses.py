@@ -84,21 +84,42 @@ HALAMAN: list[tuple[str, str, str, tuple[str, ...]]] = [
     ("belanja_tukang", "Belanja Tukang", "keuangan", ("baca", "tulis")),
     ("arus_kas", "Arus Kas (tulis = centang)", "keuangan", ("baca", "tulis")),
     ("laporan_keuangan", "Laporan Keuangan", "keuangan", ("baca", "tulis")),
-    ("info_toko", "Pengaturan Toko & Performa Toko", "info-toko", ("baca", "tulis")),
+    ("pengaturan_toko_profil", "Pengaturan Toko: tab Profil", "info-toko", ("baca", "tulis")),
+    ("pengaturan_toko_pengiriman", "Pengaturan Toko: tab Pengiriman", "info-toko", ("baca", "tulis")),
+    ("pengaturan_toko_alamat", "Pengaturan Toko: tab Alamat", "info-toko", ("baca", "tulis")),
+    ("pengaturan_toko_libur", "Pengaturan Toko: tab Mode Libur", "info-toko", ("baca", "tulis")),
+    ("performa_toko", "Performa Toko", "info-toko", ("baca", "tulis")),
     ("otomasi", "Otomasi produk dan pesanan", "info-toko", ("baca", "tulis")),
     ("iklan", "Iklan", "info-toko", ("baca", "tulis")),
-    ("settlement", "Dana & Saldo Shopee", "info-toko", ("baca", "tulis")),
-    ("kelola_toko", "Kelola Toko", "pengaturan", ("baca", "tulis")),
+    ("settlement_saldo", "Dana & Saldo Shopee: tab Saldo Penjual", "info-toko", ("baca", "tulis")),
+    ("settlement_pendapatan", "Dana & Saldo Shopee: tab Menunggu Pencairan", "info-toko", ("baca", "tulis")),
+    ("settlement_dana", "Dana & Saldo Shopee: tab Dana Dilepas", "info-toko", ("baca", "tulis")),
+    ("settlement_mutasi", "Dana & Saldo Shopee: tab Mutasi Saldo", "info-toko", ("baca", "tulis")),
+    ("kelola_toko", "Kelola Toko: tab Toko & Sinkronisasi", "pengaturan", ("baca", "tulis")),
+    ("toko_penjualan", "Kelola Toko: tab Toko Internal & Reseller", "pengaturan", ("baca", "tulis")),
     ("push_shopee", "Pengaturan push Shopee", "pengaturan", ("baca", "tulis")),
     ("asisten", "Asisten AI", "pengaturan", ("baca", "tulis")),
-    ("kelola_pengguna", "Kelola Pengguna", "pengaturan", ("baca", "tulis")),
+    ("kelola_pengguna", "Kelola Pengguna: tab Pengguna", "pengaturan", ("baca", "tulis")),
+    ("kelola_role", "Kelola Pengguna: tab Role", "pengaturan", ("baca", "tulis")),
     ("kelola_aplikasi", "Kelola Aplikasi", "pengaturan", ("baca", "tulis")),
     ("kategori_transaksi", "Kategori Transaksi", "pengaturan", ("baca", "tulis")),
 ]
 if any(g not in GRUP_LABEL for _, _, g, _ in HALAMAN):
     raise RuntimeError("HALAMAN memakai grup di luar GRUP_HALAMAN")
 
+# Pages that were split into tabs. Their stored rows are kept (never deleted by the migration) and still open the
+# screens during the change-over; a role saved from the editor gets the tab keys instead (an old app that still sends
+# the page key gets every tab of it at that level).
+USANG: dict[str, tuple[str, ...]] = {
+    "info_toko": ("pengaturan_toko_profil", "pengaturan_toko_pengiriman", "pengaturan_toko_alamat", "pengaturan_toko_libur", "performa_toko"),
+    "settlement": ("settlement_saldo", "settlement_pendapatan", "settlement_dana", "settlement_mutasi"),
+}
+# Tabs added to a page that keeps its key: a role with the page gets the new tab at the same level, once.
+TAB_BARU: dict[str, tuple[str, ...]] = {"kelola_toko": ("toko_penjualan",), "kelola_pengguna": ("kelola_role",)}
+PENANDA_PER_TAB = "migrasi:akses_per_tab_v2"
+
 TINGKAT_HALAMAN = {k: lv for k, _, _, lv in HALAMAN}
+TINGKAT_SEMUA = {**TINGKAT_HALAMAN, **{k: ("baca", "tulis") for k in USANG}}
 
 # What the built-in roles could reach before roles were editable; seeded as the starting checkmarks. The test
 # tests/test_marketplace_erp_peta_akses.py checks these against a snapshot of the old fixed rules.
@@ -147,6 +168,22 @@ async def pastikan_bawaan(session: AsyncSession) -> None:
     await _pisah_pemetaan(session)
     await _beri_belanja_supplier(session)
     await _beri_dari_operasional_umum(session, "belanja_tukang", PENANDA_TUKANG)
+    await _pisah_per_tab(session)
+
+
+async def _pisah_per_tab(session: AsyncSession) -> None:
+    """Once: copy each split page's level onto its tabs (and the new tab of a page that keeps its key), so every role
+    reaches exactly what it reached before. Nothing is deleted; existing tab rows are left as they are. The marker keeps
+    a later removal from being given back."""
+    if await session.get(PengaturanUi, PENANDA_PER_TAB):
+        return
+    sumber = {**USANG, **TAB_BARU}
+    for baris in (await session.scalars(select(RoleHalaman).where(RoleHalaman.halaman.in_(list(sumber))))).all():
+        for h in sumber[baris.halaman]:
+            if await session.get(RoleHalaman, (baris.role_id, h)) is None:
+                session.add(RoleHalaman(role_id=baris.role_id, halaman=h, tingkat=baris.tingkat))
+    session.add(PengaturanUi(id=PENANDA_PER_TAB, teks="1"))
+    await session.flush()
 
 
 async def _beri_belanja_supplier(session: AsyncSession) -> None:
@@ -261,7 +298,7 @@ async def akses_toko(session: AsyncSession, role_id: str | Iterable[str] | None)
 
 def butuh_halaman(halaman: str, perlu: str) -> Callable:
     """FastAPI dependency: the signed-in user's role must reach `halaman` at level `perlu` ("baca" or "tulis")."""
-    assert halaman in TINGKAT_HALAMAN and perlu in TINGKAT
+    assert halaman in TINGKAT_SEMUA and perlu in TINGKAT
 
     async def _inner(
         user: UserMarketplaceErp = Depends(get_current_user_marketplace_erp),
@@ -286,7 +323,13 @@ def _slug(nama: str) -> str:
 
 def _bersih_halaman(halaman: dict[str, str]) -> dict[str, str]:
     out: dict[str, str] = {}
-    for key, tingkat in (halaman or {}).items():
+    halaman = dict(halaman or {})
+    for lama, tab in USANG.items():  # an app from before the split sends the page: it means every tab of it
+        t = halaman.pop(lama, None)
+        if t and t != "tidak":
+            for k in tab:
+                halaman.setdefault(k, t)
+    for key, tingkat in halaman.items():
         if key not in TINGKAT_HALAMAN:
             raise HTTPException(422, f"Halaman '{key}' tidak dikenal")
         if tingkat == "tidak":

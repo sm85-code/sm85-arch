@@ -48,7 +48,7 @@ def test_snapshot_is_complete_and_every_route_has_a_page():
 
 def test_every_page_in_the_rules_is_in_the_registry():
     halaman = {h for _, _, hal in peta_akses.ATURAN for h in hal.split("|")} - {"*"}
-    assert halaman <= set(akses.TINGKAT_HALAMAN)
+    assert halaman <= set(akses.TINGKAT_SEMUA)
 
 
 @pytest.mark.asyncio
