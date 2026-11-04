@@ -79,7 +79,7 @@ ATURAN: list[tuple[re.Pattern, set[str] | None, str]] = [
         (r"^/kategori-transaksi", None, "kategori_transaksi"),
         (r"^/laporan-keuangan/(sumber|saldo-awal|pratinjau|tutup|riwayat|impor-drive)$", None, "laporan_tutup_buku"),
         (r"^/laporan-keuangan/[^/]+/(perbarui|buka-kembali)$", None, "laporan_tutup_buku"),
-        (r"^/laporan-keuangan$", GET, "laporan_keuangan|laporan_tutup_buku"),  # the close panel reads the month's figures
+        (r"^/laporan-keuangan(/operasional|/lembar-manual|/pemasukan-shopee|/saldo-penjual-shopee)?$", GET, "laporan_keuangan|laporan_tutup_buku"),  # the close panel computes live figures from these reads
         (r"^/laporan-keuangan", None, "laporan_keuangan"),
         (r"^/akun/[^/]+/saldo-toko", None, "settlement_saldo|settlement"),
         (r"^/akun/[^/]+/transaksi-dana", None, "settlement_mutasi|settlement"),

@@ -120,3 +120,9 @@ def test_v3_routes():
     assert peta_akses.cari(f"{P}/laporan-keuangan/2026-10-31/buka-kembali", "POST") == ("laporan_tutup_buku", "tulis")
     assert peta_akses.cari(f"{P}/laporan-keuangan/lembar-manual", "PUT") == ("laporan_keuangan", "tulis")
     assert peta_akses.cari(f"{P}/laporan-keuangan", "GET") == ("laporan_keuangan|laporan_tutup_buku", "baca")
+
+
+def test_v3_tutup_buku_reads_sheet_data():
+    for p in ("/operasional", "/lembar-manual"):
+        assert peta_akses.cari(f"{P}/laporan-keuangan{p}", "GET") == ("laporan_keuangan|laporan_tutup_buku", "baca")
+    assert peta_akses.cari(f"{P}/laporan-keuangan/lembar-manual", "PUT")[0] == "laporan_keuangan"
