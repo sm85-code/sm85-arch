@@ -91,3 +91,38 @@ async def test_saving_from_new_editor_drops_the_old_page_row(session):
     await akses.ubah(session, "lama2", "lama2", "", "semua", baru)
     assert await _izin(session, "lama2") == baru
     assert await akses.tingkat_halaman(session, "lama2", "performa_toko|info_toko") is None
+
+
+@pytest.mark.asyncio
+async def test_v3_split_iklan_template_arus_laporan(session):
+    await _role_lama(session, "v3", {"iklan": "tulis", "data_template": "baca", "arus_kas": "tulis", "laporan_keuangan": "baca"})
+    v3 = await session.get(PengaturanUi, akses.PENANDA_PER_TAB_V3)
+    await session.delete(v3)
+    await session.flush()
+    await akses.pastikan_bawaan(session)
+    izin = await _izin(session, "v3")
+    for k in akses.USANG["iklan"]:
+        assert izin[k] == "tulis"
+    assert izin["data_template_inv"] == izin["data_template_po"] == "baca"
+    assert izin["arus_kas_rekening"] == "baca"  # a read-only tab: tulis becomes baca
+    assert izin["laporan_tutup_buku"] == "baca"
+    assert izin["iklan"] == "tulis" and izin["data_template"] == "baca"  # nothing deleted
+
+
+def test_v3_routes():
+    assert peta_akses.cari(f"{P}/akun/1/gmv-max", "POST") == ("iklan_gmv|iklan", "tulis")
+    assert peta_akses.cari(f"{P}/akun/1/iklan/kampanye", "GET")[0] == "iklan_kampanye|iklan"
+    assert peta_akses.cari(f"{P}/akun/1/iklan/agen/aksi", "POST")[0] == "iklan_agen|iklan"
+    assert peta_akses.cari(f"{P}/iklan-toko/harian", "GET")[0] == "iklan_performa|iklan"
+    assert peta_akses.cari(f"{P}/iklan/abc/metrik", "PUT")[0] == "iklan_catatan|iklan"
+    assert peta_akses.cari(f"{P}/processing/document-templates/PO", "PUT") == ("data_template_po|data_template", "tulis")
+    assert peta_akses.cari(f"{P}/laporan-keuangan/tutup", "POST") == ("laporan_tutup_buku", "tulis")
+    assert peta_akses.cari(f"{P}/laporan-keuangan/2026-10-31/buka-kembali", "POST") == ("laporan_tutup_buku", "tulis")
+    assert peta_akses.cari(f"{P}/laporan-keuangan/lembar-manual", "PUT") == ("laporan_keuangan", "tulis")
+    assert peta_akses.cari(f"{P}/laporan-keuangan", "GET") == ("laporan_keuangan|laporan_tutup_buku", "baca")
+
+
+def test_v3_tutup_buku_reads_sheet_data():
+    for p in ("/operasional", "/lembar-manual"):
+        assert peta_akses.cari(f"{P}/laporan-keuangan{p}", "GET") == ("laporan_keuangan|laporan_tutup_buku", "baca")
+    assert peta_akses.cari(f"{P}/laporan-keuangan/lembar-manual", "PUT")[0] == "laporan_keuangan"

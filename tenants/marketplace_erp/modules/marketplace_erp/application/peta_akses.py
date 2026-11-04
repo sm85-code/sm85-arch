@@ -20,6 +20,8 @@ LIHAT = PROSES + "|data_tukang|data_supplier|" + HARGA + "|data_katalog_otomatis
 PREFIX_API = "/api/marketplace-erp"
 # Dana & Saldo Shopee and Pengaturan Toko were one page each; the old key still opens them until a role is saved again.
 SETTLEMENT = "settlement_saldo|settlement_pendapatan|settlement_dana|settlement_mutasi|settlement"
+IKLAN = "iklan_performa|iklan_kampanye|iklan_gmv|iklan_agen|iklan_catatan|iklan"
+TEMPLATE = "data_template_inv|data_template_po|data_template"
 PENGATURAN_TOKO = "pengaturan_toko_profil|pengaturan_toko_pengiriman|pengaturan_toko_alamat|pengaturan_toko_libur|info_toko"
 
 # (regex on the path, methods or None for all, halaman)
@@ -62,7 +64,9 @@ ATURAN: list[tuple[re.Pattern, set[str] | None, str]] = [
         # (processing_workflow.izin_harga).
         (r"^/processing/candidates(/|$)", GET, "processing_tukang|processing_supplier"),
         (r"^/processing/jobs(/|$)", None, PROSES),  # which tab a change belongs to: processing_workflow.izin_tab
-        (r"^/processing/document-templates", None, "data_template"),
+        (r"^/processing/document-templates/INV$", None, "data_template_inv|data_template"),
+        (r"^/processing/document-templates/PO$", None, "data_template_po|data_template"),
+        (r"^/processing/document-templates", None, TEMPLATE),
         (r"^/processing/parties/tukang", {"PUT"}, "data_tukang"),
         (r"^/processing/parties/supplier", {"PUT"}, "data_supplier"),
         (r"^/processing/paint-colors", {"PUT"}, "data_tarif_pengecatan"),
@@ -73,6 +77,9 @@ ATURAN: list[tuple[re.Pattern, set[str] | None, str]] = [
         (r"^/processing(/processing)?/(data|prices|paint-colors|production-structure|parties|supplier-catalog)", GET, LIHAT),
         # Keuangan
         (r"^/kategori-transaksi", None, "kategori_transaksi"),
+        (r"^/laporan-keuangan/(sumber|saldo-awal|pratinjau|tutup|riwayat|impor-drive)$", None, "laporan_tutup_buku"),
+        (r"^/laporan-keuangan/[^/]+/(perbarui|buka-kembali)$", None, "laporan_tutup_buku"),
+        (r"^/laporan-keuangan(/operasional|/lembar-manual|/pemasukan-shopee|/saldo-penjual-shopee)?$", GET, "laporan_keuangan|laporan_tutup_buku"),  # the close panel computes live figures from these reads
         (r"^/laporan-keuangan", None, "laporan_keuangan"),
         (r"^/akun/[^/]+/saldo-toko", None, "settlement_saldo|settlement"),
         (r"^/akun/[^/]+/transaksi-dana", None, "settlement_mutasi|settlement"),
@@ -89,8 +96,16 @@ ATURAN: list[tuple[re.Pattern, set[str] | None, str]] = [
         # Manual catalog tools and scheduled automation have different page permissions.
         (r"^/akun/[^/]+/produk-boost$", None, "katalog_lanjutan"),
         (r"^/akun/[^/]+/otomasi-produk", None, "otomasi"),
-        (r"^/akun/[^/]+/(sync/iklan|iklan|gmv-max)", None, "iklan"),
-        (r"^/iklan", None, "iklan"),
+        (r"^/akun/[^/]+/iklan/agen", None, "iklan_agen|iklan"),
+        (r"^/iklan/agen", None, "iklan_agen|iklan"),
+        (r"^/akun/[^/]+/iklan/performa-jam", None, "iklan_performa|iklan"),
+        (r"^/iklan-toko", None, "iklan_performa|iklan"),
+        (r"^/akun/[^/]+/gmv-max", None, "iklan_gmv|iklan"),
+        (r"^/akun/[^/]+/iklan/(kampanye|saran|saran-ai|modal|shopee)", None, "iklan_kampanye|iklan"),
+        (r"^/iklan/shopee", None, "iklan_kampanye|iklan"),
+        (r"^/akun/[^/]+/sync/iklan", None, IKLAN),  # one sync feeds every tab
+        (r"^/iklan(/|$)", None, "iklan_catatan|iklan"),
+        (r"^/akun/[^/]+/iklan", None, IKLAN),
         # Pengaturan
         (r"^/shopee/push/", None, "push_shopee"),
         (r"^/toko-penjualan(/|$)", None, "toko_penjualan"),

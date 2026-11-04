@@ -188,9 +188,9 @@ async def test_a_role_that_had_processing_keeps_every_data_menu_once(sesi_peran)
     await akses.pastikan_bawaan(sesi_peran)
     await sesi_peran.commit()
     menu = [k for k, _, g, _ in akses.HALAMAN if g == "data-produksi"]
-    assert len(menu) == 8
+    assert len(menu) == 9  # Template is two tabs (INV, PO)
     for rid, tingkat in (("lama", "baca"), ("antara", "tulis")):
-        assert [(await sesi_peran.get(RoleHalaman, (rid, k))).tingkat for k in menu] == [tingkat] * 8
+        assert [(await sesi_peran.get(RoleHalaman, (rid, k))).tingkat for k in menu] == [tingkat] * 9
     assert await sesi_peran.get(RoleHalaman, ("antara", "data_produksi")) is None
     tab = [k for k, _, g, _ in akses.HALAMAN if k.startswith("processing_")]
     assert len(tab) == 4 and [(await sesi_peran.get(RoleHalaman, ("lama", k))).tingkat for k in tab] == ["baca"] * 4
