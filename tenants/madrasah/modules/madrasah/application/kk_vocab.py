@@ -1,0 +1,235 @@
+"""Official Dukcapil vocabularies printed on the Kartu Keluarga (KK), used by
+kk_parser.py for fuzzy matching of OCR'd column values.
+
+Each mapping is ``printed/alias spelling -> canonical output value``. Several
+aliases can map to the same canonical value (e.g. old/new spellings, or the
+abbreviated form actually printed on the card such as "TIDAK/BLM SEKOLAH").
+
+Canonical output casing is kept backward compatible with what the API returned
+before these lists existed: jenis kelamin as "L"/"P", agama and status hubungan
+in Title Case (the admin form's <select> options), everything that is new
+(pendidikan, pekerjaan, status perkawinan, kewarganegaraan) in the uppercase
+spelling printed on the card.
+"""
+from __future__ import annotations
+
+JENIS_KELAMIN = {
+    "LAKI-LAKI": "L",
+    "LAKI LAKI": "L",
+    "PEREMPUAN": "P",
+}
+
+AGAMA = {
+    "ISLAM": "Islam",
+    "KRISTEN": "Kristen",
+    "KATOLIK": "Katolik",
+    "KATHOLIK": "Katolik",
+    "HINDU": "Hindu",
+    "BUDHA": "Buddha",
+    "BUDDHA": "Buddha",
+    "KHONGHUCU": "Khonghucu",
+    "KONGHUCU": "Khonghucu",
+    "KONGHUCHU": "Khonghucu",
+    "KEPERCAYAAN TERHADAP TUHAN YME": "Kepercayaan",
+    "KEPERCAYAAN TERHADAP TUHAN YANG MAHA ESA": "Kepercayaan",
+    "ALIRAN KEPERCAYAAN": "Kepercayaan",
+    "KEPERCAYAAN": "Kepercayaan",
+}
+
+PENDIDIKAN = {
+    "TIDAK/BLM SEKOLAH": "TIDAK/BLM SEKOLAH",
+    "TIDAK/BELUM SEKOLAH": "TIDAK/BLM SEKOLAH",
+    "BELUM TAMAT SD/SEDERAJAT": "BELUM TAMAT SD/SEDERAJAT",
+    "TAMAT SD/SEDERAJAT": "TAMAT SD/SEDERAJAT",
+    "SLTP/SEDERAJAT": "SLTP/SEDERAJAT",
+    "SLTA/SEDERAJAT": "SLTA/SEDERAJAT",
+    "DIPLOMA I/II": "DIPLOMA I/II",
+    "AKADEMI/DIPLOMA III/S. MUDA": "AKADEMI/DIPLOMA III/S. MUDA",
+    "AKADEMI/DIPLOMA III/SARJANA MUDA": "AKADEMI/DIPLOMA III/S. MUDA",
+    "DIPLOMA IV/STRATA I": "DIPLOMA IV/STRATA I",
+    "STRATA II": "STRATA II",
+    "STRATA III": "STRATA III",
+}
+
+_PEKERJAAN_LIST = (
+    "BELUM/TIDAK BEKERJA",
+    "MENGURUS RUMAH TANGGA",
+    "PELAJAR/MAHASISWA",
+    "PENSIUNAN",
+    "PEGAWAI NEGERI SIPIL",
+    "PEGAWAI NEGERI SIPIL (PNS)",
+    "TENTARA NASIONAL INDONESIA",
+    "TENTARA NASIONAL INDONESIA (TNI)",
+    "KEPOLISIAN RI",
+    "KEPOLISIAN RI (POLRI)",
+    "PERDAGANGAN",
+    "PETANI/PEKEBUN",
+    "PETERNAK",
+    "NELAYAN/PERIKANAN",
+    "INDUSTRI",
+    "KONSTRUKSI",
+    "TRANSPORTASI",
+    "KARYAWAN SWASTA",
+    "KARYAWAN BUMN",
+    "KARYAWAN BUMD",
+    "KARYAWAN HONORER",
+    "BURUH HARIAN LEPAS",
+    "BURUH TANI/PERKEBUNAN",
+    "BURUH NELAYAN/PERIKANAN",
+    "BURUH PETERNAKAN",
+    "PEMBANTU RUMAH TANGGA",
+    "TUKANG CUKUR",
+    "TUKANG LISTRIK",
+    "TUKANG BATU",
+    "TUKANG KAYU",
+    "TUKANG SOL SEPATU",
+    "TUKANG LAS/PANDAI BESI",
+    "TUKANG JAHIT",
+    "TUKANG GIGI",
+    "PENATA RIAS",
+    "PENATA BUSANA",
+    "PENATA RAMBUT",
+    "MEKANIK",
+    "SENIMAN",
+    "TABIB",
+    "PARAJI",
+    "PERANCANG BUSANA",
+    "PENTERJEMAH",
+    "IMAM MASJID",
+    "PENDETA",
+    "PASTOR",
+    "WARTAWAN",
+    "USTADZ/MUBALIGH",
+    "JURU MASAK",
+    "PROMOTOR ACARA",
+    "ANGGOTA DPR-RI",
+    "ANGGOTA DPD",
+    "ANGGOTA BPK",
+    "PRESIDEN",
+    "WAKIL PRESIDEN",
+    "ANGGOTA MAHKAMAH KONSTITUSI",
+    "ANGGOTA KABINET/KEMENTERIAN",
+    "DUTA BESAR",
+    "GUBERNUR",
+    "WAKIL GUBERNUR",
+    "BUPATI",
+    "WAKIL BUPATI",
+    "WALIKOTA",
+    "WAKIL WALIKOTA",
+    "ANGGOTA DPRD PROVINSI",
+    "ANGGOTA DPRD KABUPATEN/KOTA",
+    "DOSEN",
+    "GURU",
+    "PILOT",
+    "PENGACARA",
+    "NOTARIS",
+    "ARSITEK",
+    "AKUNTAN",
+    "KONSULTAN",
+    "DOKTER",
+    "BIDAN",
+    "PERAWAT",
+    "APOTEKER",
+    "PSIKIATER/PSIKOLOG",
+    "PENYIAR TELEVISI",
+    "PENYIAR RADIO",
+    "PELAUT",
+    "PENELITI",
+    "SOPIR",
+    "PIALANG",
+    "PARANORMAL",
+    "PEDAGANG",
+    "PERANGKAT DESA",
+    "KEPALA DESA",
+    "BIARAWATI",
+    "WIRASWASTA",
+    "BURUH",
+    "KARYAWAN",
+    "LAINNYA",
+)
+PEKERJAAN = {p: p for p in _PEKERJAAN_LIST}
+
+STATUS_PERKAWINAN = {
+    "BELUM KAWIN": "BELUM KAWIN",
+    "KAWIN": "KAWIN",
+    "KAWIN TERCATAT": "KAWIN TERCATAT",
+    "KAWIN BELUM TERCATAT": "KAWIN BELUM TERCATAT",
+    "KAWIN TIDAK TERCATAT": "KAWIN TIDAK TERCATAT",
+    "CERAI HIDUP": "CERAI HIDUP",
+    "CERAI MATI": "CERAI MATI",
+    "CERAI HIDUP TERCATAT": "CERAI HIDUP TERCATAT",
+    "CERAI MATI TERCATAT": "CERAI MATI TERCATAT",
+}
+
+STATUS_HUBUNGAN = {
+    "KEPALA KELUARGA": "Kepala Keluarga",
+    "SUAMI": "Suami",
+    "ISTRI": "Istri",
+    "ANAK": "Anak",
+    "MENANTU": "Menantu",
+    "CUCU": "Cucu",
+    "ORANG TUA": "Orang Tua",
+    "ORANGTUA": "Orang Tua",
+    "MERTUA": "Mertua",
+    "FAMILI LAIN": "Famili Lain",
+    "PEMBANTU": "Pembantu",
+    "LAINNYA": "Lainnya",
+}
+
+KEWARGANEGARAAN = {
+    "WNI": "WNI",
+    "WNA": "WNA",
+}
+
+# Two-digit NIK / nomor KK province prefix -> province name as printed on KK.
+KODE_PROVINSI = {
+    "11": "ACEH",
+    "12": "SUMATERA UTARA",
+    "13": "SUMATERA BARAT",
+    "14": "RIAU",
+    "15": "JAMBI",
+    "16": "SUMATERA SELATAN",
+    "17": "BENGKULU",
+    "18": "LAMPUNG",
+    "19": "KEPULAUAN BANGKA BELITUNG",
+    "21": "KEPULAUAN RIAU",
+    "31": "DKI JAKARTA",
+    "32": "JAWA BARAT",
+    "33": "JAWA TENGAH",
+    "34": "DI YOGYAKARTA",
+    "35": "JAWA TIMUR",
+    "36": "BANTEN",
+    "51": "BALI",
+    "52": "NUSA TENGGARA BARAT",
+    "53": "NUSA TENGGARA TIMUR",
+    "61": "KALIMANTAN BARAT",
+    "62": "KALIMANTAN TENGAH",
+    "63": "KALIMANTAN SELATAN",
+    "64": "KALIMANTAN TIMUR",
+    "65": "KALIMANTAN UTARA",
+    "71": "SULAWESI UTARA",
+    "72": "SULAWESI TENGAH",
+    "73": "SULAWESI SELATAN",
+    "74": "SULAWESI TENGGARA",
+    "75": "GORONTALO",
+    "76": "SULAWESI BARAT",
+    "81": "MALUKU",
+    "82": "MALUKU UTARA",
+    "91": "PAPUA",
+    "92": "PAPUA BARAT",
+    "93": "PAPUA SELATAN",
+    "94": "PAPUA TENGAH",
+    "95": "PAPUA PEGUNUNGAN",
+    "96": "PAPUA BARAT DAYA",
+}
+
+PROVINSI = {name: name for name in KODE_PROVINSI.values()}
+PROVINSI.update(
+    {
+        "DAERAH ISTIMEWA YOGYAKARTA": "DI YOGYAKARTA",
+        "D.I. YOGYAKARTA": "DI YOGYAKARTA",
+        "DKI JAKARTA RAYA": "DKI JAKARTA",
+        "NANGGROE ACEH DARUSSALAM": "ACEH",
+        "BANGKA BELITUNG": "KEPULAUAN BANGKA BELITUNG",
+    }
+)

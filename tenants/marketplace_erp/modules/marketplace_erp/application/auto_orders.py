@@ -1,4 +1,12 @@
-"""Opt-in drop-off dispatch. One durable attempt per order, never automatic replay."""
+"""Opt-in drop-off dispatch. One durable attempt per order, never automatic replay.
+
+Exception: Shopee may report READY_TO_SHIP while the package is still pending
+("Tertunda", e.g. fraud/payment review) and refuses get_shipping_parameter.
+That refusal happens before anything is sent, so the attempt is parked as
+"waiting" and re-checked every WAIT_RECHECK until the package is ready, for up
+to WAIT_WINDOW after the order time (pending can last ~24h). No cap applies
+while pending; once Shopee accepts the request the normal single attempt runs.
+"""
 import asyncio
 import logging
 from datetime import datetime, timedelta, timezone
@@ -9,6 +17,15 @@ from ..infrastructure.models import AutoOrderPolicy, AutoOrderAttempt, AkunMarke
 from ..infrastructure.adapters import erp_shopee
 
 logger = logging.getLogger(__name__)
+
+WAIT_RECHECK = timedelta(minutes=5)
+WAIT_WINDOW = timedelta(days=3)
+PENDING_MARKERS = ("can only be obtained when package is ready to be shipped",)
+
+
+def is_pending_error(message) -> bool:
+    text = str(message or "").lower()
+    return any(m in text for m in PENDING_MARKERS)
 
 
 def now():
@@ -24,12 +41,33 @@ async def claim(session):
         ~select(AutoOrderAttempt.pesanan_id).where(AutoOrderAttempt.pesanan_id == Pesanan.id).exists(),
     ).order_by(Pesanan.created_at, Pesanan.id).limit(1).with_for_update(of=Pesanan, skip_locked=True))).scalar_one_or_none()
     if row is None:
+        ident = await claim_waiting(session)
         await session.commit()
-        return None
+        return ident
     ident = row.id
     session.add(AutoOrderAttempt(pesanan_id=ident, akun_id=row.akun_id, status="running", message="Memeriksa kesiapan drop off."))
     await session.commit()  # Durable claim precedes every provider call.
     return ident
+
+
+async def claim_waiting(session):
+    """Re-claim an order parked while Shopee still had it pending (Tertunda)."""
+    current = now()
+    pending_blocked = (AutoOrderAttempt.status == "blocked") & AutoOrderAttempt.message.contains(PENDING_MARKERS[0])
+    row = (await session.execute(select(AutoOrderAttempt).join(Pesanan, Pesanan.id == AutoOrderAttempt.pesanan_id).join(AutoOrderPolicy, AutoOrderPolicy.akun_id == Pesanan.akun_id).join(AkunMarketplace, AkunMarketplace.id == Pesanan.akun_id).where(
+        AutoOrderPolicy.enabled.is_(True), AkunMarketplace.status != "nonaktif", Pesanan.platform == "shopee",
+        Pesanan.status == "to_ship", Pesanan.status_marketplace == "READY_TO_SHIP",
+        func.coalesce(Pesanan.dipesan_at, Pesanan.created_at) >= AutoOrderPolicy.enabled_at,
+        func.coalesce(Pesanan.dipesan_at, Pesanan.created_at) >= current - WAIT_WINDOW,
+        (AutoOrderAttempt.status == "waiting") | pending_blocked,
+        AutoOrderAttempt.updated_at <= current - WAIT_RECHECK,
+    ).order_by(AutoOrderAttempt.updated_at, AutoOrderAttempt.pesanan_id).limit(1).with_for_update(of=AutoOrderAttempt, skip_locked=True))).scalar_one_or_none()
+    if row is None:
+        return None
+    row.status, row.message = "running", "Memeriksa ulang kesiapan drop off (sebelumnya tertunda di Shopee)."
+    row.created_at = current  # Reaper timeout counts from this re-claim.
+    logger.info("Auto-order recheck pesanan=%s akun=%s (previously pending at Shopee)", row.pesanan_id, row.akun_id)
+    return row.pesanan_id
 
 
 async def run_one(factory, ident):
@@ -81,10 +119,19 @@ async def run_one(factory, ident):
                 await services.proses_pesanan_marketplace(session, ident, settings, auto_authorized=True)
             attempt.status, attempt.message = "succeeded", "Pengiriman drop off diproses. Siapkan paket dan serahkan ke gerai."
             await session.commit()
+            logger.info("Auto-order pesanan=%s result=succeeded", ident)
         except Exception as exc:
             await session.rollback()
             attempt = await session.get(AutoOrderAttempt, ident)
+            detail = str(getattr(exc, "detail", "") or exc)
+            if not sent and is_pending_error(detail):
+                attempt.status = "waiting"
+                attempt.message = "Pesanan masih tertunda di Shopee; dicoba lagi otomatis setelah siap dikirim."
+                logger.info("Auto-order pesanan=%s still pending at Shopee; will recheck", ident)
+                await session.commit()
+                return
             attempt.status = "unknown" if sent else "blocked"
+            logger.info("Auto-order pesanan=%s result=%s", ident, attempt.status)
             attempt.message = ("Hasil pengiriman belum pasti. Periksa Seller Centre sebelum tindakan lain." if sent else str(getattr(exc, "detail", "Pemeriksaan gagal; proses manual setelah diperiksa.")))[:1000]
             await session.commit()
         except asyncio.CancelledError:
@@ -98,6 +145,7 @@ async def run_forever(factory):
         if not erp_shopee.live_sync_enabled():
             continue
         try:
+            logger.info("Auto-order sweep tick")
             for _ in range(10):
                 async with factory() as session:
                     ident = await claim(session)
