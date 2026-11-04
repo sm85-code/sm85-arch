@@ -77,20 +77,27 @@ HALAMAN: list[tuple[str, str, str, tuple[str, ...]]] = [
     ("data_katalog_manual", "Katalog Produk Non Kayu: tab Katalog Manual", "data-produksi", ("baca", "tulis")),
     ("data_tarif_pengecatan", "Tarif Pengecatan", "data-produksi", ("baca", "tulis")),
     ("data_tarif_packing", "Tarif Packing", "data-produksi", ("baca", "tulis")),
-    ("data_template", "Template", "data-produksi", ("baca", "tulis")),
+    ("data_template_inv", "Template: tab Invoice (INV)", "data-produksi", ("baca", "tulis")),
+    ("data_template_po", "Template: tab Purchase Order (PO)", "data-produksi", ("baca", "tulis")),
     ("operasional_umum", "Kas Utama", "keuangan", ("baca", "tulis")),
     ("operasional_packing", "Kas Kecil", "keuangan", ("baca", "tulis")),
     ("belanja_supplier", "Belanja Supplier", "keuangan", ("baca", "tulis")),
     ("belanja_tukang", "Belanja Tukang", "keuangan", ("baca", "tulis")),
-    ("arus_kas", "Arus Kas (tulis = centang)", "keuangan", ("baca", "tulis")),
-    ("laporan_keuangan", "Laporan Keuangan", "keuangan", ("baca", "tulis")),
+    ("arus_kas", "Arus Kas: tab Arus Kas (tulis = centang)", "keuangan", ("baca", "tulis")),
+    ("arus_kas_rekening", "Arus Kas: tab Rekening", "keuangan", ("baca",)),
+    ("laporan_keuangan", "Laporan Keuangan: Arus Kas, Transaksi, Laba/Rugi, Neraca", "keuangan", ("baca", "tulis")),
+    ("laporan_tutup_buku", "Laporan Keuangan: tab Tutup Buku", "keuangan", ("baca", "tulis")),
     ("pengaturan_toko_profil", "Pengaturan Toko: tab Profil", "info-toko", ("baca", "tulis")),
     ("pengaturan_toko_pengiriman", "Pengaturan Toko: tab Pengiriman", "info-toko", ("baca", "tulis")),
     ("pengaturan_toko_alamat", "Pengaturan Toko: tab Alamat", "info-toko", ("baca", "tulis")),
     ("pengaturan_toko_libur", "Pengaturan Toko: tab Mode Libur", "info-toko", ("baca", "tulis")),
     ("performa_toko", "Performa Toko", "info-toko", ("baca", "tulis")),
     ("otomasi", "Otomasi produk dan pesanan", "info-toko", ("baca", "tulis")),
-    ("iklan", "Iklan", "info-toko", ("baca", "tulis")),
+    ("iklan_performa", "Iklan: tab Performa", "info-toko", ("baca", "tulis")),
+    ("iklan_kampanye", "Iklan: tab Kampanye Shopee", "info-toko", ("baca", "tulis")),
+    ("iklan_gmv", "Iklan: tab Shop GMV Max", "info-toko", ("baca", "tulis")),
+    ("iklan_agen", "Iklan: tab Agen", "info-toko", ("baca", "tulis")),
+    ("iklan_catatan", "Iklan: tab Catatan", "info-toko", ("baca", "tulis")),
     ("settlement_saldo", "Dana & Saldo Shopee: tab Saldo Penjual", "info-toko", ("baca", "tulis")),
     ("settlement_pendapatan", "Dana & Saldo Shopee: tab Menunggu Pencairan", "info-toko", ("baca", "tulis")),
     ("settlement_dana", "Dana & Saldo Shopee: tab Dana Dilepas", "info-toko", ("baca", "tulis")),
@@ -113,10 +120,18 @@ if any(g not in GRUP_LABEL for _, _, g, _ in HALAMAN):
 USANG: dict[str, tuple[str, ...]] = {
     "info_toko": ("pengaturan_toko_profil", "pengaturan_toko_pengiriman", "pengaturan_toko_alamat", "pengaturan_toko_libur", "performa_toko"),
     "settlement": ("settlement_saldo", "settlement_pendapatan", "settlement_dana", "settlement_mutasi"),
+    "iklan": ("iklan_performa", "iklan_kampanye", "iklan_gmv", "iklan_agen", "iklan_catatan"),
+    "data_template": ("data_template_inv", "data_template_po"),
 }
+# Splits added later, migrated under their own marker (the first marker has already run on live data).
+SPLIT_V3 = ("iklan", "data_template", "arus_kas", "laporan_keuangan")
 # Tabs added to a page that keeps its key: a role with the page gets the new tab at the same level, once.
-TAB_BARU: dict[str, tuple[str, ...]] = {"kelola_toko": ("toko_penjualan",), "kelola_pengguna": ("kelola_role",)}
+TAB_BARU: dict[str, tuple[str, ...]] = {
+    "kelola_toko": ("toko_penjualan",), "kelola_pengguna": ("kelola_role",),
+    "arus_kas": ("arus_kas_rekening",), "laporan_keuangan": ("laporan_tutup_buku",),
+}
 PENANDA_PER_TAB = "migrasi:akses_per_tab_v2"
+PENANDA_PER_TAB_V3 = "migrasi:akses_per_tab_v3"
 
 TINGKAT_HALAMAN = {k: lv for k, _, _, lv in HALAMAN}
 TINGKAT_SEMUA = {**TINGKAT_HALAMAN, **{k: ("baca", "tulis") for k in USANG}}
@@ -175,15 +190,21 @@ async def _pisah_per_tab(session: AsyncSession) -> None:
     """Once: copy each split page's level onto its tabs (and the new tab of a page that keeps its key), so every role
     reaches exactly what it reached before. Nothing is deleted; existing tab rows are left as they are. The marker keeps
     a later removal from being given back."""
-    if await session.get(PengaturanUi, PENANDA_PER_TAB):
-        return
-    sumber = {**USANG, **TAB_BARU}
-    for baris in (await session.scalars(select(RoleHalaman).where(RoleHalaman.halaman.in_(list(sumber))))).all():
-        for h in sumber[baris.halaman]:
-            if await session.get(RoleHalaman, (baris.role_id, h)) is None:
-                session.add(RoleHalaman(role_id=baris.role_id, halaman=h, tingkat=baris.tingkat))
-    session.add(PengaturanUi(id=PENANDA_PER_TAB, teks="1"))
-    await session.flush()
+    semua = {**USANG, **TAB_BARU}
+    tahap = [
+        (PENANDA_PER_TAB, {k: v for k, v in semua.items() if k not in SPLIT_V3}),
+        (PENANDA_PER_TAB_V3, {k: v for k, v in semua.items() if k in SPLIT_V3}),
+    ]
+    for penanda, sumber in tahap:
+        if await session.get(PengaturanUi, penanda):
+            continue
+        for baris in (await session.scalars(select(RoleHalaman).where(RoleHalaman.halaman.in_(list(sumber))))).all():
+            for h in sumber[baris.halaman]:
+                tingkat = baris.tingkat if baris.tingkat in TINGKAT_HALAMAN[h] else TINGKAT_HALAMAN[h][-1]
+                if await session.get(RoleHalaman, (baris.role_id, h)) is None:
+                    session.add(RoleHalaman(role_id=baris.role_id, halaman=h, tingkat=tingkat))
+        session.add(PengaturanUi(id=penanda, teks="1"))
+        await session.flush()
 
 
 async def _beri_belanja_supplier(session: AsyncSession) -> None:
@@ -328,7 +349,7 @@ def _bersih_halaman(halaman: dict[str, str]) -> dict[str, str]:
         t = halaman.pop(lama, None)
         if t and t != "tidak":
             for k in tab:
-                halaman.setdefault(k, t)
+                halaman.setdefault(k, t if t in TINGKAT_HALAMAN[k] else TINGKAT_HALAMAN[k][-1])
     for key, tingkat in halaman.items():
         if key not in TINGKAT_HALAMAN:
             raise HTTPException(422, f"Halaman '{key}' tidak dikenal")

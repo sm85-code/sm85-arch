@@ -54,7 +54,7 @@ def test_the_loop_is_off_by_default_and_the_route_is_an_ads_write(monkeypatch):
     assert agen_jadwal.interval_seconds() == 0
     monkeypatch.setenv("AGEN_IKLAN_JADWAL_MENIT", "15")
     assert agen_jadwal.interval_seconds() == 900
-    assert peta_akses.cari("/api/marketplace-erp/akun/ABC/iklan/agen/jadwal", "PUT") == ("iklan", "tulis")
+    assert peta_akses.cari("/api/marketplace-erp/akun/ABC/iklan/agen/jadwal", "PUT") == ("iklan_agen|iklan", "tulis")
     with pytest.raises(ValidationError):
         agen_jadwal.JadwalIn(campaign_id=7, jam=[])
 

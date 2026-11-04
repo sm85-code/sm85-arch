@@ -65,18 +65,18 @@ async def test_list_has_builtin_roles_and_the_pages(session):
     assert {"admin", "owner", "staff", "staf_keuangan", "staf_operasional", "staf_produksi"} <= set(by_id)
     assert by_id["admin"]["terkunci"] is True
     assert by_id["admin"]["halaman"] == {k: lv[-1] for k, lv in akses.TINGKAT_HALAMAN.items()}  # the highest level of every page
-    assert by_id["staf_keuangan"]["halaman"] == {"operasional_umum": "tulis", "operasional_packing": "tulis", "arus_kas": "tulis", "belanja_supplier": "tulis", "belanja_tukang": "tulis"}
+    assert by_id["staf_keuangan"]["halaman"] == {"operasional_umum": "tulis", "operasional_packing": "tulis", "arus_kas": "tulis", "arus_kas_rekening": "baca", "belanja_supplier": "tulis", "belanja_tukang": "tulis"}
     assert by_id["owner"]["halaman"] == {**akses._OWNER, "belanja_supplier": "baca", "belanja_tukang": "baca"}  # given with Operasional Umum
-    assert by_id["staff"]["halaman"] == akses._STAFF
+    assert by_id["staff"]["halaman"] == {**akses._STAFF, "arus_kas_rekening": "baca"}  # given with Arus Kas
     assert by_id["staff"]["akses_toko"] == "ditugaskan" and by_id["owner"]["akses_toko"] == "semua"
     pages = {h["id"]: h for h in data["halaman"]}
-    assert {"pesanan", "produk", "iklan", "operasional_umum", "arus_kas", "kelola_pengguna"} <= set(pages)
+    assert {"pesanan", "produk", "iklan_kampanye", "operasional_umum", "arus_kas", "kelola_pengguna"} <= set(pages)
     assert pages["dashboard"]["tingkat"] == ["baca"] and pages["sinkron_shopee"]["tingkat"] == ["tulis"]
     assert pages["pesanan"]["tingkat"] == ["baca", "tulis"] and pages["pesanan"]["grup"] == "Harian"
     assert pages["pesanan"]["grup_id"] == "harian"  # the app sidebar group id, not a display text
     # Every row carries a group the app knows; the group texts themselves come from Kelola Aplikasi (grup:<id>).
     assert {h["grup_id"] for h in data["halaman"]} == {g for g, _ in akses.GRUP_HALAMAN}
-    assert pages["iklan"]["grup_id"] == "info-toko" and pages["settlement_saldo"]["grup_id"] == "info-toko" and "settlement" not in pages
+    assert pages["iklan_agen"]["grup_id"] == "info-toko" and pages["settlement_saldo"]["grup_id"] == "info-toko" and "settlement" not in pages
     assert pages["kategori_transaksi"]["grup_id"] == "pengaturan"
 
 

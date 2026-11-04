@@ -18,10 +18,10 @@ def test_guardrail_module_does_not_call_shopee_and_schema_does_not_drop_anything
 
     ddl = inspect.getsource(models_agen).lower()
     assert "drop table" not in ddl and "drop column" not in ddl
-    assert peta_akses.cari("/api/marketplace-erp/akun/ABC/iklan/agen/batas", "GET") == ("iklan", "baca")
-    assert peta_akses.cari("/api/marketplace-erp/akun/ABC/iklan/agen/batas", "PUT") == ("iklan", "tulis")
-    assert peta_akses.cari("/api/marketplace-erp/iklan/agen/stop", "PUT") == ("iklan", "tulis")
-    assert peta_akses.cari("/api/marketplace-erp/iklan/agen/audit", "GET") == ("iklan", "baca")
+    assert peta_akses.cari("/api/marketplace-erp/akun/ABC/iklan/agen/batas", "GET") == ("iklan_agen|iklan", "baca")
+    assert peta_akses.cari("/api/marketplace-erp/akun/ABC/iklan/agen/batas", "PUT") == ("iklan_agen|iklan", "tulis")
+    assert peta_akses.cari("/api/marketplace-erp/iklan/agen/stop", "PUT") == ("iklan_agen|iklan", "tulis")
+    assert peta_akses.cari("/api/marketplace-erp/iklan/agen/audit", "GET") == ("iklan_agen|iklan", "baca")
 
 
 def test_percent_and_money_limits_reject_bad_values():

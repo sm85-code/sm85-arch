@@ -11,7 +11,7 @@ from tenants.marketplace_erp.modules.marketplace_erp.infrastructure import shope
 def test_summary_route_is_an_ads_page_read():
     from tenants.marketplace_erp.modules.marketplace_erp.application import peta_akses
 
-    assert peta_akses.cari("/api/marketplace-erp/akun/ABC/iklan/agen/ringkasan", "GET") == ("iklan", "baca")
+    assert peta_akses.cari("/api/marketplace-erp/akun/ABC/iklan/agen/ringkasan", "GET") == ("iklan_agen|iklan", "baca")
 
 
 def test_auto_product_ads_stay_callable_but_are_flagged_deprecated():

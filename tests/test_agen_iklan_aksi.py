@@ -63,7 +63,7 @@ async def sesi():
 
 def test_percent_cap_is_inclusive_at_the_limit():
     assert agen_aksi.persen_ubah(Decimal("50000"), Decimal("60000")) == 20
-    assert peta_akses.cari("/api/marketplace-erp/akun/ABC/iklan/agen/aksi", "POST") == ("iklan", "tulis")
+    assert peta_akses.cari("/api/marketplace-erp/akun/ABC/iklan/agen/aksi", "POST") == ("iklan_agen|iklan", "tulis")
 
 
 @pytest.mark.asyncio

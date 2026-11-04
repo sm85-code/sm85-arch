@@ -4,7 +4,7 @@ Everything else under Laporan Keuangan stays admin-only. Staff may only tick ("s
 rows or names, so saving here refuses any change besides the tick marks.
 """
 
-from fastapi import APIRouter, Depends, HTTPException, Query, status
+from fastapi import APIRouter, Depends, HTTPException, Query, Request, status
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from tenants.marketplace_erp.modules.marketplace_erp.application import financial_manual as manual
@@ -32,7 +32,20 @@ async def centang(
     raise HTTPException(status.HTTP_403_FORBIDDEN, "Akses ditolak")
 
 
-router = APIRouter(prefix="/arus-kas", tags=["Arus Kas"], dependencies=[Depends(baca)])
+_baca_rekening = butuh_halaman("arus_kas_rekening", "baca")
+
+
+async def baca_tab(
+    request: Request,
+    user: UserMarketplaceErp = Depends(get_current_user_marketplace_erp),
+    session: AsyncSession = Depends(get_db_marketplace_erp),
+) -> UserMarketplaceErp:
+    """Tab Rekening (the carpenters' bank accounts) has its own page; every other route is tab Arus Kas."""
+    cek = _baca_rekening if request.url.path.rstrip("/").endswith("/rekening-tukang") else baca
+    return await cek(user=user, session=session)
+
+
+router = APIRouter(prefix="/arus-kas", tags=["Arus Kas"], dependencies=[Depends(baca_tab)])
 
 TANDA = "ok:"
 PERIODE = Query(pattern=r"^\d{4}-\d{2}$")
