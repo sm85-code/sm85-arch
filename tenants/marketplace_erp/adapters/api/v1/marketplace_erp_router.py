@@ -34,6 +34,7 @@ from .chat_router import router as chat_router
 from .arus_kas_router import router as arus_kas_router
 from .kategori_router import router as kategori_router
 from .pengaturan_ui_router import router as pengaturan_ui_router
+from .order_bridge_router import router as order_bridge_router
 from .toko_penjualan_router import router as toko_penjualan_router
 from .operasional_router import router as operasional_router
 from .push_router import router as push_router
@@ -1885,3 +1886,5 @@ marketplace_erp_router.include_router(push_router)
 marketplace_erp_router.include_router(roles_router)
 
 marketplace_erp_router.include_router(processing_router)
+
+marketplace_erp_router.include_router(order_bridge_router)

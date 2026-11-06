@@ -109,6 +109,7 @@ ATURAN: list[tuple[re.Pattern, set[str] | None, str]] = [
         # Pengaturan
         (r"^/shopee/push/", None, "push_shopee"),
         (r"^/toko-penjualan(/|$)", None, "toko_penjualan"),
+        (r"^/order-bridge(/|$)", None, "toko_penjualan"),
         (r"^/(akun|oauth|koneksi-toko)(/|$)", None, "kelola_toko"),
         (r"^/asisten", None, "asisten"),
         (r"^/roles", GET, "kelola_role|kelola_pengguna"),  # the Pengguna tab needs the role names for its form

@@ -120,9 +120,19 @@ async def lifespan(_: FastAPI):
         detik_snapshot = snapshot_interval()
         if detik_snapshot:
             snapshot_task = asyncio.create_task(jalankan_snapshot(marketplace_erp_database.SessionLocal, detik_snapshot))
+    bridge_task = None
+    if marketplace_erp_database.SessionLocal is not None and os.getenv("EASYBOSS_BRIDGE_SCHEDULER") == "1":
+        from tenants.marketplace_erp.modules.marketplace_erp.application.order_bridge import run_forever as run_bridge
+        bridge_task = asyncio.create_task(run_bridge(marketplace_erp_database.SessionLocal))
     try:
         yield
     finally:
+        if bridge_task is not None:
+            bridge_task.cancel()
+            try:
+                await bridge_task
+            except asyncio.CancelledError:
+                pass
         if snapshot_task is not None:
             snapshot_task.cancel()
         if jadwal_task is not None:

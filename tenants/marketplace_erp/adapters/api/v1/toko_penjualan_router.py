@@ -38,3 +38,16 @@ async def buat(body: TokoBaru, session: AsyncSession = Depends(get_db_marketplac
 @router.put("/{id_}")
 async def ubah(id_: str, body: TokoUbah, session: AsyncSession = Depends(get_db_marketplace_erp)):
     return await tp.ubah(session, id_, body.nama, body.jenis, body.platform, body.kode, body.keterangan, body.aktif)
+
+
+@router.get("/{id_}/relasi")
+async def relasi(id_: str, session: AsyncSession = Depends(get_db_marketplace_erp)):
+    return await tp.hapus(session, id_)
+
+
+@router.delete("/{id_}")
+async def hapus(id_: str, konfirmasi: bool = False, session: AsyncSession = Depends(get_db_marketplace_erp)):
+    from fastapi import HTTPException
+    if not konfirmasi:
+        raise HTTPException(422, "Konfirmasi penghapusan diperlukan")
+    return await tp.hapus(session, id_, confirm=True)

@@ -52,7 +52,7 @@ class PesananManualIn(BaseModel):
 
 
 async def buat(session: AsyncSession, payload: PesananManualIn) -> Pesanan:
-    toko = await session.get(TokoPenjualan, payload.toko_id)
+    toko = await session.scalar(select(TokoPenjualan).where(TokoPenjualan.id == payload.toko_id).with_for_update())
     if toko is None or not toko.aktif:
         raise HTTPException(422, "Pilih toko internal atau reseller yang aktif")
     reseller = toko.jenis == "reseller"
