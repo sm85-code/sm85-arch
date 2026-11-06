@@ -2013,7 +2013,7 @@ async def _fetch_document_link(link):
 
     def fetch():
         url = urlsplit(link)
-        if url.scheme != "https" or not url.hostname or url.username or url.password:
+        if url.scheme not in {"http", "https"} or not url.hostname or url.username or url.password:
             raise HTTPException(424, "Link dokumen Shopee tidak valid.")
         port = url.port or (443 if url.scheme == "https" else 80)
         if port not in {80, 443}:
