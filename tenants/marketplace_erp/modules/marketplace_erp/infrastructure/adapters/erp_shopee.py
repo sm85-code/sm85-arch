@@ -1037,6 +1037,37 @@ def normalisasi_pesanan(order: dict) -> dict:
     }
 
 
+class OrderSyncRows(list):
+    """A degraded fulfillment snapshot must never advance the incremental watermark."""
+
+    def __init__(self, *, complete=True):
+        super().__init__()
+        self.complete = complete
+
+
+async def _shipment_order_numbers(session, akun):
+    numbers, cursor, seen = [], "", set()
+    for _ in range(_ORDER_LIST_MAX_PAGES):
+        params = {"page_size": _ORDER_LIST_PAGE_SIZE}
+        if cursor:
+            params["cursor"] = cursor
+        data = await signed_shop_request(session, akun, "/api/v2/order/get_shipment_list", params=params)
+        resp = data.get("response") or {}
+        orders = resp.get("order_list")
+        if not isinstance(orders, list) or type(resp.get("more")) is not bool or any(
+            not isinstance(o, dict) or not isinstance(o.get("order_sn"), str) or not o["order_sn"] for o in orders
+        ):
+            raise HTTPException(424, "Respons shipment Shopee tidak lengkap; watermark dipertahankan.")
+        numbers.extend(o["order_sn"] for o in orders)
+        if not resp.get("more"):
+            return numbers
+        cursor = resp.get("next_cursor") or ""
+        if not cursor or cursor in seen:
+            raise HTTPException(424, "Pagination shipment Shopee tidak lengkap; watermark dipertahankan.")
+        seen.add(cursor)
+    raise HTTPException(424, "Shipment Shopee melebihi batas halaman; watermark dipertahankan.")
+
+
 async def sync_pesanan(
     session: Any,
     akun: Any,
@@ -1062,6 +1093,7 @@ async def sync_pesanan(
     time_from, time_to = jendela_sinkron_pesanan(dari, int(time.time()))
 
     order_sn_list: list[str] = []
+    degraded = False
     cursor = ""
     seen_cursors: set[str] = set()
     for _ in range(_ORDER_LIST_MAX_PAGES):
@@ -1075,6 +1107,11 @@ async def sync_pesanan(
             params["cursor"] = cursor
         data = await signed_shop_request(session, akun, _PATH_ORDER_LIST, params=params)
         resp = data.get("response") or {}
+        warning = str(data.get("warning") or resp.get("warning") or "").lower()
+        if "get_shipment_list" in warning or "outdated" in warning:
+            degraded = True
+            order_sn_list += await _shipment_order_numbers(session, akun)
+            break
         order_sn_list += [o["order_sn"] for o in resp.get("order_list") or []]
         cursor = resp.get("next_cursor") or ""
         if not resp.get("more"):
@@ -1089,7 +1126,8 @@ async def sync_pesanan(
         if sn not in order_sn_list:
             order_sn_list.append(sn)
 
-    rows: list[dict] = []
+    order_sn_list = list(dict.fromkeys(order_sn_list))
+    rows = OrderSyncRows(complete=not degraded)
     for i in range(0, len(order_sn_list), _ORDER_DETAIL_BATCH):
         batch = order_sn_list[i : i + _ORDER_DETAIL_BATCH]
         data = await signed_shop_request(
@@ -1857,7 +1895,7 @@ def _template_bersama(result_list: list[dict], tipe: str | None) -> str:
     )
 
 
-async def unduh_resi_banyak(
+async def _unduh_resi_banyak_legacy(
     session: Any, akun: Any, pesanan: list[tuple[str, str | None]], tipe: str | None = None
 ) -> bytes:
     """Shopee's own shipping labels as one PDF for several arranged orders of one shop and courier.
@@ -1930,6 +1968,186 @@ async def unduh_resi_banyak(
         raise HTTPException(status_code=status.HTTP_424_FAILED_DEPENDENCY, detail="Shopee tidak mengirim file resi.")
     format_dokumen_resi(pdf)
     return pdf
+
+
+SHIPPING_DOCUMENT_TYPES = frozenset({
+    "NORMAL_AIR_WAYBILL", "THERMAL_AIR_WAYBILL", "NORMAL_JOB_AIR_WAYBILL",
+    "THERMAL_JOB_AIR_WAYBILL", "THERMAL_UNPACKAGED_LABEL",
+})
+_PATH_DOC_JOB = "/api/v2/logistics/create_shipping_document_job"
+_PATH_DOC_JOB_STATUS = "/api/v2/logistics/get_shipping_document_job_status"
+_PATH_DOC_FILELINK = "/api/v2/logistics/download_shipping_document_job_filelink"
+
+
+def shipping_document_job_body(shipping_document_type, *, package_list=None, booking_sn=None, unpackaged_sku_requests=None):
+    fields = {"package_list": package_list, "booking_sn": booking_sn, "unpackaged_sku_requests": unpackaged_sku_requests}
+    populated = {k: v for k, v in fields.items() if v}
+    if shipping_document_type not in SHIPPING_DOCUMENT_TYPES or len(populated) != 1:
+        raise HTTPException(422, "Pilih satu jenis dokumen dan tepat satu daftar paket, booking, atau SKU.")
+    values = next(iter(populated.values()))
+    if not isinstance(values, list) or len(values) > 600:
+        raise HTTPException(422, "Satu job mendukung 1 sampai 600 dokumen.")
+    if "unpackaged_sku_requests" not in populated:
+        if any(not isinstance(v, str) or not v.strip() for v in values) or len(set(values)) != len(values):
+            raise HTTPException(422, "ID dokumen harus string unik dan tidak kosong.")
+    else:
+        if any(not isinstance(v, dict) or not v.get("unpackaged_sku_id") or type(v.get("quantity")) is not int or v["quantity"] < 1 for v in values):
+            raise HTTPException(422, "SKU dan jumlah label tidak valid.")
+        if sum(v["quantity"] for v in values) > 600:
+            raise HTTPException(422, "Satu job mendukung maksimal 600 label SKU.")
+    return {"shipping_document_type": shipping_document_type, **populated}
+
+
+async def _fetch_document_link(link):
+    """Unsigned, isolated download: partner/shop credentials never reach a file host.
+
+    Reject private destinations and redirects, including DNS answers, before connecting.
+    Links are consumed immediately and never persisted or logged.
+    """
+    import asyncio
+    import ipaddress
+    import socket
+    import urllib3
+    import certifi
+    from urllib.parse import urlsplit
+
+    def fetch():
+        url = urlsplit(link)
+        if url.scheme not in {"http", "https"} or not url.hostname or url.username or url.password:
+            raise HTTPException(424, "Link dokumen Shopee tidak valid.")
+        port = url.port or (443 if url.scheme == "https" else 80)
+        if port not in {80, 443}:
+            raise HTTPException(424, "Port dokumen Shopee tidak diizinkan.")
+        addresses = socket.getaddrinfo(url.hostname, port, type=socket.SOCK_STREAM)
+        if not addresses or any(not ipaddress.ip_address(a[4][0]).is_global for a in addresses):
+            raise HTTPException(424, "Host dokumen Shopee tidak diizinkan.")
+        # Connect to the validated IP, preserving TLS SNI/hostname verification.
+        # No second DNS resolution, ambient cookies, auth, netrc or proxy config.
+        ip = addresses[0][4][0]
+        if url.scheme == "https":
+            pool = urllib3.HTTPSConnectionPool(ip, port, server_hostname=url.hostname,
+                                               assert_hostname=url.hostname, cert_reqs="CERT_REQUIRED",
+                                               ca_certs=certifi.where())
+        else:
+            pool = urllib3.HTTPConnectionPool(ip, port)
+        try:
+            response = pool.request("GET", url.path + ("?" + url.query if url.query else ""),
+                                    headers={"Host": url.hostname}, timeout=_DOC_TIMEOUT,
+                                    redirect=False, retries=False, preload_content=False)
+            try:
+                if response.status in {401, 403}:
+                    return None
+                if response.status != 200:
+                    raise HTTPException(424, "Unduhan dokumen Shopee gagal.")
+                content = response.read(30 * 1024 * 1024 + 1)
+                if len(content) > 30 * 1024 * 1024:
+                    raise HTTPException(424, "Dokumen Shopee melebihi batas ukuran.")
+            finally:
+                response.close()
+        finally:
+            pool.close()
+        format_dokumen_resi(content)
+        return content
+    try:
+        return await asyncio.to_thread(fetch)
+    except (urllib3.exceptions.HTTPError, OSError, ValueError) as exc:
+        raise HTTPException(424, "Unduhan dokumen Shopee gagal.") from exc
+
+
+async def download_document_job(session, akun, body):
+    import asyncio
+
+    data = await signed_shop_request(session, akun, _PATH_DOC_JOB, method="POST", body=body, timeout=_DOC_TIMEOUT)
+    resp = data.get("response") or {}
+    if resp.get("fail_list") or resp.get("failure_list") or _gagal(resp.get("result_list") or []):
+        raise HTTPException(424, "Sebagian dokumen Shopee gagal dibuat; unduhan dibatalkan.")
+    expected = body.get("package_list") or body.get("booking_sn")
+    if expected is not None and set(resp.get("success_id_list") or []) != set(expected):
+        raise HTTPException(424, "Shopee tidak menerima semua dokumen; unduhan dibatalkan.")
+    job_id = resp.get("job_id")
+    if not isinstance(job_id, str) or not job_id:
+        raise HTTPException(424, "Shopee tidak mengirim job_id dokumen.")
+    started = time.monotonic()
+    for _ in range(_DOC_POLL_TRIES):
+        data = await signed_shop_request(session, akun, _PATH_DOC_JOB_STATUS, method="POST", body={"job_id": job_id}, timeout=_DOC_TIMEOUT)
+        resp = data.get("response") or {}
+        if resp.get("job_id", job_id) != job_id:
+            raise HTTPException(424, "Shopee mengembalikan job dokumen yang berbeda.")
+        state = resp.get("job_status")
+        if state in {"FAILED", "EXPIRED"} or resp.get("fail_list") or resp.get("failure_list"):
+            raise HTTPException(424, "Shopee gagal membuat dokumen.")
+        if state == "READY":
+            break
+        if state not in {"PROCESSING", "PENDING"}:
+            raise HTTPException(424, "Status job dokumen Shopee tidak dikenali.")
+        if time.monotonic() - started >= _DOC_BATAS_DETIK:
+            raise HTTPException(409, "Resi belum siap di Shopee. Coba lagi sebentar.")
+        await asyncio.sleep(_DOC_POLL_DELAY)
+    else:
+        raise HTTPException(409, "Resi belum siap di Shopee. Coba lagi sebentar.")
+    for _ in range(2):
+        data = await signed_shop_request(session, akun, _PATH_DOC_FILELINK, method="POST", body={"job_id": job_id}, timeout=_DOC_TIMEOUT)
+        link = (data.get("response") or {}).get("file_link") or data.get("file_link")
+        if not isinstance(link, str) or not link:
+            raise HTTPException(424, "Shopee tidak mengirim file_link dokumen.")
+        content = await _fetch_document_link(link)
+        if content is not None:
+            return content
+    raise HTTPException(424, "Link dokumen Shopee kedaluwarsa; coba unduh kembali.")
+
+
+async def _unduh_resi_banyak_job(session, akun, pesanan, tipe=None):
+    if not live_sync_enabled() or not _akun_configured(akun):
+        raise ShopeeNotConfigured("Shopee live sync nonaktif atau akun belum terhubung.")
+    if not pesanan or len(pesanan) > MAKS_RESI_MASSAL:
+        raise HTTPException(400, f"Pilih 1 sampai {MAKS_RESI_MASSAL} pesanan.")
+    numbers = list(dict.fromkeys(sn for sn, _ in pesanan))
+    data = await signed_shop_request(session, akun, _PATH_DOC_PARAM, method="POST", body={"order_list": [{"order_sn": sn} for sn in numbers]}, timeout=_DOC_TIMEOUT)
+    results = (data.get("response") or {}).get("result_list") or []
+    if _gagal(results) or {r.get("order_sn") for r in results} != set(numbers):
+        raise HTTPException(424, "Parameter dokumen Shopee tidak lengkap atau gagal.")
+    template = _template_bersama(results, tipe)
+    data = await signed_shop_request(session, akun, _PATH_ORDER_DETAIL, params={"order_sn_list": ",".join(numbers), "response_optional_fields": "package_list"})
+    orders = (data.get("response") or {}).get("order_list") or []
+    if {o.get("order_sn") for o in orders} != set(numbers):
+        raise HTTPException(424, "Daftar paket Shopee tidak lengkap.")
+    packages = []
+    for order in orders:
+        listed = order.get("package_list") or []
+        if not listed or any(not p.get("package_number") for p in listed):
+            raise HTTPException(424, "Nomor paket Shopee belum tersedia.")
+        packages.extend(p["package_number"] for p in listed)
+    return await download_document_job(session, akun, shipping_document_job_body(template, package_list=packages))
+
+
+async def unduh_resi_banyak(session, akun, pesanan, tipe=None):
+    """Default job/filelink flow; explicit legacy rollback during the transition only."""
+    import asyncio
+
+    flow = os.getenv("SHOPEE_SHIPPING_DOCUMENT_FLOW", "job").strip().lower()
+    if flow not in {"job", "legacy"}:
+        raise HTTPException(409, "Pilihan alur dokumen Shopee tidak valid.")
+    if flow == "legacy":
+        return await _unduh_resi_banyak_legacy(session, akun, pesanan, tipe)
+    try:
+        async with asyncio.timeout(_DOC_BATAS_DETIK):
+            return await _unduh_resi_banyak_job(session, akun, pesanan, tipe)
+    except TimeoutError as exc:
+        raise HTTPException(409, "Resi belum siap di Shopee. Coba lagi sebentar.") from exc
+
+
+async def instant_order_limit(session, akun, *, enabled=None, limit=None):
+    """ID feature is shop-whitelisted; never enable it implicitly during sync."""
+    base = "/api/v2/logistics/"
+    suffix = "order_count_limit_outside_instant_operating_time"
+    if enabled is None:
+        return await signed_shop_request(session, akun, base + "get_" + suffix)
+    if type(enabled) is not bool or (enabled and (type(limit) is not int or limit < 0)) or (not enabled and limit is not None):
+        raise HTTPException(422, "Batas Instant harus bilangan bulat >= 0 saat aktif; hilangkan saat nonaktif.")
+    body = {"is_order_limit_enabled": enabled}
+    if enabled:
+        body["order_count_limit"] = limit
+    return await signed_shop_request(session, akun, base + "set_" + suffix, method="POST", body=body)
 
 
 async def unduh_resi(session: Any, akun: Any, order_sn: str, nomor_resi: str | None = None, tipe: str | None = None) -> bytes:

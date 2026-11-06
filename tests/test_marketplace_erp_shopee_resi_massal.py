@@ -27,6 +27,7 @@ async def session():
 
 @pytest.fixture
 def live(monkeypatch):
+    monkeypatch.setenv("SHOPEE_SHIPPING_DOCUMENT_FLOW", "legacy")
     monkeypatch.setattr(erp_shopee, "SHOPEE_LIVE_SYNC", True)
     monkeypatch.setattr(erp_shopee, "SHOPEE_PARTNER_ID", "1")
     monkeypatch.setattr(erp_shopee, "SHOPEE_PARTNER_KEY", "k")

@@ -27,7 +27,7 @@ from typing import Any
 # URL yang lolos Verify di Open Platform. Env SHOPEE_PUSH_URL menimpa ini bila diisi.
 CALLBACK_URL = "https://api.ampelkuning.com/api/marketplace-erp/shopee/push"
 # Jenis yang ERP terima: otorisasi, batal otorisasi, status pesanan, resi, masa berlaku otorisasi.
-PUSH_AKTIF = [1, 2, 3, 4, 12]
+PUSH_AKTIF = [1, 2, 3, 4, 12, 15, 30]
 
 JENIS_PUSH = {
     1: "shop_authorization",
@@ -35,10 +35,12 @@ JENIS_PUSH = {
     3: "order_status",
     4: "order_trackingno",
     12: "open_api_authorization_expiry",
+    15: "shipping_document_status_push",
     29: "return_updates",
+    30: "package_fulfillment_status_push",
 }
 # Pushes that mean "an order changed": the ERP pulls that shop's changes right away.
-KODE_PESANAN = frozenset({3, 4})
+KODE_PESANAN = frozenset({3, 4, 15, 30})
 
 
 def push_key() -> str:
@@ -95,7 +97,7 @@ FUTURE_SKEW = timedelta(minutes=5)
 
 
 async def claim_push(session, body: bytes, push: dict) -> bool:
-    """Reject stale events; acknowledge identical retries without a second pull.
+    """Reject stale events; acknowledge semantic retries without a second pull.
 
     The receipt's unique primary key handles concurrent arrivals and survives
     restarts independently from the bounded diagnostic log.
@@ -114,7 +116,11 @@ async def claim_push(session, body: bytes, push: dict) -> bool:
     try:
         async with session.begin_nested():
             session.add(ShopeePushReceipt(
-                fingerprint=hashlib.sha256(body).hexdigest(),
+                fingerprint=hashlib.sha256(json.dumps(
+                    {"shop_id": push.get("shop_id"), "partner_id": push.get("partner_id"),
+                     "code": push.get("code"), "data": push.get("data")},
+                    sort_keys=True, separators=(",", ":"), ensure_ascii=False,
+                ).encode()).hexdigest(),
                 expires_at=sent + REPLAY_WINDOW,
             ))
             await session.flush()
@@ -141,5 +147,5 @@ def ringkas(push: dict[str, Any]) -> dict[str, Any]:
         "jenis": JENIS_PUSH.get(kode) if isinstance(kode, int) else None,
         "shop_id": str(push["shop_id"]) if push.get("shop_id") is not None else None,
         "order_sn": str(data.get("ordersn") or data.get("order_sn") or "") or None,
-        "status": str(data.get("status") or "") or None,
+        "status": str(data.get("status") or data.get("fulfillment_status") or data.get("shipping_document_status") or "") or None,
     }
