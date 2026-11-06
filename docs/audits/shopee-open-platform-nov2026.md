@@ -75,6 +75,15 @@ The Instant feature can reject unsupported shops/regions or missing Instant
 channels; preserve the structured provider error. Settings can take 5–10 minutes
 to apply and reset at local noon. Do not assume every ID shop is eligible.
 
+## Independent contract cross-check
+
+- The public generated `Naputt1/shopee-v2-go` logistics declarations explicitly define `CreateShippingDocumentJobRequest` with `shipping_document_type` and exactly one of `package_list`, `booking_sn`, or `unpackaged_sku_requests`; its response defines `job_id`, `success_id_list`, and `fail_list`.
+- `GetShippingDocumentJobStatusRequest` takes `job_id`; its response defines `job_id`, `job_name`, and `job_status` with `PROCESSING`, `READY`, `EXPIRED`, `FAILED`. The ERP additionally tolerates `PENDING`; this extra state is not documented by that SDK.
+- `DownloadShippingDocumentJobFilelinkRequest` takes `job_id`; the generated response has **top-level** `file_link`, valid 30 minutes. The ERP accepts top-level and nested `response.file_link`.
+- `GetShipmentListRequest` takes `page_size` (1–100) and optional `cursor`; the response contains `order_list`, `more`, and `next_cursor`. The ERP's fallback matches these field names.
+- The Shopee announcement's example file link uses `http://`. Do not require HTTPS-only without confirmation from the provider: the downloader allows HTTP/HTTPS with public-IP DNS checks, pinned connection, no redirects, and no credential forwarding. HTTPS remains preferable when Shopee supplies it.
+- This is a **structural cross-check against a third-party generated SDK**, not a live official API validation. Endpoint permissions and actual responses remain untested.
+
 ## Validation
 
 - New offline unit and integration suite: `tests/test_marketplace_erp_shopee_nov2026.py`.
