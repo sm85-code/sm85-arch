@@ -229,6 +229,32 @@ async def test_download_uses_pinned_ip_tls_and_no_provider_auth(monkeypatch):
 
 
 @pytest.mark.asyncio
+async def test_download_public_http_filelink_without_credentials(monkeypatch):
+    """Shopee's announced filelink example uses HTTP; no auth or redirects may leak."""
+    import socket
+    import urllib3
+    monkeypatch.setattr(socket, "getaddrinfo", lambda *a, **kw: [(socket.AF_INET, socket.SOCK_STREAM, 6, "", ("8.8.8.8", 80))])
+    class Response:
+        status = 200
+        def read(self, size):
+            return b"%PDF-1.4 mock"
+        def close(self):
+            pass
+    class Pool:
+        def __init__(self, host, port, **kw):
+            assert (host, port) == ("8.8.8.8", 80)
+        def request(self, method, path, **kw):
+            assert method == "GET" and path == "/label?signature=example"
+            assert kw["headers"] == {"Host": "files.example"}
+            assert kw["redirect"] is False and kw["retries"] is False
+            return Response()
+        def close(self):
+            pass
+    monkeypatch.setattr(urllib3, "HTTPConnectionPool", Pool)
+    assert await api._fetch_document_link("http://files.example/label?signature=example") == b"%PDF-1.4 mock"
+
+
+@pytest.mark.asyncio
 @pytest.mark.parametrize("link", ["file:///etc/passwd", "https://user:pass@files.example/f", "http://127.0.0.1/f", "http://169.254.169.254/f", "https://files.example:22/f"])
 async def test_download_rejects_unsafe_links(link):
     with pytest.raises(HTTPException):
