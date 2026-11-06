@@ -170,7 +170,7 @@ async def test_rollback_after_partial_manual_write_then_retry(session, monkeypat
     assert (await b.run_orders(session, Fake()))["failed"] == 1
     assert await session.scalar(select(func.count()).select_from(Pesanan)) == 0
     row = await session.scalar(select(BridgeOrder))
-    assert row.error == "import_transaction_failed"
+    assert row.error == "import_transaction_failed" and row.attempts == 1
     monkeypatch.setattr(b.pesanan_manual, "buat", original)
     assert (await b.run_orders(session, Fake(), retry=True))["imported"] == 1
 
@@ -348,3 +348,15 @@ async def test_custom_readonly_role_cannot_mutate_bridge_or_delete_shop(session)
         assert (await c.post("/api/marketplace-erp/order-bridge/shops", json={})).status_code == 403
         assert (await c.put("/api/marketplace-erp/order-bridge/automation", json={"enabled": False})).status_code == 403
         assert (await c.delete("/api/marketplace-erp/toko-penjualan/any?konfirmasi=true")).status_code == 403
+
+
+@pytest.mark.asyncio
+async def test_bridge_manual_order_delete_returns_conflict_preserving_receipt(session):
+    from tenants.marketplace_erp.modules.marketplace_erp.application import services
+    await sync(session)
+    await b.run_orders(session, Fake())
+    receipt = await session.scalar(select(BridgeOrder))
+    with pytest.raises(HTTPException) as exc:
+        await services.delete_pesanan(session, receipt.pesanan_id)
+    assert exc.value.status_code == 409 and "EasyBoss Order Bridge" in exc.value.detail
+    assert await session.get(Pesanan, receipt.pesanan_id)

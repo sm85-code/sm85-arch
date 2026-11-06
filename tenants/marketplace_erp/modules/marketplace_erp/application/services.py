@@ -2292,7 +2292,7 @@ async def delete_pesanan(session: AsyncSession, pesanan_id: str, oleh: str | Non
     Marketplace orders (Shopee/TikTok) are never deleted: they come back on the next sync and feed settlement.
     Refused, with the reason, while anything else still points at the order, so nothing is orphaned or counted twice."""
     from tenants.marketplace_erp.modules.marketplace_erp.infrastructure.models import (
-        PesananHapusLog, SettlementPesanan, StokLedger, StokReservasi, TransaksiOperasional,
+        BridgeOrder, PesananHapusLog, SettlementPesanan, StokLedger, StokReservasi, TransaksiOperasional,
     )
 
     pesanan = await get_pesanan(session, pesanan_id)
@@ -2301,6 +2301,8 @@ async def delete_pesanan(session: AsyncSession, pesanan_id: str, oleh: str | Non
     if pesanan.status != "cancelled" and (pesanan.status in ("shipped", "completed") or pesanan.nomor_resi or pesanan.resi_dicetak_at or pesanan.tanggal_kirim):
         raise HTTPException(status.HTTP_409_CONFLICT, "Pesanan sudah dikirim atau resinya sudah ada/dicetak. Batalkan dulu bila memang tidak jadi.")
     alasan = []
+    if await session.scalar(select(BridgeOrder.id).where(BridgeOrder.pesanan_id == pesanan.id)):
+        alasan.append("terhubung ke EasyBoss Order Bridge; pertahankan identitas impor untuk mencegah duplikasi")
     item_ids = select(ItemPesanan.id).where(ItemPesanan.pesanan_id == pesanan.id)
     if await session.scalar(select(func.count()).select_from(ProcessingJob).where(ProcessingJob.source_item_id.in_(item_ids))):
         alasan.append("sudah dipetakan di Pemetaan Order (lepas pemetaannya dulu)")

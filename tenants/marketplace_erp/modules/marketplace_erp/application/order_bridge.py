@@ -247,6 +247,7 @@ async def run_orders(session, gateway, *, retry=False, automatic=False):
                                           source_status=getattr(order, "source_status", ""), snapshot_json=order.model_dump_json())
                         session.add(row)
                     row.status, row.error = "failed", "import_transaction_failed"
+                    row.attempts = (row.attempts or 0) + 1
                     outcome = "failed"
                 audited = await session.scalar(select(BridgeOrder).where(BridgeOrder.platform == key[0],
                          BridgeOrder.shop_id == key[1], BridgeOrder.order_id == key[2]))
