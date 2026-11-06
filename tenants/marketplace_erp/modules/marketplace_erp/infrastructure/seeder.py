@@ -37,6 +37,12 @@ DEFAULT_PASSWORD = "password123"
 # are self-healed here. Postgres-only syntax -- skipped on SQLite (tests
 # build the schema fresh from metadata anyway).
 _SELF_HEAL_COLUMNS = (
+    "ALTER TABLE IF EXISTS mpe_toko_penjualan ADD COLUMN IF NOT EXISTS sumber VARCHAR(16) NOT NULL DEFAULT 'manual'",
+    "ALTER TABLE IF EXISTS mpe_toko_penjualan ADD COLUMN IF NOT EXISTS easyboss_shop_id VARCHAR(128)",
+    "ALTER TABLE IF EXISTS mpe_toko_penjualan ADD COLUMN IF NOT EXISTS marketplace_shop_id VARCHAR(128)",
+    "ALTER TABLE IF EXISTS mpe_toko_penjualan ADD COLUMN IF NOT EXISTS sinkron_status VARCHAR(32) NOT NULL DEFAULT 'manual'",
+    "ALTER TABLE IF EXISTS mpe_toko_penjualan ADD COLUMN IF NOT EXISTS sinkron_at TIMESTAMPTZ",
+    "CREATE UNIQUE INDEX IF NOT EXISTS uq_mpe_toko_easyboss ON mpe_toko_penjualan(platform, easyboss_shop_id)",
     # The AI product-designer playbook is stored as a Kelola Aplikasi text and is longer than 200 characters.
     "ALTER TABLE IF EXISTS mpe_pengaturan_ui ALTER COLUMN teks TYPE TEXT",
     # Kas Kecil: categories paid out of the petty cash (Operasional Eceran) instead of Kas Utama.

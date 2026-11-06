@@ -832,10 +832,18 @@ class TokoPenjualan(MarketplaceErpBase):
     and its resellers, on any platform. `kode` is the two-letter code that goes into production order codes."""
 
     __tablename__ = "mpe_toko_penjualan"
-    __table_args__ = (UniqueConstraint("platform", "nama_key", name="uq_mpe_toko_penjualan_platform_nama"),)
+    __table_args__ = (
+        UniqueConstraint("platform", "nama_key", name="uq_mpe_toko_penjualan_platform_nama"),
+        UniqueConstraint("platform", "easyboss_shop_id", name="uq_mpe_toko_easyboss"),
+    )
 
     id: Mapped[str] = mapped_column(String(64), primary_key=True, default=_uuid)
     nama: Mapped[str] = mapped_column(String(120), nullable=False)
+    sumber: Mapped[str] = mapped_column(String(16), nullable=False, default="manual", server_default="manual")
+    easyboss_shop_id: Mapped[Optional[str]] = mapped_column(String(128), nullable=True)
+    marketplace_shop_id: Mapped[Optional[str]] = mapped_column(String(128), nullable=True)
+    sinkron_status: Mapped[str] = mapped_column(String(32), nullable=False, default="manual", server_default="manual")
+    sinkron_at: Mapped[Optional[datetime]] = mapped_column(DateTime(timezone=True), nullable=True)
     nama_key: Mapped[str] = mapped_column(String(120), nullable=False)  # casefolded name, for the uniqueness check
     jenis: Mapped[str] = mapped_column(String(16), nullable=False)  # internal | reseller
     platform: Mapped[str] = mapped_column(String(16), nullable=False)
@@ -951,6 +959,7 @@ class LaporanKeuanganTutup(MarketplaceErpBase):
     __tablename__ = "mpe_laporan_keuangan_tutup"
     tanggal: Mapped[date] = mapped_column(Date, primary_key=True)
     snapshot_json: Mapped[str] = mapped_column(Text, nullable=False)
+    audit_json: Mapped[str] = mapped_column(Text, nullable=False, default="[]", server_default="[]")
     created_by: Mapped[str] = mapped_column(String(64), nullable=False)
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=_utcnow)
 
@@ -962,6 +971,7 @@ class LaporanKeuanganAudit(MarketplaceErpBase):
     action: Mapped[str] = mapped_column(String(16), nullable=False)
     reason: Mapped[str] = mapped_column(Text, nullable=False)
     snapshot_json: Mapped[str] = mapped_column(Text, nullable=False)
+    audit_json: Mapped[str] = mapped_column(Text, nullable=False, default="[]", server_default="[]")
     created_by: Mapped[str] = mapped_column(String(64), nullable=False)
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=_utcnow)
 
@@ -1089,6 +1099,7 @@ class PesananHapusLog(MarketplaceErpBase):
     id_eksternal: Mapped[str] = mapped_column(String(255), nullable=False, index=True)
     platform: Mapped[str] = mapped_column(String(16), nullable=False)
     snapshot_json: Mapped[str] = mapped_column(Text, nullable=False)
+    audit_json: Mapped[str] = mapped_column(Text, nullable=False, default="[]", server_default="[]")
     dihapus_oleh: Mapped[Optional[str]] = mapped_column(String(255), nullable=True)
     dihapus_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=_utcnow)
 
@@ -1119,3 +1130,43 @@ class AiDrafProduk(MarketplaceErpBase):
 # Ads-agent tables live in their own module so this file is not edited for every agent change.
 # Importing them registers the tables on MarketplaceErpBase.metadata (startup create_all).
 from tenants.marketplace_erp.modules.marketplace_erp.infrastructure import models_agen as _models_agen  # noqa: E402, F401
+
+
+class BridgeState(MarketplaceErpBase):
+    __tablename__ = "mpe_bridge_state"
+    id: Mapped[str] = mapped_column(String(32), primary_key=True)
+    enabled: Mapped[bool] = mapped_column(Boolean, default=False, nullable=False)
+    checkpoint: Mapped[Optional[datetime]] = mapped_column(DateTime(timezone=True), nullable=True)
+    heartbeat: Mapped[Optional[datetime]] = mapped_column(DateTime(timezone=True), nullable=True)
+
+
+class BridgeRun(MarketplaceErpBase):
+    __tablename__ = "mpe_bridge_run"
+    id: Mapped[str] = mapped_column(String(64), primary_key=True, default=_uuid)
+    kind: Mapped[str] = mapped_column(String(32), nullable=False)
+    status: Mapped[str] = mapped_column(String(32), default="running", nullable=False)
+    started_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=_utcnow)
+    finished_at: Mapped[Optional[datetime]] = mapped_column(DateTime(timezone=True), nullable=True)
+    imported: Mapped[int] = mapped_column(Integer, default=0)
+    skipped: Mapped[int] = mapped_column(Integer, default=0)
+    failed: Mapped[int] = mapped_column(Integer, default=0)
+    error: Mapped[Optional[str]] = mapped_column(String(128), nullable=True)
+
+
+class BridgeOrder(MarketplaceErpBase):
+    __tablename__ = "mpe_bridge_order"
+    __table_args__ = (UniqueConstraint("platform", "shop_id", "order_id", name="uq_mpe_bridge_order_source"),)
+    id: Mapped[str] = mapped_column(String(64), primary_key=True, default=_uuid)
+    platform: Mapped[str] = mapped_column(String(16), nullable=False)
+    shop_id: Mapped[str] = mapped_column(String(128), nullable=False)
+    order_id: Mapped[str] = mapped_column(String(200), nullable=False)
+    toko_id: Mapped[Optional[str]] = mapped_column(ForeignKey("mpe_toko_penjualan.id", ondelete="RESTRICT"), nullable=True)
+    pesanan_id: Mapped[Optional[str]] = mapped_column(ForeignKey("mpe_pesanan.id", ondelete="RESTRICT"), nullable=True, unique=True)
+    status: Mapped[str] = mapped_column(String(32), nullable=False)
+    source_status: Mapped[str] = mapped_column(String(64), nullable=False)
+    attempts: Mapped[int] = mapped_column(Integer, default=0)
+    error: Mapped[Optional[str]] = mapped_column(String(128), nullable=True)
+    # Allowlisted source snapshot only; credentials and arbitrary API response fields are never persisted.
+    snapshot_json: Mapped[str] = mapped_column(Text, nullable=False)
+    audit_json: Mapped[str] = mapped_column(Text, nullable=False, default="[]", server_default="[]")
+    updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=_utcnow, onupdate=_utcnow)
