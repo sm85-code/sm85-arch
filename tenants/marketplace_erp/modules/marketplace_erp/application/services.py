@@ -1926,10 +1926,12 @@ async def sinkron_pesanan_akun(session: AsyncSession, akun: AkunMarketplace, *, 
     )
     async with session.begin_nested():  # a failure while importing leaves no half-imported shop behind
         hasil = await impor_pesanan_marketplace(session, akun, rows)
-    akun.watermark_sinkron_pesanan = mulai
-    if perlu_penuh:
-        akun.sinkron_penuh_pesanan_at = mulai
-    return {"pulled": len(rows), "penuh": perlu_penuh, **hasil}
+    if getattr(rows, "complete", True):
+        akun.watermark_sinkron_pesanan = mulai
+        if perlu_penuh:
+            akun.sinkron_penuh_pesanan_at = mulai
+    return {"pulled": len(rows), "penuh": perlu_penuh, **hasil,
+            **({"downgrade": True, "watermark_dipertahankan": True} if not getattr(rows, "complete", True) else {})}
 
 
 async def klaim_sinkron_pesanan(session: AsyncSession, akun: AkunMarketplace, jeda_detik: float) -> bool:
