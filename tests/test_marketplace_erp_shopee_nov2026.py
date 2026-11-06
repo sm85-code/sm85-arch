@@ -229,7 +229,7 @@ async def test_download_uses_pinned_ip_tls_and_no_provider_auth(monkeypatch):
 
 
 @pytest.mark.asyncio
-@pytest.mark.parametrize("link", ["file:///etc/passwd", "https://user:pass@files.example/f", "http://127.0.0.1/f", "http://169.254.169.254/f", "https://files.example:22/f"])
+@pytest.mark.parametrize("link", ["file:///etc/passwd", "https://user:pass@files.example/f", "http://127.0.0.1/f", "http://169.254.169.254/f", "http://files.example/label", "https://files.example:22/f"])
 async def test_download_rejects_unsafe_links(link):
     with pytest.raises(HTTPException):
         await api._fetch_document_link(link)
