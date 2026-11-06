@@ -60,29 +60,52 @@ selects the unchanged old regular-order label flow for deliberate rollback durin
 Shopee's transition. Unknown values fail closed. No deployment setting is changed
 by this PR. Remove this option after Shopee announces and completes retirement.
 
-The announcements do not specify every request/response schema. Direct official
-reference pages for create_shipping_document_job and get_shipment_list returned
-HTTP 403 in this environment. Structural fields were cross-checked against the
-public generated `Naputt1/shopee-v2-go` declarations (`logistics.type.gen.go` and
-`order.type.gen.go`), but these are secondary evidence, not a live contract test.
-Before a later deployment, validate job payload/status, event codes 15/30,
-shop permissions, file-host behavior, and supported templates with the authorized
-Shopee sandbox/reference. The October notice itself inconsistently names First
-Mile's replacement; resolve that against official reference before adding a caller.
-No production or sandbox Shopee requests are performed by these tests.
+The first documentation retrieval returned HTTP 403. On 2026-11-06 the official
+reference pages were successfully retrieved with HTTP 200 through a different
+retrieval path. The official methods, field names, types and push codes below
+now supersede the earlier third-party SDK cross-check. This validates the
+published contract, not execution against an authorized shop: this runtime has
+no Shopee partner credentials, access token or shop ID, and the connected OCI
+Gateway exposes no arbitrary command or signed Shopee request operation.
+No production or sandbox Shopee API requests were performed.
+
+Before deployment, shop-specific permissions, actual file-host responses, and
+supported templates still require an authenticated sandbox exercise. No secret,
+production setting or production database was accessed to obtain test credentials.
 
 The Instant feature can reject unsupported shops/regions or missing Instant
 channels; preserve the structured provider error. Settings can take 5–10 minutes
 to apply and reset at local noon. Do not assume every ID shop is eligible.
 
-## Independent contract cross-check
+## Initial independent contract cross-check
 
 - The public generated `Naputt1/shopee-v2-go` logistics declarations explicitly define `CreateShippingDocumentJobRequest` with `shipping_document_type` and exactly one of `package_list`, `booking_sn`, or `unpackaged_sku_requests`; its response defines `job_id`, `success_id_list`, and `fail_list`.
 - `GetShippingDocumentJobStatusRequest` takes `job_id`; its response defines `job_id`, `job_name`, and `job_status` with `PROCESSING`, `READY`, `EXPIRED`, `FAILED`. The ERP additionally tolerates `PENDING`; this extra state is not documented by that SDK.
 - `DownloadShippingDocumentJobFilelinkRequest` takes `job_id`; the generated response has **top-level** `file_link`, valid 30 minutes. The ERP accepts top-level and nested `response.file_link`.
 - `GetShipmentListRequest` takes `page_size` (1–100) and optional `cursor`; the response contains `order_list`, `more`, and `next_cursor`. The ERP's fallback matches these field names.
 - The Shopee announcement's example file link uses `http://`. Do not require HTTPS-only without confirmation from the provider: the downloader allows HTTP/HTTPS with public-IP DNS checks, pinned connection, no redirects, and no credential forwarding. HTTPS remains preferable when Shopee supplies it.
-- This is a **structural cross-check against a third-party generated SDK**, not a live official API validation. Endpoint permissions and actual responses remain untested.
+- This initial check used a third-party SDK. The official contract verification below supersedes its source limitation; shop-specific execution remains untested.
+
+## Official contract verification — 2026-11-06
+
+All seven official pages below returned HTTP 200. No application credential was
+sent to the documentation service.
+
+| Official reference | Verified contract | ERP result |
+| --- | --- | --- |
+| [Create job](https://open.shopee.com/documents/v2/v2.logistics.create_shipping_document_job?module=95&type=1) | POST; package_list is string[]; five types; one selector; up to 600; response job_id/success_id_list/fail_list | Matches active regular-label flow |
+| [Job status](https://open.shopee.com/documents/v2/v2.logistics.get_shipping_document_job_status?module=95&type=1) | POST JSON job_id; response.job_status: PROCESSING/READY/EXPIRED/FAILED | Matches; PENDING is an additional tolerated state |
+| [Job filelink](https://open.shopee.com/documents/v2/v2.logistics.download_shipping_document_job_filelink?module=95&type=1) | POST JSON job_id; top-level file_link; link valid 30 minutes | Matches; nested response.file_link is additionally tolerated |
+| [Shipment list](https://open.shopee.com/documents/v2/v2.order.get_shipment_list?module=94&type=1) | GET; required page_size 1–100; optional cursor; response order_list/more/next_cursor | Matches fallback; no order-list time filters are sent |
+| [Instant limit](https://open.shopee.com/documents/v2/v2.logistics.set_order_count_limit_outside_instant_operating_time?module=95&type=1) | POST; boolean is_order_limit_enabled; int64 order_count_limit; response update_result | Matches adapter; announcement supplies conditional limit rules |
+| [Shipping document push](https://open.shopee.com/push-mechanism/17) | Code 15; order/package/status; duplicates allowed; no guaranteed sequence | Matches routing and canonical receipt deduplication |
+| [Package fulfillment push](https://open.shopee.com/push-mechanism/33) | Code 30; ordersn/package_number/fulfillment_status/update_time; duplicates allowed | Matches routing, status summary and receipt identity |
+
+The create-job reference marks SKU quantity optional; this unused ERP helper
+requires it explicitly to validate the total label-copy limit before sending.
+There is no active unpackaged-SKU caller to migrate. The filelink reference shows
+an HTTPS example; the attached announcement also shows HTTP. Both schemes remain
+supported with the existing unsigned/public-IP/redirect protections.
 
 ## Validation
 
@@ -100,14 +123,23 @@ to apply and reset at local noon. Do not assume every ID shop is eligible.
   No workflow file is edited; full CI remains necessary before any later merge
   under AGENTS.md, outside this task's prohibition on running Actions.
 
-### Results in this workspace
+### Latest results — source commit 69e78fb
 
-- Full repository run: **1606 passed, 27 skipped**, 4 warnings (219.97 s).
-- Final affected-suite rerun after refinements: **164 passed**, 1 warning (10.63 s),
-  including **48 new November-update cases**. This rerun covers the final source;
-  the full run started before the last small validation/test refinements.
-- Repository-wide Ruff, Python compilation, and `git diff --check`: passed.
-- Warnings are existing crypt deprecation and SQLAlchemy test-conflict warnings.
-  Skipped external-service/PostgreSQL checks were not replaced by production calls.
-- Python 3.12.14; repository-pinned requirements installed in an isolated test venv.
-  No Docker executable is available here, so no container image build was performed.
+- Full repository: **1614 passed, 27 skipped, 4 warnings**, 218.49 seconds.
+  Command: `python -m pytest tests/ -n 0 -q -rs`.
+- November-update suite independently: **49 passed**, 1 warning, 2.05 seconds.
+- All 27 skipped cases require `TEST_DATABASE_URL`, which is not available;
+  they are PostgreSQL integration/self-heal checks, not passing tests.
+- Repository-wide Ruff, Python compilation and `git diff --check`: passed.
+- Runtime code and all tests were unchanged during this full run; only this
+  documentation update followed it. No additional implementation fix was needed.
+- Warnings are existing crypt deprecation, email-validator/test validation, and
+  SQLAlchemy identity-conflict warnings, not failures.
+- Python 3.12.14 with repository-pinned requirements in an isolated test venv.
+  Docker is unavailable; no container image build was performed.
+- PR #504 remained open/unmerged; its head was 69e78fb while testing. The GitHub
+  workflow-run lookup returned an empty list. This documentation-only follow-up
+  also uses `[skip ci]`; no Actions dispatch or deployment is performed.
+- Official reference verification succeeded for seven pages as listed above.
+  Authenticated Shopee calls remain unexecuted because this runtime has no
+  credentials and the connected gateway has no signed-request/exec capability.
