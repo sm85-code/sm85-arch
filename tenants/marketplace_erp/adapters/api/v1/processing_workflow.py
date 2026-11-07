@@ -17,6 +17,8 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from tenants.marketplace_erp.modules.marketplace_erp.infrastructure.database import get_db_marketplace_erp
 from tenants.marketplace_erp.modules.marketplace_erp.infrastructure.models import (
     AkunMarketplace,
+    BridgeOrder,
+    TokoPenjualan,
     PLATFORM_MANUAL,
     ItemPesanan,
     Pesanan,
@@ -29,6 +31,8 @@ from tenants.marketplace_erp.modules.marketplace_erp.infrastructure.models impor
     ProcessingParty,
     UserMarketplaceErp,
 )
+
+from tenants.marketplace_erp.modules.marketplace_erp.application.bridge_presentation import bridge_order_number
 
 from .processing_permissions import processing_access
 
@@ -617,6 +621,7 @@ def order_item(item, order, shop):
             note=(manual.get("catatan_item") or {}).get(item.id, ""),
             order_number="Menunggu SKU" if reseller else order.id_eksternal,
         )
+    base["order_number"] = bridge_order_number(order) or base["order_number"]
     return base
 
 
@@ -677,6 +682,10 @@ async def candidates(
         filters.append(
             or_(
                 Pesanan.id_eksternal.ilike(text),
+                select(BridgeOrder.id).outerjoin(TokoPenjualan, TokoPenjualan.id == BridgeOrder.toko_id).where(
+                    BridgeOrder.pesanan_id == Pesanan.id,
+                    or_(BridgeOrder.order_id.ilike(text), TokoPenjualan.nama.ilike(text)),
+                ).exists(),
                 ItemPesanan.nama_produk.ilike(text),
                 ItemPesanan.model_name.ilike(text),
                 AkunMarketplace.nama_toko.ilike(text),
@@ -872,6 +881,7 @@ def computed(row, data, order=None):
     reseller = data["source"] == "reseller"
     return dict(
         data,
+        order_number=bridge_order_number(order) or data.get("order_number", ""),
         id=row.id,
         version=row.version,
         production_total=str(production * qty),

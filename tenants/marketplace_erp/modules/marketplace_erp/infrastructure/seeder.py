@@ -37,6 +37,10 @@ DEFAULT_PASSWORD = "password123"
 # are self-healed here. Postgres-only syntax -- skipped on SQLite (tests
 # build the schema fresh from metadata anyway).
 _SELF_HEAL_COLUMNS = (
+    # Existing databases predate these audit fields; create_all never adds columns.
+    "ALTER TABLE IF EXISTS mpe_laporan_keuangan_tutup ADD COLUMN IF NOT EXISTS audit_json TEXT NOT NULL DEFAULT '[]'",
+    "ALTER TABLE IF EXISTS mpe_laporan_keuangan_audit ADD COLUMN IF NOT EXISTS audit_json TEXT NOT NULL DEFAULT '[]'",
+    "ALTER TABLE IF EXISTS mpe_pesanan_hapus_log ADD COLUMN IF NOT EXISTS audit_json TEXT NOT NULL DEFAULT '[]'",
     "ALTER TABLE IF EXISTS mpe_toko_penjualan ADD COLUMN IF NOT EXISTS sumber VARCHAR(16) NOT NULL DEFAULT 'manual'",
     "ALTER TABLE IF EXISTS mpe_toko_penjualan ADD COLUMN IF NOT EXISTS easyboss_shop_id VARCHAR(128)",
     "ALTER TABLE IF EXISTS mpe_toko_penjualan ADD COLUMN IF NOT EXISTS marketplace_shop_id VARCHAR(128)",

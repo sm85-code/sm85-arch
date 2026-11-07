@@ -46,3 +46,18 @@ def source_status_label(source):
     return {'shipped': 'Dikirim', 'completed': 'Selesai', 'cancelled': 'Dibatalkan',
             'unpaid': 'Belum Bayar', 'hold': 'Ditahan'}.get(source.get('status'),
             'Status EasyBoss: ' + source.get('source_status', 'Belum tersedia'))
+
+
+def bridge_order_number(order):
+    """Original marketplace display number; the internal order key stays unchanged."""
+    if order is None or order.platform != 'manual':
+        return None
+    try:
+        detail = json.loads(order.detail_json or '{}')
+    except (ValueError, TypeError):
+        return None
+    source = detail.get('easyboss') if isinstance(detail, dict) else None
+    if not isinstance(source, dict) or source.get('platform') not in {'tiktokshop', 'lazada'}:
+        return None
+    number = source.get('order_id')
+    return number if isinstance(number, str) and number else None

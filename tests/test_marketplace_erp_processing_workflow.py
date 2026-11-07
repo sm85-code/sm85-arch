@@ -1428,3 +1428,51 @@ async def test_packing_writer_can_finish_packing_without_tukang_write(client):
     job = (await rows(http))[0]
     job = await advance(http, job, 'packing')
     assert job['stage'] == 'siap_kirim'
+
+
+@pytest.mark.asyncio
+async def test_easyboss_number_is_consistent_in_picker_search_and_existing_jobs(client):
+    from tenants.marketplace_erp.modules.marketplace_erp.application import order_bridge as bridge
+    from tenants.marketplace_erp.modules.marketplace_erp.infrastructure.adapters.easyboss import Order
+    from tenants.marketplace_erp.modules.marketplace_erp.infrastructure.models import BridgeOrder, ProcessingJob, TokoPenjualan
+    http, _, factory = client
+    async with factory() as session:
+        session.add(TokoPenjualan(jenis='internal', platform='tiktokshop', nama='Bridge Shop', nama_key='bridge shop',
+                                 sumber='easyboss', easyboss_shop_id='shop', sinkron_status='synced', aktif=True, keterangan=''))
+        await session.commit()
+        order = Order(platform='tiktokshop', shop_id='shop', order_id='586921368363304202', complete=True,
+                      status='ready', paid=True, source_status='AWAITING_COLLECTION', buyer='s***di',
+                      ordered_at='2026-11-02T12:19:43+08:00', deadline='2026-11-10T00:59:59+08:00',
+                      items=[{'item_id':'native-line','product':'Partition','variant':'150x20x200','quantity':1}])
+        assert await bridge.ingest(session, order) == 'imported'
+        await session.commit()
+        receipt = await session.scalar(select(BridgeOrder))
+        original = await session.get(Pesanan, receipt.pesanan_id)
+        order_id, internal_code = original.id, original.id_eksternal
+        before = original.detail_json
+    for search in ['586921368363304202', 'Bridge Shop', internal_code]:
+        response = await http.get('/processing/candidates', params={'q':search})
+        assert response.status_code == 200
+        items = response.json()['items']
+        assert len(items) == 1 and items[0]['order_number'] == '586921368363304202'
+        assert items[0]['order_id'] == order_id and items[0]['manual_order_code'] == internal_code
+    item_id = items[0]['item_id']
+    response = await http.post('/processing/jobs/select', json={'route':'tukang','item_ids':[item_id]})
+    assert response.status_code == 200, response.text
+    async with factory() as session:
+        job = await session.scalar(select(ProcessingJob).where(ProcessingJob.source_item_id == item_id))
+        # Simulate an existing mapping made before the display fix.
+        data = json.loads(job.payload_json)
+        data['order_number'] = internal_code
+        job.payload_json = json.dumps(data)
+        await session.commit()
+        saved_payload, saved_version = job.payload_json, job.version
+    mapped = next(r for r in await rows(http) if r['order_id'] == order_id)
+    assert mapped['order_number'] == '586921368363304202'
+    response = await http.get('/processing/candidates', params={'q':'586921368363304202','status':'dipetakan'})
+    assert response.json()['items'][0]['order_number'] == '586921368363304202'
+    async with factory() as session:
+        job = await session.scalar(select(ProcessingJob).where(ProcessingJob.source_item_id == item_id))
+        original = await session.get(Pesanan, order_id)
+        assert job.payload_json == saved_payload and job.version == saved_version
+        assert original.id_eksternal == internal_code and original.detail_json == before
