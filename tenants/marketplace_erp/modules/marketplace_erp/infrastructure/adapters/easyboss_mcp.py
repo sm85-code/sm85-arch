@@ -1,9 +1,22 @@
 """Read-only MCP transport. Source cookies remain inside the existing MCP."""
 import json
+from decimal import Decimal, InvalidOperation
 from .easyboss import BridgeProblem, Line, Order, RejectedOrder, Shop, native_time
 
 PLATFORMS = {'tiktok': 'tiktokshop', 'lazada': 'lazada'}
 READS = {'eb_toko_list', 'eb_pesanan_list', 'eb_pesanan_detail'}
+
+
+def native_amount(value):
+    if value in (None, '', '--'):
+        return None
+    try:
+        amount = Decimal(str(value))
+        if not amount.is_finite() or amount < 0:
+            raise ValueError()
+        return amount
+    except InvalidOperation:
+        raise ValueError('invalid source amount') from None
 
 
 class MCPGateway:
@@ -145,6 +158,8 @@ def normalize(p, identity):
                 raise ValueError()
             lines.append(Line(item_id=str(item['opOrderItemId']), product=item['title'],
                 variant=item.get('skuSubName') or '', quantity=int(qty),
+                unit_price=native_amount(item.get('discountedPrice')), line_total=native_amount(item.get('discountedAmount')),
+                image_url=item.get('picUrl') or None,
                 product_sku=item.get('platformItemNum') or None, variant_sku=item.get('platformOuterSkuId') or None))
         complete = (p.get('isSplit') == 0 and len({i.item_id for i in lines}) == len(lines)
             and sum(i.quantity for i in lines) == int(o['itemQuantity'])
@@ -154,6 +169,10 @@ def normalize(p, identity):
         return Order(platform=platform, shop_id=shop_id, order_id=order_id,
             easyboss_order_id=str(o['opOrderId']), package_ids=[str(p['opOrderPackageId'])],
             complete=complete, paid=paid, status=status, source_status=source, buyer=buyer,
+            order_total=native_amount(o.get('orderAmount')), buyer_paid=native_amount(o.get('payAmount')),
+            currency=o.get('currency') or '', recipient_name=(p.get('consigneeInfo') or {}).get('name') or '',
+            recipient_phone=(p.get('consigneeInfo') or {}).get('phone') or '',
+            recipient_address=(p.get('consigneeInfo') or {}).get('fullAddress') or '',
             payment_method=o.get('paymentMethod') or '', city=(p.get('consigneeInfo') or {}).get('city') or '',
             ordered_at=native_time(o['gmtOrderStart']) if o.get('gmtOrderStart') else None,
             deadline=native_time(deadline) if deadline else None, buyer_note=o.get('buyerMessage') or '',

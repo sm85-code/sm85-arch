@@ -1405,14 +1405,22 @@ def _tgl_pesanan():
 
 def _kondisi_tahap(tahap: str):
     sudah = Pesanan.status_marketplace.in_(_MP_SUDAH_DIPROSES)
-    return {
+    conditions = {
         "belum_bayar": Pesanan.status == "unpaid",
         "perlu_diproses": and_(Pesanan.status == "to_ship", or_(Pesanan.status_marketplace.is_(None), ~sudah)),
         "menunggu_kurir": and_(Pesanan.status == "to_ship", sudah),
         "dikirim": Pesanan.status == "shipped",
         "selesai": Pesanan.status == "completed",
         "dibatalkan": Pesanan.status == "cancelled",
-    }[tahap]
+    }
+    from tenants.marketplace_erp.modules.marketplace_erp.infrastructure.models import BridgeOrder
+    awaiting = select(BridgeOrder.id).where(BridgeOrder.pesanan_id == Pesanan.id,
+        BridgeOrder.source_status == "AWAITING_COLLECTION", Pesanan.status == "to_ship").exists()
+    if tahap == "perlu_diproses":
+        return and_(conditions[tahap], ~awaiting)
+    if tahap == "menunggu_kurir":
+        return or_(conditions[tahap], awaiting)
+    return conditions[tahap]
 
 
 def _ekspresi_tahap():
@@ -1693,6 +1701,9 @@ async def ubah_status_pesanan(
     if status_baru not in STATUS_PESANAN:
         raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Status tidak dikenal")
     pesanan = await get_pesanan(session, pesanan_id)
+    from tenants.marketplace_erp.modules.marketplace_erp.infrastructure.models import BridgeOrder
+    if await session.scalar(select(BridgeOrder.id).where(BridgeOrder.pesanan_id == pesanan.id)):
+        raise HTTPException(409, "Status pesanan ini mengikuti EasyBoss; lakukan perubahan di marketplace")
     if status_baru not in _TRANSISI_STATUS.get(pesanan.status, set()):
         raise HTTPException(
             status_code=status.HTTP_409_CONFLICT,

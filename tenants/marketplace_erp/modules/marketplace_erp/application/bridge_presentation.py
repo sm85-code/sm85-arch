@@ -16,3 +16,33 @@ async def enrich_orders(session, orders):
             continue
         if isinstance(snapshot, dict):
             by_id[row.pesanan_id]._bridge_snapshot = snapshot
+
+
+DISPLAY_FIELDS = {'payment_method', 'city', 'order_total', 'buyer_paid', 'currency',
+                  'recipient_name', 'recipient_phone', 'recipient_address', 'source_status', 'status',
+                  'carrier', 'tracking_number', 'buyer_note'}
+LINE_FIELDS = {'unit_price', 'line_total', 'image_url'}
+
+
+def merge_display_snapshot(original, latest):
+    if not isinstance(latest, dict) or not all(latest.get(k) == original.get(k) for k in ('platform', 'shop_id', 'order_id')):
+        return original
+    result = {**original, **{k: latest[k] for k in DISPLAY_FIELDS if k in latest}}
+    lines = latest.get('items') or []
+    by_id = {line.get('item_id'): line for line in lines}
+    if len(by_id) != len(lines):
+        return result
+    result['items'] = []
+    for line in original.get('items') or []:
+        fresh = by_id.get(line.get('item_id')) or {}
+        same = all(fresh.get(k) == line.get(k) for k in ('product', 'variant', 'quantity'))
+        result['items'].append({**line, **({k: fresh[k] for k in LINE_FIELDS if k in fresh} if same else {})})
+    return result
+
+
+def source_status_label(source):
+    if source.get('source_status') == 'AWAITING_COLLECTION' and source.get('status') == 'ready':
+        return 'Menunggu Penyerahan ke Kurir'
+    return {'shipped': 'Dikirim', 'completed': 'Selesai', 'cancelled': 'Dibatalkan',
+            'unpaid': 'Belum Bayar', 'hold': 'Ditahan'}.get(source.get('status'),
+            'Status EasyBoss: ' + source.get('source_status', 'Belum tersedia'))

@@ -140,7 +140,13 @@ def code(order):
 
 def operational_snapshot(snapshot):
     # Display-only enrichment must not flag unchanged production orders for review.
-    return {k: v for k, v in snapshot.items() if k not in {"payment_method", "city"}}
+    display = {"payment_method", "city", "order_total", "buyer_paid", "currency",
+               "recipient_name", "recipient_phone", "recipient_address"}
+    result = {k: v for k, v in snapshot.items() if k not in display}
+    if isinstance(result.get("items"), list):
+        result["items"] = [{k: v for k, v in line.items() if k not in {"unit_price", "line_total", "image_url"}}
+                           for line in result["items"]]
+    return result
 
 
 async def ingest(session, order):
