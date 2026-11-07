@@ -149,12 +149,18 @@ async def test_normalized_orders_reach_manual_workflow_and_missing_buyer_is_bloc
 
 
 @pytest.mark.asyncio
-async def test_historical_scan_keeps_identity_without_detail_reads():
-    g = Fake([{'total': 1, 'pesanan': [{'id': 'p', 'shopId': 'shop', 'no_pesanan': 'order',
-                                      'platform': 'tiktok', 'status': 'ship_success'}]},
-              {'total': 0, 'pesanan': []}])
+async def test_active_scan_and_tracked_orders_include_moved_orders():
+    g = Fake([{'total': 0, 'pesanan': []}] * 4 + [
+        {'total': 1, 'pesanan': [{'id': 'pkg', 'shopId': 'shop', 'no_pesanan': 'order'}]}, package()])
+    g.tracked_orders = [('tiktokshop', 'shop', 'order')]
     rows = await g.orders(None)
     assert len(rows) == 1 and rows[0].order_id == 'order'
-    assert rows[0].status == 'unknown' and rows[0].paid is None
-    assert rows[0].source_status == 'ship_success'
-    assert g.calls == ['eb_pesanan_list', 'eb_pesanan_list']
+    assert rows[0].status == 'ready' and rows[0].paid is True
+    assert g.calls == ['eb_pesanan_list'] * 5 + ['eb_pesanan_detail']
+
+
+@pytest.mark.asyncio
+async def test_empty_active_queues_do_not_scan_historical_orders():
+    g = Fake([{'total': 0, 'pesanan': []}] * 4)
+    assert await g.orders(None) == []
+    assert g.calls == ['eb_pesanan_list'] * 4

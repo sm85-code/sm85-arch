@@ -110,3 +110,10 @@ asserted to be verified recipient names; shipping still uses the marketplace.
 Historical packages outside the observed wait_audit/wait_ship candidate states
 retain identity/status for import-change review without unnecessary detail reads.
 All candidate imports still require live detail, payment evidence and complete items.
+
+The live MCP truncates text output at 24,000 characters; pages are capped at 50.
+For the direct MCP adapter, scans now read waitProcess/waitShip queues plus every
+previously imported or failed/review identity across all tabs. This replaces the
+historical full-directory order scan described above. Moved/cancelled imported
+orders still get fresh details and review without changing existing production
+orders. The bridge-v1 transport retains its existing full-scan behavior.
