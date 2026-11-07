@@ -638,6 +638,8 @@ async def daftar_pesanan(
         akun_id=akun_id, akun_diizinkan=await akun_ids_diizinkan(user, session), tahap=tahap, resi=resi, q=q,
         dari=dari, sampai=sampai, urut=urut, halaman=halaman, per_halaman=per_halaman,
     )
+    from tenants.marketplace_erp.modules.marketplace_erp.application.bridge_presentation import enrich_orders
+    await enrich_orders(session, hasil["items"])
     await services.lengkapi_foto_item(session, hasil["items"])
     hasil["items"] = [PesananOut.model_validate(p).model_dump(mode="json") for p in hasil["items"]]
     return hasil
@@ -707,6 +709,8 @@ async def get_pesanan(
 ):
     pesanan = await services.get_pesanan(session, pesanan_id)
     await pastikan_akses_akun(user, session, pesanan.akun_id)
+    from tenants.marketplace_erp.modules.marketplace_erp.application.bridge_presentation import enrich_orders
+    await enrich_orders(session, [pesanan])
     await services.lengkapi_foto_item(session, [pesanan])
     return pesanan
 

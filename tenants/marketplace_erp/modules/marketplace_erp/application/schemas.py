@@ -538,8 +538,26 @@ class PesananOut(BaseModel):
         }
         if isinstance(snapshot, dict):
             data.update({k: v for k, v in snapshot.items() if k in fields and v is not None})
+        if isinstance(snapshot, dict):
+            manual = snapshot.get("manual") or {}
+            source = snapshot.get("easyboss") or {}
+            if isinstance(manual, dict):
+                data["nama_toko"] = manual.get("toko_nama") or ""
+            if isinstance(source, dict) and source.get("platform") in {"tiktokshop", "lazada"} and source.get("order_id"):
+                latest = getattr(value, "_bridge_snapshot", {})
+                if isinstance(latest, dict) and all(latest.get(k) == source.get(k) for k in ("platform", "shop_id", "order_id")):
+                    source = {**source, **{k: latest[k] for k in ("payment_method", "city") if k in latest}}
+                data["nomor_pesanan_asli"] = source["order_id"]
+                data["platform_sumber"] = source["platform"]
+                data["payment_method"] = source.get("payment_method") or ""
+                data["kota"] = source.get("city") or ""
+                data["kurir"] = source.get("carrier") or data.get("kurir")
+                data["nomor_resi"] = source.get("tracking_number") or data.get("nomor_resi")
         return data
 
+    nomor_pesanan_asli: str = ""
+    platform_sumber: str = ""
+    nama_toko: str = ""
     id: str
     platform: str
     id_eksternal: str

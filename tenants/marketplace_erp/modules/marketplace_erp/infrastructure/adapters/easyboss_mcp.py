@@ -154,6 +154,7 @@ def normalize(p, identity):
         return Order(platform=platform, shop_id=shop_id, order_id=order_id,
             easyboss_order_id=str(o['opOrderId']), package_ids=[str(p['opOrderPackageId'])],
             complete=complete, paid=paid, status=status, source_status=source, buyer=buyer,
+            payment_method=o.get('paymentMethod') or '', city=(p.get('consigneeInfo') or {}).get('city') or '',
             ordered_at=native_time(o['gmtOrderStart']) if o.get('gmtOrderStart') else None,
             deadline=native_time(deadline) if deadline else None, buyer_note=o.get('buyerMessage') or '',
             carrier=p.get('logisticsCompany'), tracking_number=p.get('logisticsNo'), items=lines)

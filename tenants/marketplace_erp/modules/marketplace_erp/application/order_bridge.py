@@ -138,6 +138,11 @@ def code(order):
     return "EB-" + hashlib.sha256(json.dumps(identity(order)).encode()).hexdigest()
 
 
+def operational_snapshot(snapshot):
+    # Display-only enrichment must not flag unchanged production orders for review.
+    return {k: v for k, v in snapshot.items() if k not in {"payment_method", "city"}}
+
+
 async def ingest(session, order):
     key = identity(order)
     row = await session.scalar(select(BridgeOrder).where(BridgeOrder.platform == key[0],
@@ -157,7 +162,7 @@ async def ingest(session, order):
     if row.pesanan_id:
         previous = await session.get(Pesanan, row.pesanan_id)
         original = json.loads(previous.detail_json).get("easyboss", {})
-        if order.status == "cancelled" or original != order.model_dump(mode="json"):
+        if order.status == "cancelled" or operational_snapshot(original) != operational_snapshot(order.model_dump(mode="json")):
             row.status, row.error = "review", "source_changed_after_import"
         return "skipped"  # Never mutate production work after source changes.
     if order.status != "ready" or order.paid is not True:
