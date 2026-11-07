@@ -69,3 +69,14 @@ Unit fixtures are synthetic SQLite/MockTransport, including native form/paginati
 Pause in dashboard prevents future automatic scans; an already running transaction/scan completes. Use the environment kill switch for an approved process restart if immediate shutdown is necessary. No restart is performed by the dashboard.
 
 Disable automation and scheduler, then revert application releases through the separately approved deployment process. Keep additive columns/tables and all source/order receipts to preserve idempotency and history. Do not drop bridge tables or delete imported orders as a rollback. Source changes after import require operational review; no automatic cancellation of production jobs occurs. Existing Shopee and manual entry remain usable.
+
+### Update 2026-11-07: direct installed MCP adapter
+
+The initial upstream-access blocker above is resolved for read access. See the
+live verification section in CONTRACT.md. The backend now supports the installed
+stateless EasyBoss MCP directly via EASYBOSS_BRIDGE_MCP_URL and its bearer binding;
+the prior optional bridge-v1 HTTPS adapter remains compatible. No new gateway is
+required. This does not activate imports or automation. Masked buyers, unproven
+Lazada/COD payment and multiple-package aggregates remain explicitly ineligible.
+Run `PYTHONPATH=. python scripts/check_easyboss_mcp.py` with the reviewed MCP
+configuration for a read-only counts/eligibility check; it prints no customer PII.

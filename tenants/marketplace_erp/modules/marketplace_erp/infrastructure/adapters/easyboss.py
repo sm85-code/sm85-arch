@@ -81,16 +81,19 @@ def native_time(value: str) -> datetime:
 
 
 def configured() -> bool:
-    return bool(os.getenv("EASYBOSS_BRIDGE_URL") and os.getenv("EASYBOSS_BRIDGE_TOKEN")
+    return bool(os.getenv("EASYBOSS_BRIDGE_TOKEN")
+                and (os.getenv("EASYBOSS_BRIDGE_MCP_URL") or os.getenv("EASYBOSS_BRIDGE_URL"))
                 and os.getenv("EASYBOSS_BRIDGE_CONTRACT_VERIFIED") == "1")
 
 
 class Gateway:
-    """Optional read-only internal gateway. Deployment requires a verified upstream implementation.
+    """Select the configured read-only MCP or bridge-v1 transport."""
+    def __new__(cls, client):
+        if getattr(client, "bridge_mcp", False):
+            from .easyboss_mcp import MCPGateway
+            return MCPGateway(client)
+        return super().__new__(cls)
 
-    This repository defines its contract; it does not claim the existing MCP implements it.
-    Bearer auth is outbound only. ERP imports call the application service in-process.
-    """
     def __init__(self, client: httpx.AsyncClient):
         self.client = client
 
@@ -152,6 +155,19 @@ class Gateway:
 def client():
     if not configured():
         raise BridgeProblem("easyboss_contract_unverified")
+    mcp_url = os.getenv("EASYBOSS_BRIDGE_MCP_URL")
+    if mcp_url:
+        from urllib.parse import urlsplit
+        parsed = urlsplit(mcp_url)
+        # HTTP only for the known Docker service; never forward credentials externally.
+        if parsed.username or parsed.password or parsed.query or parsed.fragment or not (
+            parsed.scheme == "https" or (parsed.scheme == "http" and parsed.hostname == "easyboss-mcp")):
+            raise BridgeProblem("invalid_mcp_url")
+        result = httpx.AsyncClient(base_url=mcp_url, timeout=60, follow_redirects=False,
+            headers={"Accept": "application/json, text/event-stream", "MCP-Protocol-Version": "2024-11-05",
+                     "Authorization": "Bearer " + os.environ["EASYBOSS_BRIDGE_TOKEN"]})
+        result.bridge_mcp = True
+        return result
     url = os.environ["EASYBOSS_BRIDGE_URL"].rstrip("/") + "/"
     if not url.startswith("https://"):
         raise BridgeProblem("https_required")

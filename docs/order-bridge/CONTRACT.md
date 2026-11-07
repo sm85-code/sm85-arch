@@ -59,3 +59,45 @@ Optional HTTP transport: HTTPS GET `<base>/shops` and `<base>/orders`, bearer to
 All allowlisted original canonical metadata is retained in `Pesanan.detail_json.easyboss` on successful import, with the existing `manual` detail preserved. This is not claimed to be a raw native response archive: raw API responses can contain credentials or unnecessary PII, and unverified native fields are not persisted. Invalid individual item payloads with usable source identity produce `invalid_source_order` receipts while valid orders continue; an invalid identity aborts the scan because it cannot be safely retried/deduplicated.
 
 Cancellation before import is skipped. Cancellation/status/items/shipping changes after import produce a review receipt and source-hash/status audit event, preserving original imported metadata and production work. Dashboard shows both failed receipts and review receipts; retry targets only failed receipts and fetches fresh data.
+
+## Live MCP verification — 2026-11-07
+
+Read-only host and native MCP checks succeeded against the installed EasyBoss service.
+Directory returned 9 Shopee, 14 TikTok and 2 Lazada shops. Only TikTok/Lazada are
+included by this bridge. Full directory includes shops without pending orders.
+
+The installed `eb_pesanan_detail` is NOT an order aggregate: it returns only the
+FIRST package from a search capped at five packages. The new MCP adapter first
+queries the exact original order number and requires exactly one package, checks
+shop/order/package identities, stable original line IDs, quantities against both
+package and order, and `isSplit == 0`. Multiple-package orders are rejected before
+calling detail. They require an upstream aggregate reader before import is possible.
+
+Observed TikTok sample: platform status AWAITING_COLLECTION, gmtPay populated,
+isCod=0, one complete item with variant and quantity. This supports prepaid ready
+eligibility only for that observed state. isShipped=1 coexisted with gmtDelivery=null;
+it is NOT used as evidence of actual dispatch. The buyer username is masked, so
+normalization deliberately leaves buyer empty and the importer blocks it.
+
+Observed Lazada sample: item detail available but payment not proven; canonical
+status remains unknown and paid remains null. COD and other native states are
+also ineligible until independently evidenced. No settlement or profit amount is
+inferred from order totals. Naive EasyBoss times are converted UTC+8 to UTC.
+
+Transport calls only eb_toko_list, eb_pesanan_list and eb_pesanan_detail over the
+existing stateless MCP JSON-RPC endpoint. Both JSON and SSE responses are parsed;
+HTTP/business/identity/pagination errors abort without source response logging.
+No native EasyBoss cookies or login credentials are copied into ERP.
+
+Optional configuration: EASYBOSS_BRIDGE_MCP_URL (existing internal endpoint,
+e.g. http://easyboss-mcp:8000/mcp) and EASYBOSS_BRIDGE_TOKEN (existing MCP bearer
+binding), plus EASYBOSS_BRIDGE_CONTRACT_VERIFIED=1 after operator review. This
+reuses the existing service; no additional gateway deployment is necessary.
+HTTP is restricted to the exact Docker service name; HTTPS is required elsewhere.
+Production configuration and scheduler have NOT been changed by validation.
+
+Full scans currently include historical orders (2084 TikTok packages and 24 Lazada
+packages observed). They perform sequential detail reads, so minute polling must
+remain disabled until a source retention/change window and rate limits are verified.
+Concurrent source changes can invalidate a scan, which must be retried. A total
+count alone is not an upstream snapshot guarantee.
