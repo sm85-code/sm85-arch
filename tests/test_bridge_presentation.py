@@ -72,6 +72,20 @@ async def test_existing_bridge_display_uses_source_identity_without_order_mutati
             # Display-only enrichment does not create a false operational-change review.
             assert await b.ingest(s, row) == 'skipped'
             assert receipt.status == 'imported'
+            # Lifecycle updates change read projections and queues without rewriting production work.
+            receipt.status, receipt.error = 'review', 'source_changed_after_import'
+            for native, canonical, phase in [('IN_TRANSIT','shipped','dikirim'), ('DELIVERED','completed','selesai'), ('COMPLETED','completed','selesai')]:
+                updated = row.model_copy(update={'source_status':native, 'status':canonical})
+                assert await b.ingest(s, updated) == 'skipped'
+                await s.commit()
+                await enrich_orders(s, [p])
+                assert PesananOut.model_validate(p).status == canonical
+                assert await s.scalar(select(Pesanan.id).where(services._kondisi_tahap(phase))) == p.id
+                assert await s.scalar(select(Pesanan.id).where(services._kondisi_tahap('perlu_diproses'))) is None
+                assert await s.scalar(select(Pesanan.id).where(services._kondisi_tahap('menunggu_kurir'))) is None
+                assert await s.scalar(select(services._ekspresi_tahap()).where(Pesanan.id == p.id)) == phase
+                assert receipt.status == 'imported' and receipt.error is None
+                assert before == (p.id_eksternal, p.platform, p.status, p.detail_json)
             # An unrelated snapshot cannot override this order's display metadata.
             p._bridge_snapshot = {**row.model_dump(mode='json'), 'order_id': 'wrong', 'payment_method': 'wrong'}
             assert PesananOut.model_validate(p).payment_method == ''

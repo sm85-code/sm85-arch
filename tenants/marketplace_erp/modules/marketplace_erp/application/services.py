@@ -1413,14 +1413,9 @@ def _kondisi_tahap(tahap: str):
         "selesai": Pesanan.status == "completed",
         "dibatalkan": Pesanan.status == "cancelled",
     }
-    from tenants.marketplace_erp.modules.marketplace_erp.infrastructure.models import BridgeOrder
-    awaiting = select(BridgeOrder.id).where(BridgeOrder.pesanan_id == Pesanan.id,
-        BridgeOrder.source_status.in_(["AWAITING_COLLECTION", "ready_to_ship"]), Pesanan.status == "to_ship").exists()
-    if tahap == "perlu_diproses":
-        return and_(conditions[tahap], ~awaiting)
-    if tahap == "menunggu_kurir":
-        return or_(conditions[tahap], awaiting)
-    return conditions[tahap]
+    from .bridge_status import phase_expression
+    source_phase = phase_expression()
+    return or_(source_phase == tahap, and_(source_phase.is_(None), conditions[tahap]))
 
 
 def _ekspresi_tahap():

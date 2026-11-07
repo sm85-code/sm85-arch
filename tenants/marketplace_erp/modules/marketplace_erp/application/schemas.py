@@ -556,6 +556,8 @@ class PesananOut(BaseModel):
                 data["nomor_resi"] = source.get("tracking_number") or data.get("nomor_resi")
                 data["status_sumber"] = source.get("source_status") or ""
                 data["label_status_sumber"] = source_status_label(source)
+                from .bridge_status import projected_status
+                data["status"] = projected_status(source, data["status"])
                 data["currency"] = source.get("currency") or ""
                 data["cod"] = bool(source.get("cod"))
                 data["total_sumber_tersedia"] = source.get("order_total") is not None
