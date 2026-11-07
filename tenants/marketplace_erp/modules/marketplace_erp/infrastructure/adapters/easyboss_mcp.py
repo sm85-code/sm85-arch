@@ -145,17 +145,16 @@ def normalize(p, identity):
             native_time(o['gmtPay'])
         source, status = o['platformOrderStatus'], 'unknown'
         cod = str(o.get('isCod')) == '1' and str(o.get('paymentMethod') or '').upper() == 'COD'
-        cod_eligible = platform == 'lazada' and source == 'ready_to_ship' and cod
-        if platform == 'tiktokshop' and source == 'AWAITING_COLLECTION' and paid is True:
-            status = 'ready'
-        if platform == 'lazada' and source == 'ready_to_ship' and (paid is True or cod_eligible):
-            status = 'ready'
+        cod_eligible = platform == 'lazada' and source in {'ready_to_ship', 'shipped', 'delivered'} and cod
+        from ...application.bridge_status import native_state
+        mapped = native_state(platform, source)
+        status = mapped[0] if mapped else 'unknown'
         if (p.get('isOnHoldOrder') or p.get('isPendingStatus') or str(p.get('isIsolation')) == '1'
                 or o.get('gmtRefund') or o.get('opOrderReturns') or p.get('cancelOrder') or p.get('returnOrder')):
             status = 'hold'
-        if o.get('gmtDelivery'):
+        if not mapped and o.get('gmtDelivery'):
             status = 'shipped'
-        if o.get('gmtFinish'):
+        if not mapped and o.get('gmtFinish'):
             status = 'completed'
         raw = p['items']
         if not isinstance(raw, dict) or not raw:

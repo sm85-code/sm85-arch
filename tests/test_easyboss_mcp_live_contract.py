@@ -37,9 +37,9 @@ def test_masked_buyer_cod_and_unknown_status():
     p = package()
     p['orderInfo'].update(buyerUsername='s***di', isCod='1')
     row = normalize(p, ('tiktokshop', 'shop', 'order'))
-    assert row.buyer == 's***di' and row.paid is None and row.status == 'unknown'
+    assert row.buyer == 's***di' and row.paid is None and row.status == 'ready' and row.cod_eligible is False
     p['orderInfo'].update(isCod='0', platformOrderStatus='CANCELLED')
-    assert normalize(p, ('tiktokshop', 'shop', 'order')).status == 'unknown'
+    assert normalize(p, ('tiktokshop', 'shop', 'order')).status == 'cancelled'
 
 
 @pytest.mark.parametrize('field,value', [('shopId', 'wrong'), ('quantity', '1.5'), ('opOrderId', 'other')])
@@ -203,3 +203,14 @@ async def test_email_shop_directory_name_uses_alias_for_same_stable_id():
               {'per_toko':[{'platform':'lazada','shopId':'shop','shopName':'Bumi Ternak'}]}])
     rows = await g.shops()
     assert rows[0].name == 'Bumi Ternak' and rows[0].shop_id == 'shop'
+
+
+@pytest.mark.parametrize('native,canonical,phase', [('IN_TRANSIT','shipped','dikirim'), ('DELIVERED','completed','selesai'), ('COMPLETED','completed','selesai')])
+def test_native_lifecycle_without_delivery_timestamp(native, canonical, phase):
+    from tenants.marketplace_erp.modules.marketplace_erp.application.bridge_status import native_state, projected_status
+    p = package()
+    p['orderInfo'].update(platformOrderStatus=native, gmtDelivery=None, gmtFinish=None)
+    row = normalize(p, ('tiktokshop', 'shop', 'order'))
+    assert row.status == canonical
+    assert native_state('tiktokshop', native)[1] == phase
+    assert projected_status({'platform':'tiktokshop', 'source_status':native}, 'to_ship') == canonical

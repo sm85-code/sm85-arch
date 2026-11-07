@@ -151,6 +151,13 @@ def operational_snapshot(snapshot):
     return result
 
 
+def production_snapshot(snapshot):
+    result = operational_snapshot(snapshot)
+    result.pop('status', None)
+    result.pop('source_status', None)
+    return result
+
+
 async def ingest(session, order):
     key = identity(order)
     row = await session.scalar(select(BridgeOrder).where(BridgeOrder.platform == key[0],
@@ -170,10 +177,12 @@ async def ingest(session, order):
     if row.pesanan_id:
         previous = await session.get(Pesanan, row.pesanan_id)
         original = json.loads(previous.detail_json).get("easyboss", {})
-        if order.status == "cancelled" or operational_snapshot(original) != operational_snapshot(order.model_dump(mode="json")):
+        if order.status == "cancelled" or production_snapshot(original) != production_snapshot(order.model_dump(mode="json")):
             row.status, row.error = "review", "source_changed_after_import"
+        elif row.error in (None, "source_changed_after_import"):
+            row.status, row.error = "imported", None
         return "skipped"  # Never mutate production work after source changes.
-    if order.status != "ready" or not (order.paid is True or (order.cod is True and order.cod_eligible is True)):
+    if order.status not in {"ready", "shipped", "completed"} or not (order.paid is True or (order.cod is True and order.cod_eligible is True)):
         row.status, row.error = "skipped", "ineligible_status"
         return "skipped"
     reason = None
@@ -207,6 +216,8 @@ async def ingest(session, order):
         row.status, row.error = "failed", "invalid_manual_order"
         return "failed"
     pesanan = await pesanan_manual.buat(session, payload)
+    if order.status in {"shipped", "completed"}:
+        pesanan.status = order.status  # Initial state of a new historical import only.
     detail = json.loads(pesanan.detail_json)
     detail["easyboss"] = order.model_dump(mode="json")
     pesanan.detail_json = json.dumps(detail)

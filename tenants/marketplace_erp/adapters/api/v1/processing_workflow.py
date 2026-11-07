@@ -32,7 +32,7 @@ from tenants.marketplace_erp.modules.marketplace_erp.infrastructure.models impor
     UserMarketplaceErp,
 )
 
-from tenants.marketplace_erp.modules.marketplace_erp.application.bridge_presentation import bridge_order_number
+from tenants.marketplace_erp.modules.marketplace_erp.application.bridge_presentation import bridge_order_number, effective_order_status, enrich_orders
 
 from .processing_permissions import processing_access
 
@@ -583,7 +583,9 @@ def processed():
 
 def siap():
     """Orders whose items can be mapped: Shopee orders already processed, and manual orders still being worked on."""
-    return or_(and_(*processed()), and_(Pesanan.platform == PLATFORM_MANUAL, Pesanan.status.in_(["to_ship", "shipped", "completed"])))
+    from tenants.marketplace_erp.modules.marketplace_erp.application.services import _kondisi_tahap
+    allowed = or_(*[_kondisi_tahap(t) for t in ('perlu_diproses','menunggu_kurir','dikirim','selesai')])
+    return or_(and_(*processed()), and_(Pesanan.platform == PLATFORM_MANUAL, allowed))
 
 
 def order_item(item, order, shop):
@@ -676,7 +678,9 @@ async def candidates(
     else:
         filters = [siap(), ~has_job]
         if status in CANDIDATE_STATUS:
-            filters.append(Pesanan.status == CANDIDATE_STATUS[status])
+            from tenants.marketplace_erp.modules.marketplace_erp.application.services import _kondisi_tahap
+            filters.append(or_(_kondisi_tahap('perlu_diproses'), _kondisi_tahap('menunggu_kurir'))
+                           if status == 'menunggu' else _kondisi_tahap('dikirim' if status == 'dikirim' else 'selesai'))
     if q.strip():
         text = "%" + q.strip() + "%"
         filters.append(
@@ -703,7 +707,8 @@ async def candidates(
             base.order_by(Pesanan.created_at.desc(), ItemPesanan.id).offset((page - 1) * PER_PAGE).limit(PER_PAGE)
         )
     ).all()
-    items = [dict(order_item(*row), status=row[1].status) for row in rows]
+    await enrich_orders(session, [row[1] for row in rows])
+    items = [dict(order_item(*row), status=effective_order_status(row[1])) for row in rows]
     if status == "dipetakan" and items:
         jobs = {
             j.source_item_id: j
@@ -896,7 +901,7 @@ def computed(row, data, order=None):
         packing_kayu_total=str(packing * qty) if reseller and data.get("packing_type") == "kayu" else "0",
         reseller_total=str((production + paint + packing + fee) * qty) if reseller else None,
         order_cancelled=bool(
-            order and (order.status == "cancelled" or order.status_marketplace in ["CANCELLED", "IN_CANCEL"])
+            order and (effective_order_status(order) == "cancelled" or order.status_marketplace in ["CANCELLED", "IN_CANCEL"])
         ),
     )
 
@@ -963,6 +968,7 @@ async def jobs(session: AsyncSession = Depends(get_db_marketplace_erp), actor: U
         if order_ids
         else {}
     )
+    await enrich_orders(session, list(orders.values()))
     return {
         "items": [computed(r, d, orders.get(d.get("order_id"))) for r in rows for d in [json.loads(r.payload_json)]]
     }
@@ -1327,7 +1333,7 @@ async def transition(
             raise HTTPException(409, "Tahap sudah berubah; muat ulang agar tidak tercatat dua kali")
         if row.source_item_id:
             order = await session.get(Pesanan, data["order_id"])
-            if order and (order.status == "cancelled" or order.status_marketplace in ["CANCELLED", "IN_CANCEL"]):
+            if order and (effective_order_status(order) == "cancelled" or order.status_marketplace in ["CANCELLED", "IN_CANCEL"]):
                 raise HTTPException(
                     409, "Pesanan dibatalkan/meminta pembatalan. Periksa sebelum melanjutkan pekerjaan."
                 )

@@ -41,8 +41,10 @@ def merge_display_snapshot(original, latest):
 
 
 def source_status_label(source):
-    if source.get('source_status') in {'AWAITING_COLLECTION', 'ready_to_ship'} and source.get('status') == 'ready':
-        return 'Menunggu Penyerahan ke Kurir'
+    from .bridge_status import native_state
+    state = native_state(source.get('platform'), source.get('source_status'))
+    if state:
+        return state[2]
     return {'shipped': 'Dikirim', 'completed': 'Selesai', 'cancelled': 'Dibatalkan',
             'unpaid': 'Belum Bayar', 'hold': 'Ditahan'}.get(source.get('status'),
             'Status EasyBoss: ' + source.get('source_status', 'Belum tersedia'))
@@ -61,3 +63,15 @@ def bridge_order_number(order):
         return None
     number = source.get('order_id')
     return number if isinstance(number, str) and number else None
+
+
+def effective_order_status(order):
+    from .bridge_status import projected_status
+    try:
+        source = json.loads(order.detail_json or '{}').get('easyboss') or {}
+    except (ValueError, TypeError, AttributeError):
+        return order.status
+    if not isinstance(source, dict):
+        return order.status
+    source = merge_display_snapshot(source, getattr(order, '_bridge_snapshot', {}))
+    return projected_status(source, order.status)
