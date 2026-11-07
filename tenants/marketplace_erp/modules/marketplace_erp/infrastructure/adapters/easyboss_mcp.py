@@ -76,9 +76,9 @@ class MCPGateway:
             seen, identities, total = set(), {}, None
             for page in range(1, 1001):
                 data = await self.call('eb_pesanan_list', {'tab': 'all', 'platform': platform,
-                    'halaman': page, 'per_halaman': 100})
+                    'halaman': page, 'per_halaman': 50})
                 batch, count = data.get('pesanan'), data.get('total')
-                if type(count) is not int or count < 0 or not isinstance(batch, list) or len(batch) > 100:
+                if type(count) is not int or count < 0 or not isinstance(batch, list) or len(batch) > 50:
                     raise BridgeProblem('mcp_list_contract')
                 if total is not None and count != total:
                     raise BridgeProblem('mcp_unstable_pagination')
