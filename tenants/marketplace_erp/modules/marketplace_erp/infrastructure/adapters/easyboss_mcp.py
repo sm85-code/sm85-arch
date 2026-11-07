@@ -73,7 +73,7 @@ class MCPGateway:
     async def orders(self, since):
         result = []
         for platform in PLATFORMS:
-            seen, identities, total = set(), set(), None
+            seen, identities, total = set(), {}, None
             for page in range(1, 1001):
                 data = await self.call('eb_pesanan_list', {'tab': 'all', 'platform': platform,
                     'halaman': page, 'per_halaman': 100})
@@ -89,7 +89,7 @@ class MCPGateway:
                     if not key or key in seen or not shop_id or not order_id or row.get('platform') != platform:
                         raise BridgeProblem('mcp_unstable_pagination')
                     seen.add(key)
-                    identities.add((shop_id, order_id))
+                    identities[(shop_id, order_id)] = row.get('status')
                 if len(seen) == total:
                     break
                 if not batch or len(seen) > total:
@@ -97,7 +97,15 @@ class MCPGateway:
             else:
                 raise BridgeProblem('pagination_limit')
             for shop_id, order_id in sorted(identities):
-                result.append(await self.one(platform, shop_id, order_id))
+                source_status = identities[(shop_id, order_id)]
+                if source_status in {'wait_audit', 'wait_ship'}:
+                    result.append(await self.one(platform, shop_id, order_id))
+                else:
+                    # Preserve identity/status for review of previously imported orders,
+                    # without thousands of detail reads for historical ineligible rows.
+                    result.append(Order(platform=PLATFORMS[platform], shop_id=shop_id, order_id=order_id,
+                        complete=False, paid=None, status='unknown', source_status=source_status or 'unknown',
+                        ordered_at=None, deadline=None, items=[]))
         return result
 
 
@@ -105,7 +113,7 @@ def normalize(p, identity):
     """Existing detail tool returns FIRST package only; caller proves total==1.
 
     COD and Lazada ready/payment mapping are intentionally unknown until observed.
-    Masked buyer names must not silently become usable ERP customer names.
+    The marketplace username is an opaque source identifier, not a verified legal name.
     """
     platform, shop_id, order_id = identity
     try:
@@ -144,8 +152,6 @@ def normalize(p, identity):
             and sum(i.quantity for i in lines) == int(o['itemQuantity'])
             and sum(i.quantity for i in lines) == int(p['itemQuantity']))
         buyer = o.get('buyerUsername') or ''
-        if '*' in buyer:
-            buyer = ''
         deadline = p.get('gmtLastDelivery') or o.get('gmtLastDelivery')
         return Order(platform=platform, shop_id=shop_id, order_id=order_id,
             easyboss_order_id=str(o['opOrderId']), package_ids=[str(p['opOrderPackageId'])],

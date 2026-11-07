@@ -76,8 +76,8 @@ calling detail. They require an upstream aggregate reader before import is possi
 Observed TikTok sample: platform status AWAITING_COLLECTION, gmtPay populated,
 isCod=0, one complete item with variant and quantity. This supports prepaid ready
 eligibility only for that observed state. isShipped=1 coexisted with gmtDelivery=null;
-it is NOT used as evidence of actual dispatch. The buyer username is masked, so
-normalization deliberately leaves buyer empty and the importer blocks it.
+it is NOT used as evidence of actual dispatch. The marketplace username may be masked. It is retained exactly as the source
+customer identifier; no legal name is invented. An actually absent username still blocks import.
 
 Observed Lazada sample: item detail available but payment not proven; canonical
 status remains unknown and paid remains null. COD and other native states are
@@ -101,3 +101,12 @@ packages observed). They perform sequential detail reads, so minute polling must
 remain disabled until a source retention/change window and rate limits are verified.
 Concurrent source changes can invalidate a scan, which must be retried. A total
 count alone is not an upstream snapshot guarantee.
+
+## Usability correction — 2026-11-07
+
+Marketplace usernames, including masked usernames, are usable source identifiers
+for the existing production order form. They are preserved verbatim. They are not
+asserted to be verified recipient names; shipping still uses the marketplace.
+Historical packages outside the observed wait_audit/wait_ship candidate states
+retain identity/status for import-change review without unnecessary detail reads.
+All candidate imports still require live detail, payment evidence and complete items.
