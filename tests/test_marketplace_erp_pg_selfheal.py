@@ -146,3 +146,43 @@ async def test_template_requests_recover_missing_table_concurrently():
         async with root.begin() as conn:
             await conn.execute(text(f'DROP SCHEMA IF EXISTS "{schema}" CASCADE'))
         await root.dispose()
+
+
+@pytest.mark.asyncio
+async def test_legacy_report_audit_columns_are_healed_without_changing_history():
+    from datetime import date
+    from sqlalchemy import insert
+    from sqlalchemy.ext.asyncio import create_async_engine
+    from tenants.marketplace_erp.modules.marketplace_erp.infrastructure import seeder
+    from tenants.marketplace_erp.modules.marketplace_erp.infrastructure.database import MarketplaceErpBase
+    from tenants.marketplace_erp.modules.marketplace_erp.infrastructure.models import LaporanKeuanganTutup, LaporanKeuanganAudit, PesananHapusLog
+    schema = f'mpe_audit_heal_{uuid.uuid4().hex[:8]}'
+    engine = create_async_engine(_asyncpg_url(), connect_args={"prepared_statement_cache_size": 0})
+    tables = [LaporanKeuanganTutup.__table__, LaporanKeuanganAudit.__table__, PesananHapusLog.__table__]
+    try:
+        async with engine.begin() as conn:
+            await conn.execute(text(f'CREATE SCHEMA "{schema}"'))
+            await conn.execute(text(f'SET LOCAL search_path TO "{schema}"'))
+            await conn.run_sync(MarketplaceErpBase.metadata.create_all)
+            day = date(2026, 10, 31)
+            await conn.execute(insert(LaporanKeuanganTutup).values(tanggal=day, snapshot_json='{"saldo":"123.45"}', created_by='fixture'))
+            await conn.execute(insert(LaporanKeuanganAudit).values(tanggal=day, action='close', reason='fixture', snapshot_json='{"saldo":"123.45"}', created_by='fixture'))
+            await conn.execute(insert(PesananHapusLog).values(pesanan_id='old', id_eksternal='OLD', platform='manual', snapshot_json='{"qty":2}'))
+            before = {}
+            for table in tables:
+                # Disposable test schema only: simulate a database created before the audit field existed.
+                await conn.execute(text(f'ALTER TABLE {table.name} DROP COLUMN audit_json'))
+                before[table.name] = [dict(row) for row in (await conn.execute(text(f'SELECT * FROM {table.name}'))).mappings()]
+            await seeder._self_heal_columns(conn)
+            for table in tables:
+                rows = [dict(row) for row in (await conn.execute(text(f'SELECT * FROM {table.name}'))).mappings()]
+                assert [row.pop('audit_json') for row in rows] == ['[]']
+                assert rows == before[table.name]
+                await conn.execute(text(f'UPDATE {table.name} SET audit_json = :history'), {'history':'[{"event":"kept"}]'})
+            await seeder._self_heal_columns(conn)
+            for table in tables:
+                assert (await conn.execute(text(f'SELECT audit_json FROM {table.name}'))).scalar_one() == '[{"event":"kept"}]'
+    finally:
+        async with engine.begin() as conn:
+            await conn.execute(text(f'DROP SCHEMA IF EXISTS "{schema}" CASCADE'))
+        await engine.dispose()
