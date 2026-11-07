@@ -58,6 +58,8 @@ class Order(Strict):
     status: Literal["ready", "unpaid", "cancelled", "shipped", "completed", "hold", "unknown"]
     paid: bool | None
     source_status: str = Field(min_length=1, max_length=64)
+    payment_method: str = Field(default="", max_length=120)
+    city: str = Field(default="", max_length=200)
     buyer: str = Field(default="", max_length=200)
     ordered_at: datetime | None
     deadline: datetime | None
