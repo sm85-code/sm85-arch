@@ -8,6 +8,7 @@ from __future__ import annotations
 import asyncio
 import os
 from datetime import datetime, timedelta, timezone
+from decimal import Decimal
 from typing import Literal
 
 import httpx
@@ -38,6 +39,9 @@ class RejectedOrder(Strict):
 
 
 class Line(Strict):
+    unit_price: Decimal | None = Field(default=None, ge=0)
+    line_total: Decimal | None = Field(default=None, ge=0)
+    image_url: str | None = Field(default=None, max_length=2048)
     item_id: str = Field(min_length=1, max_length=200)
     product: str = Field(min_length=1, max_length=255)
     variant: str = Field(default="", max_length=255)
@@ -48,6 +52,12 @@ class Line(Strict):
 
 
 class Order(Strict):
+    order_total: Decimal | None = Field(default=None, ge=0)
+    buyer_paid: Decimal | None = Field(default=None, ge=0)
+    currency: str = Field(default="", max_length=10)
+    recipient_name: str = Field(default="", max_length=200)
+    recipient_phone: str = Field(default="", max_length=200)
+    recipient_address: str = Field(default="", max_length=2000)
     platform: str
     shop_id: str = Field(min_length=1, max_length=128)
     order_id: str = Field(min_length=1, max_length=200)

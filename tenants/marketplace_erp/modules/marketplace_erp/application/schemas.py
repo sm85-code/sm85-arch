@@ -513,6 +513,7 @@ class ItemPesananOut(BaseModel):
     harga_satuan: Decimal
     qty: int
     subtotal: Decimal
+    harga_sumber_tersedia: Optional[bool] = None
 
     model_config = ConfigDict(from_attributes=True)
 
@@ -545,16 +546,52 @@ class PesananOut(BaseModel):
                 data["nama_toko"] = manual.get("toko_nama") or ""
             if isinstance(source, dict) and source.get("platform") in {"tiktokshop", "lazada"} and source.get("order_id"):
                 latest = getattr(value, "_bridge_snapshot", {})
-                if isinstance(latest, dict) and all(latest.get(k) == source.get(k) for k in ("platform", "shop_id", "order_id")):
-                    source = {**source, **{k: latest[k] for k in ("payment_method", "city") if k in latest}}
+                from .bridge_presentation import merge_display_snapshot, source_status_label
+                source = merge_display_snapshot(source, latest)
                 data["nomor_pesanan_asli"] = source["order_id"]
                 data["platform_sumber"] = source["platform"]
                 data["payment_method"] = source.get("payment_method") or ""
                 data["kota"] = source.get("city") or ""
                 data["kurir"] = source.get("carrier") or data.get("kurir")
                 data["nomor_resi"] = source.get("tracking_number") or data.get("nomor_resi")
+                data["status_sumber"] = source.get("source_status") or ""
+                data["label_status_sumber"] = source_status_label(source)
+                data["currency"] = source.get("currency") or ""
+                data["total_sumber_tersedia"] = source.get("order_total") is not None
+                if source.get("order_total") is not None:
+                    data["total"] = source["order_total"]
+                data["dibayar_pembeli"] = source.get("buyer_paid")
+                data["penerima"] = source.get("recipient_name") or ""
+                data["telepon_penerima"] = source.get("recipient_phone") or ""
+                data["alamat_penerima"] = source.get("recipient_address") or ""
+                data["message_to_seller"] = source.get("buyer_note") or ""
+                # Match only unique unchanged product/variant/quantity combinations.
+                # Never assign a source line's price/photo to an ambiguous ERP item.
+                source_items = source.get("items") or []
+                items = getattr(value, "items", [])
+                projected = []
+                from urllib.parse import urlsplit
+                for item in items:
+                    row = ItemPesananOut.model_validate(item).model_dump()
+                    key = (item.nama_produk, item.model_name or "", item.qty)
+                    matches = [line for line in source_items if (line.get("product"), line.get("variant") or "", line.get("quantity")) == key]
+                    unique = sum((i.nama_produk, i.model_name or "", i.qty) == key for i in items) == 1
+                    line = matches[0] if unique and len(matches) == 1 else {}
+                    row["harga_sumber_tersedia"] = line.get("unit_price") is not None and line.get("line_total") is not None
+                    if row["harga_sumber_tersedia"]:
+                        row["harga_satuan"], row["subtotal"] = line["unit_price"], line["line_total"]
+                    image = line.get("image_url") or ""
+                    url = urlsplit(image)
+                    if url.scheme == "https" and url.netloc and not url.username and not url.password:
+                        row["foto"] = image
+                    projected.append(row)
+                data["items"] = projected
         return data
 
+    status_sumber: str = ""
+    label_status_sumber: str = ""
+    total_sumber_tersedia: Optional[bool] = None
+    dibayar_pembeli: Optional[Decimal] = None
     nomor_pesanan_asli: str = ""
     platform_sumber: str = ""
     nama_toko: str = ""
