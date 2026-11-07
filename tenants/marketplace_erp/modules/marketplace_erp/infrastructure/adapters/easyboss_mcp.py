@@ -71,41 +71,47 @@ class MCPGateway:
         return normalize(package, identity)
 
     async def orders(self, since):
-        result = []
+        # New orders come from active queues. Imported/failed identities are
+        # explicitly re-read across ALL tabs, so moved/cancelled orders are kept.
+        identities = {}
         for platform in PLATFORMS:
-            seen, identities, total = set(), set(), None
-            for page in range(1, 1001):
-                data = await self.call('eb_pesanan_list', {'tab': 'all', 'platform': platform,
-                    'halaman': page, 'per_halaman': 100})
-                batch, count = data.get('pesanan'), data.get('total')
-                if type(count) is not int or count < 0 or not isinstance(batch, list) or len(batch) > 100:
-                    raise BridgeProblem('mcp_list_contract')
-                if total is not None and count != total:
-                    raise BridgeProblem('mcp_unstable_pagination')
-                total = count
-                for row in batch:
-                    key = str(row.get('id') or '')
-                    shop_id, order_id = str(row.get('shopId') or ''), str(row.get('no_pesanan') or '')
-                    if not key or key in seen or not shop_id or not order_id or row.get('platform') != platform:
+            for tab in ('waitProcess', 'waitShip'):
+                seen, total = set(), None
+                for page in range(1, 1001):
+                    data = await self.call('eb_pesanan_list', {'tab': tab, 'platform': platform,
+                        'halaman': page, 'per_halaman': 50})
+                    batch, count = data.get('pesanan'), data.get('total')
+                    if type(count) is not int or count < 0 or not isinstance(batch, list) or len(batch) > 50:
+                        raise BridgeProblem('mcp_list_contract')
+                    if total is not None and count != total:
                         raise BridgeProblem('mcp_unstable_pagination')
-                    seen.add(key)
-                    identities.add((shop_id, order_id))
-                if len(seen) == total:
-                    break
-                if not batch or len(seen) > total:
-                    raise BridgeProblem('mcp_incomplete_page')
-            else:
-                raise BridgeProblem('pagination_limit')
-            for shop_id, order_id in sorted(identities):
-                result.append(await self.one(platform, shop_id, order_id))
-        return result
+                    total = count
+                    for row in batch:
+                        key = str(row.get('id') or '')
+                        shop_id, order_id = str(row.get('shopId') or ''), str(row.get('no_pesanan') or '')
+                        if not key or key in seen or not shop_id or not order_id or row.get('platform') != platform:
+                            raise BridgeProblem('mcp_unstable_pagination')
+                        seen.add(key)
+                        identities[(platform, shop_id, order_id)] = True
+                    if len(seen) == total:
+                        break
+                    if not batch or len(seen) > total:
+                        raise BridgeProblem('mcp_incomplete_page')
+                else:
+                    raise BridgeProblem('pagination_limit')
+        reverse = {canonical: native for native, canonical in PLATFORMS.items()}
+        for platform, shop_id, order_id in getattr(self, 'tracked_orders', []):
+            if platform in reverse:
+                identities[(reverse[platform], shop_id, order_id)] = True
+        return [await self.one(platform, shop_id, order_id)
+                for platform, shop_id, order_id in sorted(identities)]
 
 
 def normalize(p, identity):
     """Existing detail tool returns FIRST package only; caller proves total==1.
 
     COD and Lazada ready/payment mapping are intentionally unknown until observed.
-    Masked buyer names must not silently become usable ERP customer names.
+    The marketplace username is an opaque source identifier, not a verified legal name.
     """
     platform, shop_id, order_id = identity
     try:
@@ -144,8 +150,6 @@ def normalize(p, identity):
             and sum(i.quantity for i in lines) == int(o['itemQuantity'])
             and sum(i.quantity for i in lines) == int(p['itemQuantity']))
         buyer = o.get('buyerUsername') or ''
-        if '*' in buyer:
-            buyer = ''
         deadline = p.get('gmtLastDelivery') or o.get('gmtLastDelivery')
         return Order(platform=platform, shop_id=shop_id, order_id=order_id,
             easyboss_order_id=str(o['opOrderId']), package_ids=[str(p['opOrderPackageId'])],

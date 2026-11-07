@@ -219,6 +219,12 @@ async def run_orders(session, gateway, *, retry=False, automatic=False):
         try:
             # Full scan deliberately avoids losing failed, moved-tab, and delayed source records.
             # Checkpoint is diagnostic until upstream changed-since guarantees are verified.
+            from tenants.marketplace_erp.modules.marketplace_erp.infrastructure.adapters.easyboss_mcp import MCPGateway
+            if isinstance(gateway, MCPGateway):
+                gateway.tracked_orders = list((await session.execute(select(
+                    BridgeOrder.platform, BridgeOrder.shop_id, BridgeOrder.order_id).where(
+                    (BridgeOrder.pesanan_id.is_not(None)) | (BridgeOrder.status.in_(["failed", "review"]))
+                ))).all())
             orders = await gateway.orders(None)
             unique, conflicts = {}, set()
             for order in orders:

@@ -76,7 +76,8 @@ The initial upstream-access blocker above is resolved for read access. See the
 live verification section in CONTRACT.md. The backend now supports the installed
 stateless EasyBoss MCP directly via EASYBOSS_BRIDGE_MCP_URL and its bearer binding;
 the prior optional bridge-v1 HTTPS adapter remains compatible. No new gateway is
-required. This does not activate imports or automation. Masked buyers, unproven
+required. This does not activate imports or automation. Missing buyers, unproven
 Lazada/COD payment and multiple-package aggregates remain explicitly ineligible.
+Source usernames are preserved even when masked; no customer name is invented.
 Run `PYTHONPATH=. python scripts/check_easyboss_mcp.py` with the reviewed MCP
 configuration for a read-only counts/eligibility check; it prints no customer PII.

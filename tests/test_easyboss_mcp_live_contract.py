@@ -37,7 +37,7 @@ def test_masked_buyer_cod_and_unknown_status():
     p = package()
     p['orderInfo'].update(buyerUsername='s***di', isCod='1')
     row = normalize(p, ('tiktokshop', 'shop', 'order'))
-    assert row.buyer == '' and row.paid is None and row.status == 'unknown'
+    assert row.buyer == 's***di' and row.paid is None and row.status == 'unknown'
     p['orderInfo'].update(isCod='0', platformOrderStatus='CANCELLED')
     assert normalize(p, ('tiktokshop', 'shop', 'order')).status == 'unknown'
 
@@ -110,7 +110,7 @@ def test_factory_and_url_policy(monkeypatch):
 
 
 @pytest.mark.asyncio
-async def test_normalized_orders_reach_manual_workflow_and_masked_buyer_is_blocked():
+async def test_normalized_orders_reach_manual_workflow_and_missing_buyer_is_blocked():
     from sqlalchemy import select
     from sqlalchemy.ext.asyncio import async_sessionmaker, create_async_engine
     from tenants.marketplace_erp.modules.marketplace_erp.application import order_bridge as bridge
@@ -127,13 +127,13 @@ async def test_normalized_orders_reach_manual_workflow_and_masked_buyer_is_block
                 sinkron_status='synced'))
             await session.commit()
             p = package()
-            p['orderInfo']['buyerUsername'] = 's***di'
+            p['orderInfo']['buyerUsername'] = ''
             assert await bridge.ingest(session, normalize(p, ('tiktokshop', 'shop', 'order'))) == 'failed'
             await session.commit()
             receipt = await session.scalar(select(BridgeOrder))
             assert receipt.error == 'missing_buyer'
             assert await session.scalar(select(Pesanan)) is None
-            p['orderInfo']['buyerUsername'] = 'Customer'
+            p['orderInfo']['buyerUsername'] = 's***di'
             row = normalize(p, ('tiktokshop', 'shop', 'order'))
             assert await bridge.ingest(session, row) == 'imported'
             await session.commit()
@@ -142,6 +142,25 @@ async def test_normalized_orders_reach_manual_workflow_and_masked_buyer_is_block
             orders = list((await session.scalars(select(Pesanan))).all())
             items = list((await session.scalars(select(ItemPesanan))).all())
             assert len(orders) == 1 and len(items) == 1
+            assert orders[0].nama_pembeli == 's***di'
             assert json.loads(orders[0].detail_json)['easyboss']['items'][0]['quantity'] == 2
     finally:
         await engine.dispose()
+
+
+@pytest.mark.asyncio
+async def test_active_scan_and_tracked_orders_include_moved_orders():
+    g = Fake([{'total': 0, 'pesanan': []}] * 4 + [
+        {'total': 1, 'pesanan': [{'id': 'pkg', 'shopId': 'shop', 'no_pesanan': 'order'}]}, package()])
+    g.tracked_orders = [('tiktokshop', 'shop', 'order')]
+    rows = await g.orders(None)
+    assert len(rows) == 1 and rows[0].order_id == 'order'
+    assert rows[0].status == 'ready' and rows[0].paid is True
+    assert g.calls == ['eb_pesanan_list'] * 5 + ['eb_pesanan_detail']
+
+
+@pytest.mark.asyncio
+async def test_empty_active_queues_do_not_scan_historical_orders():
+    g = Fake([{'total': 0, 'pesanan': []}] * 4)
+    assert await g.orders(None) == []
+    assert g.calls == ['eb_pesanan_list'] * 4
