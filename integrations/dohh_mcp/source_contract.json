@@ -8,7 +8,7 @@
     "tenants/marketplace_erp/modules/marketplace_erp/application/akses.py": "5d3901f38b674fe38ada32aaf7d2f063e4f9bad0f00924712015a8e627e3c9c8",
     "tenants/marketplace_erp/adapters/api/v1/agen_router.py": "5db223775b4ebaf03d1ee8981ce2acbd0614eda8f6491eda6ff680675cf996f0",
     "tenants/marketplace_erp/adapters/api/v1/agen_guardrail_router.py": "c5c548e37c9738d5543c07997a1a601a260a64dac2f529176551ebb1b64f500e",
-    "tenants/marketplace_erp/adapters/api/v1/marketplace_erp_router.py": "be0b759e9140da6861b2afc04002b0d14eed696ed2b84c896bba0c144b010bd7",
+    "tenants/marketplace_erp/adapters/api/v1/marketplace_erp_router.py": "4e5f3c796417342c8fa7819a2b70dca472531e8bfee9b9bc42d6701f9abc3722",
     "tenants/marketplace_erp/modules/marketplace_erp/infrastructure/auth.py": "899a0b5ff5962c3165b57eed8da973cefb0297a92abde3d0ccc490cd04229235"
   },
   "models": {
