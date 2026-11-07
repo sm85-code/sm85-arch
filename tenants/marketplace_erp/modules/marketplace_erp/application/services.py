@@ -1415,7 +1415,7 @@ def _kondisi_tahap(tahap: str):
     }
     from tenants.marketplace_erp.modules.marketplace_erp.infrastructure.models import BridgeOrder
     awaiting = select(BridgeOrder.id).where(BridgeOrder.pesanan_id == Pesanan.id,
-        BridgeOrder.source_status == "AWAITING_COLLECTION", Pesanan.status == "to_ship").exists()
+        BridgeOrder.source_status.in_(["AWAITING_COLLECTION", "ready_to_ship"]), Pesanan.status == "to_ship").exists()
     if tahap == "perlu_diproses":
         return and_(conditions[tahap], ~awaiting)
     if tahap == "menunggu_kurir":

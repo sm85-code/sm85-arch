@@ -143,6 +143,8 @@ def operational_snapshot(snapshot):
     display = {"payment_method", "city", "order_total", "buyer_paid", "currency",
                "recipient_name", "recipient_phone", "recipient_address"}
     result = {k: v for k, v in snapshot.items() if k not in display}
+    result.setdefault("cod", False)
+    result.setdefault("cod_eligible", False)
     if isinstance(result.get("items"), list):
         result["items"] = [{k: v for k, v in line.items() if k not in {"unit_price", "line_total", "image_url"}}
                            for line in result["items"]]
@@ -171,7 +173,7 @@ async def ingest(session, order):
         if order.status == "cancelled" or operational_snapshot(original) != operational_snapshot(order.model_dump(mode="json")):
             row.status, row.error = "review", "source_changed_after_import"
         return "skipped"  # Never mutate production work after source changes.
-    if order.status != "ready" or order.paid is not True:
+    if order.status != "ready" or not (order.paid is True or (order.cod is True and order.cod_eligible is True)):
         row.status, row.error = "skipped", "ineligible_status"
         return "skipped"
     reason = None

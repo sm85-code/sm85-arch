@@ -117,3 +117,17 @@ previously imported or failed/review identity across all tabs. This replaces the
 historical full-directory order scan described above. Moved/cancelled imported
 orders still get fresh details and review without changing existing production
 orders. The bridge-v1 transport retains its existing full-scan behavior.
+
+## Lazada COD evidence — 2026-11-07
+
+Bumi Ternak (stable shop ID 2989182) has a single complete package in submitPlatform
+with native platformOrderStatus=ready_to_ship, paymentMethod=COD, isCod=1,
+gmtPay=null and gmtDelivery=null. appPackageOperateStatus=ship_success and
+isShipped=1 do not prove courier collection. Active scans include submitPlatform.
+Verified Lazada COD ready_to_ship may enter the production workflow through an
+explicit cod_eligible flag; paid stays null. COD without this observed ready state,
+including unverified TikTok COD, remains ineligible. The UI labels payAmount as
+Tagihan COD rather than Dibayar Pembeli for COD orders. No settled funds are inferred.
+The shop directory remains authoritative for identities and activity; when its name
+is an account email, shop-count aliases are matched by exact platform/shop ID to
+show the operational shop name. No fuzzy shop matching or marketplace writes.
