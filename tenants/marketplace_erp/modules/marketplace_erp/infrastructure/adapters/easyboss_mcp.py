@@ -4,7 +4,7 @@ from decimal import Decimal, InvalidOperation
 from .easyboss import BridgeProblem, Line, Order, RejectedOrder, Shop, native_time
 
 PLATFORMS = {'tiktok': 'tiktokshop', 'lazada': 'lazada'}
-READS = {'eb_toko_list', 'eb_pesanan_list', 'eb_pesanan_detail'}
+READS = {'eb_toko_list', 'eb_pesanan_hitung', 'eb_pesanan_list', 'eb_pesanan_detail'}
 
 
 def native_amount(value):
@@ -54,6 +54,11 @@ class MCPGateway:
         rows = await self.call('eb_toko_list', {})
         if not isinstance(rows, list):
             raise BridgeProblem('mcp_shop_contract')
+        counts = await self.call('eb_pesanan_hitung', {'tab': 'all'})
+        if not isinstance(counts, dict) or not isinstance(counts.get('per_toko'), list):
+            raise BridgeProblem('mcp_shop_alias_contract')
+        aliases = {(s.get('platform'), str(s.get('shopId'))): s.get('shopName')
+                   for s in counts['per_toko'] if isinstance(s, dict)}
         result = []
         for platform, canonical in PLATFORMS.items():
             shops = [s for s in rows if s.get('platform') == platform]
@@ -61,7 +66,9 @@ class MCPGateway:
                 raise BridgeProblem('mcp_shop_directory_truncated')
             for s in shops:
                 result.append(Shop(platform=canonical, shop_id=str(s['shopId']),
-                    marketplace_shop_id=str(s['platformShopId']), name=s['platformShopName'],
+                    marketplace_shop_id=str(s['platformShopId']),
+                    name=(aliases.get((platform, str(s['shopId']))) or s['platformShopName'])
+                    if '@' in s['platformShopName'] else s['platformShopName'],
                     active=s.get('authStatus') == 'valid' and s.get('status') == 'normal'
                     and s.get('platformStatus') == 'normal'))
         if len({(s.platform, s.shop_id) for s in result}) != len(result):
@@ -88,7 +95,7 @@ class MCPGateway:
         # explicitly re-read across ALL tabs, so moved/cancelled orders are kept.
         identities = {}
         for platform in PLATFORMS:
-            for tab in ('waitProcess', 'waitShip'):
+            for tab in ('waitProcess', 'waitShip', 'submitPlatform'):
                 seen, total = set(), None
                 for page in range(1, 1001):
                     data = await self.call('eb_pesanan_list', {'tab': tab, 'platform': platform,
@@ -123,7 +130,7 @@ class MCPGateway:
 def normalize(p, identity):
     """Existing detail tool returns FIRST package only; caller proves total==1.
 
-    COD and Lazada ready/payment mapping are intentionally unknown until observed.
+    Lazada ready_to_ship COD is eligible for fulfilment, without being marked paid.
     The marketplace username is an opaque source identifier, not a verified legal name.
     """
     platform, shop_id, order_id = identity
@@ -137,7 +144,11 @@ def normalize(p, identity):
         if o.get('gmtPay'):
             native_time(o['gmtPay'])
         source, status = o['platformOrderStatus'], 'unknown'
+        cod = str(o.get('isCod')) == '1' and str(o.get('paymentMethod') or '').upper() == 'COD'
+        cod_eligible = platform == 'lazada' and source == 'ready_to_ship' and cod
         if platform == 'tiktokshop' and source == 'AWAITING_COLLECTION' and paid is True:
+            status = 'ready'
+        if platform == 'lazada' and source == 'ready_to_ship' and (paid is True or cod_eligible):
             status = 'ready'
         if (p.get('isOnHoldOrder') or p.get('isPendingStatus') or str(p.get('isIsolation')) == '1'
                 or o.get('gmtRefund') or o.get('opOrderReturns') or p.get('cancelOrder') or p.get('returnOrder')):
@@ -168,7 +179,7 @@ def normalize(p, identity):
         deadline = p.get('gmtLastDelivery') or o.get('gmtLastDelivery')
         return Order(platform=platform, shop_id=shop_id, order_id=order_id,
             easyboss_order_id=str(o['opOrderId']), package_ids=[str(p['opOrderPackageId'])],
-            complete=complete, paid=paid, status=status, source_status=source, buyer=buyer,
+            complete=complete, paid=paid, cod=cod, cod_eligible=cod_eligible, status=status, source_status=source, buyer=buyer,
             order_total=native_amount(o.get('orderAmount')), buyer_paid=native_amount(o.get('payAmount')),
             currency=o.get('currency') or '', recipient_name=(p.get('consigneeInfo') or {}).get('name') or '',
             recipient_phone=(p.get('consigneeInfo') or {}).get('phone') or '',

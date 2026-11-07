@@ -52,6 +52,8 @@ class Line(Strict):
 
 
 class Order(Strict):
+    cod: bool = False
+    cod_eligible: bool = False
     order_total: Decimal | None = Field(default=None, ge=0)
     buyer_paid: Decimal | None = Field(default=None, ge=0)
     currency: str = Field(default="", max_length=10)

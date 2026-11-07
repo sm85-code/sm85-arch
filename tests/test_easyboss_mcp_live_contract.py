@@ -53,9 +53,11 @@ class Fake(MCPGateway):
     def __init__(self, responses):
         self.responses = iter(responses)
         self.calls = []
+        self.arguments = []
 
     async def call(self, name, arguments):
         self.calls.append(name)
+        self.arguments.append(arguments)
         return next(self.responses)
 
 
@@ -88,7 +90,7 @@ async def test_transport_and_allowlist(sse):
     def handler(request):
         body = json.loads(request.content)
         assert body['method'] == 'tools/call'
-        payload = {'jsonrpc': '2.0', 'id': body['id'], 'result': {'content': [{'type': 'text', 'text': '[]'}]}}
+        payload = {'jsonrpc': '2.0', 'id': body['id'], 'result': {'content': [{'type': 'text', 'text': json.dumps({'per_toko': []}) if body['params']['name'] == 'eb_pesanan_hitung' else '[]'}]}}
         return (httpx.Response(200, text='data: ' + json.dumps(payload) + '\n\n',
                                headers={'content-type': 'text/event-stream'}) if sse else httpx.Response(200, json=payload))
     async with httpx.AsyncClient(base_url='https://mcp.example/mcp', transport=httpx.MockTransport(handler)) as c:
@@ -150,17 +152,54 @@ async def test_normalized_orders_reach_manual_workflow_and_missing_buyer_is_bloc
 
 @pytest.mark.asyncio
 async def test_active_scan_and_tracked_orders_include_moved_orders():
-    g = Fake([{'total': 0, 'pesanan': []}] * 4 + [
+    g = Fake([{'total': 0, 'pesanan': []}] * 6 + [
         {'total': 1, 'pesanan': [{'id': 'pkg', 'shopId': 'shop', 'no_pesanan': 'order'}]}, package()])
     g.tracked_orders = [('tiktokshop', 'shop', 'order')]
     rows = await g.orders(None)
     assert len(rows) == 1 and rows[0].order_id == 'order'
     assert rows[0].status == 'ready' and rows[0].paid is True
-    assert g.calls == ['eb_pesanan_list'] * 5 + ['eb_pesanan_detail']
+    assert g.calls == ['eb_pesanan_list'] * 7 + ['eb_pesanan_detail']
 
 
 @pytest.mark.asyncio
 async def test_empty_active_queues_do_not_scan_historical_orders():
-    g = Fake([{'total': 0, 'pesanan': []}] * 4)
+    g = Fake([{'total': 0, 'pesanan': []}] * 6)
     assert await g.orders(None) == []
-    assert g.calls == ['eb_pesanan_list'] * 4
+    assert g.calls == ['eb_pesanan_list'] * 6
+
+
+def lazada_cod_package():
+    p = package()
+    p['orderInfo'].update(platform='lazada', platformOrderStatus='ready_to_ship', isCod='1',
+                          paymentMethod='COD', gmtPay=None)
+    p['appPackageTab'] = 'submitPlatform'
+    p['appPackageOperateStatus'] = 'ship_success'
+    p['isShipped'] = '1'
+    return p
+
+
+def test_lazada_cod_ready_is_eligible_without_claiming_payment_or_dispatch():
+    row = normalize(lazada_cod_package(), ('lazada', 'shop', 'order'))
+    assert row.status == 'ready' and row.complete
+    assert row.cod is True and row.cod_eligible is True and row.paid is None
+    p = lazada_cod_package()
+    p['isPendingStatus'] = True
+    assert normalize(p, ('lazada','shop','order')).status == 'hold'
+
+
+@pytest.mark.asyncio
+async def test_lazada_submit_platform_queue_is_scanned():
+    listing = {'total':1, 'pesanan':[{'id':'pkg','shopId':'shop','no_pesanan':'order','platform':'lazada'}]}
+    g = Fake([{'total':0,'pesanan':[]}] * 5 + [listing, listing, lazada_cod_package()])
+    rows = await g.orders(None)
+    assert len(rows) == 1 and rows[0].cod_eligible and rows[0].paid is None
+    assert any(a.get('tab') == 'submitPlatform' and a.get('platform') == 'lazada' for a in g.arguments)
+
+
+@pytest.mark.asyncio
+async def test_email_shop_directory_name_uses_alias_for_same_stable_id():
+    g = Fake([[{'platform':'lazada','shopId':'shop','platformShopId':'market','platformShopName':'account@example.com',
+                'authStatus':'valid','status':'normal','platformStatus':'normal'}],
+              {'per_toko':[{'platform':'lazada','shopId':'shop','shopName':'Bumi Ternak'}]}])
+    rows = await g.shops()
+    assert rows[0].name == 'Bumi Ternak' and rows[0].shop_id == 'shop'

@@ -20,7 +20,7 @@ async def enrich_orders(session, orders):
 
 DISPLAY_FIELDS = {'payment_method', 'city', 'order_total', 'buyer_paid', 'currency',
                   'recipient_name', 'recipient_phone', 'recipient_address', 'source_status', 'status',
-                  'carrier', 'tracking_number', 'buyer_note'}
+                  'carrier', 'tracking_number', 'buyer_note', 'cod', 'cod_eligible'}
 LINE_FIELDS = {'unit_price', 'line_total', 'image_url'}
 
 
@@ -41,7 +41,7 @@ def merge_display_snapshot(original, latest):
 
 
 def source_status_label(source):
-    if source.get('source_status') == 'AWAITING_COLLECTION' and source.get('status') == 'ready':
+    if source.get('source_status') in {'AWAITING_COLLECTION', 'ready_to_ship'} and source.get('status') == 'ready':
         return 'Menunggu Penyerahan ke Kurir'
     return {'shipped': 'Dikirim', 'completed': 'Selesai', 'cancelled': 'Dibatalkan',
             'unpaid': 'Belum Bayar', 'hold': 'Ditahan'}.get(source.get('status'),

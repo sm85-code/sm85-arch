@@ -360,3 +360,22 @@ async def test_bridge_manual_order_delete_returns_conflict_preserving_receipt(se
         await services.delete_pesanan(session, receipt.pesanan_id)
     assert exc.value.status_code == 409 and "EasyBoss Order Bridge" in exc.value.detail
     assert await session.get(Pesanan, receipt.pesanan_id)
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize('cod,eligible,expected', [(True,True,'imported'), (True,False,'skipped'), (False,True,'skipped')])
+async def test_cod_import_requires_verified_eligibility_and_never_marks_paid(session, cod, eligible, expected):
+    session.add(TokoPenjualan(jenis='internal', platform='lazada', nama='COD Shop', nama_key='cod shop',
+        keterangan='', aktif=True, sumber='easyboss', easyboss_shop_id='shop-1', sinkron_status='synced'))
+    await session.commit()
+    row = order(paid=None, cod=cod, cod_eligible=eligible, payment_method='COD', source_status='ready_to_ship')
+    assert await b.ingest(session,row) == expected
+    await session.commit()
+    receipt = await session.scalar(select(BridgeOrder))
+    assert json.loads(receipt.snapshot_json)['paid'] is None
+    p = await session.scalar(select(Pesanan))
+    if expected == 'imported':
+        assert p and json.loads(p.detail_json)['easyboss']['paid'] is None
+        assert json.loads(p.detail_json)['easyboss']['cod'] is True
+    else:
+        assert p is None
