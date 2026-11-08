@@ -1428,6 +1428,7 @@ def _ekspresi_tahap():
 
 def _kondisi_pesanan(
     *,
+    sumber: str | None = None,
     akun_id: str | None = None,
     akun_diizinkan: set[str] | None = None,
     tahap: str | None = None,
@@ -1437,6 +1438,9 @@ def _kondisi_pesanan(
     sampai: datetime | None = None,
 ) -> list:
     cond = []
+    if sumber is not None:
+        from .order_source import source_condition
+        cond.append(source_condition(sumber))
     if akun_diizinkan is not None:
         from .shop_scope import condition
         cond.append(condition(akun_diizinkan))
@@ -1544,6 +1548,9 @@ async def ringkasan_pesanan(
     jumlah_toko = {a: int(n) for a, n in per_toko}
     akun_ids = dasar.get("akun_diizinkan")
     toko = sorted(await options(session,akun_ids),key=lambda x:x['nama_toko'].lower())
+    if dasar.get('sumber'):
+        from .order_source import filter_shops
+        toko = await filter_shops(session, toko, dasar['sumber'])
     return {
         "tahap": {"semua": sum(tahap_hitung.values()), **tahap_hitung},
         "toko": [{"akun_id": a["id"], "nama_toko": a["nama_toko"], "jumlah": jumlah_toko.get(a["id"], 0)} for a in toko],

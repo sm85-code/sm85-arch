@@ -297,11 +297,11 @@ async def test_recipients_follow_the_role_settings(session):
         session.add(PushSubscription(id=f"sub-{uid}", user_id=uid, endpoint=f"https://fcm.googleapis.com/{uid}", p256dh="p", auth="a"))
     await session.commit()
     got = {sub.user_id: (allowed, halaman) for sub, allowed, halaman in await push_notifications._recipients(session)}
-    assert got["a"] == (None, {"pesanan", "chat"})
-    assert got["o"] == (None, {"pesanan", "chat"})
-    assert got["s"] == (set(), {"pesanan", "chat"})  # assigned to no shop yet
+    assert got["a"] == (None, {"pesanan", "pesanan_easyboss", "chat"})
+    assert got["o"] == (None, {"pesanan", "pesanan_easyboss", "chat"})
+    assert got["s"] == (set(), {"pesanan", "pesanan_easyboss", "chat"})  # assigned to no shop yet
     assert got["k"] == (None, set())  # finance staff: every shop, but no orders and no chats
     await session.delete(await session.get(RoleHalaman, ("owner", "chat")))  # an admin unticks Chat for owner
     await session.commit()
     got = {sub.user_id: halaman for sub, _, halaman in await push_notifications._recipients(session)}
-    assert got["o"] == {"pesanan"}
+    assert got["o"] == {"pesanan", "pesanan_easyboss"}

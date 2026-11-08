@@ -124,7 +124,7 @@ async def test_bridge_notification_uses_original_number_and_shop_without_changin
     result=await api.notifications(1,s,users['admin'])
     row=next(x for x in result['items'] if x['id']==p.id)
     assert row['order_sn']=='ORIGINAL-123' and row['nama_toko']=='Source Shop'
-    assert row['key']=='order:bridge-order:process' and row['href']=='/pesanan/bridge-order'
+    assert row['key']=='order:bridge-order:process' and row['href']=='/pesanan-easyboss/bridge-order'
     assert p.id_eksternal=='EB-internal-hash'
     await api.acknowledge(api.ReadIn(keys=[row['key']]),s,users['admin'])
     assert next(x for x in (await api.notifications(1,s,users['admin']))['items'] if x['id']==p.id)['read']
@@ -132,7 +132,7 @@ async def test_bridge_notification_uses_original_number_and_shop_without_changin
     deliver = AsyncMock()
     monkeypatch.setattr(push, '_deliver', deliver)
     await push._remember(s, ['baseline:order', *[x['key'] for x in result['items'] if x['id'] != p.id]])
-    await push._orders(s, [(SimpleNamespace(pesanan=True), None, {'pesanan'})])
+    await push._orders(s, [(SimpleNamespace(pesanan=True), None, {'pesanan_easyboss'})])
     deliver.assert_awaited_once()
     payload = deliver.call_args.args[2]
     assert payload['body'] == 'ORIGINAL-123 · Source Shop'

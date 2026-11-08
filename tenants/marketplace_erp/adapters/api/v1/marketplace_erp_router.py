@@ -629,8 +629,20 @@ async def remove_staff_akun(
 # --- Tahap 2: Orders OMS -----------------------------------------------------
 
 
+@marketplace_erp_router.get("/pesanan-easyboss/sinkron")
+async def status_sinkron_easyboss(
+    session: AsyncSession = Depends(get_db_marketplace_erp),
+    user: UserMarketplaceErp = Depends(require_roles_marketplace_erp(*OWNER_OR_STAFF)),
+):
+    from tenants.marketplace_erp.modules.marketplace_erp.infrastructure.models import BridgeState
+    row = await session.get(BridgeState, "easyboss")
+    return {"aktif": bool(row and row.enabled), "terakhir": row.heartbeat if row else None}
+
+
+@marketplace_erp_router.get("/pesanan-easyboss/daftar")
 @marketplace_erp_router.get("/pesanan/daftar")
 async def daftar_pesanan(
+    request: Request,
     akun_id: str | None = None,
     tahap: str | None = Query(None, description="belum_bayar | perlu_diproses | menunggu_kurir | dikirim | selesai | dibatalkan"),
     resi: str | None = Query(None, description="belum | sudah (resi dicetak), hanya pesanan yang resinya bisa dicetak"),
@@ -647,7 +659,7 @@ async def daftar_pesanan(
     if akun_id:
         await pastikan_akses_akun(user, session, akun_id)
     hasil = await services.daftar_pesanan(
-        session,
+        session, sumber="easyboss" if "/pesanan-easyboss/" in request.url.path else "shopee",
         akun_id=akun_id, akun_diizinkan=await akun_ids_diizinkan(user, session), tahap=tahap, resi=resi, q=q,
         dari=dari, sampai=sampai, urut=urut, halaman=halaman, per_halaman=per_halaman,
     )
@@ -658,8 +670,10 @@ async def daftar_pesanan(
     return hasil
 
 
+@marketplace_erp_router.get("/pesanan-easyboss/ringkasan")
 @marketplace_erp_router.get("/pesanan/ringkasan")
 async def ringkasan_pesanan(
+    request: Request,
     akun_id: str | None = None,
     tahap: str | None = None,
     q: str | None = Query(None, max_length=100),
@@ -672,7 +686,7 @@ async def ringkasan_pesanan(
     if akun_id:
         await pastikan_akses_akun(user, session, akun_id)
     return await services.ringkasan_pesanan(
-        session, akun_id=akun_id, tahap=tahap, akun_diizinkan=await akun_ids_diizinkan(user, session), q=q, dari=dari, sampai=sampai
+        session, sumber="easyboss" if "/pesanan-easyboss/" in request.url.path else "shopee", akun_id=akun_id, tahap=tahap, akun_diizinkan=await akun_ids_diizinkan(user, session), q=q, dari=dari, sampai=sampai
     )
 
 
@@ -851,7 +865,7 @@ async def proses_massal_pesanan(
         try:
             pesanan = await services.get_pesanan(session, pesanan_id)
             info["id_eksternal"] = pesanan.id_eksternal
-            await pastikan_akses_akun(pengguna, session, pesanan.akun_id)
+            await pastikan_akses_pesanan(pengguna, session, pesanan)
             setting = payload.pengaturan.get(pesanan_id)
             if setting is None:
                 await services.proses_pesanan_marketplace(session, pesanan_id)

@@ -94,6 +94,29 @@ def require_roles_marketplace_erp(*roles: str) -> Callable:
         # All roles the account holds (the guard may also be called directly, without a database session).
         roles = await akses.peran_pengguna(session, user) if isinstance(session, AsyncSession) else [(user.role or "").strip().lower()]
         aturan = peta_akses.cari(request.url.path, request.method) if isinstance(request, Request) else None
+        if aturan and aturan[0] == "pesanan" and isinstance(request, Request):
+            from ..application.order_source import page_for_order
+            from .models import Pesanan
+            ids = [request.path_params["pesanan_id"]] if "pesanan_id" in request.path_params else []
+            if request.url.path.endswith(("/resi-massal", "/resi-gabungan", "/proses-massal")):
+                import json
+                try:
+                    body = await request.json()
+                except json.JSONDecodeError:
+                    body = {}
+                ids = body.get("pesanan_ids", []) if isinstance(body, dict) else []
+                if not isinstance(ids, list) or any(not isinstance(i, str) for i in ids):
+                    raise HTTPException(422, "Daftar pesanan tidak valid")
+            for pid in set(ids):
+                order = await session.get(Pesanan, pid)
+                if order is None:
+                    raise HTTPException(404, "Pesanan tidak ditemukan")
+                page = await page_for_order(session, order)
+                level = await akses.tingkat_halaman(session, roles, page)
+                if level is None or (aturan[1] == "tulis" and level != "tulis"):
+                    raise HTTPException(403, "Akses ditolak")
+            if ids:
+                aturan = ("pesanan|pesanan_easyboss", aturan[1])
         if aturan is None:
             ok = any(r in allowed for r in roles)
         elif aturan[0] == "*":
