@@ -690,7 +690,11 @@ async def list_pesanan(
     allowed = await akun_ids_diizinkan(user, session)
     if allowed is None:
         return rows
-    return [r for r in rows if r.akun_id in allowed]
+    from sqlalchemy import select
+    from tenants.marketplace_erp.modules.marketplace_erp.infrastructure.models import Pesanan
+    from tenants.marketplace_erp.modules.marketplace_erp.application.shop_scope import condition
+    visible = set((await session.scalars(select(Pesanan.id).where(condition(allowed)))).all())
+    return [r for r in rows if r.id in visible]
 
 
 @marketplace_erp_router.post("/pesanan", response_model=PesananOut)

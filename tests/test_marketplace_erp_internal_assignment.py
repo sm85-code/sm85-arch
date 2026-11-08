@@ -49,6 +49,9 @@ async def test_mixed_assignments_backfill_scope_and_revoke(session, data):  # no
     allowed = await akun_ids_diizinkan(user, session)
     assert set(allowed) == {a.id, "internal:" + one.id}
     assert {x["id"] for x in await shop_scope.options(session, allowed)} == set(allowed)
+    from tenants.marketplace_erp.adapters.api.v1 import marketplace_erp_router as api
+    visible = await api.list_pesanan(platform=None, akun_id='internal:' + one.id, status_filter=None, session=session, user=user)
+    assert [row.id for row in visible] == [orders[0].id]
     await pastikan_akses_pesanan(user, session, orders[0])
     with pytest.raises(HTTPException) as err:
         await pastikan_akses_pesanan(user, session, orders[1])

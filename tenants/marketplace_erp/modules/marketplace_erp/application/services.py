@@ -1368,7 +1368,8 @@ async def list_pesanan(
     if platform:
         stmt = stmt.where(Pesanan.platform == _validate_platform(platform))
     if akun_id:
-        stmt = stmt.where(Pesanan.akun_id == akun_id)
+        from .shop_scope import condition
+        stmt = stmt.where(condition([akun_id]))
     if status_filter:
         status_filter = status_filter.strip().lower()
         if status_filter not in STATUS_PESANAN:
