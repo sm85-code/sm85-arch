@@ -129,3 +129,12 @@ async def test_old_shop_columns_migrate_without_replacing_rows(factory):
         row = (await session.execute(text("SELECT id,nama,sumber,sinkron_status FROM mpe_toko_penjualan WHERE id='legacy'"))).one()
         assert tuple(row) == ("legacy", "Web App", "manual", "manual")
         await session.commit()
+
+
+@pytest.mark.asyncio
+async def test_internal_assignments_on_postgres(factory):
+    from test_marketplace_erp_internal_assignment import test_mixed_assignments_backfill_scope_and_revoke
+    from test_marketplace_erp_pesanan_dashboard import _toko
+    async with factory() as session:
+        shops = await _toko(session, "Native A"), await _toko(session, "Native B")
+        await test_mixed_assignments_backfill_scope_and_revoke(session, shops)

@@ -127,7 +127,9 @@ async def akun_ids_diizinkan(user: UserMarketplaceErp, session: AsyncSession) ->
     rows = (
         await session.execute(select(StaffAkunMarketplace.akun_id).where(StaffAkunMarketplace.user_id == user.id))
     ).scalars().all()
-    return list(rows)
+    from .models import StaffTokoPenjualan
+    internal = (await session.scalars(select(StaffTokoPenjualan.toko_id).where(StaffTokoPenjualan.user_id == user.id))).all()
+    return list(rows) + ["internal:" + value for value in internal]
 
 
 async def pastikan_akses_akun(user: UserMarketplaceErp, session: AsyncSession, akun_id: str | None) -> None:
@@ -140,3 +142,14 @@ async def pastikan_akses_akun(user: UserMarketplaceErp, session: AsyncSession, a
         return
     if akun_id is None or akun_id not in allowed:
         raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="Akses ditolak untuk akun marketplace ini")
+
+
+async def pastikan_akses_pesanan(user,session,pesanan):
+    from sqlalchemy import select
+    from ..application.shop_scope import condition
+    from .models import Pesanan
+    allowed=await akun_ids_diizinkan(user,session)
+    if allowed is None:
+        return
+    if not await session.scalar(select(Pesanan.id).where(Pesanan.id==pesanan.id,condition(allowed))):
+        raise HTTPException(403,'Akses ditolak untuk toko pesanan ini')

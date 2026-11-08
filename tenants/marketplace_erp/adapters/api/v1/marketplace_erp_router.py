@@ -19,6 +19,7 @@ from types import SimpleNamespace
 from typing import Annotated
 from datetime import date, datetime, timezone
 
+from tenants.marketplace_erp.modules.marketplace_erp.infrastructure.auth import pastikan_akses_pesanan
 from fastapi import APIRouter, BackgroundTasks, Body, Depends, HTTPException, Path, Query, Request, Response, status
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -576,6 +577,18 @@ async def transfer_stok(
 # --- Tahap 3: Staff-akun scoping ----------------------------------------------
 
 
+@marketplace_erp_router.get('/staff-akun/toko-pilihan')
+async def assignment_shop_options(session: AsyncSession = Depends(get_db_marketplace_erp), _: UserMarketplaceErp = Depends(require_roles_marketplace_erp(*ADMIN_ONLY))):
+    from tenants.marketplace_erp.modules.marketplace_erp.application.shop_scope import options
+    return await options(session)
+
+
+@marketplace_erp_router.get('/pesanan/toko-pilihan')
+async def accessible_order_shops(session: AsyncSession = Depends(get_db_marketplace_erp), user: UserMarketplaceErp = Depends(require_roles_marketplace_erp(*OWNER_OR_STAFF))):
+    from tenants.marketplace_erp.modules.marketplace_erp.application.shop_scope import options
+    return await options(session,await akun_ids_diizinkan(user,session))
+
+
 @marketplace_erp_router.get("/staff-akun", response_model=list[StaffAkunOut])
 async def list_staff_akun(
     user_id: str | None = None,
@@ -696,6 +709,7 @@ async def create_pesanan_manual(
     _: UserMarketplaceErp = Depends(require_roles_marketplace_erp(*OWNER_ONLY)),
 ):
     """A manual order for production (own shop or reseller); Pemetaan Order reads it like any other order."""
+    await pastikan_akses_akun(_, session, "internal:" + payload.toko_id)
     pesanan = await pesanan_manual.buat(session, payload)
     await session.commit()
     return await services.get_pesanan(session, pesanan.id)
@@ -708,7 +722,7 @@ async def get_pesanan(
     user: UserMarketplaceErp = Depends(require_roles_marketplace_erp(*OWNER_OR_STAFF)),
 ):
     pesanan = await services.get_pesanan(session, pesanan_id)
-    await pastikan_akses_akun(user, session, pesanan.akun_id)
+    await pastikan_akses_pesanan(user, session, pesanan)
     from tenants.marketplace_erp.modules.marketplace_erp.application.bridge_presentation import enrich_orders
     await enrich_orders(session, [pesanan])
     await services.lengkapi_foto_item(session, [pesanan])
@@ -723,7 +737,7 @@ async def ubah_status_pesanan(
     user: UserMarketplaceErp = Depends(require_roles_marketplace_erp(*OWNER_OR_STAFF)),
 ):
     pesanan = await services.get_pesanan(session, pesanan_id)
-    await pastikan_akses_akun(user, session, pesanan.akun_id)
+    await pastikan_akses_pesanan(user, session, pesanan)
     return await services.ubah_status_pesanan(session, pesanan_id, payload.status)
 
 
@@ -782,7 +796,7 @@ async def tandai_resi_dicetak(
 ):
     """Mark the label as printed (default) or clear the mark by hand."""
     pesanan = await services.get_pesanan(session, pesanan_id)
-    await pastikan_akses_akun(user, session, pesanan.akun_id)
+    await pastikan_akses_pesanan(user, session, pesanan)
     return await services.tandai_resi_pesanan(session, pesanan_id, payload.dicetak, _nama_pengguna(user))
 
 
@@ -795,7 +809,7 @@ async def cetak_resi_massal(
     """One PDF with Shopee's labels for several processed orders (same shop and courier, up to 50)."""
     for pesanan_id in dict.fromkeys(payload.pesanan_ids):
         pesanan = await services.get_pesanan(session, pesanan_id)
-        await pastikan_akses_akun(user, session, pesanan.akun_id)
+        await pastikan_akses_pesanan(user, session, pesanan)
     pdf, nama_file = await services.unduh_resi_massal(session, payload.pesanan_ids, payload.tipe, _nama_pengguna(user))
     return _respons_resi(pdf, nama_file)
 
@@ -812,7 +826,7 @@ async def cetak_resi_gabungan(
 
     for pesanan_id in dict.fromkeys(payload.pesanan_ids):
         pesanan = await services.get_pesanan(session, pesanan_id)
-        await pastikan_akses_akun(user, session, pesanan.akun_id)
+        await pastikan_akses_pesanan(user, session, pesanan)
     hasil = await services.unduh_resi_gabungan(session, payload.pesanan_ids, payload.tipe, _nama_pengguna(user))
     return {**hasil, "pdf": base64.b64encode(hasil["pdf"]).decode("ascii")}
 
@@ -862,7 +876,7 @@ async def opsi_pengiriman_pesanan(
     user: UserMarketplaceErp = Depends(require_roles_marketplace_erp(*OWNER_OR_STAFF)),
 ):
     pesanan = await services.get_pesanan(session, pesanan_id)
-    await pastikan_akses_akun(user, session, pesanan.akun_id)
+    await pastikan_akses_pesanan(user, session, pesanan)
     pesanan, akun = await services._pesanan_marketplace(session, pesanan_id)
     from tenants.marketplace_erp.modules.marketplace_erp.infrastructure.adapters import erp_shopee
     if pesanan.status != "to_ship" or pesanan.status_marketplace == "IN_CANCEL" or pesanan.status_marketplace in erp_shopee.STATUS_SUDAH_DIPROSES:
@@ -879,7 +893,7 @@ async def proses_pesanan_marketplace(
 ):
     """Arrange Drop Off/Pickup on Shopee; omitted settings preserve legacy automatic selection."""
     pesanan = await services.get_pesanan(session, pesanan_id)
-    await pastikan_akses_akun(user, session, pesanan.akun_id)
+    await pastikan_akses_pesanan(user, session, pesanan)
     if payload is None:
         return await services.proses_pesanan_marketplace(session, pesanan_id)
     return await services.proses_pesanan_marketplace(session, pesanan_id, payload.model_dump(exclude_none=True))
@@ -894,7 +908,7 @@ async def batalkan_pesanan_marketplace(
 ):
     """Cancel a Shopee order on Shopee (before shipment) and release its reserved stock."""
     pesanan = await services.get_pesanan(session, pesanan_id)
-    await pastikan_akses_akun(user, session, pesanan.akun_id)
+    await pastikan_akses_pesanan(user, session, pesanan)
     return await services.batalkan_pesanan_marketplace(session, pesanan_id, payload.alasan)
 
 
@@ -906,7 +920,7 @@ async def tangani_pembatalan_pembeli(
     user: UserMarketplaceErp = Depends(require_roles_marketplace_erp(*OWNER_OR_STAFF)),
 ):
     pesanan = await services.get_pesanan(session, pesanan_id)
-    await pastikan_akses_akun(user, session, pesanan.akun_id)
+    await pastikan_akses_pesanan(user, session, pesanan)
     return await services.tangani_pembatalan_pembeli(session, pesanan_id, payload.operasi)
 
 
@@ -922,7 +936,7 @@ async def cetak_resi_pesanan(
     ``tipe``: THERMAL_AIR_WAYBILL (100x150 mm, about A6; the default when offered) or NORMAL_AIR_WAYBILL (A4).
     """
     pesanan = await services.get_pesanan(session, pesanan_id)
-    await pastikan_akses_akun(user, session, pesanan.akun_id)
+    await pastikan_akses_pesanan(user, session, pesanan)
     pdf, nama_file = await services.unduh_resi_pesanan(session, pesanan_id, tipe, _nama_pengguna(user))
     return _respons_resi(pdf, nama_file)
 
@@ -935,7 +949,7 @@ async def set_pengiriman(
     user: UserMarketplaceErp = Depends(require_roles_marketplace_erp(*OWNER_OR_STAFF)),
 ):
     pesanan = await services.get_pesanan(session, pesanan_id)
-    await pastikan_akses_akun(user, session, pesanan.akun_id)
+    await pastikan_akses_pesanan(user, session, pesanan)
     return await services.set_pengiriman(session, pesanan_id, payload)
 
 
