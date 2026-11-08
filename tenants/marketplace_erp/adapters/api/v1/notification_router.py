@@ -4,7 +4,7 @@ from typing import Annotated
 
 from fastapi import APIRouter, Depends, Query
 from pydantic import Field
-from sqlalchemy import case, func, literal, select
+from sqlalchemy import case, func, literal, or_, select
 from sqlalchemy.dialects.postgresql import insert as pg_insert
 from sqlalchemy.dialects.sqlite import insert as sqlite_insert
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -30,17 +30,24 @@ class ReadIn(Input):
 async def order_sources(session, user):
     from tenants.marketplace_erp.modules.marketplace_erp.application.bridge_presentation import notification_identity
     number, shop = notification_identity()
+    from tenants.marketplace_erp.modules.marketplace_erp.application.order_source import easyboss_condition
+    inbox = case((easyboss_condition(), literal("/pesanan-easyboss/")), else_=literal("/pesanan/"))
+    from tenants.marketplace_erp.modules.marketplace_erp.application import akses
+    from tenants.marketplace_erp.modules.marketplace_erp.application.order_source import source_condition
+    roles = await akses.peran_pengguna(session, user)
+    sources = [source_condition(source) for source, page in (("shopee", "pesanan"), ("easyboss", "pesanan_easyboss"))
+               if await akses.tingkat_halaman(session, roles, page)]
     allowed = await akun_ids_diizinkan(user, session)
     cancel = (Pesanan.platform == "shopee") & (Pesanan.status_marketplace == "IN_CANCEL") & Pesanan.status.in_(["unpaid", "to_ship"])
     processing = services._kondisi_tahap("perlu_diproses")
     kind = case((cancel, literal("cancel")), else_=literal("process"))
     key = literal("order:") + Pesanan.id + literal(":") + kind
     return select(
-        key.label("key"), Pesanan.id.label("id"), number.label("order_sn"),
+        inbox.label("inbox"), key.label("key"), Pesanan.id.label("id"), number.label("order_sn"),
         Pesanan.akun_id.label("akun_id"), shop.label("nama_toko"),
         kind.label("kind"), func.coalesce(Pesanan.dipesan_at, Pesanan.created_at).label("created_at"),
     ).outerjoin(AkunMarketplace, AkunMarketplace.id == Pesanan.akun_id).where(
-        cancel | processing,
+        cancel | processing, or_(*sources) if sources else literal(False),
         *services._kondisi_pesanan(akun_diizinkan=allowed),
     ).subquery()
 
@@ -56,7 +63,7 @@ async def notifications(
     rows = (await session.execute(select(source).order_by(source.c.kind, source.c.created_at.desc(), source.c.id).offset((halaman - 1) * 50).limit(51))).mappings().all()
     keys = [r["key"] for r in rows[:50]]
     acknowledged = set((await session.scalars(read.where(NotificationRead.key.in_(keys)))).all()) if keys else set()
-    return {"items": [{**dict(r), "read": r["key"] in acknowledged, "title": "Permintaan pembatalan" if r["kind"] == "cancel" else "Pesanan perlu diproses", "href": f"/pesanan/{r['id']}"} for r in rows[:50]], "unread": unread or 0, "halaman": halaman, "ada_lagi": len(rows) > 50}
+    return {"items": [{**dict(r), "read": r["key"] in acknowledged, "title": "Permintaan pembatalan" if r["kind"] == "cancel" else "Pesanan perlu diproses", "href": f"{r['inbox']}{r['id']}"} for r in rows[:50]], "unread": unread or 0, "halaman": halaman, "ada_lagi": len(rows) > 50}
 
 
 @router.post("/status-dibaca")

@@ -43,6 +43,7 @@ ATURAN: list[tuple[re.Pattern, set[str] | None, str]] = [
         (r"^/pesanan/[^/]+$", {"DELETE"}, "pesanan_manual"),
         (r"^/pesanan/[^/]+/chat", None, "chat"),
         (r"^/pesanan-otomatis", None, "otomasi"),
+        (r"^/pesanan-easyboss(/|$)", None, "pesanan_easyboss"),
         (r"^/pesanan(/|$)", None, "pesanan"),
         (r"^/sinkronisasi", None, "pesanan"),
         (r"^/akun/[^/]+/chat", None, "chat"),

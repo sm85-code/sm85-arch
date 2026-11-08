@@ -12,7 +12,7 @@ import logging
 import os
 from datetime import datetime, timedelta, timezone
 
-from sqlalchemy import delete, select
+from sqlalchemy import case, delete, literal, select
 from sqlalchemy.dialects.postgresql import insert as pg_insert
 from sqlalchemy.dialects.sqlite import insert as sqlite_insert
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -81,7 +81,7 @@ async def _recipients(session: AsyncSession) -> list[tuple[PushSubscription, set
     if assigned_ids:
         for uid, tid in (await session.execute(select(StaffTokoPenjualan.user_id, StaffTokoPenjualan.toko_id).where(StaffTokoPenjualan.user_id.in_(assigned_ids)))).all():
             shops.setdefault(uid, set()).add(PREFIX + tid)
-    halaman_role = {r: {h for h in ("pesanan", "chat") if await akses.tingkat_halaman(session, list(r), h)} for r in toko_role}
+    halaman_role = {r: {h for h in ("pesanan", "pesanan_easyboss", "chat") if await akses.tingkat_halaman(session, list(r), h)} for r in toko_role}
     out = []
     for sub, _ in rows:
         r = perans[sub.user_id]
@@ -118,11 +118,13 @@ async def _orders(session: AsyncSession, recipients) -> None:
     from .bridge_presentation import notification_identity
     number, shop = notification_identity()
     from .shop_scope import key_expression
+    from .order_source import easyboss_condition
+    inbox = case((easyboss_condition(), literal("pesanan_easyboss")), else_=literal("pesanan"))
     perlu = services._kondisi_tahap("perlu_diproses")
     batal = (Pesanan.platform == "shopee") & (Pesanan.status_marketplace == "IN_CANCEL") & Pesanan.status.in_(["unpaid", "to_ship"])
     rows = (
         await session.execute(
-            select(Pesanan.id, number.label("id_eksternal"), key_expression().label("akun_id"), shop.label("nama_toko"), batal.label("batal"))
+            select(inbox.label("inbox"), Pesanan.id, number.label("id_eksternal"), key_expression().label("akun_id"), shop.label("nama_toko"), batal.label("batal"))
             .outerjoin(AkunMarketplace, AkunMarketplace.id == Pesanan.akun_id)
             .where(perlu | batal)
         )
@@ -136,16 +138,19 @@ async def _orders(session: AsyncSession, recipients) -> None:
         return
     await _remember(session, fresh)
     for sub, allowed, halaman in recipients:
-        if not sub.pesanan or "pesanan" not in halaman:
+        if not sub.pesanan:
             continue
-        for kind, single, many in (("process", "Pesanan perlu diproses", "pesanan baru perlu diproses"), ("cancel", "Permintaan pembatalan", "permintaan pembatalan")):
-            mine = [
-                {"body": f"{events[k].id_eksternal} · {events[k].nama_toko or 'Toko'}", "toko": events[k].nama_toko or "Toko", "url": f"/pesanan/{events[k].id}", "tag": k}
-                for k in fresh
-                if k.endswith(":" + kind) and _sees(allowed, events[k].akun_id)
-            ]
-            if mine:
-                await _deliver(session, sub, _summary(mine, single, many, "/pesanan"))
+        for page, path in (("pesanan", "/pesanan"), ("pesanan_easyboss", "/pesanan-easyboss")):
+            if page not in halaman:
+                continue
+            for kind, single, many in (("process", "Pesanan perlu diproses", "pesanan baru perlu diproses"), ("cancel", "Permintaan pembatalan", "permintaan pembatalan")):
+                mine = [
+                    {"body": f"{events[k].id_eksternal} · {events[k].nama_toko or 'Toko'}", "toko": events[k].nama_toko or "Toko", "url": f"{path}/{events[k].id}", "tag": k}
+                    for k in fresh
+                    if events[k].inbox == page and k.endswith(":" + kind) and _sees(allowed, events[k].akun_id)
+                ]
+                if mine:
+                    await _deliver(session, sub, _summary(mine, single, many, path))
 
 
 async def _chats(session: AsyncSession, recipients) -> None:

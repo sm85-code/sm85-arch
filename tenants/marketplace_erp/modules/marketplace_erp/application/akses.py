@@ -54,6 +54,7 @@ GRUP_LABEL = dict(GRUP_HALAMAN)
 HALAMAN: list[tuple[str, str, str, tuple[str, ...]]] = [
     ("dashboard", "Dashboard", "harian", ("baca",)),
     ("pesanan", "Pesanan", "harian", ("baca", "tulis")),
+    ("pesanan_easyboss", "Pesanan EasyBoss", "harian", ("baca", "tulis")),
     ("pesanan_manual", "Buat dan hapus pesanan manual", "harian", ("tulis",)),
     ("chat", "Chat", "harian", ("baca", "tulis")),
     ("retur", "Retur & Refund", "harian", ("baca", "tulis")),
@@ -139,12 +140,12 @@ TINGKAT_SEMUA = {**TINGKAT_HALAMAN, **{k: ("baca", "tulis") for k in USANG}}
 # What the built-in roles could reach before roles were editable; seeded as the starting checkmarks. The test
 # tests/test_marketplace_erp_peta_akses.py checks these against a snapshot of the old fixed rules.
 _OWNER = {
-    "dashboard": "baca", "pesanan": "tulis", "pesanan_manual": "tulis", "chat": "tulis", "retur": "tulis", "katalog": "tulis",
+    "dashboard": "baca", "pesanan": "tulis", "pesanan_easyboss": "tulis", "pesanan_manual": "tulis", "chat": "tulis", "retur": "tulis", "katalog": "tulis",
     "produk": "tulis", "listing": "tulis", "gudang": "tulis", "promosi": "tulis", "publikasi": "tulis",
     "sinkron_shopee": "tulis", "laporan_ringkas": "baca", "push_shopee": "tulis",
     "operasional_umum": "baca", "operasional_packing": "baca",
 }
-_STAFF = {"dashboard": "baca", "pesanan": "tulis", "chat": "tulis", "retur": "tulis", "katalog": "baca", "arus_kas": "tulis"}
+_STAFF = {"dashboard": "baca", "pesanan": "tulis", "pesanan_easyboss": "tulis", "chat": "tulis", "retur": "tulis", "katalog": "baca", "arus_kas": "tulis"}
 
 # Built-in roles and the ones every installation starts with. Seeded only when missing, never overwritten.
 BAWAAN: list[dict] = [
@@ -184,6 +185,7 @@ async def pastikan_bawaan(session: AsyncSession) -> None:
     await _beri_belanja_supplier(session)
     await _beri_dari_operasional_umum(session, "belanja_tukang", PENANDA_TUKANG)
     await _pisah_per_tab(session)
+    await _pisah_pesanan_easyboss(session)
 
 
 async def _pisah_per_tab(session: AsyncSession) -> None:
@@ -508,3 +510,15 @@ async def muat_peran_tambahan(session: AsyncSession, users: list[UserMarketplace
             peta.setdefault(uid, []).append(rid)
     for u in users:
         u.peran_tambahan = peta.get(u.id, [])  # type: ignore[attr-defined]
+
+
+async def _pisah_pesanan_easyboss(session):
+    marker = "migrasi:pesanan_easyboss_v1"
+    if await session.get(PengaturanUi, marker):
+        return
+    rows = (await session.scalars(select(RoleHalaman).where(RoleHalaman.halaman == "pesanan"))).all()
+    for row in rows:
+        if await session.get(RoleHalaman, (row.role_id, "pesanan_easyboss")) is None:
+            session.add(RoleHalaman(role_id=row.role_id, halaman="pesanan_easyboss", tingkat=row.tingkat))
+    session.add(PengaturanUi(id=marker, teks="1"))
+    await session.flush()
