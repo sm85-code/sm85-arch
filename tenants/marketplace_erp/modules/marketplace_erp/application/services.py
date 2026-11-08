@@ -2619,21 +2619,25 @@ async def laporan_dashboard(
     per_hari: dict = {}
     total_omzet = Decimal("0")
     total_pesanan = 0
+    pesanan_omzet = 0
     for akun_id, t, total, waktu in rows:
         entry = _toko(akun_id)
         entry[t] += 1
+        entry["pesanan"] += 1
+        total_pesanan += 1
         per_tahap[t]["jumlah"] += 1
         per_tahap[t]["nilai"] += total
         if waktu is not None and (entry["pesanan_terbaru"] is None or _aware(waktu) > entry["pesanan_terbaru"]):
             entry["pesanan_terbaru"] = _aware(waktu)
+        if waktu is not None:
+            hari = per_hari.setdefault(_aware(waktu).astimezone(zona).date(), {"pesanan": 0, "omzet": Decimal("0")})
+            hari["pesanan"] += 1
         if t in _TAHAP_TERHITUNG_OMZET:
-            entry["pesanan"] += 1
             entry["omzet"] += total
-            total_pesanan += 1
+            pesanan_omzet += 1
             total_omzet += total
             if waktu is not None:
                 hari = per_hari.setdefault(_aware(waktu).astimezone(zona).date(), {"pesanan": 0, "omzet": Decimal("0")})
-                hari["pesanan"] += 1
                 hari["omzet"] += total
 
     terlaris_rows = (
@@ -2682,7 +2686,7 @@ async def laporan_dashboard(
         "total_omzet": total_omzet,
         "total_pesanan": total_pesanan,
         "permintaan_pembatalan": permintaan_pembatalan,
-        "rata_rata_pesanan": (total_omzet / total_pesanan) if total_pesanan else Decimal("0"),
+        "rata_rata_pesanan": (total_omzet / pesanan_omzet) if pesanan_omzet else Decimal("0"),
         "jumlah_toko": len(toko_rows),
         "per_toko": sorted(per_toko.values(), key=lambda e: (-e["omzet"], e["nama_toko"].lower())),
         "per_tahap": list(per_tahap.values()),
