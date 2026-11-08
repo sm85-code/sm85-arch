@@ -560,6 +560,8 @@ class PesananOut(BaseModel):
                 data["status"] = projected_status(source, data["status"])
                 data["currency"] = source.get("currency") or ""
                 data["cod"] = bool(source.get("cod"))
+                from .bridge_labels import PRINTABLE
+                data["resi_bridge_tersedia"] = source.get("source_status") in PRINTABLE.get(source.get("platform"), set())
                 data["total_sumber_tersedia"] = source.get("order_total") is not None
                 if source.get("order_total") is not None:
                     data["total"] = source["order_total"]
@@ -618,6 +620,7 @@ class PesananOut(BaseModel):
     items: list[ItemPesananOut] = Field(default_factory=list)
     payment_method: str = ""
     currency: str = ""
+    resi_bridge_tersedia: bool = False
     cod: bool = False
     days_to_ship: Optional[int] = None
     estimated_shipping_fee: Optional[Decimal] = None

@@ -1447,9 +1447,13 @@ def _kondisi_pesanan(
     if resi:
         if resi not in ("belum", "sudah"):
             raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="resi harus 'belum' atau 'sudah'")
+        from .bridge_labels import PRINTABLE
+        from ..infrastructure.models import BridgeOrder
+        bridge_printable = exists().where(BridgeOrder.pesanan_id == Pesanan.id,
+            or_(*[and_(BridgeOrder.platform == platform, BridgeOrder.source_status.in_(states))
+                  for platform, states in PRINTABLE.items()]))
         cond += [
-            Pesanan.status == "to_ship",
-            Pesanan.status_marketplace == "PROCESSED",
+            or_(and_(Pesanan.status == "to_ship", Pesanan.status_marketplace == "PROCESSED"), bridge_printable),
             Pesanan.resi_dicetak_at.is_not(None) if resi == "sudah" else Pesanan.resi_dicetak_at.is_(None),
         ]
     if q and q.strip():
@@ -2121,9 +2125,15 @@ async def unduh_resi_gabungan(
 
     from tenants.marketplace_erp.modules.marketplace_erp.infrastructure.adapters import erp_shopee
 
+    from . import bridge_labels
+    bridge_rows = []
     gagal: list[dict] = []
     kelompok: dict[tuple, list] = {}
     for pid in dict.fromkeys(pesanan_ids):
+        candidate = await session.get(Pesanan, pid)
+        if bridge_labels.source(candidate):
+            bridge_rows.append(candidate)
+            continue
         try:
             p, akun = await _pesanan_marketplace(session, pid)
         except HTTPException as exc:
@@ -2151,6 +2161,15 @@ async def unduh_resi_gabungan(
             except Exception as exc:
                 raise HTTPException(status_code=424, detail="File PDF resi dari Shopee tidak valid.") from exc
         return dokumen
+
+    for order in bridge_rows:
+        try:
+            if habis():
+                raise HTTPException(409, 'Waktu habis; cetak ulang pesanan ini.')
+            pdfs.append(await bridge_labels.download(session, order))
+            berhasil.append(order)
+        except HTTPException as exc:
+            gagal.append({'id':order.id, 'id_eksternal':bridge_labels.source(order)['order_id'], 'pesan':_pesan_gagal(exc)})
 
     for anggota_penuh in kelompok.values():
         for awal in range(0, len(anggota_penuh), erp_shopee.MAKS_RESI_MASSAL):
@@ -2265,7 +2284,10 @@ def _tandai_dicetak(pesanan: list[Pesanan], oleh: str | None) -> None:
 
 async def tandai_resi_pesanan(session: AsyncSession, pesanan_id: str, dicetak: bool, oleh: str | None) -> Pesanan:
     """Mark a pulled order's label as printed, or clear the mark (e.g. it was printed but got lost)."""
-    pesanan, _ = await _pesanan_marketplace(session, pesanan_id)
+    from . import bridge_labels
+    pesanan = await get_pesanan(session, pesanan_id)
+    if not bridge_labels.source(pesanan):
+        pesanan, _ = await _pesanan_marketplace(session, pesanan_id)
     if dicetak:
         _tandai_dicetak([pesanan], oleh)
     else:
@@ -2282,6 +2304,14 @@ async def unduh_resi_pesanan(
 
     The order is marked as printed (time + who) once the PDF exists; a failed attempt leaves it unmarked."""
     from tenants.marketplace_erp.modules.marketplace_erp.infrastructure.adapters import erp_shopee
+
+    from . import bridge_labels
+    bridge_order = await get_pesanan(session, pesanan_id)
+    if bridge_labels.source(bridge_order):
+        pdf = await bridge_labels.download(session, bridge_order)
+        _tandai_dicetak([bridge_order], oleh)
+        number = bridge_labels.source(bridge_order)['order_id']
+        return pdf, f"resi-{number}.pdf"
 
     pesanan, akun = await _pesanan_marketplace(session, pesanan_id)
     if pesanan.status_marketplace not in erp_shopee.STATUS_SUDAH_DIPROSES:
