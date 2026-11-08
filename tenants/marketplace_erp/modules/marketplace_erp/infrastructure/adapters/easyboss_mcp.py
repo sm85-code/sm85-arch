@@ -4,7 +4,7 @@ from decimal import Decimal, InvalidOperation
 from .easyboss import BridgeProblem, Line, Order, RejectedOrder, Shop, native_time
 
 PLATFORMS = {'tiktok': 'tiktokshop', 'lazada': 'lazada'}
-READS = {'eb_toko_list', 'eb_pesanan_hitung', 'eb_pesanan_list', 'eb_pesanan_detail'}
+READS = {'eb_resi_pdf', 'eb_toko_list', 'eb_pesanan_hitung', 'eb_pesanan_list', 'eb_pesanan_detail'}
 
 
 def native_amount(value):
