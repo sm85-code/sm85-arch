@@ -2569,6 +2569,8 @@ async def laporan_dashboard(
     totals, a row per shop (counts per stage + revenue), orders per stage, best sellers with the shops that
     sold them, a row per day and low stock. Revenue counts orders that are not unpaid or cancelled."""
     from zoneinfo import ZoneInfo
+    from ..infrastructure.models import BridgeOrder, TokoPenjualan
+    from .bridge_presentation import merge_display_snapshot
 
     zona = ZoneInfo(_ZONA_LAPORAN)
 
@@ -2578,8 +2580,10 @@ async def laporan_dashboard(
     tgl = _tgl_pesanan()
     tahap_expr = _ekspresi_tahap()
     scope = [Pesanan.akun_id.in_(akun_diizinkan)] if akun_diizinkan is not None else []
-    # Manual production orders carry no sales figures: they stay out of the sales dashboard.
-    jendela = [tgl >= dari, tgl <= sampai, Pesanan.platform != PLATFORM_MANUAL, *scope]
+    # Include marketplace bridge orders while retaining the same account assignment scope.
+    bridge_exists = exists().where(BridgeOrder.pesanan_id == Pesanan.id,
+        BridgeOrder.platform.in_(['tiktokshop', 'lazada']))
+    jendela = [tgl >= dari, tgl <= sampai, or_(Pesanan.platform != PLATFORM_MANUAL, bridge_exists), *scope]
     permintaan_pembatalan = (await session.execute(
         select(func.count(Pesanan.id)).where(
             *jendela, Pesanan.platform == "shopee", Pesanan.status_marketplace == "IN_CANCEL",
@@ -2588,9 +2592,37 @@ async def laporan_dashboard(
     )).scalar_one()
     rows = (
         await session.execute(
-            select(Pesanan.akun_id, tahap_expr.label("t"), Pesanan.total, tgl.label("tgl")).where(*jendela)
+            select(Pesanan.akun_id, tahap_expr.label("t"), Pesanan.total, tgl.label("tgl"), Pesanan.id).where(*jendela)
         )
     ).all()
+
+    bridge_sources = {}
+    bridge_shops = {}
+    ids = [row.id for row in rows]
+    if ids:
+        source_rows = (await session.execute(select(BridgeOrder, TokoPenjualan.nama, Pesanan.detail_json)
+            .join(Pesanan, Pesanan.id == BridgeOrder.pesanan_id)
+            .outerjoin(TokoPenjualan, TokoPenjualan.id == BridgeOrder.toko_id)
+            .where(BridgeOrder.pesanan_id.in_(ids)))).all()
+        for receipt, shop_name, detail in source_rows:
+            try:
+                original = json.loads(detail or '{}').get('easyboss', {})
+                latest = json.loads(receipt.snapshot_json or '{}')
+                source = merge_display_snapshot(original, latest)
+                if (source.get('platform'), source.get('shop_id'), source.get('order_id')) != (receipt.platform, receipt.shop_id, receipt.order_id):
+                    continue
+                key = 'bridge:' + (receipt.toko_id or receipt.platform + ':' + receipt.shop_id)
+                bridge_sources[receipt.pesanan_id] = (key, source)
+                bridge_shops[key] = shop_name or 'Toko EasyBoss'
+            except (ValueError, TypeError, AttributeError):
+                continue
+
+    def source_amount(value, fallback=Decimal('0')):
+        try:
+            result = Decimal(str(value))
+            return result if result.is_finite() and result >= 0 else fallback
+        except Exception:
+            return fallback
 
     toko_rows = {
         a.id: a
@@ -2603,8 +2635,9 @@ async def laporan_dashboard(
         if akun_id not in per_toko:
             akun = toko_rows.get(akun_id)
             per_toko[akun_id] = {
-                "akun_id": akun_id,
-                "nama_toko": akun.nama_toko if akun else "(tanpa toko)",
+                "akun_id": akun_id if akun_id not in bridge_shops else None,
+                "toko_key": akun_id or "none",
+                "nama_toko": bridge_shops.get(akun_id) or (akun.nama_toko if akun else "(tanpa toko)"),
                 "pesanan": 0,
                 "omzet": Decimal("0"),
                 **{t: 0 for t in TAHAP_PESANAN},
@@ -2620,7 +2653,10 @@ async def laporan_dashboard(
     total_omzet = Decimal("0")
     total_pesanan = 0
     pesanan_omzet = 0
-    for akun_id, t, total, waktu in rows:
+    for akun_id, t, total, waktu, order_id in rows:
+        if order_id in bridge_sources:
+            akun_id, source = bridge_sources[order_id]
+            total = source_amount(source.get('order_total'), total)
         entry = _toko(akun_id)
         entry[t] += 1
         entry["pesanan"] += 1
@@ -2650,7 +2686,7 @@ async def laporan_dashboard(
                 func.count(func.distinct(Pesanan.id)),
             )
             .join(Pesanan, Pesanan.id == ItemPesanan.pesanan_id)
-            .where(*jendela, Pesanan.status.in_(_STATUS_TERHITUNG_PENJUALAN))
+            .where(*jendela, Pesanan.platform != PLATFORM_MANUAL, Pesanan.status.in_(_STATUS_TERHITUNG_PENJUALAN))
             .group_by(ItemPesanan.nama_produk, Pesanan.akun_id)
         )
     ).all()
@@ -2662,6 +2698,28 @@ async def laporan_dashboard(
         e["pesanan"] += int(jumlah)
         akun = toko_rows.get(akun_id)
         e["toko"].append({"nama_toko": akun.nama_toko if akun else "(tanpa toko)", "qty": int(qty)})
+    for _, phase, _, _, order_id in rows:
+        if order_id not in bridge_sources or phase not in _TAHAP_TERHITUNG_OMZET:
+            continue
+        key, source = bridge_sources[order_id]
+        seen_names = set()
+        for line in source.get('items') or []:
+            name = line.get('product')
+            qty = line.get('quantity')
+            if not name or not isinstance(qty, int) or qty <= 0:
+                continue
+            value = source_amount(line.get('line_total'), source_amount(line.get('unit_price')) * qty)
+            entry = produk.setdefault(name, {'nama_produk':name, 'qty_terjual':0, 'omzet':Decimal('0'), 'pesanan':0, 'toko':[]})
+            entry['qty_terjual'] += qty
+            entry['omzet'] += value
+            if name not in seen_names:
+                entry['pesanan'] += 1
+                seen_names.add(name)
+            shop_entry = next((x for x in entry['toko'] if x['nama_toko'] == bridge_shops[key]), None)
+            if shop_entry:
+                shop_entry['qty'] += qty
+            else:
+                entry['toko'].append({'nama_toko':bridge_shops[key], 'qty':qty})
     produk_terlaris = sorted(produk.values(), key=lambda e: (-e["qty_terjual"], e["nama_produk"]))[:20]
     for e in produk_terlaris:
         e["toko"].sort(key=lambda x: -x["qty"])
@@ -2687,7 +2745,7 @@ async def laporan_dashboard(
         "total_pesanan": total_pesanan,
         "permintaan_pembatalan": permintaan_pembatalan,
         "rata_rata_pesanan": (total_omzet / pesanan_omzet) if pesanan_omzet else Decimal("0"),
-        "jumlah_toko": len(toko_rows),
+        "jumlah_toko": len(per_toko),
         "per_toko": sorted(per_toko.values(), key=lambda e: (-e["omzet"], e["nama_toko"].lower())),
         "per_tahap": list(per_tahap.values()),
         "produk_terlaris": produk_terlaris,
