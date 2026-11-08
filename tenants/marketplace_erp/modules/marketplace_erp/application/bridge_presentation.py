@@ -75,3 +75,14 @@ def effective_order_status(order):
         return order.status
     source = merge_display_snapshot(source, getattr(order, '_bridge_snapshot', {}))
     return projected_status(source, order.status)
+
+
+def notification_identity():
+    """Display identity only; internal notification keys and links remain stable."""
+    from sqlalchemy import func
+    from tenants.marketplace_erp.modules.marketplace_erp.infrastructure.models import AkunMarketplace, Pesanan, TokoPenjualan
+    conditions = (BridgeOrder.pesanan_id == Pesanan.id, Pesanan.platform == 'manual',
+                  BridgeOrder.platform.in_(['tiktokshop', 'lazada']))
+    number = select(BridgeOrder.order_id).where(*conditions).correlate(Pesanan).scalar_subquery()
+    shop = select(TokoPenjualan.nama).join(BridgeOrder, BridgeOrder.toko_id == TokoPenjualan.id).where(*conditions).correlate(Pesanan).scalar_subquery()
+    return func.coalesce(number, Pesanan.id_eksternal), func.coalesce(shop, AkunMarketplace.nama_toko)
