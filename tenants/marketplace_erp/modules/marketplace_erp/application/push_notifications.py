@@ -110,11 +110,13 @@ def _summary(items: list[dict], single: str, many: str, url_many: str) -> dict:
 
 
 async def _orders(session: AsyncSession, recipients) -> None:
+    from .bridge_presentation import notification_identity
+    number, shop = notification_identity()
     perlu = services._kondisi_tahap("perlu_diproses")
     batal = (Pesanan.platform == "shopee") & (Pesanan.status_marketplace == "IN_CANCEL") & Pesanan.status.in_(["unpaid", "to_ship"])
     rows = (
         await session.execute(
-            select(Pesanan.id, Pesanan.id_eksternal, Pesanan.akun_id, AkunMarketplace.nama_toko, batal.label("batal"))
+            select(Pesanan.id, number.label("id_eksternal"), Pesanan.akun_id, shop.label("nama_toko"), batal.label("batal"))
             .outerjoin(AkunMarketplace, AkunMarketplace.id == Pesanan.akun_id)
             .where(perlu | batal)
         )

@@ -28,14 +28,16 @@ class ReadIn(Input):
 
 
 async def order_sources(session, user):
+    from tenants.marketplace_erp.modules.marketplace_erp.application.bridge_presentation import notification_identity
+    number, shop = notification_identity()
     allowed = await akun_ids_diizinkan(user, session)
     cancel = (Pesanan.platform == "shopee") & (Pesanan.status_marketplace == "IN_CANCEL") & Pesanan.status.in_(["unpaid", "to_ship"])
     processing = services._kondisi_tahap("perlu_diproses")
     kind = case((cancel, literal("cancel")), else_=literal("process"))
     key = literal("order:") + Pesanan.id + literal(":") + kind
     return select(
-        key.label("key"), Pesanan.id.label("id"), Pesanan.id_eksternal.label("order_sn"),
-        Pesanan.akun_id.label("akun_id"), AkunMarketplace.nama_toko.label("nama_toko"),
+        key.label("key"), Pesanan.id.label("id"), number.label("order_sn"),
+        Pesanan.akun_id.label("akun_id"), shop.label("nama_toko"),
         kind.label("kind"), func.coalesce(Pesanan.dipesan_at, Pesanan.created_at).label("created_at"),
     ).outerjoin(AkunMarketplace, AkunMarketplace.id == Pesanan.akun_id).where(
         cancel | processing,

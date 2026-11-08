@@ -106,3 +106,34 @@ async def test_http_permissions_and_bounded_read_payload(db):
         assert (await client.get('/notifikasi?halaman=0')).status_code == 422
         assert (await client.post('/notifikasi/dibaca', json={'keys': ['order:p:process']})).status_code == 200
         assert (await client.get('/notifikasi')).json()['unread'] == 1
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize('platform', ['tiktokshop', 'lazada'])
+async def test_bridge_notification_uses_original_number_and_shop_without_changing_keys(db, platform, monkeypatch):
+    from tenants.marketplace_erp.modules.marketplace_erp.infrastructure.models import BridgeOrder, TokoPenjualan
+    s, users = db
+    shop = TokoPenjualan(nama='Source Shop', nama_key='source shop', jenis='internal', platform=platform,
+                        sumber='easyboss', easyboss_shop_id='source-shop', aktif=True, sinkron_status='synced', keterangan='')
+    p = Pesanan(id='bridge-order', platform='manual', id_eksternal='EB-internal-hash', status='to_ship')
+    s.add_all([shop,p])
+    await s.flush()
+    s.add(BridgeOrder(platform=platform,shop_id='source-shop',order_id='ORIGINAL-123',toko_id=shop.id,pesanan_id=p.id,
+                      status='imported',source_status='AWAITING_SHIPMENT' if platform=='tiktokshop' else 'pending',snapshot_json='{}'))
+    await s.commit()
+    result=await api.notifications(1,s,users['admin'])
+    row=next(x for x in result['items'] if x['id']==p.id)
+    assert row['order_sn']=='ORIGINAL-123' and row['nama_toko']=='Source Shop'
+    assert row['key']=='order:bridge-order:process' and row['href']=='/pesanan/bridge-order'
+    assert p.id_eksternal=='EB-internal-hash'
+    await api.acknowledge(api.ReadIn(keys=[row['key']]),s,users['admin'])
+    assert next(x for x in (await api.notifications(1,s,users['admin']))['items'] if x['id']==p.id)['read']
+    from tenants.marketplace_erp.modules.marketplace_erp.application import push_notifications as push
+    deliver = AsyncMock()
+    monkeypatch.setattr(push, '_deliver', deliver)
+    await push._remember(s, ['baseline:order', *[x['key'] for x in result['items'] if x['id'] != p.id]])
+    await push._orders(s, [(SimpleNamespace(pesanan=True), None, {'pesanan'})])
+    deliver.assert_awaited_once()
+    payload = deliver.call_args.args[2]
+    assert payload['body'] == 'ORIGINAL-123 · Source Shop'
+    assert payload['tag'] == row['key'] and payload['url'] == row['href']
