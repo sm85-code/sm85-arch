@@ -379,3 +379,19 @@ async def test_cod_import_requires_verified_eligibility_and_never_marks_paid(ses
         assert json.loads(p.detail_json)['easyboss']['cod'] is True
     else:
         assert p is None
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize('source,status', [('AWAITING_SHIPMENT','ready'),('AWAITING_COLLECTION','ready'),('IN_TRANSIT','shipped')])
+async def test_tiktok_verified_cod_import_is_unpaid_and_idempotent(session,source,status):
+    g = Fake(shops=[shop().model_copy(update={'platform':'tiktokshop'})],
+             orders=[order(platform='tiktokshop',source_status=source,status=status,paid=None,
+                           cod=True,cod_eligible=True,payment_method='Cash on delivery')])
+    await sync(session,g)
+    assert (await b.run_orders(session,g))['imported'] == 1
+    p = await session.scalar(select(Pesanan))
+    assert p.status == ('shipped' if status == 'shipped' else 'to_ship')
+    source_data = json.loads(p.detail_json)['easyboss']
+    assert source_data['cod'] is True and source_data['paid'] is None
+    assert (await b.run_orders(session,g))['imported'] == 0
+    assert await session.scalar(select(func.count()).select_from(Pesanan)) == 1

@@ -214,3 +214,24 @@ def test_native_lifecycle_without_delivery_timestamp(native, canonical, phase):
     assert row.status == canonical
     assert native_state('tiktokshop', native)[1] == phase
     assert projected_status({'platform':'tiktokshop', 'source_status':native}, 'to_ship') == canonical
+
+
+@pytest.mark.parametrize('source,status,eligible', [
+    ('AWAITING_SHIPMENT','ready',True), ('AWAITING_COLLECTION','ready',True),
+    ('IN_TRANSIT','shipped',True), ('DELIVERED','completed',True), ('COMPLETED','completed',True),
+    ('UNPAID','unpaid',False), ('ON_HOLD','hold',False), ('CANCELLED','cancelled',False),
+    ('UNRECOGNIZED','unknown',False)])
+def test_tiktok_native_cod_fulfilment_does_not_claim_payment(source,status,eligible):
+    p = package()
+    p['orderInfo'].update(platformOrderStatus=source,isCod='1',paymentMethod='Cash on delivery',gmtPay=None)
+    row = normalize(p, ('tiktokshop','shop','order'))
+    assert row.complete and row.cod and row.paid is None
+    assert row.status == status and row.cod_eligible is eligible
+
+
+@pytest.mark.parametrize('flag,method', [('0','Cash on delivery'),('1','PayLater'),('1',''),('1','unknown')])
+def test_tiktok_cod_requires_explicit_native_flag_and_payment_method(flag,method):
+    p = package()
+    p['orderInfo'].update(isCod=flag,paymentMethod=method,gmtPay=None)
+    row = normalize(p, ('tiktokshop','shop','order'))
+    assert row.cod is False and row.cod_eligible is False and row.paid is None
