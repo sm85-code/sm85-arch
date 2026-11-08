@@ -143,11 +143,11 @@ async def test_dashboard_tables(session, data):
 
     # A5 (40 days ago) is outside the period; unpaid and cancelled orders do not count as revenue.
     assert d["total_omzet"] == Decimal("200") + Decimal("300") + Decimal("400") + Decimal("1000")
-    assert d["total_pesanan"] == 4 and d["rata_rata_pesanan"] == Decimal("475")
+    assert d["total_pesanan"] == 6 and d["rata_rata_pesanan"] == Decimal("475")
     assert d["jumlah_toko"] == 3
 
     per_toko = {t["nama_toko"]: t for t in d["per_toko"]}
-    assert per_toko["Toko A"]["pesanan"] == 3 and per_toko["Toko A"]["omzet"] == Decimal("900")
+    assert per_toko["Toko A"]["pesanan"] == 4 and per_toko["Toko A"]["omzet"] == Decimal("900")
     assert (per_toko["Toko A"]["belum_bayar"], per_toko["Toko A"]["perlu_diproses"], per_toko["Toko A"]["menunggu_kurir"], per_toko["Toko A"]["dikirim"], per_toko["Toko A"]["selesai"]) == (1, 1, 1, 1, 0)
     assert per_toko["Toko B"]["dibatalkan"] == 1 and per_toko["Toko B"]["omzet"] == Decimal("1000")
     assert per_toko["Toko Sepi"]["pesanan"] == 0 and per_toko["Toko Sepi"]["pesanan_terbaru"] is None  # shops without orders still listed
@@ -162,7 +162,7 @@ async def test_dashboard_tables(session, data):
     meja = next(p for p in d["produk_terlaris"] if p["nama_produk"] == "Meja Kayu")
     assert meja["qty_terjual"] == 2 and meja["omzet"] == Decimal("300")
 
-    assert sum(h["pesanan"] for h in d["per_hari"]) == 4
+    assert sum(h["pesanan"] for h in d["per_hari"]) == 6
     assert d["per_hari"][0]["tanggal"] > d["per_hari"][-1]["tanggal"]  # newest day first
     assert d["data_sejak"] == SEKARANG - timedelta(days=40)
 
@@ -279,3 +279,37 @@ async def test_dashboard_buyer_cancellation_count_respects_period_and_shop(sessi
     assert (await services.laporan_dashboard(session, **period))["permintaan_pembatalan"] == 2
     assert (await services.laporan_dashboard(session, **period, akun_diizinkan=[a.id]))["permintaan_pembatalan"] == 1
     assert (await services.laporan_dashboard(session, **period, akun_diizinkan=[]))["permintaan_pembatalan"] == 0
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize('scope_kind', ['assigned','none','all'])
+async def test_dashboard_counts_match_assigned_order_scope_for_all_statuses(session,data,scope_kind):
+    a,b=data
+    allowed = [a.id] if scope_kind=='assigned' else [] if scope_kind=='none' else None
+    start=SEKARANG-timedelta(days=30)
+    d=await services.laporan_dashboard(session,dari=start,sampai=SEKARANG,akun_diizinkan=allowed)
+    orders=await services.daftar_pesanan(session,dari=start,sampai=SEKARANG,akun_diizinkan=allowed)
+    assert d['total_pesanan']==orders['total']==sum(x['jumlah'] for x in d['per_tahap'])
+    assert d['total_pesanan']==sum(x['pesanan'] for x in d['per_toko'])==sum(x['pesanan'] for x in d['per_hari'])
+    assert d['total_omzet']==sum(x['omzet'] for x in d['per_toko'])
+    if allowed is not None:
+        assert all(x['akun_id'] in allowed for x in d['per_toko'])
+        assert all(x['nama_toko']=='Toko A' for p in d['produk_terlaris'] for x in p['toko'])
+
+
+@pytest.mark.asyncio
+async def test_dashboard_route_enforces_assignment_and_rejects_other_shop(session,data):
+    from tenants.marketplace_erp.adapters.api.v1.marketplace_erp_router import laporan_dashboard
+    from tenants.marketplace_erp.modules.marketplace_erp.infrastructure.models import UserMarketplaceErp,StaffAkunMarketplace
+    from fastapi import HTTPException
+    a,b=data
+    user=UserMarketplaceErp(id='dashboard-staff',nama='Staff',username='dashboard-staff',password_hash='synthetic',role='staff')
+    session.add(user)
+    await session.flush()
+    session.add(StaffAkunMarketplace(user_id=user.id,akun_id=a.id))
+    await session.commit()
+    d=await laporan_dashboard(akun_id=None,dari=SEKARANG-timedelta(days=30),sampai=SEKARANG,batas_stok_kritis=5,session=session,user=user)
+    assert d['total_pesanan']==4 and all(x['akun_id']==a.id for x in d['per_toko'])
+    with pytest.raises(HTTPException) as denied:
+        await laporan_dashboard(akun_id=b.id,dari=SEKARANG-timedelta(days=30),sampai=SEKARANG,batas_stok_kritis=5,session=session,user=user)
+    assert denied.value.status_code==403
