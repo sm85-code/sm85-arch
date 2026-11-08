@@ -144,8 +144,10 @@ def normalize(p, identity):
         if o.get('gmtPay'):
             native_time(o['gmtPay'])
         source, status = o['platformOrderStatus'], 'unknown'
-        cod = str(o.get('isCod')) == '1' and str(o.get('paymentMethod') or '').upper() == 'COD'
-        cod_eligible = platform == 'lazada' and source in {'ready_to_ship', 'shipped', 'delivered'} and cod
+        cod = str(o.get('isCod')) == '1' and str(o.get('paymentMethod') or '').casefold() in {'cod', 'cash on delivery'}
+        cod_states = {'lazada': {'ready_to_ship', 'shipped', 'delivered'},
+                      'tiktokshop': {'AWAITING_SHIPMENT', 'AWAITING_COLLECTION', 'IN_TRANSIT', 'DELIVERED', 'COMPLETED'}}
+        cod_eligible = cod and source in cod_states.get(platform, set())
         from ...application.bridge_status import native_state
         mapped = native_state(platform, source)
         status = mapped[0] if mapped else 'unknown'
