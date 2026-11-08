@@ -1368,7 +1368,8 @@ async def list_pesanan(
     if platform:
         stmt = stmt.where(Pesanan.platform == _validate_platform(platform))
     if akun_id:
-        stmt = stmt.where(Pesanan.akun_id == akun_id)
+        from .shop_scope import condition
+        stmt = stmt.where(condition([akun_id]))
     if status_filter:
         status_filter = status_filter.strip().lower()
         if status_filter not in STATUS_PESANAN:
@@ -1437,9 +1438,11 @@ def _kondisi_pesanan(
 ) -> list:
     cond = []
     if akun_diizinkan is not None:
-        cond.append(Pesanan.akun_id.in_(akun_diizinkan) if akun_diizinkan else literal(False))
+        from .shop_scope import condition
+        cond.append(condition(akun_diizinkan))
     if akun_id:
-        cond.append(Pesanan.akun_id == akun_id)
+        from .shop_scope import condition
+        cond.append(condition([akun_id]))
     if tahap:
         if tahap not in TAHAP_PESANAN:
             raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=f"tahap harus salah satu dari {TAHAP_PESANAN}")
@@ -1520,6 +1523,8 @@ async def ringkasan_pesanan(
 ) -> dict:
     """Counts for the filter chips. Each chip row ignores its own filter so it shows what picking it would give:
     the status counts honour the chosen shop, the shop counts honour the chosen status."""
+    from .shop_scope import key_expression, options
+    shop_key = key_expression()
     dasar = dict(filters)
     per_tahap = (
         await session.execute(
@@ -1531,20 +1536,17 @@ async def ringkasan_pesanan(
     tahap_hitung = {t: 0 for t in TAHAP_PESANAN} | {t: int(n) for t, n in per_tahap}
     per_toko = (
         await session.execute(
-            select(Pesanan.akun_id, func.count())
+            select(shop_key, func.count())
             .where(*_kondisi_pesanan(tahap=tahap, **dasar))
-            .group_by(Pesanan.akun_id)
+            .group_by(shop_key)
         )
     ).all()
     jumlah_toko = {a: int(n) for a, n in per_toko}
     akun_ids = dasar.get("akun_diizinkan")
-    toko = sorted(
-        (a for a in await list_akun_marketplace(session) if a.id_toko_eksternal and (akun_ids is None or a.id in akun_ids)),
-        key=lambda a: a.nama_toko.lower(),
-    )
+    toko = sorted(await options(session,akun_ids),key=lambda x:x['nama_toko'].lower())
     return {
         "tahap": {"semua": sum(tahap_hitung.values()), **tahap_hitung},
-        "toko": [{"akun_id": a.id, "nama_toko": a.nama_toko, "jumlah": jumlah_toko.get(a.id, 0)} for a in toko],
+        "toko": [{"akun_id": a["id"], "nama_toko": a["nama_toko"], "jumlah": jumlah_toko.get(a["id"], 0)} for a in toko],
         "total_toko": sum(jumlah_toko.values()),
     }
 
@@ -2375,6 +2377,12 @@ async def delete_pesanan(session: AsyncSession, pesanan_id: str, oleh: str | Non
 
 
 async def assign_staff_akun(session: AsyncSession, payload: StaffAkunIn) -> StaffAkunMarketplace:
+    if payload.akun_id.startswith('internal:'):
+        from .shop_scope import assign_many
+        existing = await list_staff_akun(session,user_id=payload.user_id)
+        if any(x.akun_id == payload.akun_id for x in existing):
+            raise HTTPException(409,'Staff sudah ditugaskan ke toko ini')
+        return (await assign_many(session,payload.user_id,[payload.akun_id]))[0]
     user = await session.get(UserMarketplaceErp, payload.user_id)
     if not user:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="User tidak ditemukan")
@@ -2398,10 +2406,20 @@ async def list_staff_akun(session: AsyncSession, *, user_id: str | None = None) 
     stmt = select(StaffAkunMarketplace).order_by(StaffAkunMarketplace.created_at.desc())
     if user_id:
         stmt = stmt.where(StaffAkunMarketplace.user_id == user_id)
-    return list((await session.execute(stmt)).scalars().all())
+    from .shop_scope import internal_rows
+    return list((await session.execute(stmt)).scalars().all()) + await internal_rows(session,user_id)
 
 
 async def remove_staff_akun(session: AsyncSession, staff_akun_id: str) -> None:
+    from .shop_scope import ASSIGN_PREFIX
+    if staff_akun_id.startswith(ASSIGN_PREFIX):
+        from ..infrastructure.models import StaffTokoPenjualan
+        row = await session.get(StaffTokoPenjualan,staff_akun_id[len(ASSIGN_PREFIX):])
+        if not row:
+            raise HTTPException(404,'Penugasan toko internal tidak ditemukan')
+        await session.delete(row)
+        await session.flush()
+        return
     row = await session.get(StaffAkunMarketplace, staff_akun_id)
     if not row:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Penugasan staff-akun tidak ditemukan")
@@ -2579,7 +2597,8 @@ async def laporan_dashboard(
 
     tgl = _tgl_pesanan()
     tahap_expr = _ekspresi_tahap()
-    scope = [Pesanan.akun_id.in_(akun_diizinkan)] if akun_diizinkan is not None else []
+    from .shop_scope import condition
+    scope = [condition(akun_diizinkan)] if akun_diizinkan is not None else []
     # Include marketplace bridge orders while retaining the same account assignment scope.
     bridge_exists = exists().where(BridgeOrder.pesanan_id == Pesanan.id,
         BridgeOrder.platform.in_(['tiktokshop', 'lazada']))
@@ -2635,7 +2654,7 @@ async def laporan_dashboard(
         if akun_id not in per_toko:
             akun = toko_rows.get(akun_id)
             per_toko[akun_id] = {
-                "akun_id": akun_id if akun_id not in bridge_shops else None,
+                "akun_id": akun_id if akun_id not in bridge_shops else "internal:" + akun_id.removeprefix("bridge:"),
                 "toko_key": akun_id or "none",
                 "nama_toko": bridge_shops.get(akun_id) or (akun.nama_toko if akun else "(tanpa toko)"),
                 "pesanan": 0,
@@ -3590,18 +3609,6 @@ async def konfirmasi_retur_marketplace(session: AsyncSession, akun_id: str, nomo
 
 
 async def assign_staff_banyak(session: AsyncSession, user_id: str, akun_ids: list[str]) -> list[StaffAkunMarketplace]:
-    """Validate the entire additive assignment before changing anything; repeated requests are safe."""
-    user = (await session.execute(select(UserMarketplaceErp).where(UserMarketplaceErp.id == user_id).with_for_update())).scalar_one_or_none()
-    if not user or await akses.akses_toko(session, await akses.peran_pengguna(session, user)) != "ditugaskan":
-        raise HTTPException(422, "Pilih pengguna dengan role yang aksesnya dibatasi per toko")
-    ids = list(dict.fromkeys(akun_ids))
-    for akun_id in ids:
-        await get_akun_marketplace(session, akun_id)
-    existing = {r.akun_id: r for r in await list_staff_akun(session, user_id=user_id)}
-    for akun_id in ids:
-        if akun_id not in existing:
-            row = StaffAkunMarketplace(user_id=user_id, akun_id=akun_id)
-            session.add(row)
-            existing[akun_id] = row
-    await session.flush()
-    return [existing[akun_id] for akun_id in ids]
+    from .shop_scope import assign_many
+    return await assign_many(session,user_id,akun_ids)
+

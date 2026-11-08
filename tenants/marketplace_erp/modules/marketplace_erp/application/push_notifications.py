@@ -76,6 +76,11 @@ async def _recipients(session: AsyncSession) -> list[tuple[PushSubscription, set
     if assigned_ids:
         for user_id, akun_id in (await session.execute(select(StaffAkunMarketplace.user_id, StaffAkunMarketplace.akun_id).where(StaffAkunMarketplace.user_id.in_(assigned_ids)))).all():
             shops.setdefault(user_id, set()).add(akun_id)
+    from ..infrastructure.models import StaffTokoPenjualan
+    from .shop_scope import PREFIX
+    if assigned_ids:
+        for uid, tid in (await session.execute(select(StaffTokoPenjualan.user_id, StaffTokoPenjualan.toko_id).where(StaffTokoPenjualan.user_id.in_(assigned_ids)))).all():
+            shops.setdefault(uid, set()).add(PREFIX + tid)
     halaman_role = {r: {h for h in ("pesanan", "chat") if await akses.tingkat_halaman(session, list(r), h)} for r in toko_role}
     out = []
     for sub, _ in rows:
@@ -112,11 +117,12 @@ def _summary(items: list[dict], single: str, many: str, url_many: str) -> dict:
 async def _orders(session: AsyncSession, recipients) -> None:
     from .bridge_presentation import notification_identity
     number, shop = notification_identity()
+    from .shop_scope import key_expression
     perlu = services._kondisi_tahap("perlu_diproses")
     batal = (Pesanan.platform == "shopee") & (Pesanan.status_marketplace == "IN_CANCEL") & Pesanan.status.in_(["unpaid", "to_ship"])
     rows = (
         await session.execute(
-            select(Pesanan.id, number.label("id_eksternal"), Pesanan.akun_id, shop.label("nama_toko"), batal.label("batal"))
+            select(Pesanan.id, number.label("id_eksternal"), key_expression().label("akun_id"), shop.label("nama_toko"), batal.label("batal"))
             .outerjoin(AkunMarketplace, AkunMarketplace.id == Pesanan.akun_id)
             .where(perlu | batal)
         )

@@ -8,6 +8,8 @@ from decimal import Decimal
 from typing import Annotated, Literal
 from zoneinfo import ZoneInfo
 
+from tenants.marketplace_erp.modules.marketplace_erp.application.shop_scope import condition
+from tenants.marketplace_erp.modules.marketplace_erp.infrastructure.auth import akun_ids_diizinkan
 from fastapi import APIRouter, Depends, HTTPException, Query
 from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
 from sqlalchemy import and_, delete, func, or_, select, text, update
@@ -643,13 +645,15 @@ async def candidates_rekap(
     has_job = select(ProcessingJob.id).where(ProcessingJob.source_item_id == ItemPesanan.id).exists()
     toko = func.coalesce(AkunMarketplace.nama_toko, "Pesanan manual")
 
+    scope = condition(await akun_ids_diizinkan(actor, session))
+
     async def per_toko(*filters):
         rows = await session.execute(
             select(toko, func.count())
             .select_from(ItemPesanan)
             .join(Pesanan, Pesanan.id == ItemPesanan.pesanan_id)
             .outerjoin(AkunMarketplace, AkunMarketplace.id == Pesanan.akun_id)
-            .where(*filters)
+            .where(*filters, scope)
             .group_by(toko)
         )
         return {name: n for name, n in rows.all()}
@@ -681,6 +685,7 @@ async def candidates(
             from tenants.marketplace_erp.modules.marketplace_erp.application.services import _kondisi_tahap
             filters.append(or_(_kondisi_tahap('perlu_diproses'), _kondisi_tahap('menunggu_kurir'))
                            if status == 'menunggu' else _kondisi_tahap('dikirim' if status == 'dikirim' else 'selesai'))
+    filters.append(condition(await akun_ids_diizinkan(actor, session)))
     if q.strip():
         text = "%" + q.strip() + "%"
         filters.append(
@@ -770,7 +775,7 @@ async def select_items(
             select(ItemPesanan, Pesanan, AkunMarketplace.nama_toko)
             .join(Pesanan, Pesanan.id == ItemPesanan.pesanan_id)
             .outerjoin(AkunMarketplace, AkunMarketplace.id == Pesanan.akun_id)
-            .where(ItemPesanan.id.in_(ids), siap())
+            .where(ItemPesanan.id.in_(ids), siap(), condition(await akun_ids_diizinkan(actor, session)))
         )
     ).all()
     if len(rows) != len(ids):

@@ -251,6 +251,8 @@ async def ensure_marketplace_erp_schema() -> None:
         await akses.pastikan_bawaan(session)
         await kategori.pastikan_bawaan(session)
         await kapitalkan_katalog_manual(session)
+        from ..application.shop_scope import backfill_links
+        await backfill_links(session)
         if await _flag_default_password_owner(session):
             logger.warning(
                 "marketplace_erp: seeded owner %s still uses the default password -- "

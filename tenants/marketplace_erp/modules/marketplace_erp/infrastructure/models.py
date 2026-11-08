@@ -1170,3 +1170,18 @@ class BridgeOrder(MarketplaceErpBase):
     snapshot_json: Mapped[str] = mapped_column(Text, nullable=False)
     audit_json: Mapped[str] = mapped_column(Text, nullable=False, default="[]", server_default="[]")
     updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=_utcnow, onupdate=_utcnow)
+
+
+class StaffTokoPenjualan(MarketplaceErpBase):
+    __tablename__ = 'mpe_staff_toko_penjualan'
+    __table_args__ = (UniqueConstraint('user_id','toko_id',name='uq_mpe_staff_toko_user_store'),)
+    id: Mapped[str] = mapped_column(String(64),primary_key=True,default=_uuid)
+    user_id: Mapped[str] = mapped_column(ForeignKey('mpe_users.id',ondelete='CASCADE'),index=True)
+    toko_id: Mapped[str] = mapped_column(ForeignKey('mpe_toko_penjualan.id',ondelete='CASCADE'),index=True)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True),default=_utcnow)
+
+
+class PesananTokoPenjualan(MarketplaceErpBase):
+    __tablename__ = 'mpe_pesanan_toko_penjualan'
+    pesanan_id: Mapped[str] = mapped_column(ForeignKey('mpe_pesanan.id',ondelete='CASCADE'),primary_key=True)
+    toko_id: Mapped[str] = mapped_column(ForeignKey('mpe_toko_penjualan.id',ondelete='RESTRICT'),index=True)

@@ -79,6 +79,9 @@ async def buat(session: AsyncSession, payload: PesananManualIn) -> Pesanan:
     )
     session.add(pesanan)
     await session.flush()
+    if toko.jenis == "internal":
+        from ..infrastructure.models import PesananTokoPenjualan
+        session.add(PesananTokoPenjualan(pesanan_id=pesanan.id,toko_id=toko.id))
     catatan: dict[str, str] = {}
     for item in payload.items:
         baris = ItemPesanan(
