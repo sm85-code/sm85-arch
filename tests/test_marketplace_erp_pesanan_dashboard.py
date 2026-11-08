@@ -313,3 +313,42 @@ async def test_dashboard_route_enforces_assignment_and_rejects_other_shop(sessio
     with pytest.raises(HTTPException) as denied:
         await laporan_dashboard(akun_id=b.id,dari=SEKARANG-timedelta(days=30),sampai=SEKARANG,batas_stok_kritis=5,session=session,user=user)
     assert denied.value.status_code==403
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize('platform,states', [
+    ('tiktokshop',['AWAITING_SHIPMENT','AWAITING_COLLECTION','IN_TRANSIT']),
+    ('lazada',['pending','ready_to_ship','shipped'])])
+async def test_dashboard_includes_bridge_stages_shops_prices_and_products_without_expanding_assignments(session,data,platform,states):
+    from sqlalchemy import select
+    from tenants.marketplace_erp.modules.marketplace_erp.infrastructure.models import TokoPenjualan,Pesanan
+    from tenants.marketplace_erp.modules.marketplace_erp.infrastructure.adapters.easyboss import Order
+    from tenants.marketplace_erp.modules.marketplace_erp.application import order_bridge
+    a,_=data
+    session.add(TokoPenjualan(jenis='internal',platform=platform,nama='Bridge Shop',nama_key='bridge shop',
+        sumber='easyboss',easyboss_shop_id='bridge-shop',sinkron_status='synced',aktif=True,keterangan=''))
+    await session.commit()
+    for i,state in enumerate(states):
+        row=Order(platform=platform,shop_id='bridge-shop',order_id=f'original-{i}',complete=True,status='shipped' if i==2 else 'ready',
+            source_status=state,paid=True,buyer='masked',ordered_at=SEKARANG,deadline=SEKARANG+timedelta(days=2),order_total='100',
+            items=[{'item_id':f'line-{i}','product':'Bridge Chair','quantity':2,'unit_price':'50','line_total':'100'}])
+        assert await order_bridge.ingest(session,row)=='imported'
+    await session.commit()
+    period={'dari':SEKARANG-timedelta(days=30),'sampai':SEKARANG}
+    d=await services.laporan_dashboard(session,**period)
+    summary=await services.ringkasan_pesanan(session,**period)
+    assert d['total_pesanan']==summary['tahap']['semua']==9
+    counts={x['tahap']:x['jumlah'] for x in d['per_tahap']}
+    assert counts['perlu_diproses']==summary['tahap']['perlu_diproses']==3
+    assert counts['menunggu_kurir']==summary['tahap']['menunggu_kurir']==2
+    assert sum(x['pesanan'] for x in d['per_toko'])==sum(x['pesanan'] for x in d['per_hari'])==9
+    shop=next(x for x in d['per_toko'] if x['nama_toko']=='Bridge Shop')
+    assert shop['pesanan']==3 and shop['omzet']==Decimal('300') and shop['toko_key'].startswith('bridge:')
+    product=next(x for x in d['produk_terlaris'] if x['nama_produk']=='Bridge Chair')
+    assert product['qty_terjual']==6 and product['pesanan']==3 and product['omzet']==Decimal('300')
+    assert product['toko']==[{'nama_toko':'Bridge Shop','qty':6}]
+    restricted=await services.laporan_dashboard(session,akun_diizinkan=[a.id],**period)
+    assert restricted['total_pesanan']==4 and all(x['akun_id']==a.id for x in restricted['per_toko'])
+    assert not any(x['nama_produk']=='Bridge Chair' for x in restricted['produk_terlaris'])
+    rows=(await session.scalars(select(Pesanan).where(Pesanan.platform=='manual'))).all()
+    assert len(rows)==3 and all(p.total==0 for p in rows)
