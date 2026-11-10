@@ -50,8 +50,11 @@ from tenants.store.modules.store.infrastructure.seeder import seed_store
 store_admin_router = APIRouter()
 
 ADMIN_ROLES = ADMIN_ROLES_STORE
-# Managing other admin accounts is the owner's job only.
+# Creating and deleting admin accounts is the owner's job only.
 STAFF_MANAGE_ROLES = (ROLE_OWNER,)
+# Admins may list staff and rename staff; they can never edit the owner account
+# (enforced in services.update_staff) and StaffPatch has no role field.
+STAFF_VIEW_ROLES = ADMIN_ROLES
 
 admin_only = require_admin_roles(*ADMIN_ROLES)
 
@@ -487,13 +490,13 @@ async def patch_pengaturan(
     return services.pengaturan_out(await services.update_pengaturan(session, payload))
 
 
-# --- Staff (owner only) ----------------------------------------------------
+# --- Staff (list/rename: admin+owner; create/delete: owner only) -----------
 
 
 @store_admin_router.get("/staff")
 async def list_staff(
     session: AsyncSession = Depends(get_db_store),
-    _user: AdminStore = Depends(require_admin_roles(*STAFF_MANAGE_ROLES)),
+    _user: AdminStore = Depends(require_admin_roles(*STAFF_VIEW_ROLES)),
 ):
     return [services.staff_out(u) for u in await services.list_staff(session)]
 
@@ -512,9 +515,9 @@ async def patch_staff(
     staff_id: str,
     payload: StaffPatch,
     session: AsyncSession = Depends(get_db_store),
-    _user: AdminStore = Depends(require_admin_roles(*STAFF_MANAGE_ROLES)),
+    user: AdminStore = Depends(require_admin_roles(*STAFF_VIEW_ROLES)),
 ):
-    return services.staff_out(await services.update_staff(session, staff_id, payload))
+    return services.staff_out(await services.update_staff(session, staff_id, payload, actor=user))
 
 
 @store_admin_router.delete("/staff/{staff_id}")

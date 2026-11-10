@@ -165,6 +165,26 @@ async def test_staff_routes_are_owner_only(session):
     assert exc.value.status_code == 403
 
 
+@pytest.mark.asyncio
+async def test_admin_can_list_and_rename_staff_but_never_the_owner(session):
+    from tenants.store.modules.store.application import services
+    from tenants.store.modules.store.application.schemas import StaffPatch
+    view = auth.require_admin_roles(*admin_module.STAFF_VIEW_ROLES)
+    owner, plain = await _admin(session, "owner", "o2@mail.com"), await _admin(session, "admin", "p2@mail.com")
+    other = await _admin(session, "admin", "q2@mail.com")
+    assert await view(user=plain) is plain and await view(user=owner) is owner
+    renamed = await services.update_staff(session, other.id, StaffPatch(nama="Baru"), actor=plain)
+    assert renamed.nama == "Baru" and renamed.role == "admin"
+    with pytest.raises(HTTPException) as exc:
+        await services.update_staff(session, owner.id, StaffPatch(nama="X"), actor=plain)
+    assert exc.value.status_code == 403
+    assert (await services.update_staff(session, owner.id, StaffPatch(nama="Owner"), actor=owner)).nama == "Owner"
+    with pytest.raises(HTTPException) as exc:
+        await services.update_staff(session, "missing-id", StaffPatch(nama="X"), actor=plain)
+    assert exc.value.status_code == 404
+    assert "role" not in StaffPatch.model_fields
+
+
 # --- cookies ---------------------------------------------------------------
 
 
