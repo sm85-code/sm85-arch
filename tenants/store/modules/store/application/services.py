@@ -1661,8 +1661,11 @@ async def get_staff(session: AsyncSession, staff_id: str) -> AdminStore:
     return user
 
 
-async def update_staff(session: AsyncSession, staff_id: str, payload: "StaffPatch") -> AdminStore:
+async def update_staff(session: AsyncSession, staff_id: str, payload: "StaffPatch", actor: AdminStore | None = None) -> AdminStore:
     user = await get_staff(session, staff_id)
+    actor_is_owner = actor is None or (actor.role or "").strip().lower() == ROLE_OWNER
+    if not actor_is_owner and (user.role or "").strip().lower() == ROLE_OWNER:
+        raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="Akun owner hanya bisa diubah oleh owner")
     for field, value in payload.model_dump(exclude_unset=True).items():
         setattr(user, field, value)
     await session.flush()
