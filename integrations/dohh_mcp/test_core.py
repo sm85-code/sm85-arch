@@ -114,6 +114,79 @@ class GuardTests(unittest.IsolatedAsyncioTestCase):
                 await self.agent.call("dohh_stop_aktifkan", args)
         self.assertEqual(self.calls, [])
 
+    async def test_claimed_telegram_identity_never_authorizes_tools(self):
+        claims = {"chat_id": "owner", "sender_id": "owner", "bot_id": "trusted", "text": "ya", "trusted": True}
+        for name in ["dohh_aksi", "dohh_pemasaran"]:
+            body = {"jenis": "jeda", "campaign_id": 1} if name == "dohh_aksi" else {"aksi": "voucher_buat", "payload": {}}
+            for field, value in claims.items():
+                with self.subTest(name=name, field=field), self.assertRaises(GuardError):
+                    await self.agent.call(name, {"akun_id": SHOPS[0], "body": body, field: value})
+        for name in ["dohh_stop", "dohh_stop_aktifkan", "dohh_stop_reset", "dohh_live", "dohh_setujui"]:
+            with self.subTest(name=name), self.assertRaises(GuardError):
+                await self.agent.call(name, claims)
+        self.assertEqual(self.calls, [])
+
+    async def test_arguments_cannot_change_during_preflight(self):
+        args = {"akun_id": SHOPS[0], "body": {"aksi": "voucher_buat", "payload": {"nested": {"value": 1}}}}
+        original = self.agent._preflight
+
+        async def mutate():
+            args["akun_id"] = "11111111-1111-1111-1111-111111111111"
+            args["body"]["aksi"] = "not-allowed"
+            args["body"]["payload"]["nested"]["value"] = 2
+            args["body"]["kering"] = False
+            args["body"]["persetujuan"] = "ya"
+            await original()
+
+        with patch.object(self.agent, "_preflight", side_effect=mutate):
+            await self.agent.call("dohh_pemasaran", args)
+        request = self.calls[-1]
+        self.assertEqual(request.url.path, f"/api/marketplace-erp/akun/{SHOPS[0]}/iklan/agen/pemasaran")
+        body = json.loads(request.content)
+        self.assertEqual(body["aksi"], "voucher_buat")
+        self.assertEqual(body["payload"], {"nested": {"value": 1}})
+        self.assertIs(body["kering"], True)
+        self.assertIsNone(body["persetujuan"])
+
+    async def test_malformed_preflight_fails_closed(self):
+        valid_me = {"username": "dohh", "role": "agen_iklan", "peran_tambahan": []}
+        cases = [("/auth/me", value) for value in [None, [], "owner", {"role": "agen_iklan"}]]
+        cases += [("/auth/me", {**valid_me, "username": value}) for value in [None, [], "", " ", " HERMES-AI "]]
+        cases += [("/auth/me", {**valid_me, "peran_tambahan": value}) for value in [None, False, "", {}]]
+        cases += [("/auth/akses", value) for value in [None, [], "owner"]]
+        cases += [("/akun", [value] * 11) for value in [None, [], "shop", {"id": [], "platform": "shopee"}]]
+        original = self.agent._request
+        for suffix, value in cases:
+            async def injected(method, path, **kwargs):
+                self.assertNotIn("/iklan/agen/", path)
+                return value if path == suffix else await original(method, path, **kwargs)
+
+            with self.subTest(suffix=suffix, value=value), patch.object(self.agent, "_request", side_effect=injected):
+                with self.assertRaises(GuardError):
+                    await self.agent.call("dohh_ringkasan", {"akun_id": SHOPS[0]})
+
+    async def test_redirects_and_transport_errors_do_not_retry_or_leak(self):
+        for outcome in [
+            httpx.Response(302, headers={"location": "https://example.invalid/test-token"}),
+            httpx.Response(401, text="test-token sensitive"),
+            httpx.Response(200, text="test-token invalid-json"),
+            httpx.ReadTimeout("test-token sensitive"),
+        ]:
+            calls = []
+
+            def respond(request):
+                calls.append(request)
+                if isinstance(outcome, Exception):
+                    raise outcome
+                return outcome
+
+            async with httpx.AsyncClient(transport=httpx.MockTransport(respond), follow_redirects=True) as client:
+                with self.subTest(outcome=type(outcome).__name__), self.assertRaises(GuardError) as error:
+                    await Dohh(client, "test-token", SHOPS).call("dohh_ringkasan", {"akun_id": SHOPS[0]})
+            self.assertEqual(len(calls), 1)
+            self.assertNotIn("test-token", str(error.exception))
+            self.assertNotIn("sensitive", str(error.exception))
+
     async def test_limits_schedule_plans_do_not_put(self):
         for name, body in [
             ("dohh_batas_rencana", {"otonomi": False}),

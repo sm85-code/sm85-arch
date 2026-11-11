@@ -1,5 +1,6 @@
 """Dohh boundary: dedicated ERP principal, exact shops, no live writes."""
 
+from copy import deepcopy
 from uuid import UUID, uuid4
 import json
 
@@ -38,12 +39,20 @@ class Dohh:
 
     async def _preflight(self):
         me = await self._request("GET", "/auth/me")
-        if me.get("role") != "agen_iklan" or me.get("peran_tambahan") or me.get("username", "").lower() == "hermes-ai":
+        if (
+            not isinstance(me, dict)
+            or me.get("role") != "agen_iklan"
+            or me.get("peran_tambahan") != []
+            or not isinstance(me.get("username"), str)
+            or not me["username"].strip()
+            or me["username"].strip().lower() == "hermes-ai"
+        ):
             raise GuardError("Wajib akun khusus agen_iklan tanpa peran tambahan")
         access = await self._request("GET", "/auth/akses")
         expected = {"iklan": "tulis", "produk": "baca", "katalog": "baca", "pesanan": "baca"}
         if (
-            access.get("roles") != ["agen_iklan"]
+            not isinstance(access, dict)
+            or access.get("roles") != ["agen_iklan"]
             or access.get("akses_toko") != "ditugaskan"
             or access.get("halaman") != expected
         ):
@@ -52,7 +61,10 @@ class Dohh:
         if (
             not isinstance(shops, list)
             or len(shops) != 11
-            or any(s.get("platform") != "shopee" for s in shops)
+            or any(
+                not isinstance(s, dict) or s.get("platform") != "shopee" or not isinstance(s.get("id"), str)
+                for s in shops
+            )
             or {s.get("id") for s in shops} != self.shops
         ):
             raise GuardError("Cakupan toko ERP tidak sesuai 11 toko")
@@ -62,6 +74,9 @@ class Dohh:
         if tool is None:
             raise GuardError("Alat tidak tersedia; live/STOP perlu gateway owner tervalidasi")
         try:
+            # Freeze caller-owned nested data before the first await. Preflight must
+            # not allow another task to change the shop, route, or validated body.
+            args = deepcopy(args)
             verify_sources()
             json.dumps(args, allow_nan=False)
             Draft202012Validator(tool["inputSchema"], format_checker=FormatChecker()).validate(args)
