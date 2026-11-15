@@ -11,6 +11,7 @@ from datetime import datetime, timedelta, timezone
 from fastapi import HTTPException
 from sqlalchemy import func, select, text
 
+from tenants.marketplace_erp.modules.marketplace_erp.application import order_bridge_lean as lean
 from tenants.marketplace_erp.modules.marketplace_erp.application import pesanan_manual
 from tenants.marketplace_erp.modules.marketplace_erp.infrastructure.adapters import easyboss as eb
 from tenants.marketplace_erp.modules.marketplace_erp.infrastructure.models import (
@@ -226,77 +227,131 @@ async def ingest(session, order):
     return "imported"
 
 
+async def _apply(session, run, key, order, *, conflict=False):
+    """Ingest one normalized order in its own savepoint, audit it, count the outcome, commit."""
+    if conflict:
+        order = eb.RejectedOrder(platform=order.platform, shop_id=order.shop_id, order_id=order.order_id)
+    try:
+        async with session.begin_nested():
+            outcome = await ingest(session, order)
+    except Exception:
+        # No upstream payloads, credentials, buyer names or SQL parameters in logs/errors.
+        row = await session.scalar(select(BridgeOrder).where(BridgeOrder.platform == key[0],
+             BridgeOrder.shop_id == key[1], BridgeOrder.order_id == key[2]))
+        if row is None:
+            row = BridgeOrder(platform=key[0], shop_id=key[1], order_id=key[2],
+                              source_status=getattr(order, "source_status", ""), snapshot_json=order.model_dump_json())
+            session.add(row)
+        row.status, row.error = "failed", "import_transaction_failed"
+        row.attempts = (row.attempts or 0) + 1
+        outcome = "failed"
+    audited = await session.scalar(select(BridgeOrder).where(BridgeOrder.platform == key[0],
+             BridgeOrder.shop_id == key[1], BridgeOrder.order_id == key[2]))
+    if audited:
+        events = json.loads(audited.audit_json or "[]")
+        event = {"source_hash": hashlib.sha256(audited.snapshot_json.encode()).hexdigest(),
+                 "status": audited.status, "source_status": audited.source_status,
+                 "error": audited.error, "pesanan_id": audited.pesanan_id}
+        if not events or any(events[-1].get(k) != v for k, v in event.items()):
+            events.append({**event, "at": now().isoformat(), "run_id": run.id})
+            audited.audit_json = json.dumps(events)
+    setattr(run, outcome, getattr(run, outcome) + 1)
+    await session.commit()
+
+
 async def run_orders(session, gateway, *, retry=False, automatic=False):
+    from tenants.marketplace_erp.modules.marketplace_erp.infrastructure.adapters.easyboss_mcp import MCPGateway
+    lean_mode = isinstance(gateway, MCPGateway)
     async with exclusive(session):
         st = await state(session)
         if automatic and not st.enabled:
             await session.commit()
             return {"status": "paused"}
+        started = now()
+        L = lean.load(st) if lean_mode else None
+        if lean_mode:
+            # Backoff, daily cap and the interval are checked BEFORE any upstream call.
+            skip = lean.precheck(L, now=started, automatic=automatic)
+            if skip:
+                st.heartbeat, st.lean_json = started, lean.dump(L)
+                await session.commit()
+                return {"status": skip, "requests_today": L["requests"], "backoff_until": L.get("backoff_until")}
         # A previous running row under an acquired exclusive lock means its process died.
         for stale in (await session.scalars(select(BridgeRun).where(BridgeRun.status == "running"))).all():
             stale.status, stale.error, stale.finished_at = "interrupted", "process_interrupted", now()
         run = BridgeRun(kind="retry" if retry else "orders")
         session.add(run)
         st.heartbeat = now()
-        started = now()
+        budget = None
+        if lean_mode:
+            budget = lean.Budget(L, started)
+            gateway.budget, gateway.pause = budget, lean.call_delay()
+            L["last_round_at"] = started.isoformat()
+            st.lean_json = lean.dump(L)
         await session.commit()
         try:
-            # Full scan deliberately avoids losing failed, moved-tab, and delayed source records.
-            # Checkpoint is diagnostic until upstream changed-since guarantees are verified.
-            from tenants.marketplace_erp.modules.marketplace_erp.infrastructure.adapters.easyboss_mcp import MCPGateway
-            if isinstance(gateway, MCPGateway):
-                gateway.tracked_orders = list((await session.execute(select(
-                    BridgeOrder.platform, BridgeOrder.shop_id, BridgeOrder.order_id).where(
-                    (BridgeOrder.pesanan_id.is_not(None)) | (BridgeOrder.status.in_(["failed", "review"]))
-                ))).all())
-            orders = await gateway.orders(None)
-            unique, conflicts = {}, set()
-            for order in orders:
-                if order.platform not in PLATFORMS:
-                    continue
-                key = identity(order)
-                if key in unique and unique[key] != order:
-                    conflicts.add(key)
-                unique[key] = order
-            failures = set((await session.execute(select(BridgeOrder.platform, BridgeOrder.shop_id, BridgeOrder.order_id)
-                           .where(BridgeOrder.status == "failed"))).all()) if retry else None
-            for key, order in unique.items():
-                if failures is not None and key not in failures:
-                    continue
-                if key in conflicts:
-                    order = eb.RejectedOrder(platform=order.platform, shop_id=order.shop_id, order_id=order.order_id)
-                try:
-                    async with session.begin_nested():
-                        outcome = await ingest(session, order)
-                except Exception:
-                    # No upstream payloads, credentials, buyer names or SQL parameters in logs/errors.
-                    row = await session.scalar(select(BridgeOrder).where(BridgeOrder.platform == key[0],
-                         BridgeOrder.shop_id == key[1], BridgeOrder.order_id == key[2]))
-                    if row is None:
-                        row = BridgeOrder(platform=key[0], shop_id=key[1], order_id=key[2],
-                                          source_status=getattr(order, "source_status", ""), snapshot_json=order.model_dump_json())
-                        session.add(row)
-                    row.status, row.error = "failed", "import_transaction_failed"
-                    row.attempts = (row.attempts or 0) + 1
-                    outcome = "failed"
-                audited = await session.scalar(select(BridgeOrder).where(BridgeOrder.platform == key[0],
-                         BridgeOrder.shop_id == key[1], BridgeOrder.order_id == key[2]))
-                if audited:
-                    events = json.loads(audited.audit_json or "[]")
-                    event = {"source_hash": hashlib.sha256(audited.snapshot_json.encode()).hexdigest(),
-                             "status": audited.status, "source_status": audited.source_status,
-                             "error": audited.error, "pesanan_id": audited.pesanan_id}
-                    if not events or any(events[-1].get(k) != v for k, v in event.items()):
-                        events.append({**event, "at": now().isoformat(), "run_id": run.id})
-                        audited.audit_json = json.dumps(events)
-                setattr(run, outcome, getattr(run, outcome) + 1)
-                await session.commit()
+            if lean_mode:
+                # Lean: list pages first, then details ONLY for new/changed orders, one at a time.
+                for key, sig in await lean.plan(session, gateway, L, now=started, retry=retry):
+                    st.lean_json = lean.dump(L)
+                    try:
+                        order = await gateway.one(lean.NATIVE[key[0]], key[1], key[2])
+                    except eb.BridgeProblem as exc:
+                        if str(exc) in lean.FATAL:
+                            raise
+                        # Order-specific source inconsistency: remember the signature (no re-read every
+                        # round); it is read again when its list status changes.
+                        run.failed += 1
+                        L["seen"][lean.kstr(key)] = [sig, now().isoformat()]
+                        continue
+                    await _apply(session, run, key, order)
+                    L["seen"][lean.kstr(key)] = [sig, now().isoformat()]
+                    st.lean_json = lean.dump(L)
+                    await session.commit()
+            else:
+                # bridge-v1 gateway: its own contract guarantees changed/cancelled records per scan.
+                orders = await gateway.orders(None)
+                unique, conflicts = {}, set()
+                for order in orders:
+                    if order.platform not in PLATFORMS:
+                        continue
+                    key = identity(order)
+                    if key in unique and unique[key] != order:
+                        conflicts.add(key)
+                    unique[key] = order
+                failures = set((await session.execute(select(BridgeOrder.platform, BridgeOrder.shop_id, BridgeOrder.order_id)
+                               .where(BridgeOrder.status == "failed"))).all()) if retry else None
+                for key, order in unique.items():
+                    if failures is not None and key not in failures:
+                        continue
+                    await _apply(session, run, key, order, conflict=key in conflicts)
             st.checkpoint, run.status = started, "partial" if run.failed else "success"
         except Exception as exc:
-            run.status, run.error = "failed", str(exc) if isinstance(exc, eb.BridgeProblem) else "sync_failed"
+            code = str(exc) if isinstance(exc, eb.BridgeProblem) else "sync_failed"
+            if code == "round_cap_reached":
+                # Remaining new orders simply wait for the next round; not an error.
+                st.checkpoint, run.status = started, "partial" if run.failed else "success"
+                run.error = code
+            else:
+                run.status, run.error = "failed", code
+            if lean_mode and code == "upstream_rate_limited":
+                lean.back_off(L, now())
         run.finished_at, st.heartbeat = now(), now()
+        result = run_dict(run)
+        if lean_mode:
+            lean.prune(L, now())
+            L["last_round"] = {"at": started.isoformat(), "requests": budget.round, "status": run.status,
+                               "error": run.error, "imported": run.imported}
+            result.update(requests=budget.round, requests_today=L["requests"])
+            alerts = list(L["alerts"])
+            L["alerts"] = []
+            st.lean_json = lean.dump(L)
         await session.commit()
-        return run_dict(run)
+        if lean_mode:
+            lean.logger.warning("easyboss-bridge round: status=%s requests=%d today=%d imported=%d skipped=%d failed=%d error=%s",
+                                run.status, budget.round, L["requests"], run.imported, run.skipped, run.failed, run.error)
+            await lean.send_alerts({"alerts": alerts})
+        return result
 
 
 def run_dict(row):
@@ -311,7 +366,7 @@ async def dashboard(session):
     totals = dict((await session.execute(select(BridgeOrder.status, func.count()).group_by(BridgeOrder.status))).all())
     totals["imported"] = await session.scalar(select(func.count()).select_from(BridgeOrder).where(BridgeOrder.pesanan_id.is_not(None)))
     heartbeat = st.heartbeat if st else None
-    healthy = bool(heartbeat and now() - heartbeat.replace(tzinfo=timezone.utc) < timedelta(seconds=180))
+    healthy = bool(heartbeat and now() - heartbeat.replace(tzinfo=timezone.utc) < timedelta(seconds=660))
     return {"configured": eb.configured(), "connection": "unverified" if not eb.configured() else
             ("ok" if runs and runs[0].status == "success" else "unknown"),
             "scheduler": "disabled" if os.getenv("EASYBOSS_BRIDGE_SCHEDULER") != "1" else
@@ -320,11 +375,14 @@ async def dashboard(session):
             "last_sync": st.checkpoint if st else None,
             "shops": await session.scalar(select(func.count()).select_from(TokoPenjualan).where(TokoPenjualan.sumber == "easyboss")),
             "counts": totals, "runs": [run_dict(r) for r in runs],
+            "lean": ({k: v for k, v in lean.load(st).items() if k not in ("seen", "alerts")} if st else {}),
             "errors": [{k: getattr(r, k) for k in ("id", "platform", "shop_id", "order_id", "status", "error", "attempts", "updated_at")} for r in errors]}
 
 
 async def run_forever(factory):
-    interval = max(60, int(os.getenv("EASYBOSS_BRIDGE_INTERVAL_SECONDS", "60")))
+    """Single cooperative scheduler. The real cadence is enforced by lean.precheck() from the persisted
+    last_round_at under the PostgreSQL advisory lock, so restarts or extra workers never add rounds."""
+    tick = min(300, lean.interval_seconds())
     while True:
         try:
             async with factory() as session:
@@ -334,4 +392,4 @@ async def run_forever(factory):
             raise
         except Exception:
             pass  # Next tick retries; no secret-bearing exception strings are logged.
-        await asyncio.sleep(interval)
+        await asyncio.sleep(tick)

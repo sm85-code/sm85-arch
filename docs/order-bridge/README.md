@@ -34,7 +34,19 @@ All defaults are OFF. No owner login/token is required by the worker: it runs in
 | `EASYBOSS_BRIDGE_TOKEN` | Secret bearer token restricted upstream to shop/order reads |
 | `EASYBOSS_BRIDGE_CONTRACT_VERIFIED` | `1` only after upstream evidence/sandbox acceptance; absent disables API operations |
 | `EASYBOSS_BRIDGE_SCHEDULER` | `1` starts the background worker; absent means no worker |
-| `EASYBOSS_BRIDGE_INTERVAL_SECONDS` | Minimum 60, default 60; increase after measuring upstream limits |
+| `EASYBOSS_BRIDGE_INTERVAL_SECONDS` | Minimum 600, default 1800 (30 min). Enforced from persisted state, so restarts/extra workers never add rounds |
+| `EASYBOSS_BRIDGE_DAILY_CAP` | Default 1000 EasyBoss reads per WIB day; at the cap the bridge stops until tomorrow and alerts once (alert at 80% too) |
+| `EASYBOSS_BRIDGE_ROUND_MAX` | Default 80 reads per round; the rest waits for the next round |
+| `EASYBOSS_BRIDGE_BACKOFF_MINUTES` | Minimum/default 60. A 429 (also `code 429`/`base.tooManyRequest` inside an HTTP-200 body) stops the round and pauses the bridge, no retries |
+| `EASYBOSS_BRIDGE_LOOKBACK_HOURS` | Default 72; unknown orders older than this are never imported from history |
+| `EASYBOSS_BRIDGE_CALL_DELAY_SECONDS` | Default 2; spacing between consecutive reads |
+| `EASYBOSS_BRIDGE_SLOW_HOURS` | Default 6; failed receipts are re-read at most this often |
+| `EASYBOSS_BRIDGE_ALERT_TELEGRAM_TOKEN` / `EASYBOSS_BRIDGE_ALERT_CHAT_ID` | Optional Pipip Telegram delivery for cap/429 alerts; alerts are always logged |
+
+Lean round (2026-11-15, after a 60 s full scan caused ~60k reads/day and an EasyBoss lock): page 1 of the
+`all` tab per platform (TikTok, Lazada), newest first, paging only while every row is unknown; details
+(`eb_pesanan_list` filter + `eb_pesanan_detail`) only for new orders or orders whose list status/package
+changed. Typical round: 2 reads, +2 per new/changed order.
 
 DB automation state is also disabled initially. Both process flag and dashboard Enable are required. The dashboard flag cannot start a process whose scheduler flag is off.
 

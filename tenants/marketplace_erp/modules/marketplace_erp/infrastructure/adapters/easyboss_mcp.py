@@ -1,10 +1,20 @@
 """Read-only MCP transport. Source cookies remain inside the existing MCP."""
+import asyncio
 import json
 from decimal import Decimal, InvalidOperation
 from .easyboss import BridgeProblem, Line, Order, RejectedOrder, Shop, native_time
 
 PLATFORMS = {'tiktok': 'tiktokshop', 'lazada': 'lazada'}
 READS = {'eb_resi_pdf', 'eb_toko_list', 'eb_pesanan_hitung', 'eb_pesanan_list', 'eb_pesanan_detail'}
+
+
+def rate_limited(data):
+    """EasyBoss answers throttling with HTTP 200 + code 429 / base.tooManyRequest inside the JSON."""
+    try:
+        text = json.dumps(data, ensure_ascii=False, default=str).casefold()
+    except (TypeError, ValueError):
+        text = str(data).casefold()
+    return any(m in text for m in ('429', 'toomanyrequest', 'too many request', 'terlalu sering'))
 
 
 def native_amount(value):
@@ -20,6 +30,11 @@ def native_amount(value):
 
 
 class MCPGateway:
+    # Optional lean-scheduler hooks: budget.spend() runs before every upstream call (daily cap)
+    # and `pause` spaces consecutive calls. Class defaults keep test doubles working.
+    budget = None
+    pause = 0.0
+
     def __init__(self, client):
         self.client = client
         self.counter = 0
@@ -27,10 +42,16 @@ class MCPGateway:
     async def call(self, name, arguments):
         if name not in READS:
             raise BridgeProblem('mcp_read_not_allowed')
+        if self.budget is not None:
+            self.budget.spend()
+        if self.pause and self.counter:
+            await asyncio.sleep(self.pause)
         self.counter += 1
         try:
             r = await self.client.post(str(self.client.base_url).rstrip('/'), json={'jsonrpc': '2.0', 'id': self.counter,
                 'method': 'tools/call', 'params': {'name': name, 'arguments': arguments}})
+            if r.status_code == 429:
+                raise BridgeProblem('upstream_rate_limited')
             r.raise_for_status()
             if 'text/event-stream' in r.headers.get('content-type', ''):
                 events = [json.loads(s[6:]) for s in r.text.splitlines() if s.startswith('data: ')]
@@ -43,12 +64,43 @@ class MCPGateway:
             blocks = result['content']
             if result.get('isError') or len(blocks) != 1 or blocks[0]['type'] != 'text':
                 raise ValueError()
-            data = json.loads(blocks[0]['text'])
+            text = blocks[0]['text']
+            try:
+                data = json.loads(text)
+            except ValueError:
+                if rate_limited(text):
+                    raise BridgeProblem('upstream_rate_limited') from None
+                raise
             if isinstance(data, dict) and 'error' in data:
+                if rate_limited(data):
+                    raise BridgeProblem('upstream_rate_limited')
                 raise ValueError()
             return data
+        except BridgeProblem:
+            raise
         except Exception:
             raise BridgeProblem('mcp_read_failed') from None
+
+    async def recent(self, platform, page, per_page=50):
+        """ONE list page of the 'all' tab, newest order first. Returns (total, rows) without details."""
+        data = await self.call('eb_pesanan_list', {'tab': 'all', 'platform': platform,
+            'halaman': page, 'per_halaman': per_page})
+        batch, count = data.get('pesanan') if isinstance(data, dict) else None, data.get('total') if isinstance(data, dict) else None
+        if type(count) is not int or count < 0 or not isinstance(batch, list) or len(batch) > per_page:
+            raise BridgeProblem('mcp_list_contract')
+        rows = []
+        for row in batch:
+            package, shop_id, order_id = (str(row.get('id') or ''), str(row.get('shopId') or ''),
+                                          str(row.get('no_pesanan') or ''))
+            if not package or not shop_id or not order_id or row.get('platform') != platform:
+                raise BridgeProblem('mcp_list_contract')
+            try:
+                ordered = native_time(row['dibuat']) if row.get('dibuat') else None
+            except (TypeError, ValueError):
+                ordered = None
+            rows.append({'key': (PLATFORMS[platform], shop_id, order_id), 'package': package,
+                         'status': str(row.get('status') or ''), 'ordered_at': ordered})
+        return count, rows
 
     async def shops(self):
         rows = await self.call('eb_toko_list', {})
