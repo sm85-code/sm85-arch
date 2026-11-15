@@ -37,6 +37,8 @@ DEFAULT_PASSWORD = "password123"
 # are self-healed here. Postgres-only syntax -- skipped on SQLite (tests
 # build the schema fresh from metadata anyway).
 _SELF_HEAL_COLUMNS = (
+    # Lean EasyBoss bridge scheduler state (request budget, 429 backoff, list signatures).
+    "ALTER TABLE IF EXISTS mpe_bridge_state ADD COLUMN IF NOT EXISTS lean_json TEXT NOT NULL DEFAULT '{}'",
     # Existing databases predate these audit fields; create_all never adds columns.
     "ALTER TABLE IF EXISTS mpe_laporan_keuangan_tutup ADD COLUMN IF NOT EXISTS audit_json TEXT NOT NULL DEFAULT '[]'",
     "ALTER TABLE IF EXISTS mpe_laporan_keuangan_audit ADD COLUMN IF NOT EXISTS audit_json TEXT NOT NULL DEFAULT '[]'",

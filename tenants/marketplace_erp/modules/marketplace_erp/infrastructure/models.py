@@ -1138,6 +1138,8 @@ class BridgeState(MarketplaceErpBase):
     enabled: Mapped[bool] = mapped_column(Boolean, default=False, nullable=False)
     checkpoint: Mapped[Optional[datetime]] = mapped_column(DateTime(timezone=True), nullable=True)
     heartbeat: Mapped[Optional[datetime]] = mapped_column(DateTime(timezone=True), nullable=True)
+    # Lean scheduler bookkeeping: daily request budget, 429 backoff, last list signature per order.
+    lean_json: Mapped[str] = mapped_column(Text, nullable=False, default="{}", server_default="{}")
 
 
 class BridgeRun(MarketplaceErpBase):
