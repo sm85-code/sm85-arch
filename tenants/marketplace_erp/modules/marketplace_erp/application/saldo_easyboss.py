@@ -137,4 +137,3 @@ async def snapshot():
         if _task is None or _task.done():
             _task = asyncio.create_task(_load())
         return None
-
