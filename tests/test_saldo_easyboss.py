@@ -48,6 +48,9 @@ def test_duplicates_conflicts_and_missing():
     out = s.projection([source([first, other])])
     assert out["jumlah"] == 1 and out["tanpa_angka"] == 1
     assert out["pesanan"][0]["perkiraan_dana_cair"] is None
+    assert out["total"] is None
+    assert out["total_platform"]["tiktok"] is None
+    assert out["per_toko"][0]["total"] is None
 
 
 def test_filters_totals_and_pagination():

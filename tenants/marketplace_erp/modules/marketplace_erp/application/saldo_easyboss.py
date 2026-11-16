@@ -68,10 +68,20 @@ def projection(sources, platform='', toko='', status='', search='', page=1, page
             value = Decimal(str(value))
             item['total'] += value
             totals[row['platform']] += value
+    total = sum(totals.values())
+    if rows and all(r.get('perkiraan_dana_cair') is None for r in rows):
+        total = None
+    for platform_key in totals:
+        platform_rows = [r for r in rows if r['platform'] == platform_key]
+        if platform_rows and all(r.get('perkiraan_dana_cair') is None for r in platform_rows):
+            totals[platform_key] = None
+    for item in per_store.values():
+        if item['tanpa_angka'] == item['jumlah']:
+            item['total'] = None
     uncertain = [r for r in uncertain if (not platform or r['platform'] == platform) and (not toko or str(r.get('shopId')) == toko) and search.lower() in r['no_pesanan'].lower()]
     complete = all(s.get('lengkap') is True for s in sources)
     return {'perlu_verifikasi': uncertain, 'pesanan': rows[(page-1)*page_size:page*page_size], 'jumlah': len(rows), 'page': page, 'page_size': page_size,
-            'total': sum(totals.values()), 'total_platform': totals, 'per_toko': list(per_store.values()),
+            'total': total, 'total_platform': totals, 'per_toko': list(per_store.values()),
             'toko': list(stores.values()), 'status': statuses, 'lengkap': complete,
             'tanpa_angka': sum(r.get('perkiraan_dana_cair') is None for r in rows),
             'diambil_wib': min((s.get('diambil_wib', '') for s in sources), default=''),
@@ -127,3 +137,4 @@ async def snapshot():
         if _task is None or _task.done():
             _task = asyncio.create_task(_load())
         return None
+
