@@ -53,6 +53,17 @@ async def operasional(
     return await ops.untuk_arus_kas(session, periode)
 
 
+@router.get("/struktur-kas", dependencies=[Depends(hanya_admin)])
+async def struktur_kas(periode: str = Query(pattern=r"^\d{4}-\d{2}$"), session: AsyncSession = Depends(get_db_marketplace_erp)):
+    return await manual.struktur(session, periode)
+
+
+@router.put("/struktur-kas", dependencies=[Depends(hanya_admin)])
+async def simpan_struktur_kas(payload: manual.KasStructure, periode: str = Query(pattern=r"^\d{4}-\d{2}$"),
+                             session: AsyncSession = Depends(get_db_marketplace_erp), actor: UserMarketplaceErp = Depends(admin)):
+    return await manual.simpan_struktur(session, periode, payload, actor)
+
+
 @router.get("/lembar-manual")
 async def manual_sheet(
     periode: str = Query(pattern=r"^\d{4}-\d{2}$"), session: AsyncSession = Depends(get_db_marketplace_erp)
