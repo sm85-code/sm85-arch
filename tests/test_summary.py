@@ -156,3 +156,34 @@ async def test_summary_http_permission_filters_and_write_methods(sesi_peran):
         current.role = 'admin'
         assert (await client.get('/summary?preset=khusus&start=2026-11-16&end=2026-11-16')).status_code == 200
         assert (await client.get('/summary')).headers['cache-control'] == 'no-store, private'
+
+
+def test_unknown_state_does_not_publish_partial_units_as_a_complete_average():
+    r = eb()
+    r['source_status'] = 'UNRECOGNIZED'
+    source = json.loads(r['snapshot_json'])
+    source['status'] = 'unknown'
+    r['snapshot_json'] = json.dumps(source)
+    t = summary.project([row(), r], DAY, DAY)['totals']
+    assert t['units'] is None and t['average_units'] is None
+
+
+@pytest.mark.asyncio
+async def test_http_money_serialization_preserves_decimal_precision(sesi_peran, monkeypatch):
+    import httpx
+    from fastapi import FastAPI
+    from tenants.marketplace_erp.adapters.api.v1.summary_router import readonly_session
+    from tenants.marketplace_erp.modules.marketplace_erp.infrastructure.auth import get_current_user_marketplace_erp
+    app = FastAPI()
+    app.include_router(router)
+    async def db():
+        yield sesi_peran
+    async def user():
+        return SimpleNamespace(role='admin', id='admin')
+    async def read(*args, **kwargs):
+        return {'gross': Decimal('9007199254740993.01')}
+    app.dependency_overrides[readonly_session] = db
+    app.dependency_overrides[get_current_user_marketplace_erp] = user
+    monkeypatch.setattr(summary, 'read', read)
+    async with httpx.AsyncClient(transport=httpx.ASGITransport(app=app), base_url='http://test') as c:
+        assert (await c.get('/summary')).json()['gross'] == '9007199254740993.01'

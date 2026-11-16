@@ -1,9 +1,11 @@
 """Summary-only GET namespace and transaction-level PostgreSQL write protection."""
 import asyncio
 from datetime import date
+from decimal import Decimal
 from typing import Literal
 
 from fastapi import APIRouter, Depends, HTTPException, Query, Response
+from fastapi.encoders import jsonable_encoder
 from sqlalchemy import select, text
 from sqlalchemy.exc import DBAPIError
 
@@ -76,7 +78,8 @@ async def get_summary(
             allowed = await scope(session, user)
             if shop and allowed is not None and shop not in allowed:
                 raise HTTPException(403, "Akses toko ditolak")
-            return await summary.read(session, start, end, allowed, platform=platform, shop=shop,
+            result = await summary.read(session, start, end, allowed, platform=platform, shop=shop,
                                       status=status, page=page, page_size=page_size, configured_readonly=True)
+            return jsonable_encoder(result, custom_encoder={Decimal: str})
     except (TimeoutError, DBAPIError):
         raise HTTPException(503, "Pembacaan Summary gagal atau melewati batas waktu. Data tidak dianggap nol; coba periode lebih pendek.") from None
