@@ -99,3 +99,10 @@ async def test_background_singleflight_cache_and_backoff(monkeypatch):
     with pytest.raises(HTTPException) as err:
         await s.snapshot()
     assert err.value.status_code == 503
+
+
+def test_completed_without_settlement_evidence_is_uncertain():
+    item = {**row(), 'status_platform': 'COMPLETED'}
+    out = s.projection([source([item])])
+    assert out['jumlah'] == 0 and out['total'] == 0
+    assert len(out['perlu_verifikasi']) == 1
