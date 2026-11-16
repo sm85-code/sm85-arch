@@ -99,6 +99,7 @@ HALAMAN: list[tuple[str, str, str, tuple[str, ...]]] = [
     ("iklan_gmv", "Iklan: tab Shop GMV Max", "info-toko", ("baca", "tulis")),
     ("iklan_agen", "Iklan: tab Agen", "info-toko", ("baca", "tulis")),
     ("iklan_catatan", "Iklan: tab Catatan", "info-toko", ("baca", "tulis")),
+    ("saldo_easyboss", "Saldo EasyBoss (Administrator)", "info-toko", ("baca",)),
     ("settlement_saldo", "Dana & Saldo Shopee: tab Saldo Penjual", "info-toko", ("baca", "tulis")),
     ("settlement_pendapatan", "Dana & Saldo Shopee: tab Menunggu Pencairan", "info-toko", ("baca", "tulis")),
     ("settlement_dana", "Dana & Saldo Shopee: tab Dana Dilepas", "info-toko", ("baca", "tulis")),
@@ -355,6 +356,8 @@ def _bersih_halaman(halaman: dict[str, str]) -> dict[str, str]:
     for key, tingkat in halaman.items():
         if key not in TINGKAT_HALAMAN:
             raise HTTPException(422, f"Halaman '{key}' tidak dikenal")
+        if key == "saldo_easyboss" and tingkat != "tidak":
+            raise HTTPException(422, "Saldo EasyBoss hanya untuk Administrator")
         if tingkat == "tidak":
             continue
         if tingkat not in TINGKAT_HALAMAN[key]:
