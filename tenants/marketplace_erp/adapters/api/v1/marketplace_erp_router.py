@@ -40,6 +40,7 @@ from .toko_penjualan_router import router as toko_penjualan_router
 from .operasional_router import router as operasional_router
 from .push_router import router as push_router
 from .roles_router import router as roles_router
+from .saldo_easyboss_router import router as saldo_easyboss_router
 from .financial_reports_router import router as financial_reports_router
 from .processing_router import router as processing_router
 
@@ -1924,3 +1925,5 @@ marketplace_erp_router.include_router(roles_router)
 marketplace_erp_router.include_router(processing_router)
 
 marketplace_erp_router.include_router(order_bridge_router)
+
+marketplace_erp_router.include_router(saldo_easyboss_router)
