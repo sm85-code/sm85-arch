@@ -53,6 +53,7 @@ GRUP_LABEL = dict(GRUP_HALAMAN)
 # that are not a menu (an action or a tab) keep this label, with any ": tab ..." or "(...)" hint kept as it is.
 HALAMAN: list[tuple[str, str, str, tuple[str, ...]]] = [
     ("dashboard", "Dashboard", "harian", ("baca",)),
+    ("summary", "Summary", "harian", ("baca",)),
     ("pesanan", "Pesanan", "harian", ("baca", "tulis")),
     ("pesanan_easyboss", "Pesanan EasyBoss", "harian", ("baca", "tulis")),
     ("pesanan_manual", "Buat dan hapus pesanan manual", "harian", ("tulis",)),
