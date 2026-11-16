@@ -48,6 +48,9 @@ def test_duplicates_conflicts_and_missing():
     out = s.projection([source([first, other])])
     assert out["jumlah"] == 1 and out["tanpa_angka"] == 1
     assert out["pesanan"][0]["perkiraan_dana_cair"] is None
+    assert out["total"] is None
+    assert out["total_platform"]["tiktok"] is None
+    assert out["per_toko"][0]["total"] is None
 
 
 def test_filters_totals_and_pagination():
@@ -99,3 +102,10 @@ async def test_background_singleflight_cache_and_backoff(monkeypatch):
     with pytest.raises(HTTPException) as err:
         await s.snapshot()
     assert err.value.status_code == 503
+
+
+def test_completed_without_settlement_evidence_is_uncertain():
+    item = {**row(), 'status_platform': 'COMPLETED'}
+    out = s.projection([source([item])])
+    assert out['jumlah'] == 0 and out['total'] == 0
+    assert len(out['perlu_verifikasi']) == 1
