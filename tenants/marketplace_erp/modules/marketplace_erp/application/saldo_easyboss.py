@@ -1,6 +1,8 @@
 """Read-only EasyBoss escrow projection via the existing Business Tools vault relay."""
 import asyncio
 import os
+import json
+import logging
 import time
 from decimal import Decimal
 from pathlib import Path
@@ -92,10 +94,48 @@ def projection(sources, platform='', toko='', status='', search='', page=1, page
 _task = None
 _error = None
 _error_at = 0
+_log = logging.getLogger(__name__)
 
 
-async def _load():
-    global _cache, _error, _error_at
+def _restore():
+    global _cache
+    path = os.getenv('ERP_EASYBOSS_CACHE_FILE')
+    if not path:
+        return
+    try:
+        data = json.loads(Path(path).read_text())
+        age = max(0, time.time() - float(data['saved_at']))
+        sources = data['sources']
+        if age < 86400 and isinstance(sources, list) and len(sources) == 2 and all(isinstance(x, dict) and isinstance(x.get('pesanan'), list) for x in sources):
+            _cache = (time.monotonic() - age, sources)
+    except (OSError, ValueError, KeyError, TypeError):
+        pass
+
+
+def _persist(sources):
+    path = os.getenv('ERP_EASYBOSS_CACHE_FILE')
+    if not path:
+        return
+    try:
+        target = Path(path)
+        target.parent.mkdir(parents=True, exist_ok=True)
+        temporary = target.with_suffix('.tmp')
+        fd = os.open(temporary, os.O_WRONLY | os.O_CREAT | os.O_TRUNC, 0o600)
+        with os.fdopen(fd, 'w') as stream:
+            json.dump({'saved_at': time.time(), 'sources': sources}, stream)
+        temporary.replace(target)
+    except OSError:
+        _log.warning('EasyBoss snapshot persistence unavailable')
+
+
+def refresh_state():
+    return {'refreshing': _task is not None and not _task.done(),
+            'stale': bool(_cache and time.monotonic() - _cache[0] >= 600),
+            'refresh_error': _error}
+
+
+async def _fetch_sources():
+    global _cache, _error
     try:
         token = Path(os.environ['ERP_BUSINESS_TOOLS_TOKEN_FILE']).read_text().strip()
         sources = []
@@ -122,18 +162,35 @@ async def _load():
                 sources.append(combined)
         _cache = (time.monotonic(), sources)
         _error = None
-    except (OSError, KeyError, ValueError, httpx.HTTPError):
+        _persist(sources)
+    except Exception:
+        raise
+
+
+async def _load():
+    global _error, _error_at
+    try:
+        async with asyncio.timeout(240):
+            await _fetch_sources()
+    except Exception as exc:
+        _log.warning("EasyBoss refresh failed (%s)", type(exc).__name__)
         _error = 'Data EasyBoss belum tersedia. Periksa koneksi dan sesi Credential Vault. Sumber mungkin membatasi akses; pembacaan ditunda 60 menit.'
         _error_at = time.monotonic()
 
 
 async def snapshot():
-    global _task
+    global _task, _cache
     async with _lock:
+        if _cache is None:
+            _restore()
         if _cache and time.monotonic() - _cache[0] < 600:
             return _cache[1]
         if _error and time.monotonic() - _error_at < 3600:
+            if _cache and time.monotonic() - _cache[0] < 86400:
+                return _cache[1]
             raise HTTPException(503, _error)
         if _task is None or _task.done():
             _task = asyncio.create_task(_load())
+        if _cache and time.monotonic() - _cache[0] < 86400:
+            return _cache[1]
         return None
