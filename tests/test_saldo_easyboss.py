@@ -105,7 +105,75 @@ async def test_background_singleflight_cache_and_backoff(monkeypatch):
 
 
 def test_completed_without_settlement_evidence_is_uncertain():
-    item = {**row(), 'status_platform': 'COMPLETED'}
+    item = {**row(), "status_platform": "COMPLETED"}
     out = s.projection([source([item])])
-    assert out['jumlah'] == 0 and out['total'] == 0
-    assert len(out['perlu_verifikasi']) == 1
+    assert out["jumlah"] == 0 and out["total"] == 0
+    assert len(out["perlu_verifikasi"]) == 1
+
+
+@pytest.mark.asyncio
+async def test_expired_snapshot_stays_visible_during_refresh(monkeypatch):
+    import asyncio
+
+    sources = [source([])]
+    monkeypatch.setattr(s, "_cache", (s.time.monotonic() - 601, sources))
+    monkeypatch.setattr(s, "_task", None)
+    monkeypatch.setattr(s, "_error", None)
+    gate = asyncio.Event()
+    monkeypatch.setattr(s, "_load", gate.wait)
+    assert await s.snapshot() is sources
+    task = s._task
+    assert s.refresh_state()["refreshing"] is True
+    assert s.refresh_state()["stale"] is True
+    assert await s.snapshot() is sources and s._task is task
+    gate.set()
+    await task
+
+
+def test_snapshot_survives_process_restart(monkeypatch, tmp_path):
+    import json
+
+    path = tmp_path / "saldo.json"
+    monkeypatch.setenv("ERP_EASYBOSS_CACHE_FILE", str(path))
+    sources = [source([]), source([])]
+    s._persist(sources)
+    assert path.stat().st_mode & 0o077 == 0
+    assert json.loads(path.read_text())["sources"] == sources
+    monkeypatch.setattr(s, "_cache", None)
+    s._restore()
+    assert s._cache[1] == sources
+
+
+@pytest.mark.asyncio
+async def test_unexpected_source_failure_does_not_loop_loading(monkeypatch):
+    async def fail():
+        raise TypeError("unexpected source schema")
+
+    monkeypatch.setattr(s, "_fetch_sources", fail)
+    monkeypatch.setattr(s, "_error", None)
+    monkeypatch.setattr(s, "_error_at", 0)
+    await s._load()
+    assert s._error and s._error_at > 0
+
+
+@pytest.mark.asyncio
+async def test_refresh_deadline_is_bounded(monkeypatch):
+    import asyncio
+
+    original_timeout = asyncio.timeout
+    monkeypatch.setattr(s.asyncio, "timeout", lambda seconds: original_timeout(0.01))
+    monkeypatch.setattr(s, "_fetch_sources", lambda: asyncio.sleep(10))
+    monkeypatch.setattr(s, "_error", None)
+    monkeypatch.setattr(s, "_error_at", 0)
+    await s._load()
+    assert s._error and s._error_at > 0
+
+
+@pytest.mark.asyncio
+async def test_stale_snapshot_still_available_when_source_fails(monkeypatch):
+    sources = [source([])]
+    monkeypatch.setattr(s, "_cache", (s.time.monotonic() - 601, sources))
+    monkeypatch.setattr(s, "_error", "Source unavailable")
+    monkeypatch.setattr(s, "_error_at", s.time.monotonic())
+    assert await s.snapshot() is sources
+    assert s.refresh_state()["refresh_error"] == "Source unavailable"
