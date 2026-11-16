@@ -131,7 +131,7 @@ def metrics(rows):
             "cancelled": sum(r["status"] == "dibatalkan" for r in rows), "returns": None,
             "waiting_courier": sum(r["status"] == "menunggu_kurir" for r in rows),
             "unknown": sum(r["status"] == "tidak_dikenal" for r in rows),
-            "average_units": (total([r["units"] for r in active]) / len(active)) if active and all(r["units"] is not None for r in active) else None,
+            "average_units": (total([r["units"] for r in active]) / len(active)) if active and not any(r["status"] == "tidak_dikenal" for r in rows) and all(r["units"] is not None for r in active) else None,
             "gross": gross, "net": None, "pending": None,
             "average_value": gross / n if n and gross is not None else None,
             "completed_sales": total([r["gross"] for r in rows if r["status"] == "selesai"]),
