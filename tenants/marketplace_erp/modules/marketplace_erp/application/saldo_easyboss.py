@@ -36,9 +36,14 @@ def projection(sources, platform='', toko='', status='', search='', page=1, page
             else:
                 unique[key] = dict(row)
     rows = []
+    uncertain = []
     for key, row in unique.items():
         code = row.get('status_platform') or ''
-        if row.get('sudah_cair') or code not in ELIGIBLE:
+        if row.get('sudah_cair'):
+            continue
+        if code not in ELIGIBLE:
+            if not any(word in code.lower() for word in ('cancel', 'return', 'shipped_back', 'awaiting', 'pending', 'packed', 'ready_to_ship', 'unpaid')):
+                uncertain.append(row)
             continue
         row['key'] = ':'.join(key)
         row['status_label'] = STATUS.get(code, code or 'Belum diketahui')
@@ -63,8 +68,9 @@ def projection(sources, platform='', toko='', status='', search='', page=1, page
             value = Decimal(str(value))
             item['total'] += value
             totals[row['platform']] += value
+    uncertain = [r for r in uncertain if (not platform or r['platform'] == platform) and (not toko or str(r.get('shopId')) == toko) and search.lower() in r['no_pesanan'].lower()]
     complete = all(s.get('lengkap') is True for s in sources)
-    return {'pesanan': rows[(page-1)*page_size:page*page_size], 'jumlah': len(rows), 'page': page, 'page_size': page_size,
+    return {'perlu_verifikasi': uncertain, 'pesanan': rows[(page-1)*page_size:page*page_size], 'jumlah': len(rows), 'page': page, 'page_size': page_size,
             'total': sum(totals.values()), 'total_platform': totals, 'per_toko': list(per_store.values()),
             'toko': list(stores.values()), 'status': statuses, 'lengkap': complete,
             'tanpa_angka': sum(r.get('perkiraan_dana_cair') is None for r in rows),
