@@ -1187,3 +1187,14 @@ class PesananTokoPenjualan(MarketplaceErpBase):
     __tablename__ = 'mpe_pesanan_toko_penjualan'
     pesanan_id: Mapped[str] = mapped_column(ForeignKey('mpe_pesanan.id',ondelete='CASCADE'),primary_key=True)
     toko_id: Mapped[str] = mapped_column(ForeignKey('mpe_toko_penjualan.id',ondelete='RESTRICT'),index=True)
+
+
+class LaporanManualAudit(MarketplaceErpBase):
+    """Immutable snapshots of manual figures and structure before every save."""
+    __tablename__ = "mpe_laporan_manual_audit"
+    id: Mapped[str] = mapped_column(String(36), primary_key=True, default=_uuid)
+    periode: Mapped[str] = mapped_column(String(7), index=True)
+    version: Mapped[int] = mapped_column(Integer)
+    data_json: Mapped[str] = mapped_column(Text)
+    actor_id: Mapped[str] = mapped_column(String(64))
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=_utcnow)
