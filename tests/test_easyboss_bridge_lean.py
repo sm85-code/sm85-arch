@@ -63,7 +63,7 @@ class Upstream:
             return {"total": len(rows), "pesanan": [self.row(k, v) for k, v in page]}
         if name == "eb_pesanan_detail":
             o = self.orders[a["no_pesanan"]]
-            return package(a["no_pesanan"], o["pkg"])
+            return package(a["no_pesanan"], o["pkg"], o.get("source", "AWAITING_SHIPMENT"))
         raise AssertionError(name)
 
     def handler(self, request):
@@ -109,28 +109,36 @@ def details(up):
     return [c for c in up.calls if c[0] == "eb_pesanan_detail"]
 
 
-@pytest.mark.asyncio
-async def test_first_round_counts_requests_and_fetches_detail_only_for_new_orders(env):
-    s, up, client = env
-    s.add(BridgeOrder(platform="tiktokshop", shop_id="shop", order_id="old", status="imported",
-                      source_status="AWAITING_SHIPMENT", snapshot_json="{}"))
+async def seed_imported(s, oid, source, *, pkg=None):
+    """Already-imported EasyBoss order, so first-sight / refresh cannot create a second Pesanan."""
+    s.add(Pesanan(id="p-" + oid, platform="manual", id_eksternal=oid, status="to_ship",
+                  detail_json=json.dumps({"easyboss": {"platform": "tiktokshop", "shop_id": "shop", "order_id": oid}})))
+    s.add(BridgeOrder(platform="tiktokshop", shop_id="shop", order_id=oid, pesanan_id="p-" + oid,
+                      status="imported", source_status=source, snapshot_json="{}"))
     await s.commit()
-    up.orders = {"old": {"pkg": "p-old", "status": "waitShip", "dibuat": gmt(timedelta(hours=5))},
-                 "new": {"pkg": "p-new", "status": "waitProcess", "dibuat": gmt(timedelta(minutes=5))}}
+
+
+@pytest.mark.asyncio
+async def test_first_round_fetches_new_orders_and_first_sight_of_known_receipts(env):
+    s, up, client = env
+    await seed_imported(s, "old", "AWAITING_SHIPMENT")
+    up.orders = {"old": {"pkg": "p-old", "status": "waitShip", "source": "AWAITING_COLLECTION", "dibuat": gmt(timedelta(hours=5))},
+                 "new": {"pkg": "p-new", "status": "waitProcess", "source": "AWAITING_SHIPMENT", "dibuat": gmt(timedelta(minutes=5))}}
     result = await run(s, client)
-    # 2 list pages (TikTok + Lazada) + 2 reads for the ONE new order; the known order is not re-read.
-    assert result["requests"] == 4 and len(up.calls) == 4
-    assert details(up) == [("eb_pesanan_detail", None, None, "new")]
+    # 2 list pages (TikTok + Lazada) + 2 reads each for the new order and the known receipt.
+    assert result["requests"] == 6 and len(up.calls) == 6
+    assert {c[3] for c in details(up)} == {"old", "new"}
     assert result["imported"] == 1
-    assert await s.scalar(select(func.count()).select_from(Pesanan)) == 1
+    assert await s.scalar(select(func.count()).select_from(Pesanan)) == 2
+    assert (await s.scalar(select(BridgeOrder).where(BridgeOrder.order_id == "old"))).source_status == "AWAITING_COLLECTION"
     st = await lean_state(s)
-    assert st["requests"] == 4 and st["last_round"]["requests"] == 4
+    assert st["requests"] == 6 and st["last_round"]["requests"] == 6
 
     up.calls.clear()
     result = await run(s, client)
-    # Nothing changed: exactly the two list pages, never a detail sweep of tracked orders.
+    # Just refreshed: no slow-refresh yet, exactly the two list pages.
     assert result["requests"] == 2 and details(up) == []
-    assert (await lean_state(s))["requests"] == 6
+    assert (await lean_state(s))["requests"] == 8
 
 
 @pytest.mark.asyncio
@@ -228,3 +236,83 @@ def test_rate_limit_detection():
     assert rate_limited({"error": "x", "detail": "base.tooManyRequest"})
     assert rate_limited("Permintaan terlalu sering")
     assert not rate_limited({"error": "HTTP 500", "detail": "boom"})
+
+@pytest.mark.asyncio
+async def test_slow_refresh_rechecks_oldest_open_orders_even_when_list_signature_is_unchanged(env):
+    """List operate status can stay ship_success while the marketplace status used by LZ-TS tabs moves."""
+    s, up, client = env
+    now = datetime.now(timezone.utc)
+    for i, oid in enumerate(("stale", "mid", "freshish", "done")):
+        source = "DELIVERED" if oid == "done" else "AWAITING_COLLECTION"
+        await seed_imported(s, oid, source)
+    # Oldest first; the completed order must never consume a refresh slot.
+    ages = {"stale": 10, "mid": 6, "freshish": 5, "done": 12}
+    for oid, hours in ages.items():
+        await s.execute(BridgeOrder.__table__.update().where(BridgeOrder.order_id == oid).values(
+            updated_at=now - timedelta(hours=hours)))
+    await s.commit()
+    up.orders = {oid: {"pkg": "p-" + oid, "status": "ship_success" if oid != "done" else "ship_success",
+                       "source": "DELIVERED" if oid == "done" else "IN_TRANSIT",
+                       "dibuat": gmt(timedelta(hours=ages[oid]))} for oid in ages}
+    seen = {f"tiktokshop|shop|{oid}": [f"ship_success:p-{oid}", (now - timedelta(hours=1)).isoformat()]
+            for oid in ages}
+    st = await s.get(BridgeState, "easyboss")
+    st.lean_json = json.dumps({"day": now.astimezone(lean.WIB).date().isoformat(), "requests": 0,
+                               "seen": seen, "alerts": []})
+    await s.commit()
+
+    result = await run(s, client)
+    # 2 list pages + 2 reads each for the two oldest open orders (cap default 5, only 3 are open).
+    assert {c[3] for c in details(up)} == {"stale", "mid", "freshish"}
+    assert "done" not in {c[3] for c in details(up)}
+    assert result["requests"] == 8
+    rows = {r.order_id: r.source_status for r in (await s.scalars(select(BridgeOrder))).all()}
+    assert rows["stale"] == rows["mid"] == rows["freshish"] == "IN_TRANSIT"
+    assert rows["done"] == "DELIVERED"
+
+
+@pytest.mark.asyncio
+async def test_slow_refresh_caps_per_round_and_picks_oldest_first(env, monkeypatch):
+    s, up, client = env
+    monkeypatch.setenv("EASYBOSS_BRIDGE_OPEN_REFRESH", "2")
+    now = datetime.now(timezone.utc)
+    for i, oid in enumerate(("a", "b", "c")):
+        await seed_imported(s, oid, "AWAITING_COLLECTION")
+        await s.execute(BridgeOrder.__table__.update().where(BridgeOrder.order_id == oid).values(
+            updated_at=now - timedelta(hours=9 - i)))
+    await s.commit()
+    up.orders = {oid: {"pkg": "p-" + oid, "status": "ship_success", "source": "IN_TRANSIT",
+                       "dibuat": gmt(timedelta(hours=3))} for oid in ("a", "b", "c")}
+    seen = {f"tiktokshop|shop|{oid}": [f"ship_success:p-{oid}", now.isoformat()] for oid in ("a", "b", "c")}
+    st = await s.get(BridgeState, "easyboss")
+    st.lean_json = json.dumps({"day": now.astimezone(lean.WIB).date().isoformat(), "requests": 0,
+                               "seen": seen, "alerts": []})
+    await s.commit()
+    await run(s, client)
+    assert [c[3] for c in details(up)] == ["a", "b"]
+    up.calls.clear()
+    # Immediately afterwards they are fresh; the remaining open order is still stale and is next.
+    await run(s, client)
+    assert [c[3] for c in details(up)] == ["c"]
+
+
+@pytest.mark.asyncio
+async def test_catch_up_refreshes_all_stale_open_orders_in_one_round(env):
+    s, up, client = env
+    now = datetime.now(timezone.utc)
+    for oid in ("u", "v", "w"):
+        await seed_imported(s, oid, "AWAITING_COLLECTION")
+        await s.execute(BridgeOrder.__table__.update().where(BridgeOrder.order_id == oid).values(
+            updated_at=now - timedelta(hours=8)))
+    await s.commit()
+    up.orders = {oid: {"pkg": "p-" + oid, "status": "ship_success", "source": "IN_TRANSIT",
+                       "dibuat": gmt(timedelta(hours=4))} for oid in ("u", "v", "w")}
+    seen = {f"tiktokshop|shop|{oid}": [f"ship_success:p-{oid}", now.isoformat()] for oid in ("u", "v", "w")}
+    st = await s.get(BridgeState, "easyboss")
+    st.lean_json = json.dumps({"day": now.astimezone(lean.WIB).date().isoformat(), "requests": 0,
+                               "seen": seen, "alerts": []})
+    await s.commit()
+    result = await run(s, client, catch_up=True)
+    assert {c[3] for c in details(up)} == {"u", "v", "w"}
+    assert result["requests"] == 8
+

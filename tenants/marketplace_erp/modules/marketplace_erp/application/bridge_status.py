@@ -20,6 +20,7 @@ STATES = {
   'ready_to_ship': ('ready', 'menunggu_kurir', 'Menunggu Penyerahan ke Kurir'),
   'shipped': ('shipped', 'dikirim', 'Dikirim'),
   'delivered': ('completed', 'selesai', 'Diterima Pembeli'),
+  'confirmed': ('completed', 'selesai', 'Diterima Pembeli'),
   'canceled': ('cancelled', 'dibatalkan', 'Dibatalkan'),
   'cancelled': ('cancelled', 'dibatalkan', 'Dibatalkan'),
  },

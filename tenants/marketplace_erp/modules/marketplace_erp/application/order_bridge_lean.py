@@ -3,9 +3,12 @@
 One round (default every 30 minutes):
   * reads page 1 of the 'all' tab per platform (TikTok, Lazada), newest first, and only pages further
     while every row on the page is still unknown;
-  * fetches order details ONLY for orders that are new (inside the lookback window) or whose list
-    signature (package status/id) changed since the last round;
-  * never re-reads every tracked order; failed receipts are retried at most every few hours;
+  * fetches order details for orders that are new (inside the lookback window), whose list
+    signature (package status/id) changed since the last round, or that already exist in ERP
+    and are seen for the first time;
+  * each round also re-reads a few already-imported orders that are not yet final (belum bayar,
+    perlu diproses, menunggu kurir, dikirim), oldest last refresh first, even if the list
+    signature is unchanged; failed receipts are retried at most every few hours;
   * every upstream call spends from a persisted per-day (WIB) budget; at the cap the bridge stops
     for the rest of the day and alerts once;
   * an EasyBoss 429 (also when it is hidden in an HTTP-200 JSON body) stops the round and backs off
@@ -67,6 +70,27 @@ def max_pages():
 
 def slow_every():
     return timedelta(hours=_env_int("EASYBOSS_BRIDGE_SLOW_HOURS", 6, floor=1))
+
+
+# Non-final LZ-TS tabs. Default 5 (capped at 8) extra detail fetches per round, and only when
+# the last refresh is older than 2 hours, so the daily cap stays well below 1000.
+OPEN_PHASES = {"belum_bayar", "perlu_diproses", "menunggu_kurir", "dikirim"}
+
+
+def open_refresh():
+    return min(8, _env_int("EASYBOSS_BRIDGE_OPEN_REFRESH", 5, floor=0))
+
+
+def open_fresh():
+    return timedelta(hours=_env_int("EASYBOSS_BRIDGE_OPEN_FRESH_HOURS", 2, floor=1))
+
+
+def is_open(row):
+    from tenants.marketplace_erp.modules.marketplace_erp.application.bridge_status import native_state
+    if not row.pesanan_id:
+        return False
+    state = native_state(row.platform, row.source_status)
+    return bool(state and state[1] in OPEN_PHASES)
 
 
 def call_delay():
@@ -166,7 +190,7 @@ def back_off(lean, now):
                           + until.astimezone(WIB).strftime("%H:%M WIB") + ", tanpa coba ulang.")
 
 
-async def plan(session, gateway, lean, *, now, retry=False):
+async def plan(session, gateway, lean, *, now, retry=False, catch_up=False):
     """List stage. Returns ([(key, signature)] needing detail). Spends only list calls."""
     known = {(r.platform, r.shop_id, r.order_id): r for r in (await session.scalars(select(BridgeOrder))).all()}
     seen = lean["seen"]
@@ -192,9 +216,10 @@ async def plan(session, gateway, lean, *, now, retry=False):
                         else:
                             wanted[key] = sig
                     elif key in known:
-                        # First sight since the lean scheduler started: the receipt already exists.
+                        # First sight of an already-imported receipt: still stop paging, but
+                        # fetch details so a status that changed while we were not watching is applied.
                         stop = True
-                        seen[kstr(key)] = [sig, now.isoformat()]
+                        wanted[key] = sig
                     elif ordered is not None and ordered < cutoff:
                         # Historical order outside the lookback window: never import from history.
                         stop = True
@@ -213,6 +238,19 @@ async def plan(session, gateway, lean, *, now, retry=False):
         for r in due:
             key = (r.platform, r.shop_id, r.order_id)
             wanted.setdefault(key, (seen.get(kstr(key)) or ["retry"])[0])
+    # Open-tab refresh does not wait for a list-signature change: ship_success can hide
+    # AWAITING_COLLECTION -> IN_TRANSIT / DELIVERED. Catch-up takes every stale open order
+    # (still bounded by the per-round and daily caps).
+    limit = open_refresh() if not catch_up else max(open_refresh(), len(known))
+    age = timedelta(0) if catch_up else open_fresh()
+    if limit:
+        due = sorted((r for r in known.values()
+                      if is_open(r) and (catch_up or now - (_ts(r.updated_at.isoformat()) or now) >= age)
+                      and (r.platform, r.shop_id, r.order_id) not in wanted),
+                     key=lambda r: r.updated_at)[:limit]
+        for r in due:
+            key = (r.platform, r.shop_id, r.order_id)
+            wanted.setdefault(key, (seen.get(kstr(key)) or ["refresh"])[0])
     return sorted(wanted.items())
 
 
