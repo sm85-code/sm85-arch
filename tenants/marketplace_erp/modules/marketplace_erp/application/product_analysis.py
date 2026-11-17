@@ -14,7 +14,7 @@ from .summary import JAKARTA
 LIMIT = 20000
 NOTES = [
     "Hanya snapshot ERP. Periode memakai tanggal pesanan Asia/Jakarta; status terakhir.",
-    "Omzet: subtotal barang setelah diskon item, sebelum biaya marketplace dan ongkir. Bukan omzet bersih atau dana pencairan.",
+    "Omzet: subtotal barang tersimpan, sebelum biaya marketplace dan ongkir. Importer memakai harga setelah diskon item bila ada, lalu harga asli, lalu 0 jika harga tidak tersedia. Histori tidak menandai fallback tersebut; angka 0 belum tentu barang gratis. Bukan omzet bersih atau dana pencairan.",
     "Belum bayar, batal, status tidak dikenal dan retur/refund dikeluarkan. Ledger refund per baris belum tersedia; retur sebagian pada status biasa belum dapat dikoreksi. Angka sementara.",
     "Tanpa pemetaan master, listing terpisah per toko/item/model. Nama mirip tidak digabung. Tinjau pemetaan melalui pengelolaan listing/master Produk yang ada; analisis tidak mengubahnya.",
     "Stok adalah snapshot katalog beserta waktu pengambilan, bukan jaminan stok saat ini. URL membuka produk; pilih varian sesuai pesan.",
