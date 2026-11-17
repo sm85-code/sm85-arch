@@ -259,7 +259,7 @@ async def _apply(session, run, key, order, *, conflict=False):
     await session.commit()
 
 
-async def run_orders(session, gateway, *, retry=False, automatic=False):
+async def run_orders(session, gateway, *, retry=False, automatic=False, catch_up=False):
     from tenants.marketplace_erp.modules.marketplace_erp.infrastructure.adapters.easyboss_mcp import MCPGateway
     lean_mode = isinstance(gateway, MCPGateway)
     async with exclusive(session):
@@ -292,7 +292,7 @@ async def run_orders(session, gateway, *, retry=False, automatic=False):
         try:
             if lean_mode:
                 # Lean: list pages first, then details ONLY for new/changed orders, one at a time.
-                for key, sig in await lean.plan(session, gateway, L, now=started, retry=retry):
+                for key, sig in await lean.plan(session, gateway, L, now=started, retry=retry, catch_up=catch_up):
                     st.lean_json = lean.dump(L)
                     try:
                         order = await gateway.one(lean.NATIVE[key[0]], key[1], key[2])

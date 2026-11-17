@@ -216,6 +216,16 @@ def test_native_lifecycle_without_delivery_timestamp(native, canonical, phase):
     assert projected_status({'platform':'tiktokshop', 'source_status':native}, 'to_ship') == canonical
 
 
+def test_lazada_confirmed_means_buyer_received():
+    from tenants.marketplace_erp.modules.marketplace_erp.application.bridge_status import native_state, projected_status
+    assert native_state('lazada', 'confirmed') == ('completed', 'selesai', 'Diterima Pembeli')
+    assert projected_status({'platform': 'lazada', 'source_status': 'confirmed'}, 'to_ship') == 'completed'
+    p = lazada_cod_package()
+    p['orderInfo'].update(platformOrderStatus='confirmed', gmtDelivery=None, gmtFinish=None)
+    row = normalize(p, ('lazada', 'shop', 'order'))
+    assert row.status == 'completed' and row.source_status == 'confirmed' and row.cod_eligible is True
+
+
 @pytest.mark.parametrize('source,status,eligible', [
     ('AWAITING_SHIPMENT','ready',True), ('AWAITING_COLLECTION','ready',True),
     ('IN_TRANSIT','shipped',True), ('DELIVERED','completed',True), ('COMPLETED','completed',True),
