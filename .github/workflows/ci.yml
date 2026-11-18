@@ -74,7 +74,7 @@ jobs:
   # Manual rollback on the server: sudo /opt/sm85-arch/deploy.sh rollback
   deploy-oracle:
     needs: [lint-and-test, integration-pg]
-    if: github.event_name == 'push' && github.ref == 'refs/heads/main'
+    if: ${{ false }} # Production migrated to sm85-code/ampelkuning and erp-ampelkuning
     runs-on: ubuntu-latest
     concurrency:
       group: oracle-deploy-sm85-arch
